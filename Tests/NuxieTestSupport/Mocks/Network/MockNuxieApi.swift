@@ -72,6 +72,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     // Track last trackEvent call details
     public private(set) var lastTrackEventCall: TrackEventCall?
     public private(set) var lastResponseFieldCall: ResponseFieldCall?
+    public private(set) var responseFieldCalls: [ResponseFieldCall] = []
     public private(set) var lastResponseSubmitCall: (
         distinctId: String,
         journeyId: String,
@@ -310,7 +311,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         key: String,
         value: Any
     ) async throws -> ResponseWriteResponse {
-        lastResponseFieldCall = ResponseFieldCall(
+        let call = ResponseFieldCall(
             distinctId: distinctId,
             journeyId: journeyId,
             responseSchemaId: responseSchemaId,
@@ -318,6 +319,8 @@ public actor MockNuxieApi: NuxieApiProtocol {
             key: key,
             value: value
         )
+        lastResponseFieldCall = call
+        responseFieldCalls.append(call)
         if let responseWriteError {
             throw responseWriteError
         }
@@ -370,6 +373,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         sentEvents.removeAll()
         lastTrackEventCall = nil
         lastResponseFieldCall = nil
+        responseFieldCalls = []
         lastResponseSubmitCall = nil
         lastResponseAbandonCall = nil
         checkFeatureResponse = nil

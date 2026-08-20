@@ -738,6 +738,24 @@ struct JourneyStateEnvelope: Codable, Sendable {
     }
 }
 
+/// A response-field mutation that has been accepted locally but has not yet
+/// been acknowledged by the response service. The intent is checkpointed
+/// before the local projection changes so a relaunch can safely replay the
+/// idempotent field upsert without losing an earlier failed write.
+struct PendingResponseFieldWrite: Codable, Equatable, Sendable {
+    enum Mutation: String, Codable, Sendable {
+        case set
+        case unset
+    }
+
+    let operationId: String
+    let screenId: String
+    let field: String
+    let mutation: Mutation
+    let value: ScreenEmissionValue
+    let occurredAt: String
+}
+
 /// A coherent, immutable-in-transit view of one journey state version.
 ///
 /// Codable persistence, goal evaluation, event payload construction, and
@@ -777,6 +795,9 @@ struct JourneySnapshot: Codable, Sendable {
     public var responseSession: ResponseSessionSnapshot?
     /// Durable idempotency receipts for response-session mutations.
     public var responseSessionReceipts: [String: ResponseSessionOperationResult]
+    /// Locally accepted field writes awaiting server acknowledgement, keyed
+    /// by the stable screen-emission operation identifier.
+    public var pendingResponseFieldWrites: [String: PendingResponseFieldWrite]
     /// A failed response operation keeps the draft retryable across runner
     /// reconstruction and app restart.
     public var responseSessionRetryRequired: Bool
@@ -840,6 +861,7 @@ struct JourneySnapshot: Codable, Sendable {
         self.resumePoint = nil
         self.responseSession = nil
         self.responseSessionReceipts = [:]
+        self.pendingResponseFieldWrites = [:]
         self.responseSessionRetryRequired = false
 
         self.startedAt = now
@@ -876,6 +898,7 @@ struct JourneySnapshot: Codable, Sendable {
         case resumePoint
         case responseSession
         case responseSessionReceipts
+        case pendingResponseFieldWrites
         case responseSessionRetryRequired
         case startedAt
         case updatedAt
@@ -914,6 +937,10 @@ struct JourneySnapshot: Codable, Sendable {
             [String: ResponseSessionOperationResult].self,
             forKey: .responseSessionReceipts
         )
+        pendingResponseFieldWrites = try container.decode(
+            [String: PendingResponseFieldWrite].self,
+            forKey: .pendingResponseFieldWrites
+        )
         responseSessionRetryRequired = try container.decode(
             Bool.self,
             forKey: .responseSessionRetryRequired
@@ -946,6 +973,7 @@ struct JourneySnapshot: Codable, Sendable {
         try container.encodeIfPresent(resumePoint, forKey: .resumePoint)
         try container.encode(responseSession, forKey: .responseSession)
         try container.encode(responseSessionReceipts, forKey: .responseSessionReceipts)
+        try container.encode(pendingResponseFieldWrites, forKey: .pendingResponseFieldWrites)
         try container.encode(responseSessionRetryRequired, forKey: .responseSessionRetryRequired)
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(updatedAt, forKey: .updatedAt)

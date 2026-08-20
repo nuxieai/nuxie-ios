@@ -744,6 +744,57 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 .to(equal(.drained))
         }
 
+        it("retains earlier failed response writes until every mutation synchronizes") {
+            let experience = signedExperience(definition: responseDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            await mocks.nuxieApi.setResponseWriteError(NSError(
+                domain: "ResponseWrite",
+                code: 1
+            ))
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(
+                    actionId: "answer",
+                    value: .string("first")
+                )
+            )
+
+            var snapshot = await journey.snapshot()
+            expect(snapshot.pendingResponseFieldWrites.count).to(equal(1))
+            expect(snapshot.responseSessionRetryRequired).to(beTrue())
+            await service.handleRuntimeDismiss(
+                journeyId: journey.id,
+                reason: .userDismissed,
+                controller: controller
+            )
+            let activeJourneyIds = await service.getActiveJourneys(for: distinctId).map(\.id)
+            expect(activeJourneyIds).to(contain(journey.id))
+
+            await mocks.nuxieApi.setResponseWriteError(nil)
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(
+                    actionId: "answer",
+                    value: .string("second")
+                )
+            )
+
+            snapshot = await journey.snapshot()
+            expect(snapshot.pendingResponseFieldWrites).to(beEmpty())
+            expect(snapshot.responseSessionRetryRequired).to(beFalse())
+            expect(snapshot.responseSession?.values["answer"]).to(equal(.string("second")))
+            let values = await mocks.nuxieApi.responseFieldCalls.compactMap {
+                $0.value as? String
+            }
+            expect(values).to(equal(["first", "first", "second"]))
+        }
+
         it("compacts a generated event dropped by beforeSend after its batch commits") {
             let eventName = "survey_filtered"
             let experience = signedExperience(definition: definition(eventName: eventName))

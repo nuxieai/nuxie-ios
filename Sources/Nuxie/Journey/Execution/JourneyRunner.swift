@@ -320,6 +320,9 @@ actor JourneyRunner {
                 schema: $0
             )
         }
+        self.didFailResponseWrite = !initialState.pendingResponseFieldWrites.isEmpty
+        self.didFailSubmitResponse = initialState.responseSessionRetryRequired
+            && initialState.pendingResponseFieldWrites.isEmpty
         self.persistEntryActionClaim = persistEntryActionClaim
         self.emitsTransitionEvents = emitsTransitionEvents
 
@@ -396,6 +399,7 @@ actor JourneyRunner {
                 await self?.applyResponseProjection(projection)
             }
         }
+        _ = await synchronizePendingResponseFieldWrites()
     }
 
     private func applyResponseProjection(_ projection: ResponseSessionProjection) async {
@@ -1042,92 +1046,171 @@ actor JourneyRunner {
         screenId: String,
         field: String
     ) async -> ScreenResponseEmissionResult {
-        guard let responseSessionModule, let responseSessionRun,
-              let responseSchema = responseSessionRun.schema else {
+        guard responseSessionModule != nil, let responseSessionRun,
+              responseSessionRun.schema != nil else {
             responseOperationFailureRevision &+= 1
             return .rejected(message: "response session is unavailable")
         }
 
-        do {
-            let result: ResponseSessionOperationResult
-            let serverValue: Any
-            switch emission.name {
-            case SystemEventNames.responseSet:
-                guard let value = emission.payload["value"] else {
-                    responseOperationFailureRevision &+= 1
-                    return .rejected(message: "response set emission has no value")
-                }
-                result = try await responseSessionModule.set(
-                    run: responseSessionRun,
-                    emissionId: emission.id,
-                    screenId: screenId,
-                    field: field,
-                    value: value,
-                    occurredAt: emission.occurredAt
-                )
-                serverValue = value.foundationValue
-            case SystemEventNames.responseUnset:
-                result = try await responseSessionModule.unset(
-                    run: responseSessionRun,
-                    emissionId: emission.id,
-                    screenId: screenId,
-                    field: field,
-                    occurredAt: emission.occurredAt
-                )
-                serverValue = NSNull()
-            default:
+        let mutation: PendingResponseFieldWrite.Mutation
+        let value: ScreenEmissionValue
+        switch emission.name {
+        case SystemEventNames.responseSet:
+            guard let emittedValue = emission.payload["value"] else {
                 responseOperationFailureRevision &+= 1
-                return .rejected(message: "unsupported response emission")
+                return .rejected(message: "response set emission has no value")
             }
+            mutation = .set
+            value = emittedValue
+        case SystemEventNames.responseUnset:
+            mutation = .unset
+            value = .null
+        default:
+            responseOperationFailureRevision &+= 1
+            return .rejected(message: "unsupported response emission")
+        }
 
-            guard case .accepted = result else {
-                responseOperationFailureRevision &+= 1
-                let diagnostic = if case .rejected(let diagnostic, _) = result {
-                    diagnostic.rawValue
-                } else {
-                    "response session rejected the mutation"
-                }
-                return .rejected(message: diagnostic)
-            }
-            didAttemptResponseDraftWrite = true
-
-            let serverValueBox = UncheckedSendable(serverValue)
-            let write = try await apiClient.setResponseField(
-                distinctId: journey.distinctId,
-                journeyId: journey.id,
-                responseSchemaId: responseSchema.key,
-                schemaVersion: Int(exactly: responseSchema.version),
-                key: field,
-                value: serverValueBox.value
-            )
-            if let response = write.response {
-                let currentVersion =
-                    (try? await responseSessionModule.snapshot(journeyId: journey.id)?.version) ?? 0
-                if let snapshot = Self.responseSessionSnapshot(
-                    from: response,
-                    version: currentVersion + 1
-                ) {
-                    _ = try await responseSessionModule.reconcile(
-                        run: responseSessionRun,
-                        operationId: "server:\(response.id):\(response.updatedAt.timeIntervalSince1970)",
-                        snapshot: snapshot
-                    )
-                }
-            } else {
-                _ = try await responseSessionModule.acknowledgeWrite(
-                    run: responseSessionRun,
-                    operationId: "server-write:\(emission.id)"
-                )
-            }
-            didFailResponseWrite = false
-            await markResponseRetryRequired(false)
-            return .accepted
-        } catch {
+        let pendingWrite = PendingResponseFieldWrite(
+            operationId: emission.id,
+            screenId: screenId,
+            field: field,
+            mutation: mutation,
+            value: value,
+            occurredAt: emission.occurredAt
+        )
+        guard await persistPendingResponseFieldWrite(pendingWrite) else {
             didFailResponseWrite = true
             responseOperationFailureRevision &+= 1
-            await markResponseRetryRequired(true)
-            return .rejected(message: "response session mutation failed")
+            return .rejected(message: "response mutation intent could not be persisted")
         }
+
+        return await synchronizePendingResponseFieldWrites()
+            ? .accepted
+            : .rejected(message: "response session mutation failed")
+    }
+
+    private func synchronizePendingResponseFieldWrites() async -> Bool {
+        guard let responseSessionModule, let responseSessionRun,
+              let responseSchema = responseSessionRun.schema else {
+            return false
+        }
+        let pending = (await journey.snapshot()).pendingResponseFieldWrites.values.sorted {
+            ($0.occurredAt, $0.operationId) < ($1.occurredAt, $1.operationId)
+        }
+        guard !pending.isEmpty else {
+            didFailResponseWrite = false
+            return true
+        }
+
+        for write in pending {
+            do {
+                let localResult: ResponseSessionOperationResult
+                switch write.mutation {
+                case .set:
+                    localResult = try await responseSessionModule.set(
+                        run: responseSessionRun,
+                        emissionId: write.operationId,
+                        screenId: write.screenId,
+                        field: write.field,
+                        value: write.value,
+                        occurredAt: write.occurredAt
+                    )
+                case .unset:
+                    localResult = try await responseSessionModule.unset(
+                        run: responseSessionRun,
+                        emissionId: write.operationId,
+                        screenId: write.screenId,
+                        field: write.field,
+                        occurredAt: write.occurredAt
+                    )
+                }
+                guard case .accepted = localResult else {
+                    _ = await removePendingResponseFieldWrite(operationId: write.operationId)
+                    throw ResponseSessionModuleError.snapshotAuthorityMismatch
+                }
+                didAttemptResponseDraftWrite = true
+                let serverValue = UncheckedSendable(write.value.foundationValue)
+                let serverWrite = try await apiClient.setResponseField(
+                    distinctId: journey.distinctId,
+                    journeyId: journey.id,
+                    responseSchemaId: responseSchema.key,
+                    schemaVersion: Int(exactly: responseSchema.version),
+                    key: write.field,
+                    value: serverValue.value
+                )
+                if write.operationId == pending.last?.operationId,
+                   let response = serverWrite.response {
+                    let currentVersion =
+                        (try? await responseSessionModule.snapshot(journeyId: journey.id)?.version)
+                        ?? 0
+                    guard let snapshot = Self.responseSessionSnapshot(
+                        from: response,
+                        version: currentVersion + 1
+                    ) else {
+                        throw ResponseSessionModuleError.snapshotAuthorityMismatch
+                    }
+                    _ = try await responseSessionModule.reconcile(
+                        run: responseSessionRun,
+                        operationId:
+                            "server:\(response.id):\(response.updatedAt.timeIntervalSince1970)",
+                        snapshot: snapshot
+                    )
+                } else {
+                    _ = try await responseSessionModule.acknowledgeWrite(
+                        run: responseSessionRun,
+                        operationId: "server-write:\(write.operationId)"
+                    )
+                }
+                guard await removePendingResponseFieldWrite(operationId: write.operationId) else {
+                    throw ResponseSessionModuleError.snapshotAuthorityMismatch
+                }
+            } catch {
+                LogWarning(
+                    "JourneyRunner: failed to synchronize response field \(write.field): \(error)"
+                )
+                didFailResponseWrite = true
+                responseOperationFailureRevision &+= 1
+                return false
+            }
+        }
+        didFailResponseWrite = false
+        return true
+    }
+
+    private func persistPendingResponseFieldWrite(_ write: PendingResponseFieldWrite) async -> Bool {
+        return await persistResponseWriteState { state in
+            state.pendingResponseFieldWrites[write.operationId] = write
+            state.responseSessionRetryRequired = true
+        }
+    }
+
+    private func removePendingResponseFieldWrite(operationId: String) async -> Bool {
+        let submitFailed = didFailSubmitResponse
+        return await persistResponseWriteState { state in
+            state.pendingResponseFieldWrites.removeValue(forKey: operationId)
+            state.responseSessionRetryRequired =
+                !state.pendingResponseFieldWrites.isEmpty || submitFailed
+        }
+    }
+
+    private func persistResponseWriteState(
+        _ mutate: @Sendable (inout JourneySnapshot) -> Void
+    ) async -> Bool {
+        let versioned = await journey.versionedSnapshot()
+        var updated = versioned.snapshot
+        mutate(&updated)
+        updated.updatedAt = dateProvider.now()
+        guard await journey.replace(updated, ifRevisionEquals: versioned.revision) else {
+            return false
+        }
+        guard await persistResponseRetryMarker(updated) else {
+            _ = await journey.replace(
+                versioned.snapshot,
+                ifRevisionEquals: versioned.revision + 1
+            )
+            return false
+        }
+        return true
     }
 
     /// Runs the exact route revision durably admitted for a screen emission.
@@ -3003,13 +3086,23 @@ actor JourneyRunner {
                 userInfo: [NSLocalizedDescriptionKey: "submit_response requires the pinned response schema"]
             )
         }
-        let schemaVersion = responseSchema.flatMap { Int(exactly: $0.version) }
         let responseSubmitOperationId = responseOperationId(
             context: context,
             index: index,
             field: "submit",
             nodeId: action.nodeId
         )
+        guard await synchronizePendingResponseFieldWrites() else {
+            didFailSubmitResponse = true
+            responseOperationFailureRevision &+= 1
+            throw ResponseBranchAbort(
+                operation: "submit_response",
+                diagnostic: "pending_response_write_failed",
+                correlationId: responseSubmitOperationId,
+                underlying: nil
+            )
+        }
+        let schemaVersion = responseSchema.flatMap { Int(exactly: $0.version) }
         do {
             let result = try await apiClient.submitResponse(
                 distinctId: journey.distinctId,
@@ -3106,7 +3199,7 @@ actor JourneyRunner {
     }
 
     func hasFailedResponseOperation() -> Bool {
-        didFailSubmitResponse
+        didFailResponseWrite || didFailSubmitResponse
     }
 
     func responseFailureRevision() -> UInt64 {
@@ -3114,23 +3207,26 @@ actor JourneyRunner {
     }
 
     private func markResponseRetryRequired(_ required: Bool) async {
+        let hasPendingFieldWrites = !(await journey.snapshot())
+            .pendingResponseFieldWrites.isEmpty
+        let effectiveRequired = required || hasPendingFieldWrites
         if let responseSessionModule {
             do {
                 try await responseSessionModule.setRetryRequired(
                     journeyId: journey.id,
-                    required: required
+                    required: effectiveRequired
                 )
             } catch {
                 LogError("JourneyRunner: failed to persist response retry marker: \(error)")
                 await journey.update { state in
-                    state.responseSessionRetryRequired = required
+                    state.responseSessionRetryRequired = effectiveRequired
                     state.updatedAt = dateProvider.now()
                 }
                 _ = await persistResponseRetryMarker(await journey.snapshot())
             }
         } else {
             await journey.update { state in
-                state.responseSessionRetryRequired = required
+                state.responseSessionRetryRequired = effectiveRequired
                 state.updatedAt = dateProvider.now()
             }
             _ = await persistResponseRetryMarker(await journey.snapshot())
