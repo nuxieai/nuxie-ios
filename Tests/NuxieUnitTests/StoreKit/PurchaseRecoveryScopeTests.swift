@@ -383,14 +383,14 @@ private actor RecoveryFeatureRecorder: FeatureServiceProtocol {
     func getAllCached() async -> [String: FeatureAccess] { [:] }
     func check(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async throws -> FeatureCheckResult {
         throw NuxieNetworkError.invalidResponse
     }
     func checkWithCache(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?,
         forceRefresh: Bool
     ) async throws -> FeatureAccess {

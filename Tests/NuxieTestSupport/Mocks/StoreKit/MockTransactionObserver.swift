@@ -11,6 +11,13 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
     public private(set) var recordedPurchaseFinishRequirements: [Bool] = []
     public private(set) var syncCalls: [(transactionJws: String, transactionId: String, productId: String?, originalTransactionId: String?)] = []
     public var nextSyncResult: Bool = true
+    public var nextPurchaseBackedUsageResult: FeatureUsageResult?
+    public private(set) var purchaseBackedUsageCalls: [(
+        distinctId: String,
+        featureId: String,
+        amount: Double,
+        entityId: String?
+    )] = []
     private var completedPurchaseTransactionIds: Set<String> = []
 
     public init() {}
@@ -41,6 +48,22 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
     public func syncCurrentEntitlements(distinctId: String) async {
         syncCurrentEntitlementsCalled = true
         syncCurrentEntitlementsDistinctIds.append(distinctId)
+    }
+
+    public func useFeatureWithPendingPurchase(
+        distinctId: String,
+        featureId: String,
+        amount: Double,
+        entityId: String?,
+        metadata: [String: AnyCodable]?
+    ) async throws -> FeatureUsageResult? {
+        _ = metadata
+        purchaseBackedUsageCalls.append((distinctId, featureId, amount, entityId))
+        return nextPurchaseBackedUsageResult
+    }
+
+    public func setNextPurchaseBackedUsageResult(_ result: FeatureUsageResult?) {
+        nextPurchaseBackedUsageResult = result
     }
 
     public func recordVerifiedPurchase(

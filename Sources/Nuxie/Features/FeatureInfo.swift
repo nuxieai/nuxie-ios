@@ -62,7 +62,7 @@ public final class FeatureInfo: ObservableObject {
     /// Get the balance for a metered feature
     /// - Parameter featureId: The feature identifier
     /// - Returns: Current balance, nil if feature not found or is boolean type
-    public func balance(_ featureId: String) -> Int? {
+    public func balance(_ featureId: String) -> Double? {
         all[featureId]?.balance
     }
 
@@ -115,7 +115,7 @@ public final class FeatureInfo: ObservableObject {
     /// - Parameters:
     ///   - featureId: The feature identifier
     ///   - amount: The amount to decrement
-    internal func decrementBalance(_ featureId: String, amount: Int) {
+    internal func decrementBalance(_ featureId: String, amount: Double) {
         guard let access = all[featureId], !access.unlimited else { return }
 
         let currentBalance = access.balance ?? 0
@@ -134,7 +134,7 @@ public final class FeatureInfo: ObservableObject {
     /// - Parameters:
     ///   - featureId: The feature identifier
     ///   - balance: The new balance from server
-    internal func setBalance(_ featureId: String, balance: Int) {
+    internal func setBalance(_ featureId: String, balance: Double) {
         guard let access = all[featureId] else { return }
 
         let newAccess = FeatureAccess.withBalance(

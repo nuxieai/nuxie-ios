@@ -16,7 +16,7 @@ struct GatePlan: Codable, Sendable {
 
   public let decision: Decision
   public let featureId: String?
-  public let requiredBalance: Int?
+  public let requiredBalance: Double?
   public let entityId: String?
   public let flowId: String?
   public let policy: Policy?

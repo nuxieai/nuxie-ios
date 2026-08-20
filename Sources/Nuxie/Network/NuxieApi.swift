@@ -483,7 +483,7 @@ extension NuxieApi {
     public func checkFeature(
         customerId: String,
         featureId: String,
-        requiredBalance: Int? = nil,
+        requiredBalance: Double? = nil,
         entityId: String? = nil
     ) async throws -> FeatureCheckResult {
         let request = FeatureCheckRequest(
@@ -517,6 +517,23 @@ extension NuxieApi {
             endpoint: .purchase(request),
             body: request,
             responseType: PurchaseResponse.self
+        )
+    }
+
+    func useFeatureWithPurchase(
+        _ request: PurchaseBackedFeatureUseRequest
+    ) async throws -> PurchaseBackedFeatureUseResponse {
+        try await self.request(
+            endpoint: .checkFeature(
+                FeatureCheckRequest(
+                    customerId: request.customerId,
+                    featureId: request.featureId,
+                    requiredBalance: nil,
+                    entityId: request.entityId
+                )
+            ),
+            body: request,
+            responseType: PurchaseBackedFeatureUseResponse.self
         )
     }
 

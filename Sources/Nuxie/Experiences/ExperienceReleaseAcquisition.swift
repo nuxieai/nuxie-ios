@@ -354,6 +354,7 @@ struct ExperienceReleaseProductDocument: Decodable, Equatable, Sendable {
         let id: String
         let featureId: String?
         let featureExternalId: String?
+        let purchaseUsageFeatureIds: [String]
         let allowanceType: String?
         let allowance: Double?
         let interval: String?

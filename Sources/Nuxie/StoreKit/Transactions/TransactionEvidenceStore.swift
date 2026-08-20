@@ -15,6 +15,9 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     let productId: String
     let distinctId: String
     let recordedAt: Date
+    /// Internal and external Feature identifiers from the signed Product.
+    /// This is selection metadata for the server command, not local access.
+    let productFeatureIds: [String]
     let localEntitlementGrants: [StoredLocalEntitlementGrant]
     let isRevoked: Bool
     let finishRequired: Bool
@@ -35,6 +38,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         productId: String,
         distinctId: String,
         recordedAt: Date,
+        productFeatureIds: [String] = [],
         localEntitlementGrants: [StoredLocalEntitlementGrant],
         isRevoked: Bool,
         finishRequired: Bool = false,
@@ -49,6 +53,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.productId = productId
         self.distinctId = distinctId
         self.recordedAt = recordedAt
+        self.productFeatureIds = productFeatureIds
         self.localEntitlementGrants = localEntitlementGrants
         self.isRevoked = isRevoked
         self.finishRequired = finishRequired
@@ -69,6 +74,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             productId: productId,
             distinctId: distinctId,
             recordedAt: recordedAt,
+            productFeatureIds: productFeatureIds,
             localEntitlementGrants: localEntitlementGrants,
             isRevoked: isRevoked,
             finishRequired: finishRequired,

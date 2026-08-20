@@ -554,14 +554,13 @@ final class IRInterpreter {
             let target = try await evalValue(value)
             guard case .number(let n) = target else { return false }
             guard let balance = await features.getBalance(id) else { return false }
-            let targetInt = Int(n)
             switch op {
-            case "credits_eq": return balance == targetInt
-            case "credits_neq": return balance != targetInt
-            case "credits_gt": return balance > targetInt
-            case "credits_gte": return balance >= targetInt
-            case "credits_lt": return balance < targetInt
-            case "credits_lte": return balance <= targetInt
+            case "credits_eq": return balance == n
+            case "credits_neq": return balance != n
+            case "credits_gt": return balance > n
+            case "credits_gte": return balance >= n
+            case "credits_lt": return balance < n
+            case "credits_lte": return balance <= n
             default: return false
             }
 

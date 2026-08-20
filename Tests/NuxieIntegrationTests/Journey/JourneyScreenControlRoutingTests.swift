@@ -42,6 +42,8 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
         nonisolated(unsafe) var store: MockJourneyStore!
         nonisolated(unsafe) var service: JourneyService!
         nonisolated(unsafe) var controller: MockExperienceViewController!
+        nonisolated(unsafe) var featureInfo: FeatureInfo!
+        nonisolated(unsafe) var featureService: FeatureService!
 
         let distinctId = "screen-control-user"
         let experienceId = "screen-control-experience"
@@ -457,6 +459,23 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
+        func featureGatePlanResponse(
+            featureId: String,
+            requiredBalance: Double,
+            flowId: String
+        ) -> EventResponse {
+            EventResponse(
+                status: "ok",
+                payload: ["gate": AnyCodable([
+                    "decision": "require_feature",
+                    "featureId": featureId,
+                    "requiredBalance": requiredBalance,
+                    "flowId": flowId,
+                    "policy": "hard",
+                ])]
+            )
+        }
+
         func install(_ experience: Experience) async {
             mocks.identityService.setDistinctId(distinctId)
             let reference = ExperienceReference(
@@ -676,7 +695,20 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             mocks = MockFactory.shared
             mocks.dateProvider.setCurrentDate(Date())
             store = MockJourneyStore()
-            service = mocks.makeJourneyService(journeyStore: store)
+            featureInfo = FeatureInfo()
+            featureService = FeatureService(
+                api: mocks.nuxieApi,
+                identity: mocks.identityService,
+                profile: mocks.profileService,
+                dateProvider: mocks.dateProvider,
+                featureInfo: featureInfo,
+                cacheTTL: NuxieConfiguration(apiKey: "test-api-key").featureCacheTTL
+            )
+            service = mocks.makeJourneyService(
+                journeyStore: store,
+                features: featureService,
+                featureInfo: featureInfo
+            )
             controller = MockExperienceViewController(mockExperienceVersionId: versionId)
             mocks.experiencePresentationService.defaultMockViewController = controller
         }
@@ -1051,6 +1083,139 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     .map(\.experienceVersionId)
                     .filter { $0 == sourceFlow || $0 == nestedFlow }
             }.toEventually(equal([sourceFlow, nestedFlow]), timeout: .seconds(2))
+        }
+
+        it("accepts an exact authoritative opaque feature gate without showing its fallback") {
+            let fallbackFlow = "opaque-gate-fallback"
+            let experience = signedExperience(definition: renamedRouteDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            mocks.eventLog.preparedTriggerBeforeSend = { event in
+                guard event.name == "original_submit" else { return event }
+                return NuxieEvent(
+                    id: event.id,
+                    name: "renamed_submit",
+                    distinctId: event.distinctId,
+                    properties: event.properties,
+                    timestamp: event.timestamp
+                )
+            }
+            mocks.eventLog.setTrackWithResponseResult(
+                featureGatePlanResponse(
+                    featureId: "exports",
+                    requiredBalance: 2,
+                    flowId: fallbackFlow
+                ),
+                for: "renamed_submit"
+            )
+            await featureService.applyAuthoritativeUse(
+                FeatureCheckResult(
+                    customerId: distinctId,
+                    featureId: "credit_wallet",
+                    requiredBalance: 2,
+                    code: "feature_found",
+                    allowed: true,
+                    unlimited: false,
+                    balance: 8,
+                    type: .creditSystem,
+                    preview: nil
+                ),
+                requestedFeatureId: "exports",
+                distinctId: distinctId,
+                entityId: nil
+            )
+            await featureService.syncFeatureInfo()
+            let published = await MainActor.run {
+                featureInfo.feature("exports")
+            }
+            expect(published?.allowed).to(beTrue())
+            expect(published?.balance).to(beNil())
+            await mocks.nuxieApi.setCheckFeatureResponse(
+                FeatureCheckResult(
+                    customerId: distinctId,
+                    featureId: "exports",
+                    requiredBalance: 2,
+                    code: "insufficient_balance",
+                    allowed: false,
+                    unlimited: false,
+                    balance: 0,
+                    type: .metered,
+                    preview: nil
+                )
+            )
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(actionId: "submit")
+            )
+
+            expect(mocks.experiencePresentationService.presentedExperiences.map(\.experienceVersionId))
+                .toNot(contain(fallbackFlow))
+        }
+
+        it("rejects an ordinary metered feature gate with no visible balance") {
+            let fallbackFlow = "ordinary-gate-fallback"
+            let experience = signedExperience(definition: renamedRouteDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            mocks.eventLog.preparedTriggerBeforeSend = { event in
+                guard event.name == "original_submit" else { return event }
+                return NuxieEvent(
+                    id: event.id,
+                    name: "renamed_submit",
+                    distinctId: event.distinctId,
+                    properties: event.properties,
+                    timestamp: event.timestamp
+                )
+            }
+            mocks.eventLog.setTrackWithResponseResult(
+                featureGatePlanResponse(
+                    featureId: "exports",
+                    requiredBalance: 2,
+                    flowId: fallbackFlow
+                ),
+                for: "renamed_submit"
+            )
+            let info = featureInfo!
+            await MainActor.run {
+                info.update([
+                    "exports": FeatureAccess(
+                        allowed: true,
+                        unlimited: false,
+                        balance: nil,
+                        type: .metered
+                    )
+                ])
+            }
+            await mocks.nuxieApi.setCheckFeatureResponse(
+                FeatureCheckResult(
+                    customerId: distinctId,
+                    featureId: "exports",
+                    requiredBalance: 2,
+                    code: "insufficient_balance",
+                    allowed: false,
+                    unlimited: false,
+                    balance: 0,
+                    type: .metered,
+                    preview: nil
+                )
+            )
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(actionId: "submit")
+            )
+
+            await expect {
+                mocks.experiencePresentationService.presentedExperiences
+                    .map(\.experienceVersionId)
+            }.toEventually(contain(fallbackFlow), timeout: .seconds(2))
         }
 
         it("does not re-enroll the source experience from its own generated event") {

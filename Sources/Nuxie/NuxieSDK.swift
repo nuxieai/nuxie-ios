@@ -843,7 +843,7 @@ public final class NuxieSDK: @unchecked Sendable {
   /// For instant cache-only reads (e.g. SwiftUI), use `features` instead.
   public func hasFeature(
     _ featureId: String,
-    requiredBalance: Int = 1,
+    requiredBalance: Double = 1,
     entityId: String? = nil,
     policy: FeatureCheckPolicy = .cacheFirst
   ) async throws -> FeatureAccess {
@@ -929,6 +929,9 @@ public final class NuxieSDK: @unchecked Sendable {
   /// This method sends the usage directly to the server (blocking) and returns the result,
   /// including updated balance information. Use this when you need confirmation that the
   /// usage was recorded, such as for critical or irreversible operations.
+  /// When one unsynchronized native App Store purchase matches the Feature, the SDK
+  /// verifies that purchase and consumes this usage atomically. The returned
+  /// `authoritativeAccess` then contains the resulting server-authoritative balance.
   ///
   /// - Parameters:
   ///   - featureId: The feature identifier (external ID configured in Nuxie dashboard)
@@ -944,7 +947,9 @@ public final class NuxieSDK: @unchecked Sendable {
   /// // Consume and confirm usage
   /// let result = try await Nuxie.shared.useFeatureAndWait("ai_generations")
   /// if result.success {
-  ///     print("Remaining: \(result.usage?.remaining ?? 0)")
+  ///     let remaining = result.authoritativeAccess?.balance
+  ///         ?? result.usage?.remaining
+  ///     print("Remaining: \(remaining ?? 0)")
   /// }
   /// ```
   @discardableResult
@@ -975,6 +980,22 @@ public final class NuxieSDK: @unchecked Sendable {
       properties["metadata"] = metadata
     }
 
+    if !setUsage,
+       let purchaseBackedResult = try await coreTransactionObserver
+        .useFeatureWithPendingPurchase(
+          distinctId: distinctId,
+          featureId: featureId,
+          amount: amount,
+          entityId: entityId,
+          metadata: metadata?.mapValues(AnyCodable.init)
+        ) {
+      return purchaseBackedResult
+    }
+
+    guard identityService.getDistinctId() == distinctId else {
+      throw CancellationError()
+    }
+
     // Send directly to /i/event endpoint for immediate confirmation
     let api = coreApi
     // Boxed to hand the write-once payload across the API boundary.
@@ -987,10 +1008,14 @@ public final class NuxieSDK: @unchecked Sendable {
       entityId: entityId
     )
 
+    guard identityService.getDistinctId() == distinctId else {
+      throw CancellationError()
+    }
+
     // Update local balance from server response
     if let usage = response.usage, let remaining = usage.remaining {
       await MainActor.run {
-        features.setBalance(featureId, balance: Int(remaining))
+        features.setBalance(featureId, balance: remaining)
       }
     }
 

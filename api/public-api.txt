@@ -32,7 +32,7 @@ s:5Nuxie0A16PurchaseDelegateP16restorePurchasesAA13RestoreResultOyYaF	Function	r
 s:5Nuxie0A16PurchaseDelegateP8purchase7productAA0B6ResultOAA12StoreProductV_tYaF	Function	purchase(product:)
 s:5Nuxie0A22PlatformViewControllera	TypeAlias	NuxiePlatformViewController
 s:5Nuxie0A3SDKC	TypeDecl	NuxieSDK
-s:5Nuxie0A3SDKC10hasFeature_15requiredBalance8entityId6policyAA0D6AccessVSS_SiSSSgAC0D11CheckPolicyOtYaKF	Function	hasFeature(_:requiredBalance:entityId:policy:)
+s:5Nuxie0A3SDKC10hasFeature_15requiredBalance8entityId6policyAA0D6AccessVSS_SdSSSgAC0D11CheckPolicyOtYaKF	Function	hasFeature(_:requiredBalance:entityId:policy:)
 s:5Nuxie0A3SDKC10useFeature_6amount8entityId8metadataySS_SdSSSgSDySSypGSgtF	Function	useFeature(_:amount:entityId:metadata:)
 s:5Nuxie0A3SDKC11flushEventsSbyYaF	Function	flushEvents()
 s:5Nuxie0A3SDKC12isIdentifiedSbvg	Accessor	Get()
@@ -193,7 +193,7 @@ s:5Nuxie11EnvironmentO7stagingyA2CmF	Var	staging
 s:5Nuxie11FeatureInfoC	TypeDecl	FeatureInfo
 s:5Nuxie11FeatureInfoC10hasBalanceySbSSF	Function	hasBalance(_:)
 s:5Nuxie11FeatureInfoC3allSDySSAA0B6AccessVGvp	Var	all
-s:5Nuxie11FeatureInfoC7balanceySiSgSSF	Function	balance(_:)
+s:5Nuxie11FeatureInfoC7balanceySdSgSSF	Function	balance(_:)
 s:5Nuxie11FeatureInfoC7featureyAA0B6AccessVSgSSF	Function	feature(_:)
 s:5Nuxie11FeatureInfoC9isAllowedySbSSF	Function	isAllowed(_:)
 s:5Nuxie11FeatureInfoCACycfc	Constructor	init()
@@ -287,7 +287,7 @@ s:5Nuxie13FeatureAccessV10hasBalanceSbvg	Accessor	Get()
 s:5Nuxie13FeatureAccessV10hasBalanceSbvp	Var	hasBalance
 s:5Nuxie13FeatureAccessV4typeAA0B4TypeOvp	Var	type
 s:5Nuxie13FeatureAccessV7allowedSbvp	Var	allowed
-s:5Nuxie13FeatureAccessV7balanceSiSgvp	Var	balance
+s:5Nuxie13FeatureAccessV7balanceSdSgvp	Var	balance
 s:5Nuxie13FeatureAccessV9unlimitedSbvp	Var	unlimited
 s:5Nuxie13HandoffActionV	TypeDecl	HandoffAction
 s:5Nuxie13HandoffActionV10toRegionIdSSvp	Var	toRegionId
@@ -646,8 +646,10 @@ s:5Nuxie18FeatureUsageResultV0C4InfoV7current5limit9remainingAESd_SdSgAItcfc	Con
 s:5Nuxie18FeatureUsageResultV0C4InfoV7currentSdvp	Var	current
 s:5Nuxie18FeatureUsageResultV0C4InfoV9remainingSdSgvp	Var	remaining
 s:5Nuxie18FeatureUsageResultV10amountUsedSdvp	Var	amountUsed
+s:5Nuxie18FeatureUsageResultV19authoritativeAccessAA0bF0VSgvp	Var	authoritativeAccess
 s:5Nuxie18FeatureUsageResultV5usageAC0C4InfoVSgvp	Var	usage
 s:5Nuxie18FeatureUsageResultV7messageSSSgvp	Var	message
+s:5Nuxie18FeatureUsageResultV7success9featureId10amountUsed7message5usage19authoritativeAccessACSb_SSSdSSSgAC0C4InfoVSgAA0bM0VSgtcfc	Constructor	init(success:featureId:amountUsed:message:usage:authoritativeAccess:)
 s:5Nuxie18FeatureUsageResultV7success9featureId10amountUsed7message5usageACSb_SSSdSSSgAC0C4InfoVSgtcfc	Constructor	init(success:featureId:amountUsed:message:usage:)
 s:5Nuxie18FeatureUsageResultV7successSbvp	Var	success
 s:5Nuxie18FeatureUsageResultV9featureIdSSvp	Var	featureId

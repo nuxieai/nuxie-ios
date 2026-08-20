@@ -22,7 +22,7 @@ struct IRFeatureQueriesAdapter: IRFeatureQueries {
         return access.unlimited
     }
 
-    public func getBalance(_ featureId: String) async -> Int? {
+    public func getBalance(_ featureId: String) async -> Double? {
         guard let access = await featureService.getCached(featureId: featureId, entityId: nil) else {
             return nil
         }

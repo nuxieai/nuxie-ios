@@ -1,0 +1,29 @@
+{
+  "suite": "events/atomic-purchase-sync",
+  "version": 2,
+  "event": {
+    "name": "$purchase_synced",
+    "properties": [
+      "customer_id",
+      "original_transaction_id",
+      "product_id",
+      "transaction_id"
+    ]
+  },
+  "retry": {
+    "request_identity": "stable_purchase_use_event_id",
+    "retain_evidence_on_failure": true,
+    "emit_on_failure": false
+  },
+  "acceptance": {
+    "boundary": "decoded_2xx",
+    "command_success": true,
+    "post_use_access": {
+      "allowed_after_final_finite_unit": false,
+      "balance_after_final_finite_unit": 0
+    },
+    "capture_before_retiring_evidence": true,
+    "emissions_per_accepted_receipt": 1,
+    "ordinary_usage_fallback": false
+  }
+}

@@ -1956,6 +1956,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "id": "entitlement_pro",
                     "featureId": "feature_pro",
                     "featureExternalId": "pro",
+                    "purchaseUsageFeatureIds": ["api_calls", "feature_api_calls"],
                     "allowanceType": "unlimited",
                     "allowance": NSNull(),
                     "interval": NSNull(),
@@ -2016,6 +2017,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 "id": "entitlement_pro_v2",
                 "featureId": "feature_pro_v2",
                 "featureExternalId": "pro_v2",
+                "purchaseUsageFeatureIds": ["api_v2", "feature_api_v2"],
                 "allowanceType": "unlimited",
                 "allowance": NSNull(),
                 "interval": NSNull(),
@@ -2066,6 +2068,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
 
         XCTAssertEqual(productService.requestedProductIds, Set([productID]))
         XCTAssertEqual(experience.products.map(\.placementId), [placementID])
+        XCTAssertEqual(
+            experience.products.first?.localEntitlementGrants.first?
+                .purchaseUsageFeatureIds,
+            ["api_v2", "feature_api_v2"]
+        )
     }
 
     func testTestStoreProductCarriesExactSignedPurchaseContext() async throws {

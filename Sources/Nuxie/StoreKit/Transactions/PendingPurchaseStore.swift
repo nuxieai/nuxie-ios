@@ -24,8 +24,32 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
     let appAccountToken: UUID
     let commercialContext: PurchaseCommercialContext
     let recordedAt: Date
+    /// Internal and external Feature identifiers from the signed Product.
+    /// Used only to choose evidence for an atomic server command; it never
+    /// projects quota or credit balances locally.
+    let productFeatureIds: [String]
     let localEntitlementGrants: [StoredLocalEntitlementGrant]
     let state: PendingPurchaseState
+
+    init(
+        scope: PurchaseStorageScope,
+        distinctId: String,
+        appAccountToken: UUID,
+        commercialContext: PurchaseCommercialContext,
+        recordedAt: Date,
+        productFeatureIds: [String] = [],
+        localEntitlementGrants: [StoredLocalEntitlementGrant],
+        state: PendingPurchaseState
+    ) {
+        self.scope = scope
+        self.distinctId = distinctId
+        self.appAccountToken = appAccountToken
+        self.commercialContext = commercialContext
+        self.recordedAt = recordedAt
+        self.productFeatureIds = productFeatureIds
+        self.localEntitlementGrants = localEntitlementGrants
+        self.state = state
+    }
 }
 
 /// Scope-isolated flat-file store under Application Support. A small JSON

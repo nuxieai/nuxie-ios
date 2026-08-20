@@ -1357,6 +1357,7 @@ actor ExperienceLoader {
                     StoreProduct.LocalEntitlementGrant(
                         featureId: $0.featureId ?? $0.id,
                         featureExternalId: $0.featureExternalId,
+                        purchaseUsageFeatureIds: $0.purchaseUsageFeatureIds,
                         allowanceType: $0.allowanceType,
                         allowance: $0.allowance
                     )
@@ -1400,6 +1401,7 @@ actor ExperienceLoader {
                 StoreProduct.LocalEntitlementGrant(
                     featureId: $0.featureId ?? $0.id,
                     featureExternalId: $0.featureExternalId,
+                    purchaseUsageFeatureIds: $0.purchaseUsageFeatureIds,
                     allowanceType: $0.allowanceType,
                     allowance: $0.allowance
                 )

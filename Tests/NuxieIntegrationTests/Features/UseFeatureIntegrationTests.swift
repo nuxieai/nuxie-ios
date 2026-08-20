@@ -30,6 +30,50 @@ final class UseFeatureIntegrationTests: AsyncSpec {
             // MARK: - Basic Usage Tests
 
             describe("basic usage") {
+                it("uses pending StoreKit evidence before the ordinary usage event") {
+                    let transactionObserver = MockTransactionObserver()
+                    let authoritative = FeatureUsageResult(
+                        success: true,
+                        featureId: "credits",
+                        amountUsed: 2,
+                        message: nil,
+                        usage: nil,
+                        authoritativeAccess: FeatureAccess(
+                            allowed: true,
+                            unlimited: false,
+                            balance: 3,
+                            type: .creditSystem
+                        )
+                    )
+                    await transactionObserver.setNextPurchaseBackedUsageResult(
+                        authoritative
+                    )
+                    var overrides = mocks.unitTestOverrides()
+                    overrides.transactionObserver = transactionObserver
+                    await NuxieSDK.shared.shutdown()
+                    try NuxieSDK.shared.setup(
+                        with: NuxieConfiguration(apiKey: "test-api-key"),
+                        overrides: overrides
+                    )
+                    mocks.identityService.setDistinctId("test-user-123")
+
+                    let result = try await NuxieSDK.shared.useFeatureAndWait(
+                        "credits",
+                        amount: 2
+                    )
+
+                    expect(result.success) == true
+                    expect(result.usage).to(beNil())
+                    expect(result.authoritativeAccess?.balance) == 3
+                    let trackEventCallCount = await mockApi.trackEventCallCount
+                    expect(trackEventCallCount) == 0
+                    let calls = await transactionObserver.purchaseBackedUsageCalls
+                    expect(calls.count) == 1
+                    expect(calls.first?.distinctId) == "test-user-123"
+                    expect(calls.first?.featureId) == "credits"
+                    expect(calls.first?.amount) == 2
+                }
+
                 it("should call API with correct $feature_used event") {
                     await mockApi.configureTrackEventResponse(status: "ok")
 
@@ -63,6 +107,45 @@ final class UseFeatureIntegrationTests: AsyncSpec {
 
                     let lastCall = await mockApi.lastTrackEventCall
                     expect(lastCall?.distinctId).to(equal("custom-user-456"))
+                }
+
+                it("cancels an ordinary use when identity changes during the request") {
+                    let usage = EventResponse.Usage(
+                        current: 7,
+                        limit: 10,
+                        remaining: 3
+                    )
+                    await mockApi.configureTrackEventResponse(
+                        status: "ok",
+                        usage: usage
+                    )
+                    await mockApi.setTrackEventDelay(0.2)
+
+                    let use = Task {
+                        try await NuxieSDK.shared.useFeatureAndWait("credits")
+                    }
+                    while await mockApi.trackEventCallCount == 0 {
+                        await Task.yield()
+                    }
+                    mocks.identityService.setDistinctId("next-user")
+                    await MainActor.run {
+                        NuxieSDK.shared.features.update(
+                            "credits",
+                            access: FeatureAccess.withBalance(
+                                42,
+                                unlimited: false,
+                                type: .creditSystem
+                            )
+                        )
+                    }
+
+                    await expect {
+                        try await use.value
+                    }.to(throwError(errorType: CancellationError.self))
+                    let visibleBalance = await MainActor.run {
+                        NuxieSDK.shared.features.balance("credits")
+                    }
+                    expect(visibleBalance) == 42
                 }
             }
 

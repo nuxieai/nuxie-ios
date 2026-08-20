@@ -42,6 +42,23 @@ events carry `experience_id`. `$experiment_exposure` carries both
 `experience_id` and `experience_version`. Authored script events receive
 `journey_id`, `experience_id`, and `screen_id` from the runner.
 
+## Commerce events
+
+| Event | Properties | Producer |
+| --- | --- | --- |
+| `$purchase_synced` | `transaction_id`, `original_transaction_id`, `product_id`, `customer_id` | Store transaction sync or atomic purchase-backed feature use |
+
+For an atomic purchase-backed feature use, transport errors and non-2xx
+responses retain the scoped receipt evidence, emit no `$purchase_synced`, and
+retry with the same purchase-use event identity. A decoded 2xx response means
+the command committed even when its post-use access is disallowed because the
+last finite credit was consumed. Before retiring or scrubbing receipt evidence,
+the SDK durably captures a stable `$purchase_synced` event scoped to the
+purchasing identity. A failed capture keeps the bounded evidence for an
+idempotent retry; replaying a captured event acknowledges the same identity
+without duplicate delivery. The portable property, retry, and exactly-once contract is
+`fixtures/events/atomic-purchase-sync.json`.
+
 A mailbox claim is admitted only after the synchronous claim CAS acknowledges
 the device and returns its authoritative epoch. The SDK first persists the
 versioned state envelope, then enters through the same disk-resume path used
