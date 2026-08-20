@@ -60,16 +60,16 @@ struct ExperienceReleaseDescriptorEnvelope: Codable, Equatable, Sendable {
             return encoded
         }
         let json = "{" + [
-            "\"mediaType\":\(string(mediaType))",
-            "\"encoding\":\(string(encoding))",
+            "\"descriptorBytesBase64\":\(string(descriptorBytesBase64))",
             "\"descriptorSha256\":\(string(descriptorSha256))",
             "\"descriptorSizeBytes\":\(descriptorSizeBytes)",
-            "\"descriptorBytesBase64\":\(string(descriptorBytesBase64))",
+            "\"encoding\":\(string(encoding))",
+            "\"mediaType\":\(string(mediaType))",
             "\"signature\":{" + [
-                "\"version\":\(signature.version)",
                 "\"algorithm\":\(string(signature.algorithm))",
                 "\"keyId\":\(string(signature.keyId))",
                 "\"signatureBase64\":\(string(signature.signatureBase64))",
+                "\"version\":\(signature.version)",
             ].joined(separator: ",") + "}",
         ].joined(separator: ",") + "}"
         return Data(json.utf8)
