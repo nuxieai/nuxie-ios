@@ -1,5 +1,57 @@
 import Foundation
 
+enum ActiveProductEvidenceAuthorityResolution: Equatable, Sendable {
+    case unavailable
+    case readyNoMatch
+    case nativeStoreKit
+    case providerConnector
+    case ambiguous
+
+    var resolvedAuthority: PurchaseEvidenceAuthority? {
+        switch self {
+        case .unavailable:
+            return nil
+        case .readyNoMatch, .nativeStoreKit:
+            return .nativeStoreKit
+        case .providerConnector:
+            return .providerConnector
+        case .ambiguous:
+            return .ambiguous
+        }
+    }
+}
+
+func activeProductEvidenceAuthority(
+    products: [ExperienceReleaseProductDocument],
+    storeProductId: String
+) -> ActiveProductEvidenceAuthorityResolution {
+    let authorities = Set(products
+        .filter {
+            $0.store.platform == "apple_app_store"
+                && $0.store.productId == storeProductId
+        }
+        .map {
+            $0.providerFeatureAccess == nil
+                ? PurchaseEvidenceAuthority.nativeStoreKit
+                : .providerConnector
+        })
+    switch authorities.count {
+    case 0:
+        return .readyNoMatch
+    case 1:
+        switch authorities.first {
+        case .nativeStoreKit:
+            return .nativeStoreKit
+        case .providerConnector:
+            return .providerConnector
+        default:
+            return .ambiguous
+        }
+    default:
+        return .ambiguous
+    }
+}
+
 /// Authenticates release profiles and resolves descriptor-native experiences.
 actor ExperienceLoader {
     private struct ExperienceVersionKey: Hashable {
@@ -47,6 +99,15 @@ actor ExperienceLoader {
     /// descriptors during profile admission, before any paywall is presented.
     private var productMappingsByReleaseAndID: [String: ExperienceReleaseProductDocument] = [:]
     private var productMappingsByReleaseAndStoreID: [String: ExperienceReleaseProductDocument] = [:]
+    /// Nil until an authenticated profile (including an authenticated empty
+    /// profile) has established the current app's Product authority. The
+    /// catalog is the material recovery generation: identical admissions do
+    /// not rescan StoreKit, while ownership changes do.
+    private var productAuthorityCatalog: [
+        String: ActiveProductEvidenceAuthorityResolution
+    ]?
+    private var productAuthorityChangeHandler: (@Sendable () async -> Void)?
+    private var pendingProductAuthorityChangeNotification = false
     private var preparedReleasesByVersion: [ExperienceVersionKey: StoredPreparedRelease] = [:]
     private var pendingPreparations: [
         AuthenticatedExperienceReleaseID: PendingPreparation
@@ -100,6 +161,7 @@ actor ExperienceLoader {
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
         guard let profile else {
+            let authorityChanged = installProductAuthorityCatalog([:])
             cancelWarmTasks()
             finishPreloadAccounting(cancelled: true)
             cancelPendingPreparations()
@@ -111,6 +173,7 @@ actor ExperienceLoader {
             await interactivePreparationCache.removeAll()
             preloadMetricsByRelease.removeAll()
             reportedPreloadMetricsByRelease.removeAll()
+            if authorityChanged { await notifyProductAuthorityChanged() }
             return nil
         }
 
@@ -135,6 +198,9 @@ actor ExperienceLoader {
             installed[key] = definition
         }
         let productMappings = makeProductMappingCache(installed.values)
+        let authorityChanged = installProductAuthorityCatalog(
+            makeProductAuthorityCatalog(installed.values)
+        )
 
         if hasSameReleaseAuthority(as: installed) {
             // Disk admission and a concurrent network refresh can authenticate
@@ -146,6 +212,7 @@ actor ExperienceLoader {
             productMappingsByReleaseAndStoreID.merge(productMappings.byStoreID) {
                 current, _ in current
             }
+            if authorityChanged { await notifyProductAuthorityChanged() }
             return catalog.references
         }
 
@@ -167,7 +234,26 @@ actor ExperienceLoader {
         preloadMetricsByRelease.removeAll()
         reportedPreloadMetricsByRelease.removeAll()
         beginWarming(installed.values)
+        if authorityChanged { await notifyProductAuthorityChanged() }
         return catalog.references
+    }
+
+    func setProductAuthorityChangeHandler(
+        _ handler: @escaping @Sendable () async -> Void
+    ) async {
+        productAuthorityChangeHandler = handler
+        guard productAuthorityCatalog != nil,
+              pendingProductAuthorityChangeNotification else { return }
+        pendingProductAuthorityChangeNotification = false
+        await handler()
+    }
+
+    private func notifyProductAuthorityChanged() async {
+        guard let productAuthorityChangeHandler else {
+            pendingProductAuthorityChangeNotification = true
+            return
+        }
+        await productAuthorityChangeHandler()
     }
 
     private func hasSameReleaseAuthority(
@@ -202,6 +288,47 @@ actor ExperienceLoader {
             }
         }
         return (byID, byStoreID)
+    }
+
+    private func makeProductAuthorityCatalog(
+        _ definitions: Dictionary<ExperienceVersionKey,
+            AuthenticatedExperienceReleaseDefinition>.Values
+    ) -> [String: ActiveProductEvidenceAuthorityResolution] {
+        let products = definitions
+            .filter { $0.mode == .active }
+            .flatMap(\.products)
+        let storeProductIds = Set(products.compactMap { product in
+            product.store.platform == "apple_app_store"
+                ? product.store.productId
+                : nil
+        })
+        return Dictionary(uniqueKeysWithValues: storeProductIds.map { storeProductId in
+            (
+                storeProductId,
+                activeProductEvidenceAuthority(
+                    products: products,
+                    storeProductId: storeProductId
+                )
+            )
+        })
+    }
+
+    private func installProductAuthorityCatalog(
+        _ catalog: [String: ActiveProductEvidenceAuthorityResolution]
+    ) -> Bool {
+        let changed = productAuthorityCatalog != catalog
+        productAuthorityCatalog = catalog
+        return changed
+    }
+
+    /// Resolves current receipt ownership from the authenticated active release
+    /// set. Conflicting active Products fail closed instead of depending on
+    /// dictionary iteration order.
+    func purchaseEvidenceAuthority(
+        storeProductId: String
+    ) -> ActiveProductEvidenceAuthorityResolution {
+        guard let productAuthorityCatalog else { return .unavailable }
+        return productAuthorityCatalog[storeProductId] ?? .readyNoMatch
     }
 
     /// Returns authenticated Product authority without requiring an Experience
@@ -255,6 +382,8 @@ actor ExperienceLoader {
         await interactivePreparationCache.removeAll()
         preloadMetricsByRelease.removeAll()
         reportedPreloadMetricsByRelease.removeAll()
+        productAuthorityCatalog = nil
+        pendingProductAuthorityChangeNotification = false
     }
 
     /// Drops memory-heavy prepared bytes while retaining authenticated

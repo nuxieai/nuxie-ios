@@ -26,6 +26,24 @@ for removed_config in enableFileLogging propertiesSanitizer do-not-track do‑no
   fi
 done
 
+for removed_purchase_api in \
+  StoreKitPurchaseEvidence \
+  providerPurchased \
+  purchasedWithStoreKitEvidence \
+  providerRestored \
+  storeKitRestored \
+  'purchaseOutcome('; do
+  if grep -R -Fq "$removed_purchase_api" Sources Examples README.md; then
+    fail "maintained source or guidance mentions removed purchase API: $removed_purchase_api"
+  fi
+done
+for removed_delegate_signature in 'func purchase(_ product' 'func restore()'; do
+  if grep -R -Fq "$removed_delegate_signature" \
+    Sources/Nuxie/StoreKit/NuxiePurchaseDelegate.swift Examples README.md; then
+    fail "maintained delegate guidance mentions removed signature: $removed_delegate_signature"
+  fi
+done
+
 grep -Fq 'test             - Run the full unit + native-runtime + integration + macOS gate' Makefile \
   || fail 'Make help does not describe the full test gate'
 
@@ -39,7 +57,7 @@ if grep -Fq 'public init(purchases:' "$revenuecat_adapter"; then
 fi
 for provider_adapter in Examples/Adapters/NuxieRevenueCatPurchaseDelegate.swift \
   Examples/Adapters/NuxieSuperwallPurchaseDelegate.swift; do
-  if grep -Eq 'purchasedWithStoreKitEvidence|transaction\.finish' "$provider_adapter"; then
+  if grep -Eq 'transaction\.finish' "$provider_adapter"; then
     fail "provider adapter takes transaction sync/finish ownership: $provider_adapter"
   fi
 done

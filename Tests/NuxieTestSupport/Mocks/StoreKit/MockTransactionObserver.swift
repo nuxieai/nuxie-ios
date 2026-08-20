@@ -6,6 +6,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
     public private(set) var stopListeningCalled = false
     public private(set) var syncCurrentEntitlementsCalled = false
     public private(set) var syncCurrentEntitlementsDistinctIds: [String] = []
+    public private(set) var profileReadyRecoveryCalls = 0
     public private(set) var recordedPurchaseIds: [String] = []
     public private(set) var recordedPurchaseDistinctIds: [String] = []
     public private(set) var recordedPurchaseFinishRequirements: [Bool] = []
@@ -28,6 +29,11 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
 
     public func stopListening() async {
         stopListeningCalled = true
+    }
+
+    public func retryAfterProfileReady() async {
+        guard !stopListeningCalled else { return }
+        profileReadyRecoveryCalls += 1
     }
 
     public func syncTransaction(

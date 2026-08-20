@@ -24,6 +24,7 @@ struct NuxieCoreOverrides {
   var triggers: TriggerServiceProtocol?
   var productService: ProductService?
   var transactionObserver: TransactionObserverProtocol?
+  var transactionRecoverySources: StoreTransactionRecoverySources?
   var pendingPurchaseStore: PendingPurchaseStoreProtocol?
   var purchaseAccountOwnershipStore: PurchaseAccountOwnershipStoreProtocol?
   var transactionService: TransactionService?
@@ -276,7 +277,8 @@ final class NuxieCore: @unchecked Sendable {
       ),
       localAccessStore: localPurchaseAccessStore,
       purchaseStorageScope: purchaseStorageScope,
-      dateProvider: dateProvider
+      dateProvider: dateProvider,
+      recoverySources: overrides.transactionRecoverySources
     )
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
       customStoragePath: configuration.customStoragePath,
@@ -303,9 +305,20 @@ final class NuxieCore: @unchecked Sendable {
       introEligibilityTokenProvider: introEligibilityTokenProvider,
       introEligibilityOverrideHealth: introEligibilityOverrideHealth,
       featureService: features,
-      testStore: testStore
+      testStore: testStore,
+      activeProductEvidenceAuthority: { storeProductId in
+        await experiences.purchaseEvidenceAuthority(
+          storeProductId: storeProductId
+        )
+      }
     )
     builtTransactionService.set(transactionService)
+    experiences.setProductAuthorityChangeHandler { [weak transactionObserver] in
+      guard let transactionObserver else { return }
+      Task { [weak transactionObserver] in
+        await transactionObserver?.retryAfterProfileReady()
+      }
+    }
     let userTransitions = overrides.userTransitions ?? UserTransitionCoordinator(
       profile: profile,
       segments: segments,

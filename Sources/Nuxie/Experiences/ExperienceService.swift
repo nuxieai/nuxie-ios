@@ -92,6 +92,15 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
 
     func onAppDidEnterBackground() async
     func onAppBecameActive() async
+
+    /// Receipt authority derived only from authenticated active release Products.
+    func purchaseEvidenceAuthority(
+        storeProductId: String
+    ) async -> ActiveProductEvidenceAuthorityResolution
+
+    func setProductAuthorityChangeHandler(
+        _ handler: @escaping @Sendable () async -> Void
+    )
 }
 
 extension ExperienceServiceProtocol {
@@ -99,6 +108,12 @@ extension ExperienceServiceProtocol {
     func suspendWarmLoads() async {}
     func onAppDidEnterBackground() async {}
     func onAppBecameActive() async {}
+    func purchaseEvidenceAuthority(
+        storeProductId: String
+    ) async -> ActiveProductEvidenceAuthorityResolution { .unavailable }
+    func setProductAuthorityChangeHandler(
+        _ handler: @escaping @Sendable () async -> Void
+    ) { _ = handler }
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? { nil }
@@ -238,6 +253,22 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
         try await experienceLoader.replaceReleaseProfile(profile)
+    }
+
+    func purchaseEvidenceAuthority(
+        storeProductId: String
+    ) async -> ActiveProductEvidenceAuthorityResolution {
+        await experienceLoader.purchaseEvidenceAuthority(
+            storeProductId: storeProductId
+        )
+    }
+
+    func setProductAuthorityChangeHandler(
+        _ handler: @escaping @Sendable () async -> Void
+    ) {
+        Task {
+            await experienceLoader.setProductAuthorityChangeHandler(handler)
+        }
     }
 
     func waitForWarmLoadsToSettle() async {
