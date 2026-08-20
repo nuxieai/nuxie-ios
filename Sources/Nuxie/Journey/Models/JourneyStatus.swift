@@ -93,8 +93,6 @@ public enum JourneyExitReason: String, Codable, Sendable {
     }
 }
 
-// Legacy workflow execution types removed (Experience FSM handles execution state)
-
 extension JourneyExitReason {
     /// Maps an exit action's reason string onto the exit-reason enum;
     /// unknown or absent reasons default to `.completed`.

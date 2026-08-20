@@ -499,7 +499,7 @@ final class IRInterpreterTests: AsyncSpec {
 
             it("should resolve Response.Field only from the exact execution snapshot") {
                 let snapshot = ResponseSessionSnapshot(
-                    responseId: "rsp_c2f57dfc6a81edf7fe7dbf80d32a660820341f0f5b698d9f1ded40e06cbd69c8",
+                    responseId: "rsp_fdf96a130d4da11a334943fddeae435c692b09f043d68c86a2c0298edbe8def7",
                     journeyId: "journey-1",
                     responseSchemaKey: "survey",
                     responseSchemaVersionId: "survey-v1",

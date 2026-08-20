@@ -25,7 +25,9 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
             from: Data(contentsOf: fixturesRoot.appendingPathComponent("fixture-index.json"))
         )
         XCTAssertEqual(index.schemaVersion, "nuxie-sdk-releases.v1")
-        StubURLProtocol.register(matcher: { $0.url?.host?.hasSuffix(".fixture.nuxie.test") == true }) {
+        StubURLProtocol.register(matcher: {
+            $0.url?.host?.hasSuffix(".sdk-fixtures.nuxie.test") == true
+        }) {
             request in
             let fixtureID = request.url!.host!.components(separatedBy: ".").first!
             let fileURL = fixturesRoot.appendingPathComponent(fixtureID)
@@ -55,7 +57,7 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
         for fixture in index.fixtures {
             let fixtureRoot = fixturesRoot.appendingPathComponent(fixture.id)
             let profile = try JSONDecoder().decode(
-                ExperienceReleaseProfileV2.self,
+                ExperienceReleaseProfile.self,
                 from: Data(contentsOf: fixtureRoot.appendingPathComponent("profile.json"))
             )
             let cache = temporaryDirectory()
@@ -63,7 +65,7 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
                 cacheDirectory: cache,
                 urlSession: TestURLSessionProvider.createTestSession(),
                 authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
-                supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+                supportedRuntime: ExperienceReleaseRuntime.current,
                 admission: ExperienceReleaseAdmission(
                     store: InMemoryExperienceReleaseHighWaterStore()
                 )

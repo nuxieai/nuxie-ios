@@ -2,10 +2,10 @@ import Foundation
 import XCTest
 @testable import Nuxie
 
-final class ExperienceDefinitionV2Tests: XCTestCase {
+final class ExperienceDefinitionTests: XCTestCase {
     private func goldenDescriptorObject() throws -> [String: Any] {
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: fixtureData("envelope.json")
         )
         let bytes = try XCTUnwrap(Data(base64Encoded: envelope.descriptorBytesBase64))
@@ -14,7 +14,7 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
 
     func testGoldenReleaseBuildsRoutesResponsesAndControlActionsDirectly() throws {
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: fixtureData("envelope.json")
         )
         let bytes = try XCTUnwrap(Data(base64Encoded: envelope.descriptorBytesBase64))
@@ -23,10 +23,10 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
         )
         try ExperienceReleaseDescriptorSchemaValidator.validate(object)
         let descriptor = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorV2.self,
+            ExperienceReleaseDescriptor.self,
             from: bytes
         )
-        let definition = try ExperienceDefinitionV2(descriptor: descriptor)
+        let definition = try ExperienceDefinition(descriptor: descriptor)
 
         XCTAssertEqual(definition.entryRouteEventName, "$app_opened")
         let route = try XCTUnwrap(
@@ -66,8 +66,8 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
     }
 
     func testDeviceAvailableSelectsAvailableProgramOnDevice() throws {
-        let route = JourneyRouteV2(
-            key: JourneyRouteKeyV2(host: .journey, eventName: "device-work"),
+        let route = JourneyRoute(
+            key: JourneyRouteKey(host: .journey, eventName: "device-work"),
             revisionSHA256: String(repeating: "a", count: 64),
             program: [.object([
                 "type": .string("device_available"),
@@ -82,7 +82,7 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
                 ])]),
             ])]
         )
-        let definition = ExperienceDefinitionV2(
+        let definition = ExperienceDefinition(
             entryRouteEventName: "$app_opened",
             screens: [],
             viewModelValues: [],
@@ -103,27 +103,27 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
     }
 
     func testSignedDeviceRegionProjectionInsertsCompilerHandoffAtCursor() throws {
-        let route = JourneyRouteV2(
-            key: JourneyRouteKeyV2(host: .journey, eventName: "handoff"),
+        let route = JourneyRoute(
+            key: JourneyRouteKey(host: .journey, eventName: "handoff"),
             revisionSHA256: String(repeating: "b", count: 64),
             program: [
                 .object(["type": .string("navigate"), "screenId": .string("next")]),
                 .object(["type": .string("connector_action"), "accountRef": .string("a"), "toolKey": .string("t"), "payload": .object(["value": .string("x")]), "onSucceeded": .array([]), "onFailed": .array([]), "onTimeout": .array([])])
             ]
         )
-        let deviceRegion = JourneyExecutionRegionV2(
+        let deviceRegion = JourneyExecutionRegion(
             id: "device",
             plane: .device,
-            entryCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0),
+            entryCursor: JourneyExecutionCursor(programPath: "/program", actionIndex: 0),
             actionPaths: ["/program/0"]
         )
-        let serverRegion = JourneyExecutionRegionV2(
+        let serverRegion = JourneyExecutionRegion(
             id: "server",
             plane: .server,
-            entryCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 1),
+            entryCursor: JourneyExecutionCursor(programPath: "/program", actionIndex: 1),
             actionPaths: ["/program/1"]
         )
-        let plan = JourneyExecutionPlanV2(
+        let plan = JourneyExecutionPlan(
             id: "plan",
             route: route.key,
             revisionSHA256: route.revisionSHA256,
@@ -132,10 +132,10 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
             entryCursor: deviceRegion.entryCursor,
             deviceRegions: [deviceRegion],
             serverRegions: [serverRegion],
-            handoffEdges: [JourneyExecutionHandoffEdgeV2(
+            handoffEdges: [JourneyExecutionHandoffEdge(
                 id: "edge",
                 fromRegionId: deviceRegion.id,
-                fromCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 1),
+                fromCursor: JourneyExecutionCursor(programPath: "/program", actionIndex: 1),
                 toRegionId: serverRegion.id,
                 toCursor: serverRegion.entryCursor,
                 direction: "device_to_server",
@@ -144,7 +144,7 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
                 onDeviceUnavailableCursor: nil
             )]
         )
-        let definition = ExperienceDefinitionV2(
+        let definition = ExperienceDefinition(
             entryRouteEventName: "$app_opened",
             screens: [],
             viewModelValues: [],
@@ -171,26 +171,26 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
     }
 
     func testSignedDeviceRegionProjectionEmitsTerminalHandoffAtEndOfProgram() throws {
-        let route = JourneyRouteV2(
-            key: JourneyRouteKeyV2(host: .journey, eventName: "terminal-handoff"),
+        let route = JourneyRoute(
+            key: JourneyRouteKey(host: .journey, eventName: "terminal-handoff"),
             revisionSHA256: String(repeating: "c", count: 64),
             program: [
                 .object(["type": .string("navigate"), "screenId": .string("next")]),
             ]
         )
-        let deviceRegion = JourneyExecutionRegionV2(
+        let deviceRegion = JourneyExecutionRegion(
             id: "device-terminal",
             plane: .device,
-            entryCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0),
+            entryCursor: JourneyExecutionCursor(programPath: "/program", actionIndex: 0),
             actionPaths: ["/program/0"]
         )
-        let serverRegion = JourneyExecutionRegionV2(
+        let serverRegion = JourneyExecutionRegion(
             id: "server-terminal",
             plane: .server,
-            entryCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 1),
+            entryCursor: JourneyExecutionCursor(programPath: "/program", actionIndex: 1),
             actionPaths: []
         )
-        let plan = JourneyExecutionPlanV2(
+        let plan = JourneyExecutionPlan(
             id: "terminal-plan",
             route: route.key,
             revisionSHA256: route.revisionSHA256,
@@ -199,10 +199,10 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
             entryCursor: deviceRegion.entryCursor,
             deviceRegions: [deviceRegion],
             serverRegions: [serverRegion],
-            handoffEdges: [JourneyExecutionHandoffEdgeV2(
+            handoffEdges: [JourneyExecutionHandoffEdge(
                 id: "terminal-edge",
                 fromRegionId: deviceRegion.id,
-                fromCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 1),
+                fromCursor: JourneyExecutionCursor(programPath: "/program", actionIndex: 1),
                 toRegionId: serverRegion.id,
                 toCursor: serverRegion.entryCursor,
                 direction: "device_to_server",
@@ -211,7 +211,7 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
                 onDeviceUnavailableCursor: nil
             )]
         )
-        let definition = ExperienceDefinitionV2(
+        let definition = ExperienceDefinition(
             entryRouteEventName: "$app_opened",
             screens: [],
             viewModelValues: [],
@@ -275,7 +275,7 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
               case .submitResponse(let submit) = wait.onSatisfied.first else {
             return XCTFail("canonical nested action program did not decode")
         }
-        XCTAssertNil(submit.responseSchemaId)
+        XCTAssertEqual(submit.type, "submit_response")
     }
 
     func testCanonicalActionUnionDecodesEveryPublishedShape() throws {
@@ -361,7 +361,7 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
             .deletingLastPathComponent()
         return try Data(
             contentsOf: root
-                .appendingPathComponent("fixtures/experience-release-descriptor-v2")
+                .appendingPathComponent("fixtures/experience-release-descriptor")
                 .appendingPathComponent(name)
         )
     }
@@ -404,7 +404,7 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
         XCTAssertThrowsError(try ExperienceReleaseDescriptorSchemaValidator.validate(descriptor))
     }
 
-    func testRuntimeAdmissionRejectsScreenActionsV2UntilExecutorIsAvailable() throws {
+    func testRuntimeAdmissionRejectsScreenActionsUntilExecutorIsAvailable() throws {
         var object = try goldenDescriptorObject()
         var behaviors = try XCTUnwrap(object["screenBehaviors"] as? [[String: Any]])
         var behavior = try XCTUnwrap(behaviors.first)
@@ -413,7 +413,7 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
             "behavior": ["kind": "script"],
         ]]
         behavior["script"] = [
-            "protocol": "screen-actions-v2",
+            "protocol": "screen-actions",
             "artifact": [
                 "key": "screen-behavior/sha256/\(String(repeating: "a", count: 64)).bin",
                 "sha256": String(repeating: "a", count: 64),
@@ -426,12 +426,12 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
         object["screenBehaviors"] = behaviors
         try ExperienceReleaseDescriptorSchemaValidator.validate(object)
         let bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-        let descriptor = try JSONDecoder().decode(ExperienceReleaseDescriptorV2.self, from: bytes)
+        let descriptor = try JSONDecoder().decode(ExperienceReleaseDescriptor.self, from: bytes)
 
-        XCTAssertThrowsError(try ExperienceDefinitionV2(descriptor: descriptor)) { error in
+        XCTAssertThrowsError(try ExperienceDefinition(descriptor: descriptor)) { error in
             XCTAssertEqual(
                 error as? ExperienceReleaseDescriptorAuthenticationError,
-                .unsupportedCompatibility("screen_actions_v2")
+                .unsupportedRuntime("screen_actions")
             )
         }
     }

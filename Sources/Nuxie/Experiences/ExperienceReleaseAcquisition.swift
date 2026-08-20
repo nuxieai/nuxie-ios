@@ -120,18 +120,18 @@ struct PreparedExperienceRelease: Sendable {
 }
 
 struct AuthenticatedExperienceReleaseID: Codable, Equatable, Hashable, Sendable {
-    let identity: ExperienceReleaseIdentityV2
+    let identity: ExperienceReleaseIdentity
     let descriptorSHA256: String
 }
 
 struct AuthenticatedExperienceReleaseDefinition: Sendable {
     let releaseID: AuthenticatedExperienceReleaseID
     let authenticatedDescriptor: AuthenticatedExperienceReleaseDescriptor
-    let delivery: ExperienceReleaseDeliveryV2
+    let delivery: ExperienceReleaseDelivery
     let mode: ExperienceReleaseAdmissionMode
     let behavior: ExperienceBehaviorDefinition
     let journey: JourneyDocument
-    let definitionV2: ExperienceDefinitionV2
+    let definition: ExperienceDefinition
     let screenIDs: Set<String>
     let products: [ExperienceReleaseProductDocument]
     let placements: [ExperienceReleasePlacementDocument]
@@ -146,13 +146,13 @@ struct AuthenticatedExperienceReleaseCatalog: Sendable {
 }
 
 struct ExperienceReleaseRejection: Sendable {
-    let locator: ExperienceReleaseIdentityV2
+    let locator: ExperienceReleaseIdentity
     let contractCode: String
 }
 
-struct ExperienceReleaseRuntimeCompatibility {
-    /// Derived from the runtime module's single compatibility authority.
-    static let current = ExperienceReleaseSupportedCompatibility(
+struct ExperienceReleaseRuntime {
+    /// Derived from the runtime module's authoritative build metadata.
+    static let current = ExperienceReleaseSupportedRuntime(
         currentSdkVersion: SDKVersion.current,
         supportedRuntimeRevisions: [NuxieEmbeddedRuntimeCompatibility.sourceRevision],
         supportedLuauRevisions: [
@@ -285,23 +285,6 @@ private struct ExperienceReleaseRenderDocument: Decodable {
     let transitions: [Transition]
     let textInputs: [TextInput]
     let assets: [Asset]
-}
-
-private struct ExperienceReleaseCompatibilityDocument: Decodable {
-    struct Luau: Decodable {
-        let revision: String
-        let bytecodeVersions: [Int]
-    }
-    struct SceneFormat: Decodable {
-        let major: Int
-        let minor: Int
-    }
-
-    let minimumSdkVersion: String
-    let runtimeRevision: String
-    let luau: Luau
-    let sceneFormat: SceneFormat
-    let requiredCapabilities: [String]
 }
 
 private struct ExperienceReleaseProvenanceDocument: Decodable {
@@ -459,7 +442,7 @@ private struct ExperienceReleasePresentationDocument: Decodable {
 
 protocol ExperienceReleaseAcquiring: Sendable {
     func authenticateProfile(
-        _ profile: ExperienceReleaseProfileV2
+        _ profile: ExperienceReleaseProfile
     ) async throws -> AuthenticatedExperienceReleaseCatalog
 
     func prepare(
@@ -655,7 +638,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private struct AuthenticatedMembership {
-        let identity: ExperienceReleaseIdentityV2
+        let identity: ExperienceReleaseIdentity
         let digest: String
         let definition: AuthenticatedExperienceReleaseDefinition
     }
@@ -681,7 +664,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     private let maximumCacheBytes: Int
     private let urlSession: URLSession
     private let authorizationKeys: [ExperiencePackageAuthorizationKey]
-    private let supportedCompatibility: ExperienceReleaseSupportedCompatibility
+    private let supportedRuntime: ExperienceReleaseSupportedRuntime
     private let admission: ExperienceReleaseAdmission
 
     init(
@@ -689,7 +672,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         maximumCacheBytes: Int = 256 * 1_024 * 1_024,
         urlSession: URLSession = .shared,
         authorizationKeys: [ExperiencePackageAuthorizationKey],
-        supportedCompatibility: ExperienceReleaseSupportedCompatibility,
+        supportedRuntime: ExperienceReleaseSupportedRuntime,
         admission: ExperienceReleaseAdmission
     ) {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
@@ -701,16 +684,16 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         self.maximumCacheBytes = max(0, maximumCacheBytes)
         self.urlSession = urlSession
         self.authorizationKeys = authorizationKeys
-        self.supportedCompatibility = supportedCompatibility
+        self.supportedRuntime = supportedRuntime
         self.admission = admission
     }
 
     func authenticateProfile(
-        _ profile: ExperienceReleaseProfileV2
+        _ profile: ExperienceReleaseProfile
     ) async throws -> AuthenticatedExperienceReleaseCatalog {
         _ = try Self.validatedOrigin(profile.delivery.renderBaseUrl)
         _ = try Self.validatedOrigin(profile.delivery.assetBaseUrl)
-        let memberships: [(ExperienceReleaseProfileEntryV2, ExperienceReleaseAdmissionMode)] =
+        let memberships: [(ExperienceReleaseProfileEntry, ExperienceReleaseAdmissionMode)] =
             profile.pinned.map {
                 ($0, .pinned(
                     experienceVersionId: $0.locator.experienceVersionId,
@@ -719,7 +702,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 ))
             } + profile.active.map { ($0, .active) }
         var acceptedMemberships: [
-            (ExperienceReleaseProfileEntryV2, ExperienceReleaseAdmissionMode)
+            (ExperienceReleaseProfileEntry, ExperienceReleaseAdmissionMode)
         ] = []
         var definitions: [AuthenticatedExperienceReleaseDefinition] = []
         var batches: [ExperienceReleaseAdmission.AuthenticatedBatch] = []
@@ -731,7 +714,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                     envelopeBytes: try membership.0.exactEnvelopeBytes(),
                     authorizationKeys: authorizationKeys,
                     expectedIdentity: Self.expectation(membership.0.locator),
-                    supportedCompatibility: supportedCompatibility,
+                    supportedRuntime: supportedRuntime,
                     mode: membership.1
                 )
                 let batch = try await admission.authenticate([candidate])
@@ -784,7 +767,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         guard let bytes = try? Data(contentsOf: url),
               SHA256Provider.hexDigest(bytes) == descriptorSHA256,
               let descriptor = try? JSONDecoder().decode(
-                  ExperienceReleaseDescriptorV2.self,
+                  ExperienceReleaseDescriptor.self,
                   from: bytes
               ),
               let products = try? JSONDecoder().decode(
@@ -844,7 +827,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func resolveMemberships(
-        memberships: [(ExperienceReleaseProfileEntryV2, ExperienceReleaseAdmissionMode)],
+        memberships: [(ExperienceReleaseProfileEntry, ExperienceReleaseAdmissionMode)],
         definitions: [AuthenticatedExperienceReleaseDefinition]
     ) throws -> [AuthenticatedExperienceReleaseDefinition] {
         let joined = zip(memberships, definitions).map { membership, definition in
@@ -872,7 +855,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     private nonisolated static func resolveList(
         _ memberships: [AuthenticatedMembership]
     ) throws -> [AuthenticatedMembership] {
-        var byIdentity: [ExperienceReleaseIdentityV2: AuthenticatedMembership] = [:]
+        var byIdentity: [ExperienceReleaseIdentity: AuthenticatedMembership] = [:]
         var byRoute: [RouteKey: AuthenticatedMembership] = [:]
         for item in memberships {
             if let existing = byIdentity[item.identity] {
@@ -916,7 +899,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         return Array(highestByStream.values)
     }
 
-    private nonisolated static func routeKey(_ identity: ExperienceReleaseIdentityV2) -> RouteKey {
+    private nonisolated static func routeKey(_ identity: ExperienceReleaseIdentity) -> RouteKey {
         RouteKey(
             appId: identity.appId,
             environment: identity.environment,
@@ -942,8 +925,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     func acquire(
-        entry: ExperienceReleaseProfileEntryV2,
-        delivery: ExperienceReleaseDeliveryV2,
+        entry: ExperienceReleaseProfileEntry,
+        delivery: ExperienceReleaseDelivery,
         mode: ExperienceReleaseAdmissionMode,
         initialScreenID: String? = nil
     ) async throws -> AcquiredExperienceRelease {
@@ -953,7 +936,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             envelopeBytes: try entry.exactEnvelopeBytes(),
             authorizationKeys: authorizationKeys,
             expectedIdentity: Self.expectation(entry.locator),
-            supportedCompatibility: supportedCompatibility,
+            supportedRuntime: supportedRuntime,
             mode: mode
         )
         guard authenticated.descriptorSHA256 == entry.descriptorSha256 else {
@@ -980,17 +963,17 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
 
     private func acquireAuthenticated(
         _ authenticated: AuthenticatedExperienceReleaseDescriptor,
-        delivery: ExperienceReleaseDeliveryV2,
+        delivery: ExperienceReleaseDelivery,
         initialScreenID: String?
     ) async throws -> AcquiredExperienceRelease {
         let render = try Self.decode(
             ExperienceReleaseRenderDocument.self,
             from: authenticated.descriptor.render
         )
-        let definitionV2 = try ExperienceDefinitionV2(
+        let definition = try ExperienceDefinition(
             descriptor: authenticated.descriptor
         )
-        let journey = definitionV2.renderShell
+        let journey = definition.renderShell
         let selectedScreenID = try Self.selectedScreenID(
             requested: initialScreenID,
             renderScreenIDs: Set(render.screens.map(\.id)),
@@ -1030,7 +1013,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
 
     private func prepareAuthenticated(
         _ authenticated: AuthenticatedExperienceReleaseDescriptor,
-        delivery: ExperienceReleaseDeliveryV2,
+        delivery: ExperienceReleaseDelivery,
         intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease {
         let renderOrigin = try Self.validatedOrigin(delivery.renderBaseUrl)
@@ -1043,10 +1026,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         guard render.renderer == "rive" else {
             throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(render.renderer)
         }
-        let definitionV2 = try ExperienceDefinitionV2(
+        let definition = try ExperienceDefinition(
             descriptor: authenticated.descriptor
         )
-        let journey = definitionV2.renderShell
+        let journey = definition.renderShell
         let journeyArtifacts = try JSONDecoder().decode(
             [ExperienceReleaseScreenBehaviorArtifactDocument].self,
             from: JSONEncoder().encode(authenticated.descriptor.screenBehaviors)
@@ -1180,7 +1163,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 authenticatedKeyID: authenticated.authenticatedKeyID,
                 renderPlan: renderPlan,
                 journey: journey,
-                definitionV2: definitionV2,
+                definition: definition,
                 sceneBytes: scene.bytes,
                 assets: runtimeAssets
             ))
@@ -1592,7 +1575,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func expectation(
-        _ identity: ExperienceReleaseIdentityV2
+        _ identity: ExperienceReleaseIdentity
     ) -> ExperienceReleaseIdentityExpectation {
         ExperienceReleaseIdentityExpectation(
             appId: identity.appId,
@@ -1607,8 +1590,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func definition(
-        entry: ExperienceReleaseProfileEntryV2,
-        delivery: ExperienceReleaseDeliveryV2,
+        entry: ExperienceReleaseProfileEntry,
+        delivery: ExperienceReleaseDelivery,
         mode: ExperienceReleaseAdmissionMode,
         authenticated: AuthenticatedExperienceReleaseDescriptor
     ) throws -> AuthenticatedExperienceReleaseDefinition {
@@ -1636,10 +1619,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             ExperienceReleaseRenderDocument.self,
             from: descriptor.render
         )
-        let definitionV2 = try ExperienceDefinitionV2(descriptor: descriptor)
-        let journey = definitionV2.renderShell
+        let definition = try ExperienceDefinition(descriptor: descriptor)
+        let journey = definition.renderShell
         guard Self.hasValidPrePresentationProgram(
-            definitionV2,
+            definition,
             render: render,
             enrollmentEventName: enrollment.trigger.eventName
         ) else {
@@ -1653,7 +1636,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             [ExperienceReleasePlacementDocument].self,
             from: JSONEncoder().encode(descriptor.placements)
         )
-        try validatePurchasePlacements(in: definitionV2, placements: placements)
+        try validatePurchasePlacements(in: definition, placements: placements)
         guard render.renderer == "rive" else {
             throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding("release")
         }
@@ -1736,7 +1719,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             mode: mode,
             behavior: behavior,
             journey: journey,
-            definitionV2: definitionV2,
+            definition: definition,
             screenIDs: Set(render.screens.map(\.id)),
             products: products,
             placements: placements
@@ -1744,7 +1727,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func validatePurchasePlacements(
-        in definition: ExperienceDefinitionV2,
+        in definition: ExperienceDefinition,
         placements: [ExperienceReleasePlacementDocument]
     ) throws {
         let declared = Set(placements.map(\.id))
@@ -1765,7 +1748,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func hasValidPrePresentationProgram(
-        _ definition: ExperienceDefinitionV2,
+        _ definition: ExperienceDefinition,
         render: ExperienceReleaseRenderDocument,
         enrollmentEventName: String?
     ) -> Bool {

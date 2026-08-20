@@ -14,7 +14,7 @@ private struct ExperienceTextInputGeometry {
 }
 
 /// Resolves signed geometry paths from a generic native snapshot. This is
-/// product policy over plain values; no compatibility result graph survives.
+/// product policy over plain values.
 private struct ExperienceTextInputGeometryResolver {
     let snapshot: ExperienceInteractiveViewModelSnapshot
 

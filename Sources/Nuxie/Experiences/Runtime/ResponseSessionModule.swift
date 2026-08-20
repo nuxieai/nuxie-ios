@@ -294,7 +294,7 @@ func deriveResponseSessionId(journeyId: String) throws -> String {
         throw ResponseSessionModuleError.journeyIdTooLong
     }
     var bigEndianLength = length.bigEndian
-    var input = Data("nuxie.response.v2".utf8)
+    var input = Data("nuxie.response.v1".utf8)
     input.append(0)
     withUnsafeBytes(of: &bigEndianLength) { input.append(contentsOf: $0) }
     input.append(journey)

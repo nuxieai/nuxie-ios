@@ -222,7 +222,7 @@ actor ExperienceReleaseAdmission {
         let envelopeBytes: Data
         let authorizationKeys: [ExperiencePackageAuthorizationKey]
         let expectedIdentity: ExperienceReleaseIdentityExpectation
-        let supportedCompatibility: ExperienceReleaseSupportedCompatibility
+        let supportedRuntime: ExperienceReleaseSupportedRuntime
         let mode: ExperienceReleaseAdmissionMode
     }
 
@@ -264,7 +264,7 @@ actor ExperienceReleaseAdmission {
                 envelopeBytes: candidate.envelopeBytes,
                 authorizationKeys: candidate.authorizationKeys,
                 expectedIdentity: candidate.expectedIdentity,
-                supportedCompatibility: candidate.supportedCompatibility,
+                supportedRuntime: candidate.supportedRuntime,
                 replayPolicy: replayPolicy
             )
             authenticated.append(value)
@@ -330,14 +330,14 @@ actor ExperienceReleaseAdmission {
         envelopeBytes: Data,
         authorizationKeys: [ExperiencePackageAuthorizationKey],
         expectedIdentity: ExperienceReleaseIdentityExpectation,
-        supportedCompatibility: ExperienceReleaseSupportedCompatibility,
+        supportedRuntime: ExperienceReleaseSupportedRuntime,
         mode: ExperienceReleaseAdmissionMode
     ) async throws -> AuthenticatedExperienceReleaseDescriptor {
         let batch = try await authenticate([Candidate(
             envelopeBytes: envelopeBytes,
             authorizationKeys: authorizationKeys,
             expectedIdentity: expectedIdentity,
-            supportedCompatibility: supportedCompatibility,
+            supportedRuntime: supportedRuntime,
             mode: mode
         )])
         try await commit(batch)

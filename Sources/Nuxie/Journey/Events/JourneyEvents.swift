@@ -4,8 +4,7 @@ import Foundation
 ///
 /// These facts use snake_case properties and travel through the decision
 /// lane. Parking uses its durable queued form; ownership-changing facts use
-/// the synchronous response form. Removed legacy journey lifecycle names are
-/// not aliases.
+/// the synchronous response form.
 final class JourneyEvents: Sendable {
 
     // MARK: - Journey facts

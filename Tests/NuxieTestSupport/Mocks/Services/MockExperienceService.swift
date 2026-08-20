@@ -8,7 +8,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     private var _prefetchedExperiences: [ExperienceReference] = []
     private var _removedExperienceVersionIds: [String] = []
     private var _fetchedExperienceVersionIds: [String] = []
-    private var _releaseProfiles: [ExperienceReleaseProfileV2?] = []
+    private var _releaseProfiles: [ExperienceReleaseProfile?] = []
     private var _authenticatedReleaseReferences: [ExperienceReference]?
     private var _releaseProfileFailuresRemaining = 0
     private var _releaseProfileAuthenticationGate: ReleaseProfileAuthenticationGate?
@@ -49,7 +49,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         set { withLock { _fetchedExperienceVersionIds = newValue } }
     }
 
-    public var releaseProfiles: [ExperienceReleaseProfileV2?] {
+    public var releaseProfiles: [ExperienceReleaseProfile?] {
         withLock { _releaseProfiles }
     }
 
@@ -178,7 +178,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     }
     
     public func replaceReleaseProfile(
-        _ profile: ExperienceReleaseProfileV2?
+        _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
         withLock { _releaseProfiles.append(profile) }
         if profile != nil {

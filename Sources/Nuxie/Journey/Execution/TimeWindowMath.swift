@@ -1,6 +1,6 @@
 import Foundation
 
-/// Deterministic calendar math for Journey v2 time windows.
+/// Deterministic calendar math for Journey time windows.
 /// All timezone offsets come from the verified, pinned IANA bundle.
 enum TimeWindowMath {
     static let currentDeviceTimezoneToken = "__current_device__"

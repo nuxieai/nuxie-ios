@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// The only timezone authority used by Journey v2 time windows.
+/// The only timezone authority used by Journey time windows.
 ///
 /// This is deliberately a small, signed-at-build-time projection of the pinned
 /// IANA database. Foundation/ICU timezone rules are never consulted for route

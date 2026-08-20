@@ -47,10 +47,10 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
         let experienceId = "screen-control-experience"
         let versionId = "screen-control-version"
 
-        func definition(eventName: String) -> ExperienceDefinitionV2 {
-            ExperienceDefinitionV2(
+        func definition(eventName: String) -> ExperienceDefinition {
+            ExperienceDefinition(
                 entryRouteEventName: "paywall_trigger",
-                screens: [JourneyScreenV2(
+                screens: [JourneyScreen(
                     id: "screen-1",
                     defaultViewModelName: nil,
                     defaultInstanceId: nil
@@ -77,11 +77,11 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
         }
 
         func signedExperience(
-            definition: ExperienceDefinitionV2,
+            definition: ExperienceDefinition,
             goal: GoalConfig? = nil,
             exitPolicy: ExitPolicy? = nil
         ) -> Experience {
-            let identity = ExperienceReleaseIdentityV2(
+            let identity = ExperienceReleaseIdentity(
                 appId: "test-app",
                 environment: "test",
                 experienceId: experienceId,
@@ -108,7 +108,7 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     presentationStyle: .fullScreen
                 ),
                 journey: definition.renderShell,
-                definitionV2: definition,
+                definition: definition,
                 assetBaseURL: URL(string: "https://assets.nuxie.ai/")!,
                 authenticatedReleaseID: .init(
                     identity: identity,
@@ -117,18 +117,18 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
-        func renamedRouteDefinition() -> ExperienceDefinitionV2 {
-            let routeKey = JourneyRouteKeyV2(
+        func renamedRouteDefinition() -> ExperienceDefinition {
+            let routeKey = JourneyRouteKey(
                 host: .screen("screen-1"),
                 eventName: "renamed_submit"
             )
-            let nestedRouteKey = JourneyRouteKeyV2(
+            let nestedRouteKey = JourneyRouteKey(
                 host: .screen("screen-1"),
                 eventName: "renamed_route_ran"
             )
             let revision = String(repeating: "c", count: 64)
             let nestedRevision = String(repeating: "8", count: 64)
-            let route = JourneyRouteV2(
+            let route = JourneyRoute(
                 key: routeKey,
                 revisionSHA256: revision,
                 program: [.object([
@@ -141,17 +141,17 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     ])]),
                 ])]
             )
-            let cursor = JourneyExecutionCursorV2(
+            let cursor = JourneyExecutionCursor(
                 programPath: "/program",
                 actionIndex: 0
             )
-            let region = JourneyExecutionRegionV2(
+            let region = JourneyExecutionRegion(
                 id: "device",
                 plane: .device,
                 entryCursor: cursor,
                 actionPaths: ["/program/0", "/program/0/defaultProgram/0"]
             )
-            let nestedRoute = JourneyRouteV2(
+            let nestedRoute = JourneyRoute(
                 key: nestedRouteKey,
                 revisionSHA256: nestedRevision,
                 program: [.object([
@@ -160,15 +160,15 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     "payload": .object([:]),
                 ])]
             )
-            let nestedRegion = JourneyExecutionRegionV2(
+            let nestedRegion = JourneyExecutionRegion(
                 id: "nested-device",
                 plane: .device,
                 entryCursor: cursor,
                 actionPaths: ["/program/0"]
             )
-            return ExperienceDefinitionV2(
+            return ExperienceDefinition(
                 entryRouteEventName: "paywall_trigger",
-                screens: [JourneyScreenV2(
+                screens: [JourneyScreen(
                     id: "screen-1",
                     defaultViewModelName: nil,
                     defaultInstanceId: nil
@@ -176,7 +176,7 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 viewModelValues: [],
                 routes: [routeKey: route, nestedRouteKey: nestedRoute],
                 executionPlans: [
-                    JourneyExecutionPlanV2(
+                    JourneyExecutionPlan(
                         id: "renamed-route-plan",
                         route: routeKey,
                         revisionSHA256: revision,
@@ -187,7 +187,7 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                         serverRegions: [],
                         handoffEdges: []
                     ),
-                    JourneyExecutionPlanV2(
+                    JourneyExecutionPlan(
                         id: "nested-route-plan",
                         route: nestedRouteKey,
                         revisionSHA256: nestedRevision,
@@ -213,14 +213,14 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
-        func pausedRouteDefinition() -> ExperienceDefinitionV2 {
+        func pausedRouteDefinition() -> ExperienceDefinition {
             let eventName = "pause_route"
-            let routeKey = JourneyRouteKeyV2(
+            let routeKey = JourneyRouteKey(
                 host: .screen("screen-1"),
                 eventName: eventName
             )
             let revision = String(repeating: "e", count: 64)
-            let route = JourneyRouteV2(
+            let route = JourneyRoute(
                 key: routeKey,
                 revisionSHA256: revision,
                 program: [
@@ -235,23 +235,23 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     ]),
                 ]
             )
-            let cursor = JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0)
-            let region = JourneyExecutionRegionV2(
+            let cursor = JourneyExecutionCursor(programPath: "/program", actionIndex: 0)
+            let region = JourneyExecutionRegion(
                 id: "paused-device",
                 plane: .device,
                 entryCursor: cursor,
                 actionPaths: ["/program/0", "/program/1"]
             )
-            return ExperienceDefinitionV2(
+            return ExperienceDefinition(
                 entryRouteEventName: "paywall_trigger",
-                screens: [JourneyScreenV2(
+                screens: [JourneyScreen(
                     id: "screen-1",
                     defaultViewModelName: nil,
                     defaultInstanceId: nil
                 )],
                 viewModelValues: [],
                 routes: [routeKey: route],
-                executionPlans: [JourneyExecutionPlanV2(
+                executionPlans: [JourneyExecutionPlan(
                     id: "paused-route-plan",
                     route: routeKey,
                     revisionSHA256: revision,
@@ -276,13 +276,13 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
-        func replayRecoveryDefinition() -> ExperienceDefinitionV2 {
-            let routeKey = JourneyRouteKeyV2(
+        func replayRecoveryDefinition() -> ExperienceDefinition {
+            let routeKey = JourneyRouteKey(
                 host: .screen("screen-1"),
                 eventName: "replay_source"
             )
             let revision = String(repeating: "f", count: 64)
-            let route = JourneyRouteV2(
+            let route = JourneyRoute(
                 key: routeKey,
                 revisionSHA256: revision,
                 program: [.object([
@@ -291,23 +291,23 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     "payload": .object([:]),
                 ])]
             )
-            let cursor = JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0)
-            let region = JourneyExecutionRegionV2(
+            let cursor = JourneyExecutionCursor(programPath: "/program", actionIndex: 0)
+            let region = JourneyExecutionRegion(
                 id: "replay-device",
                 plane: .device,
                 entryCursor: cursor,
                 actionPaths: ["/program/0"]
             )
-            return ExperienceDefinitionV2(
+            return ExperienceDefinition(
                 entryRouteEventName: "paywall_trigger",
-                screens: [JourneyScreenV2(
+                screens: [JourneyScreen(
                     id: "screen-1",
                     defaultViewModelName: nil,
                     defaultInstanceId: nil
                 )],
                 viewModelValues: [],
                 routes: [routeKey: route],
-                executionPlans: [JourneyExecutionPlanV2(
+                executionPlans: [JourneyExecutionPlan(
                     id: "replay-route-plan",
                     route: routeKey,
                     revisionSHA256: revision,
@@ -323,13 +323,13 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
-        func backReplayDefinition() -> ExperienceDefinitionV2 {
-            let routeKey = JourneyRouteKeyV2(
+        func backReplayDefinition() -> ExperienceDefinition {
+            let routeKey = JourneyRouteKey(
                 host: .screen("screen-1"),
                 eventName: "go_back"
             )
             let revision = String(repeating: "9", count: 64)
-            let route = JourneyRouteV2(
+            let route = JourneyRoute(
                 key: routeKey,
                 revisionSHA256: revision,
                 program: [.object([
@@ -337,23 +337,23 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     "steps": .number(1),
                 ])]
             )
-            let cursor = JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0)
-            let region = JourneyExecutionRegionV2(
+            let cursor = JourneyExecutionCursor(programPath: "/program", actionIndex: 0)
+            let region = JourneyExecutionRegion(
                 id: "back-device",
                 plane: .device,
                 entryCursor: cursor,
                 actionPaths: ["/program/0"]
             )
-            return ExperienceDefinitionV2(
+            return ExperienceDefinition(
                 entryRouteEventName: "paywall_trigger",
-                screens: [JourneyScreenV2(
+                screens: [JourneyScreen(
                     id: "screen-1",
                     defaultViewModelName: nil,
                     defaultInstanceId: nil
                 )],
                 viewModelValues: [],
                 routes: [routeKey: route],
-                executionPlans: [JourneyExecutionPlanV2(
+                executionPlans: [JourneyExecutionPlan(
                     id: "back-route-plan",
                     route: routeKey,
                     revisionSHA256: revision,
@@ -369,10 +369,10 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
-        func journeyEntryEventDefinition(eventName: String) -> ExperienceDefinitionV2 {
-            let routeKey = JourneyRouteKeyV2(host: .journey, eventName: "paywall_trigger")
+        func journeyEntryEventDefinition(eventName: String) -> ExperienceDefinition {
+            let routeKey = JourneyRouteKey(host: .journey, eventName: "paywall_trigger")
             let revision = String(repeating: "d", count: 64)
-            let route = JourneyRouteV2(
+            let route = JourneyRoute(
                 key: routeKey,
                 revisionSHA256: revision,
                 program: [.object([
@@ -381,19 +381,19 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     "payload": .object([:]),
                 ])]
             )
-            let cursor = JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0)
-            let region = JourneyExecutionRegionV2(
+            let cursor = JourneyExecutionCursor(programPath: "/program", actionIndex: 0)
+            let region = JourneyExecutionRegion(
                 id: "entry-device",
                 plane: .device,
                 entryCursor: cursor,
                 actionPaths: ["/program/0"]
             )
-            return ExperienceDefinitionV2(
+            return ExperienceDefinition(
                 entryRouteEventName: "paywall_trigger",
                 screens: [],
                 viewModelValues: [],
                 routes: [routeKey: route],
-                executionPlans: [JourneyExecutionPlanV2(
+                executionPlans: [JourneyExecutionPlan(
                     id: "entry-plan",
                     route: routeKey,
                     revisionSHA256: revision,

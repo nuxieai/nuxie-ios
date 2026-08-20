@@ -188,7 +188,7 @@ actor JourneyRunner {
     private let onMilestone: (@Sendable (_ milestoneId: String, _ label: String?, _ screenId: String?, _ handlerId: String?) async -> Void)?
     private let capturesSendEvents: Bool
 
-    // Constructor-injected collaborators (Phase 4c composition root).
+    // Constructor-injected collaborators.
     private let eventLog: JourneyRunnerEventAccess
     private let identityService: IdentityServiceProtocol
     private let segmentService: SegmentServiceProtocol
@@ -198,10 +198,9 @@ actor JourneyRunner {
     private let dateProvider: DateProviderProtocol
     private let irRuntime: IRRuntime
     /// The exact signed execution plan selected for this route and start
-    /// plane. Plan selection is fail-closed; unsigned/legacy region tables are
-    /// never consulted by the v2 runtime.
-    private let executionPlan: JourneyExecutionPlanV2?
-    private let executionRoute: JourneyRouteV2?
+    /// plane. Plan selection is fail-closed.
+    private let executionPlan: JourneyExecutionPlan?
+    private let executionRoute: JourneyRoute?
     private let hasUnresolvedPersistedExecutionPlan: Bool
     /// Single response authority for this run. All response writes are routed
     /// through the schema-pinned module; the runner never owns a second cache.
@@ -252,7 +251,6 @@ actor JourneyRunner {
     private var triggerResetTasks: [String: Task<Void, Never>] = [:]
     private let deferredTaskQueue = SerialTaskQueue()
     private var didAttemptResponseDraftWrite = false
-    private var didFailSetResponseField = false
     private var didFailSubmitResponse = false
     private var responseOperationFailureRevision: UInt64 = 0
     private var presentationEpochAdvancedForScreenId: String?
@@ -296,7 +294,7 @@ actor JourneyRunner {
         self.apiClient = apiClient
         self.dateProvider = dateProvider
         self.irRuntime = irRuntime
-        let definition = experience.definitionV2
+        let definition = experience.definition
         let persistedPlanId = initialState.executionState.planId
         let persistedPlan = persistedPlanId.flatMap { definition?.executionPlan(id: $0) }
         self.hasUnresolvedPersistedExecutionPlan = persistedPlanId != nil && persistedPlan == nil
@@ -313,7 +311,7 @@ actor JourneyRunner {
             ?? (persistedPlanId == nil ? entryRoute : nil)
         self.responseSessionModule = responseSessionModule
         self.persistResponseRetryMarker = persistResponseRetryMarker
-        self.responseSessionRun = experience.definitionV2?.responseSchema.map {
+        self.responseSessionRun = experience.definition?.responseSchema.map {
             ResponseSessionRunAuthority(
                 journeyId: initialState.id,
                 executionOwnershipEpoch: UInt64(max(initialState.epoch, 0)),
@@ -400,8 +398,9 @@ actor JourneyRunner {
     }
 
     private func applyResponseProjection(_ projection: ResponseSessionProjection) async {
+        didAttemptResponseDraftWrite = projection.state == .draft && !projection.values.isEmpty
         for (key, value) in projection.values {
-            let path = ResponseFormController.valuePath(forKey: key)
+            let path = ResponseProjectionPaths.value(field: key)
             _ = viewModelState.setValue(
                 path: path,
                 value: value.foundationValue,
@@ -416,7 +415,7 @@ actor JourneyRunner {
             )
         }
         if let state = projection.state {
-            let path = ResponseFormController.statePath
+            let path = ResponseProjectionPaths.state
             _ = viewModelState.setValue(
                 path: path,
                 value: state.rawValue,
@@ -592,7 +591,7 @@ actor JourneyRunner {
             name: SystemEventNames.screenShown,
             properties: ["screen_id": screenId]
         )
-        let hasScreenRoute = experience.definitionV2?.route(
+        let hasScreenRoute = experience.definition?.route(
             host: .screen(screenId),
             eventName: event.name
         ) != nil
@@ -641,7 +640,7 @@ actor JourneyRunner {
         _ event: NuxieEvent,
         screenId: String
     ) async -> RunOutcome? {
-        if experience.definitionV2?.route(
+        if experience.definition?.route(
             host: .screen(screenId),
             eventName: event.name
         ) != nil {
@@ -880,12 +879,12 @@ actor JourneyRunner {
             return false
         }
 
-        if let definition = experience.definitionV2,
+        if let definition = experience.definition,
            event.name == definition.entryRouteEventName,
            (await journey.snapshot()).context["_entry_actions_ran"]?.value as? Bool == true {
             return false
         }
-        return experience.definitionV2?.route(
+        return experience.definition?.route(
             host: .journey,
             eventName: event.name
         ) != nil
@@ -1023,22 +1022,10 @@ actor JourneyRunner {
         guard let hostId = screenId ?? currentScreenId,
               !hostId.isEmpty else { return nil }
 
-        if event.name == SystemEventNames.responseSet {
-            return await runResponseSetBuiltIn(
-                event,
-                screenId: hostId,
-                componentId: componentId,
-                instanceId: instanceId
-            )
-        }
-        if event.name == SystemEventNames.responseUnset {
-            return await runResponseUnsetBuiltIn(
-                event,
-                screenId: hostId,
-                componentId: componentId,
-                instanceId: instanceId
-            )
-        }
+        // Response emissions are consumed and persisted by ScreenEmissionRouter.
+        // They are not ordinary Journey route events.
+        guard event.name != SystemEventNames.responseSet,
+              event.name != SystemEventNames.responseUnset else { return nil }
 
         return await dispatchEvent(
             hostId: hostId,
@@ -1156,71 +1143,6 @@ actor JourneyRunner {
         return await processQueue(resumeContext: nil)
     }
 
-    /// Built-in handling for the `$response_set` Script Verb event
-    /// (`Nuxie.response.set(field, value)` in screen scripts). Synthesizes a
-    /// set_response_field action against the experience-scoped response schema, so
-    /// scripts never carry schema ids. Drops the event when the experience declares
-    /// no response schema or the payload is malformed (Experience Logic 2026-07-04).
-    private func runResponseSetBuiltIn(
-        _ event: NuxieEvent,
-        screenId: String,
-        componentId: String?,
-        instanceId: String?
-    ) async -> RunOutcome? {
-        if isPaused { return nil }
-        if let schema = experience.definitionV2?.responseSchema,
-           let field = event.properties["field"] as? String,
-           schema.capturesByScreen[screenId]?.contains(field) != true {
-            return nil
-        }
-        guard let action = ResponseFormController.synthesizedSetResponseField(
-            schemaId: screens.responseSchemas?.first?.responseSchemaId,
-            eventProperties: event.properties
-        ) else { return nil }
-
-        enqueueActions(
-            [.setResponseField(action)],
-            context: TriggerContext(
-                screenId: screenId,
-                componentId: componentId,
-                handlerId: nil,
-                instanceId: instanceId,
-                payload: eventPayload(event)
-            )
-        )
-        return await processQueue(resumeContext: nil)
-    }
-
-    private func runResponseUnsetBuiltIn(
-        _ event: NuxieEvent,
-        screenId: String,
-        componentId: String?,
-        instanceId: String?
-    ) async -> RunOutcome? {
-        if isPaused { return nil }
-        guard let schema = experience.definitionV2?.responseSchema,
-              let field = event.properties["field"] as? String,
-              schema.capturesByScreen[screenId]?.contains(field) == true else {
-            return nil
-        }
-        enqueueActions(
-            [.setResponseField(SetResponseFieldAction(
-                responseSchemaId: schema.key,
-                schemaVersion: Int(schema.version),
-                key: field,
-                value: AnyCodable(NSNull())
-            ))],
-            context: TriggerContext(
-                screenId: screenId,
-                componentId: componentId,
-                handlerId: nil,
-                instanceId: instanceId,
-                payload: eventPayload(event)
-            )
-        )
-        return await processQueue(resumeContext: nil)
-    }
-
     private func dispatchEvent(
         hostId: String,
         event: NuxieEvent,
@@ -1262,9 +1184,9 @@ actor JourneyRunner {
         screenRouteAdmissionId: String? = nil,
         actionPathPrefix: String? = nil
     ) async -> [ActionRequest] {
-        guard let definition = experience.definitionV2,
+        guard let definition = experience.definition,
               !hasUnresolvedPersistedExecutionPlan else { return [] }
-        let routeHost: JourneyRouteHostV2 = hostId == journeyEventHostKey
+        let routeHost: JourneyRouteHost = hostId == journeyEventHostKey
             ? .journey
             : .screen(hostId)
         let state = await journey.snapshot()
@@ -1275,7 +1197,7 @@ actor JourneyRunner {
            route.revisionSHA256 != expectedRouteRevision {
             return []
         }
-        let plan: JourneyExecutionPlanV2?
+        let plan: JourneyExecutionPlan?
         if let persistedPlanId = state.executionState.planId {
             guard let persistedPlan = definition.executionPlan(id: persistedPlanId) else {
                 return []
@@ -1485,7 +1407,7 @@ actor JourneyRunner {
                 )
             )
         } else {
-            // Canonical v2 continuations persist their exact remaining program.
+            // Canonical canonical continuations persist their exact remaining program.
             // A checkpoint without it belongs to the retired handler model and
             // must not be reconstructed from mutable release metadata.
             return nil
@@ -1590,12 +1512,12 @@ actor JourneyRunner {
     }
 
     private func runEntryActionsIfNeeded() async -> RunOutcome? {
-        guard let definition = experience.definitionV2 else { return nil }
-        return await runV2EntryActionsIfNeeded(definition)
+        guard let definition = experience.definition else { return nil }
+        return await runEntryRouteIfNeeded(definition)
     }
 
-    private func runV2EntryActionsIfNeeded(
-        _ definition: ExperienceDefinitionV2
+    private func runEntryRouteIfNeeded(
+        _ definition: ExperienceDefinition
     ) async -> RunOutcome? {
         guard let route = definition.route(
             host: .journey,
@@ -1653,14 +1575,14 @@ actor JourneyRunner {
     }
 
     /// Resolves a signed plan region's cursor to the exact route program
-    /// suffix. This is the only device-region admission path for v2.
+    /// suffix. This is the only device-region admission path for the canonical runtime.
     func advanceClaimedExecutionPlanRegion(
-        _ plan: JourneyExecutionPlanV2,
-        region: JourneyExecutionRegionV2
+        _ plan: JourneyExecutionPlan,
+        region: JourneyExecutionRegion
     ) async -> RunOutcome? {
         guard region.plane == .device,
               let route = executionRoute,
-              let definition = experience.definitionV2,
+              let definition = experience.definition,
               let actions = try? definition.compiledDeviceRegionProgram(
                   route,
                   plan: plan,
@@ -1955,7 +1877,7 @@ actor JourneyRunner {
                     experienceId: experience.id,
                     experienceVersionId: experience.versionId,
                     releaseID: experience.authenticatedReleaseID,
-                    presentationStyle: experience.behaviorPresentationStyle ?? .fullScreen,
+                    presentationStyle: experience.behaviorPresentationStyle,
                     shell: experience.shellContract(screenId: screenId),
                     screenId: screenId,
                     transition: transition,
@@ -2392,8 +2314,6 @@ actor JourneyRunner {
         case .updateCustomer(let updateCustomer):
             await handleUpdateCustomer(updateCustomer, context: context)
             return .continue
-        case .setResponseField(let setResponseField):
-            return try await handleSetResponseField(setResponseField, context: context, index: index)
         case .submitResponse(let submitResponse):
             return try await handleSubmitResponse(submitResponse, context: context, index: index)
         case .purchase(let purchase):
@@ -2481,8 +2401,6 @@ actor JourneyRunner {
             return .transfer(handoff)
         case .exit(let exitAction):
             return .exit(JourneyExitReason.fromActionReason(exitAction.reason))
-        case .unknown:
-            return .continue
         }
     }
 
@@ -2577,7 +2495,7 @@ actor JourneyRunner {
     ) async -> ActionResult {
         guard let timezone = TimeWindowMath.resolveTimezone(
             action.timezone,
-            appDefault: experience.definitionV2?.appDefaultTimezone
+            appDefault: experience.definition?.appDefaultTimezone
         ) else {
             return .exit(.error)
         }
@@ -2595,7 +2513,7 @@ actor JourneyRunner {
             return .exit(.error)
         case .inWindow:
             return nestedSequence(
-                action.successActions ?? [],
+                action.onInside,
                 context: context,
                 programPath: actionPath.map { "\($0)/onInside" },
                 nodeId: action.nodeId
@@ -2620,19 +2538,12 @@ actor JourneyRunner {
         resumeContext: ResumeContext?
     ) async -> ActionResult {
         let now = dateProvider.now()
-        let canonicalCondition = action.condition ?? resumeContext?.pending.journeyCondition
-        let legacyCondition = action.legacyCondition ?? resumeContext?.pending.condition
+        let condition = resumeContext?.pending.journeyCondition ?? action.condition
         let event = resumeContext?.event
-
-        let ok: Bool
-        if let condition = canonicalCondition {
-            ok = await evalJourneyCondition(condition, event: event)
-        } else {
-            ok = await evalConditionIR(legacyCondition, event: event)
-        }
+        let ok = await evalJourneyCondition(condition, event: event)
         if ok {
             return nestedSequence(
-                action.successActions ?? [],
+                action.onSatisfied,
                 context: context,
                 programPath: actionPath.map { "\($0)/onSatisfied" },
                 nodeId: action.nodeId
@@ -2646,7 +2557,7 @@ actor JourneyRunner {
             let deadline = startedAt.addingTimeInterval(TimeInterval(maxTimeMs) / 1000)
             if now >= deadline {
                 return nestedSequence(
-                    action.timeoutActions ?? [],
+                    action.onTimeout,
                     context: context,
                     programPath: actionPath.map { "\($0)/onTimeout" },
                     nodeId: action.nodeId
@@ -2657,9 +2568,9 @@ actor JourneyRunner {
                 context: context,
                 index: index,
                 resumeAt: deadline,
-                condition: legacyCondition,
-                journeyCondition: canonicalCondition,
-                journeyWaitTrigger: canonicalCondition == nil ? nil : action.trigger,
+                condition: nil,
+                journeyCondition: condition,
+                journeyWaitTrigger: action.trigger,
                 maxTimeMs: maxTimeMs,
                 startedAt: startedAt,
                 allowsResponseVersionRefresh: true
@@ -2671,9 +2582,9 @@ actor JourneyRunner {
             context: context,
             index: index,
             resumeAt: nil,
-            condition: legacyCondition,
-            journeyCondition: canonicalCondition,
-            journeyWaitTrigger: canonicalCondition == nil ? nil : action.trigger,
+            condition: nil,
+            journeyCondition: condition,
+            journeyWaitTrigger: action.trigger,
             maxTimeMs: nil,
             startedAt: startedAt,
             allowsResponseVersionRefresh: true
@@ -2686,15 +2597,10 @@ actor JourneyRunner {
         actionPath: String?
     ) async -> ActionResult {
         for (branchIndex, branch) in action.branches.enumerated() {
-            let ok: Bool
-            if let condition = branch.condition {
-                ok = await evalJourneyCondition(condition, event: nil)
-            } else {
-                ok = await evalConditionIR(branch.legacyCondition, event: nil)
-            }
+            let ok = await evalJourneyCondition(branch.condition, event: nil)
             if ok {
                 return nestedSequence(
-                    branch.actions,
+                    branch.program,
                     context: context,
                     programPath: actionPath.map { "\($0)/branches/\(branchIndex)/program" },
                     nodeId: action.nodeId ?? branch.id
@@ -2702,9 +2608,9 @@ actor JourneyRunner {
             }
         }
 
-        if let defaults = action.defaultActions {
+        if !action.defaultProgram.isEmpty {
             return nestedSequence(
-                defaults,
+                action.defaultProgram,
                 context: context,
                 programPath: actionPath.map { "\($0)/defaultProgram" },
                 nodeId: action.nodeId
@@ -2804,7 +2710,7 @@ actor JourneyRunner {
         }
 
         return nestedSequence(
-            variant.actions,
+            variant.program,
             context: context,
             programPath: actionPath.map { "\($0)/variants/\(variantIndex)/program" },
             nodeId: action.nodeId ?? variant.id
@@ -2990,166 +2896,20 @@ actor JourneyRunner {
     }
 
 
-    private static func screenEmissionValue(_ value: Any) -> ScreenEmissionValue {
-        if value is NSNull { return .null }
-        if let value = value as? Bool { return .bool(value) }
-        if let value = value as? NSNumber { return .number(value.doubleValue) }
-        if let value = value as? String { return .string(value) }
-        if let value = value as? [Any] {
-            return .array(value.map(screenEmissionValue))
-        }
-        if let value = value as? [String: Any] {
-            return .object(value.mapValues(screenEmissionValue))
-        }
-        return .null
-    }
-
-    private func handleSetResponseField(
-        _ action: SetResponseFieldAction,
-        context: TriggerContext,
-        index: Int
-    ) async throws -> ActionResult {
-        let resolvedValue = await resolveValueRefs(action.value.value, context: context)
-        let responseWriteOperationId = responseOperationId(
-            context: context,
-            index: index,
-            field: action.key,
-            nodeId: action.nodeId
-        )
-        if let responseSessionModule, let responseSessionRun {
-            let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
-            let responseScreenId = context.screenId ?? currentScreenId ?? ""
-            let occurredAt = dateProvider.now().ISO8601Format()
-            let result: ResponseSessionOperationResult
-            do {
-                if case .null = Self.screenEmissionValue(resolvedValue) {
-                    result = try await responseSessionModule.unset(
-                        run: responseSessionRun,
-                        emissionId: responseWriteOperationId,
-                        screenId: responseScreenId,
-                        field: action.key,
-                        occurredAt: occurredAt
-                    )
-                } else {
-                    result = try await responseSessionModule.set(
-                        run: responseSessionRun,
-                        emissionId: responseWriteOperationId,
-                        screenId: responseScreenId,
-                        field: action.key,
-                        value: Self.screenEmissionValue(resolvedValue),
-                        occurredAt: occurredAt
-                    )
-                }
-            } catch {
-                didFailSetResponseField = true
-                responseOperationFailureRevision &+= 1
-                await markResponseRetryRequired(true)
-                throw ResponseBranchAbort(
-                    operation: "set_response_field",
-                    diagnostic: "response_session_failed",
-                    correlationId: responseWriteOperationId,
-                    underlying: error.localizedDescription
-                )
-            }
-            guard case .accepted = result else {
-                didFailSetResponseField = true
-                responseOperationFailureRevision &+= 1
-                await markResponseRetryRequired(true)
-                let diagnostic: String
-                if case .rejected(let reason, _) = result {
-                    diagnostic = reason.rawValue
-                } else {
-                    diagnostic = "response_session_rejected"
-                }
-                throw ResponseBranchAbort(
-                    operation: "set_response_field",
-                    diagnostic: diagnostic,
-                    correlationId: responseWriteOperationId,
-                    underlying: nil
-                )
-            }
-        }
-        do {
-            didAttemptResponseDraftWrite = true
-            // Boxed to hand the write-once value across the API boundary.
-            let resolvedValueBox = UncheckedSendable(resolvedValue)
-            let result = try await apiClient.setResponseField(
-                distinctId: journey.distinctId,
-                journeyId: journey.id,
-                responseSchemaId: action.responseSchemaId,
-                schemaVersion: action.schemaVersion,
-                key: action.key,
-                value: resolvedValueBox.value
-            )
-            didFailSetResponseField = false
-            if let responseSessionModule, let responseSessionRun {
-                do {
-                    if let response = result.response {
-                        let currentVersion = (try? await responseSessionModule.snapshot(journeyId: journey.id)?.version) ?? 0
-                        if let snapshot = Self.responseSessionSnapshot(
-                            from: response,
-                            version: currentVersion + 1
-                        ) {
-                            _ = try await responseSessionModule.reconcile(
-                                run: responseSessionRun,
-                                operationId: "server:\(response.id):\(response.updatedAt.timeIntervalSince1970)",
-                                snapshot: snapshot
-                            )
-                        }
-                    } else {
-                        _ = try await responseSessionModule.acknowledgeWrite(
-                            run: responseSessionRun,
-                            operationId: "server-write:\(responseWriteOperationId)"
-                        )
-                    }
-                } catch {
-                    didFailSetResponseField = true
-                    responseOperationFailureRevision &+= 1
-                    await markResponseRetryRequired(true)
-                    throw ResponseBranchAbort(
-                        operation: "set_response_field",
-                        diagnostic: "reconciliation_failed",
-                        correlationId: responseWriteOperationId,
-                        underlying: error.localizedDescription
-                    )
-                }
-            }
-            await markResponseRetryRequired(false)
-        } catch let error as ResponseBranchAbort {
-            throw error
-        } catch {
-            // Transient server failure must not kill the journey (executeAction
-            // converts throws to .exit(.error)). The draft was already applied
-            // locally; didFailSetResponseField keeps dismissal from abandoning
-            // it, and the server reconciles on the next successful write.
-            didFailSetResponseField = true
-            responseOperationFailureRevision &+= 1
-            await markResponseRetryRequired(true)
-            throw ResponseBranchAbort(
-                operation: "set_response_field",
-                diagnostic: "server_write_failed",
-                correlationId: responseWriteOperationId,
-                underlying: error.localizedDescription
-            )
-        }
-
-        return .continue
-    }
-
     private func handleSubmitResponse(
         _ action: SubmitResponseAction,
         context: TriggerContext,
         index: Int
     ) async throws -> ActionResult {
-        let responseSchema = experience.definitionV2?.responseSchema
-        guard let responseSchemaId = action.responseSchemaId ?? responseSchema?.key else {
+        let responseSchema = experience.definition?.responseSchema
+        guard let responseSchemaId = responseSchema?.key else {
             throw NSError(
                 domain: "Nuxie.JourneyRunner",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "submit_response requires the pinned response schema"]
             )
         }
-        let schemaVersion = action.schemaVersion ?? responseSchema.flatMap { Int(exactly: $0.version) }
+        let schemaVersion = responseSchema.flatMap { Int(exactly: $0.version) }
         let responseSubmitOperationId = responseOperationId(
             context: context,
             index: index,
@@ -3224,8 +2984,8 @@ actor JourneyRunner {
         } catch let error as ResponseBranchAbort {
             throw error
         } catch {
-            // Same policy as set_response_field: a failed submit keeps the
-            // journey alive; the draft stays local (didFailSubmitResponse
+            // A failed submit keeps the journey alive; the draft stays local
+            // (didFailSubmitResponse
             // blocks abandonment) so the response is not lost.
             didFailSubmitResponse = true
             responseOperationFailureRevision &+= 1
@@ -3242,7 +3002,7 @@ actor JourneyRunner {
     }
 
     func shouldAbandonResponseDraftsAfterDismiss() async -> Bool {
-        guard !didFailSetResponseField && !didFailSubmitResponse else { return false }
+        guard !didFailSubmitResponse else { return false }
         if let responseSessionModule {
             if let snapshot = try? await responseSessionModule.snapshot(journeyId: journey.id) {
                 return snapshot.state == .draft
@@ -3252,7 +3012,7 @@ actor JourneyRunner {
     }
 
     func hasFailedResponseOperation() -> Bool {
-        didFailSetResponseField || didFailSubmitResponse
+        didFailSubmitResponse
     }
 
     func responseFailureRevision() -> UInt64 {
@@ -3345,6 +3105,20 @@ actor JourneyRunner {
             submittedAt: response.submittedAt.map(iso),
             abandonedAt: response.abandonedAt.map(iso)
         )
+    }
+
+    private static func screenEmissionValue(_ value: Any) -> ScreenEmissionValue {
+        if value is NSNull { return .null }
+        if let value = value as? Bool { return .bool(value) }
+        if let value = value as? NSNumber { return .number(value.doubleValue) }
+        if let value = value as? String { return .string(value) }
+        if let value = value as? [Any] {
+            return .array(value.map(screenEmissionValue))
+        }
+        if let value = value as? [String: Any] {
+            return .object(value.mapValues(screenEmissionValue))
+        }
+        return .null
     }
 
     private func handleCallDelegate(

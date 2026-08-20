@@ -201,9 +201,9 @@ final class OrchestrationStack {
 
     private static func releaseProfile(
         for references: [ExperienceReference]
-    ) -> ExperienceReleaseProfileV2 {
+    ) -> ExperienceReleaseProfile {
         let digest = String(repeating: "a", count: 64)
-        let envelope = try! ExperienceReleaseDescriptorEnvelopeV2(
+        let envelope = try! ExperienceReleaseDescriptorEnvelope(
             mediaType: ExperienceReleaseDescriptorLimits.mediaType,
             encoding: "base64",
             descriptorSha256: digest,
@@ -216,13 +216,13 @@ final class OrchestrationStack {
                 signatureBase64: "signature"
             )
         ).canonicalBytes()
-        return ExperienceReleaseProfileV2(
+        return ExperienceReleaseProfile(
             delivery: .init(
                 renderBaseUrl: "https://cdn.nuxie.test/renders/",
                 assetBaseUrl: "https://cdn.nuxie.test/assets/"
             ),
             active: references.enumerated().map { index, reference in
-                ExperienceReleaseProfileEntryV2(
+                ExperienceReleaseProfileEntry(
                     locator: .init(
                         appId: "orchestration-app",
                         environment: "test",

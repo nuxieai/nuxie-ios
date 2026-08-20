@@ -17,7 +17,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             envelopeBytes: envelope,
             authorizationKeys: [authorizationKey],
             expectedIdentity: expectation,
-            supportedCompatibility: supportedCompatibility,
+            supportedRuntime: supportedRuntime,
             replayPolicy: .active(minimumPublishedAtSeq: 42)
         )
 
@@ -30,11 +30,11 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testAuthenticatesSharedPublisherGoldenEnvelope() throws {
         let envelope = try fixtureData("envelope.json")
         let expectedEnvelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: envelope
         )
         let expectedIdentity = try JSONDecoder().decode(
-            ExperienceReleaseIdentityV2.self,
+            ExperienceReleaseIdentity.self,
             from: fixtureData("expected-identity.json")
         )
         let capabilities = try JSONDecoder().decode(
@@ -67,7 +67,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                     publishedAt: expectedIdentity.publishedAt,
                     publishedAtSeq: expectedIdentity.publishedAtSeq
                 ),
-            supportedCompatibility: supportedCompatibility(
+            supportedRuntime: supportedRuntime(
                 capabilities: Set(capabilities)
             ),
             replayPolicy: .active(minimumPublishedAtSeq: 42)
@@ -80,7 +80,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         XCTAssertEqual(authenticated.descriptor.identity, expectedIdentity)
         XCTAssertEqual(authenticated.descriptorSHA256, expectedEnvelope.descriptorSha256)
         XCTAssertFalse(authenticated.exactDescriptorBytes.isEmpty)
-        let definition = try ExperienceDefinitionV2(
+        let definition = try ExperienceDefinition(
             descriptor: authenticated.descriptor
         )
         XCTAssertEqual(definition.entryRouteEventName, "$app_opened")
@@ -112,7 +112,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testRejectsTamperedInvalidJSONAsBadSignatureBeforeDescriptorDecode() throws {
         let signed = try signedEnvelopeValue(descriptorBytes: validDescriptorBytes())
         let tamperedBytes = Data("{".utf8)
-        let tampered = ExperienceReleaseDescriptorEnvelopeV2(
+        let tampered = ExperienceReleaseDescriptorEnvelope(
             mediaType: signed.mediaType,
             encoding: signed.encoding,
             descriptorSha256: SHA256Provider.hexDigest(tamperedBytes),
@@ -127,7 +127,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 envelopeBytes: envelope,
                 authorizationKeys: [authorizationKey],
                 expectedIdentity: expectedIdentity,
-                supportedCompatibility: supportedCompatibility(capabilities: []),
+                supportedRuntime: supportedRuntime(capabilities: []),
                 replayPolicy: .active(minimumPublishedAtSeq: 0)
             )
         ) {
@@ -169,7 +169,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     func testRejectsDescriptorDigestMismatch() throws {
         let signed = try signedEnvelopeValue(descriptorBytes: validDescriptorBytes())
-        let envelope = ExperienceReleaseDescriptorEnvelopeV2(
+        let envelope = ExperienceReleaseDescriptorEnvelope(
             mediaType: signed.mediaType,
             encoding: signed.encoding,
             descriptorSha256: String(repeating: "0", count: 64),
@@ -225,7 +225,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: descriptor),
-            supportedCompatibility: supportedCompatibility(capabilities: ["rive"]),
+            supportedRuntime: supportedRuntime(capabilities: ["rive"]),
             is: "experience_release.descriptor.malformed_bounds"
         )
     }
@@ -458,7 +458,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         }
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: oversized),
-            is: "experience_release.descriptor.limit_exceeded"
+            is: "experience_release.descriptor.invalid"
         )
     }
 
@@ -632,7 +632,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             envelopeBytes: try envelope.canonicalBytes(),
             authorizationKeys: [authorizationKey],
             expectedIdentity: expectedIdentity,
-            supportedCompatibility: supportedCompatibility,
+            supportedRuntime: supportedRuntime,
             replayPolicy: .pinned(
                 experienceVersionId: expectedIdentity.experienceVersionId,
                 buildId: expectedIdentity.buildId,
@@ -844,7 +844,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         XCTAssertNoThrow(try authenticate(descriptorBytes: descriptor))
     }
 
-    func testRejectsUnsortedOrUnknownLuauCompatibility() throws {
+    func testRejectsUnsortedOrUnknownLuauRuntimeRequirements() throws {
         let unsorted = try mutatedValidDescriptor { root in
             var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
             requirements["luau"] = ["revision": "luau-1", "bytecodeVersions": [2, 1]]
@@ -868,25 +868,25 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         )
     }
 
-    func testCompatibilityFailsClosedForUnsupportedSdkRuntimeLuauAndScene() throws {
-        let cases: [ExperienceReleaseSupportedCompatibility] = [
-            supportedCompatibility(currentSdkVersion: "1.1.9"),
-            supportedCompatibility(runtimeRevisions: []),
-            supportedCompatibility(luauRevisions: [:]),
-            supportedCompatibility(luauRevisions: ["luau-1": [1]]),
-            supportedCompatibility(sceneFormatMajor: 2),
-            supportedCompatibility(sceneFormatMinor: -1),
+    func testRuntimeRequirementsFailClosedForUnsupportedSdkRuntimeLuauAndScene() throws {
+        let cases: [ExperienceReleaseSupportedRuntime] = [
+            supportedRuntime(currentSdkVersion: "1.1.9"),
+            supportedRuntime(runtimeRevisions: []),
+            supportedRuntime(luauRevisions: [:]),
+            supportedRuntime(luauRevisions: ["luau-1": [1]]),
+            supportedRuntime(sceneFormatMajor: 2),
+            supportedRuntime(sceneFormatMinor: -1),
         ]
-        for compatibility in cases {
+        for supportedRuntime in cases {
             assertAuthenticationError(
                 try signedEnvelope(descriptorBytes: validDescriptorBytes()),
-                supportedCompatibility: compatibility,
-                is: "experience_release.compatibility.unsupported"
+                supportedRuntime: supportedRuntime,
+                is: "experience_release.runtime.unsupported"
             )
         }
     }
 
-    func testCompatibilityRejectsScreenActionsV2BeforeAcquisition() throws {
+    func testRuntimeRejectsScreenActionsBeforeAcquisition() throws {
         let descriptor = try mutatedValidDescriptor { root in
             var screens = try XCTUnwrap(root["screenBehaviors"] as? [[String: Any]])
             var screen = try XCTUnwrap(screens.first)
@@ -895,7 +895,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 "behavior": ["kind": "script"],
             ]]
             screen["script"] = [
-                "protocol": "screen-actions-v2",
+                "protocol": "screen-actions",
                 "artifact": [
                     "key": "screen-behavior/sha256/\(String(repeating: "c", count: 64)).bin",
                     "sha256": String(repeating: "c", count: 64),
@@ -911,7 +911,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         XCTAssertThrowsError(try authenticate(descriptorBytes: descriptor)) { error in
             XCTAssertEqual(
                 error as? ExperienceReleaseDescriptorAuthenticationError,
-                .unsupportedCompatibility("screen_actions_v2")
+                .unsupportedRuntime("screen_actions")
             )
         }
     }
@@ -925,7 +925,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             }
             assertAuthenticationError(
                 try signedEnvelope(descriptorBytes: descriptor),
-                is: "experience_release.compatibility.unsupported"
+                is: "experience_release.runtime.unsupported"
             )
         }
     }
@@ -1193,7 +1193,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             envelopeBytes: try pinnedEnvelope.canonicalBytes(),
             authorizationKeys: [authorizationKey],
             expectedIdentity: expectedIdentity,
-            supportedCompatibility: supportedCompatibility,
+            supportedRuntime: supportedRuntime,
             mode: .pinned(
                 experienceVersionId: expectedIdentity.experienceVersionId,
                 buildId: expectedIdentity.buildId,
@@ -1310,19 +1310,19 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         )
     }
 
-    private var supportedCompatibility: ExperienceReleaseSupportedCompatibility {
-        supportedCompatibility()
+    private var supportedRuntime: ExperienceReleaseSupportedRuntime {
+        supportedRuntime()
     }
 
-    private func supportedCompatibility(
+    private func supportedRuntime(
         capabilities: Set<String> = ["rive", "text-input"],
         currentSdkVersion: String = "1.2.0",
         runtimeRevisions: Set<String> = ["runtime-1"],
         luauRevisions: [String: Set<Int>] = ["luau-1": [1, 2]],
         sceneFormatMajor: Int = 1,
         sceneFormatMinor: Int = 0
-    ) -> ExperienceReleaseSupportedCompatibility {
-        ExperienceReleaseSupportedCompatibility(
+    ) -> ExperienceReleaseSupportedRuntime {
+        ExperienceReleaseSupportedRuntime(
             currentSdkVersion: currentSdkVersion,
             supportedRuntimeRevisions: runtimeRevisions,
             supportedLuauRevisions: luauRevisions,
@@ -1335,7 +1335,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     private func validDescriptorBytes() -> Data {
         let envelope = try! JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: fixtureData("envelope.json")
         )
         return Data(base64Encoded: envelope.descriptorBytesBase64)!
@@ -1354,13 +1354,13 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     private func authenticate(
         descriptorBytes: Data,
         expectedIdentity: ExperienceReleaseIdentityExpectation? = nil,
-        supportedCompatibility: ExperienceReleaseSupportedCompatibility? = nil
+        supportedRuntime: ExperienceReleaseSupportedRuntime? = nil
     ) throws -> AuthenticatedExperienceReleaseDescriptor {
         try ExperienceReleaseDescriptorVerifier().authenticate(
             envelopeBytes: signedEnvelope(descriptorBytes: descriptorBytes),
             authorizationKeys: [authorizationKey],
             expectedIdentity: expectedIdentity ?? self.expectedIdentity,
-            supportedCompatibility: supportedCompatibility ?? self.supportedCompatibility,
+            supportedRuntime: supportedRuntime ?? self.supportedRuntime,
             replayPolicy: .active(minimumPublishedAtSeq: 0)
         )
     }
@@ -1368,7 +1368,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     private func assertAuthenticationError(
         _ envelope: @autoclosure () throws -> Data,
         expectedIdentity: ExperienceReleaseIdentityExpectation? = nil,
-        supportedCompatibility: ExperienceReleaseSupportedCompatibility? = nil,
+        supportedRuntime: ExperienceReleaseSupportedRuntime? = nil,
         replayPolicy: ExperienceReleaseReplayPolicy = .active(minimumPublishedAtSeq: 0),
         is expectedCode: String,
         file: StaticString = #filePath,
@@ -1379,7 +1379,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 envelopeBytes: envelope(),
                 authorizationKeys: [authorizationKey],
                 expectedIdentity: expectedIdentity ?? self.expectedIdentity,
-                supportedCompatibility: supportedCompatibility ?? self.supportedCompatibility,
+                supportedRuntime: supportedRuntime ?? self.supportedRuntime,
                 replayPolicy: replayPolicy
             ),
             file: file,
@@ -1456,7 +1456,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         descriptor: Data
     ) async throws -> AuthenticatedExperienceReleaseDescriptor {
         let identity = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorV2.self,
+            ExperienceReleaseDescriptor.self,
             from: descriptor
         ).identity
         return try await admission.authenticateAndAdmit(
@@ -1472,7 +1472,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 publishedAt: identity.publishedAt,
                 publishedAtSeq: identity.publishedAtSeq
             ),
-            supportedCompatibility: supportedCompatibility,
+            supportedRuntime: supportedRuntime,
             mode: .active
         )
     }
@@ -1485,25 +1485,25 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             .deletingLastPathComponent()
         return try Data(
             contentsOf: root
-                .appendingPathComponent("fixtures/experience-release-descriptor-v2")
+                .appendingPathComponent("fixtures/experience-release-descriptor")
                 .appendingPathComponent(name)
         )
     }
 
     private func signedEnvelopeValue(
         descriptorBytes: Data
-    ) throws -> ExperienceReleaseDescriptorEnvelopeV2 {
+    ) throws -> ExperienceReleaseDescriptorEnvelope {
         let signedBytes = Data(ExperienceReleaseDescriptorLimits.signatureDomain.utf8)
             + descriptorBytes
         let signature = try signingKey.signature(for: signedBytes)
-        return ExperienceReleaseDescriptorEnvelopeV2(
+        return ExperienceReleaseDescriptorEnvelope(
             mediaType: ExperienceReleaseDescriptorLimits.mediaType,
             encoding: "base64",
             descriptorSha256: SHA256Provider.hexDigest(descriptorBytes),
             descriptorSizeBytes: descriptorBytes.count,
             descriptorBytesBase64: descriptorBytes.base64EncodedString(),
-            signature: ExperienceReleaseDescriptorSignatureV2(
-                version: 2,
+            signature: ExperienceReleaseDescriptorSignature(
+                version: 1,
                 algorithm: "ed25519",
                 keyId: "TEST_ONLY_DEV_KEYPAIR",
                 signatureBase64: signature.base64EncodedString()

@@ -7,8 +7,7 @@ final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
     override class func spec() {
         func makeJourneyDocument(
             values: [JourneyViewModelValue] = [],
-            screens: [JourneyScreen]? = nil,
-            handlers: JourneyHandlerMap = [:]
+            screens: [JourneyScreen]? = nil
         ) -> JourneyDocument {
             JourneyDocument(
                 screens: screens ?? [
@@ -18,7 +17,6 @@ final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
                         defaultInstanceId: "runtime-instance"
                     )
                 ],
-                handlers: handlers,
                 viewModelValues: values
             )
         }
@@ -245,21 +243,11 @@ final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
                     .to(equal("Runtime title"))
             }
 
-            it("does not revive legacy Journey-owned view-model triggers") {
+            it("does not treat arbitrary view-model paths as triggers") {
                 let pulse = path("pulse")
-                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(
-                    handlers: [
-                        "screen-1": [
-                            JourneyEventHandler(
-                                id: "handler-trigger",
-                                eventName: "screen_shown",
-                                actions: [
-                                    .fireTrigger(FireTriggerAction(path: pulse)),
-                                ]
-                            ),
-                        ],
-                    ]
-                ))
+                let coordinator = ExperienceViewModelStateCoordinator(
+                    screens: makeJourneyDocument()
+                )
 
                 expect(coordinator.isTriggerPath(path: pulse, screenId: "screen-1")).to(beFalse())
                 expect(coordinator.isTriggerPath(path: path("title"), screenId: "screen-1")).to(beFalse())

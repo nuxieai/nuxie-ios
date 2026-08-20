@@ -774,8 +774,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let riv = Data("RIVE descriptor fixture".utf8)
         let image = Data([1, 2, 3, 4])
         var (entry, delivery) = try releaseEntry(riv: riv, image: image)
-        entry = ExperienceReleaseProfileEntryV2(
-            locator: ExperienceReleaseIdentityV2(
+        entry = ExperienceReleaseProfileEntry(
+            locator: ExperienceReleaseIdentity(
                 appId: entry.locator.appId,
                 environment: entry.locator.environment,
                 experienceId: "different",
@@ -1090,7 +1090,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     ed25519PublicKeyBytes: signingKey.publicKey.rawRepresentation
                 )
             ],
-            supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+            supportedRuntime: ExperienceReleaseRuntime.current,
             admission: ExperienceReleaseAdmission(store: UnavailableExperienceReleaseHighWaterStore())
         )
 
@@ -1180,7 +1180,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     ed25519PublicKeyBytes: signingKey.publicKey.rawRepresentation
                 )
             ],
-            supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+            supportedRuntime: ExperienceReleaseRuntime.current,
             admission: ExperienceReleaseAdmission(store: highWater)
         )
         let store = ExperienceLoader(
@@ -1235,10 +1235,10 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             root["identity"] = identity
         }
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: invalidSource.exactEnvelopeBytes()
         )
-        let invalidEnvelope = ExperienceReleaseDescriptorEnvelopeV2(
+        let invalidEnvelope = ExperienceReleaseDescriptorEnvelope(
             mediaType: envelope.mediaType,
             encoding: envelope.encoding,
             descriptorSha256: envelope.descriptorSha256,
@@ -1251,7 +1251,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 signatureBase64: Data(repeating: 0, count: 64).base64EncodedString()
             )
         )
-        let invalid = ExperienceReleaseProfileEntryV2(
+        let invalid = ExperienceReleaseProfileEntry(
             locator: invalidSource.locator,
             descriptorSha256: invalidSource.descriptorSha256,
             envelopeBytes: try invalidEnvelope.canonicalBytes()
@@ -1367,7 +1367,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     ed25519PublicKeyBytes: signingKey.publicKey.rawRepresentation
                 )
             ],
-            supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+            supportedRuntime: ExperienceReleaseRuntime.current,
             admission: ExperienceReleaseAdmission(store: highWater)
         )
         let store = ExperienceLoader(
@@ -1396,7 +1396,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
     }
 
     func testCanonicalEnvelopeMatchesJSONStringifyForLineSeparators() throws {
-        let envelope = ExperienceReleaseDescriptorEnvelopeV2(
+        let envelope = ExperienceReleaseDescriptorEnvelope(
             mediaType: ExperienceReleaseDescriptorLimits.mediaType,
             encoding: "base64",
             descriptorSha256: String(repeating: "a", count: 64),
@@ -1420,7 +1420,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
 
     func testCanonicalEnvelopePreservesLiteralLineSeparatorEscapeText() throws {
         let literalKeyID = #"key\u2028line\u2029paragraph"#
-        let envelope = ExperienceReleaseDescriptorEnvelopeV2(
+        let envelope = ExperienceReleaseDescriptorEnvelope(
             mediaType: ExperienceReleaseDescriptorLimits.mediaType,
             encoding: "base64",
             descriptorSha256: String(repeating: "a", count: 64),
@@ -1436,7 +1436,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
 
         let bytes = try envelope.canonicalBytes()
         let decoded = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: bytes
         )
 
@@ -1453,7 +1453,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             withJSONObject: object,
             options: [.prettyPrinted]
         )
-        let noncanonical = ExperienceReleaseProfileEntryV2(
+        let noncanonical = ExperienceReleaseProfileEntry(
             locator: entry.locator,
             descriptorSha256: entry.descriptorSha256,
             envelopeBytes: reformatted
@@ -1468,14 +1468,14 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             image: Data([8])
         )
         let entry = try budgetEntry(locator: source.locator, seed: 8)
-        let profile = ExperienceReleaseProfileV2(
+        let profile = ExperienceReleaseProfile(
             delivery: delivery,
             active: Array(repeating: entry, count: 9),
             pinned: []
         )
 
         let decoded = try JSONDecoder().decode(
-            ExperienceReleaseProfileV2.self,
+            ExperienceReleaseProfile.self,
             from: JSONEncoder().encode(profile)
         )
         XCTAssertEqual(decoded.active.count, 9)
@@ -1489,14 +1489,14 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let entries = try (0..<9).map {
             try budgetEntry(locator: source.locator, seed: UInt8($0))
         }
-        let profile = ExperienceReleaseProfileV2(
+        let profile = ExperienceReleaseProfile(
             delivery: delivery,
             active: entries,
             pinned: []
         )
 
         XCTAssertThrowsError(try JSONDecoder().decode(
-            ExperienceReleaseProfileV2.self,
+            ExperienceReleaseProfile.self,
             from: JSONEncoder().encode(profile)
         ))
     }
@@ -1599,156 +1599,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
     }
 
-#if LEGACY_JOURNEY_TESTS
-    func testAdmissionUsesEnrollmentEventAsEntryRootAndStopsAtNavigateCommit() async throws {
-        let (entry, delivery) = try releaseEntry(
-            riv: Data("RIVE enrollment entry".utf8),
-            image: Data([6, 5])
-        )
-        let admitted = try resign(entry: entry) { root in
-            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            journey["handlers"] = [
-                JourneyDocument.journeyEventHostKey: [[
-                    "id": "handler-enrollment",
-                    "eventName": "launch_offer",
-                    "actions": [
-                        [
-                            "type": "navigate",
-                            "screenId": "screen_welcome",
-                            "nodeId": "node-entry",
-                        ],
-                        [
-                            "type": "send_event",
-                            "eventName": "post_attach",
-                            "nodeId": "node-post-attach",
-                        ],
-                    ],
-                ]],
-            ]
-            root["journey"] = journey
-            var enrollment = try XCTUnwrap(root["enrollment"] as? [String: Any])
-            var trigger = try XCTUnwrap(enrollment["trigger"] as? [String: Any])
-            trigger["eventName"] = "launch_offer"
-            enrollment["trigger"] = trigger
-            root["enrollment"] = enrollment
-        }
-
-        let catalog = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
-            .init(delivery: delivery, active: [admitted], pinned: [])
-        )
-        XCTAssertEqual(catalog.definitions.count, 1)
-
-        let rejected = try resign(entry: admitted) { root in
-            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            journey["handlers"] = [
-                JourneyDocument.journeyEventHostKey: [[
-                    "id": "handler-enrollment",
-                    "eventName": "launch_offer",
-                    "actions": [
-                        [
-                            "type": "send_event",
-                            "eventName": "pre_attach_side_effect",
-                            "nodeId": "node-side-effect",
-                        ],
-                        [
-                            "type": "navigate",
-                            "screenId": "screen_welcome",
-                            "nodeId": "node-entry",
-                        ],
-                    ],
-                ]],
-            ]
-            root["journey"] = journey
-        }
-        do {
-            _ = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
-                .init(delivery: delivery, active: [rejected], pinned: [])
-            )
-            XCTFail("expected a side effect before the presentation commit to fail closed")
-        } catch let error as ExperienceReleaseAcquisitionError {
-            XCTAssertEqual(error, .invalidProfileEntry)
-        }
-    }
-
-    func testAdmissionSortsSameEventHandlersAndRejectsExperimentBeforeCommit() async throws {
-        let (entry, delivery) = try releaseEntry(
-            riv: Data("RIVE classifier ordering".utf8),
-            image: Data([4, 2])
-        )
-        let orderedCommit = try resign(entry: entry) { root in
-            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            journey["handlers"] = [
-                JourneyDocument.journeyEventHostKey: [
-                    [
-                        "id": "handler-post-attach",
-                        "eventName": SystemEventNames.journeyStarted,
-                        "order": 20,
-                        "actions": [[
-                            "type": "start_animation",
-                            "animationId": "post_attach_animation",
-                            "nodeId": "node-animation",
-                        ]],
-                    ],
-                    [
-                        "id": "handler-commit",
-                        "eventName": SystemEventNames.journeyStarted,
-                        "order": 10,
-                        "actions": [[
-                            "type": "navigate",
-                            "screenId": "screen_welcome",
-                            "nodeId": "node-navigate",
-                        ]],
-                    ],
-                ],
-            ]
-            root["journey"] = journey
-        }
-        let catalog = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
-            .init(delivery: delivery, active: [orderedCommit], pinned: [])
-        )
-        XCTAssertEqual(catalog.definitions.count, 1)
-
-        let experimentFirst = try resign(entry: entry) { root in
-            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            journey["handlers"] = [
-                JourneyDocument.journeyEventHostKey: [[
-                    "id": "handler-experiment",
-                    "eventName": SystemEventNames.journeyStarted,
-                    "actions": [
-                        [
-                            "type": "experiment",
-                            "experimentId": "experiment-entry",
-                            "variants": [[
-                                "id": "control",
-                                "percentage": 50,
-                                "actions": [[
-                                    "type": "navigate",
-                                    "screenId": "screen_welcome",
-                                ]],
-                            ], [
-                                "id": "variant",
-                                "percentage": 50,
-                                "actions": [[
-                                    "type": "navigate",
-                                    "screenId": "screen_welcome",
-                                ]],
-                            ]],
-                        ],
-                    ],
-                ]],
-            ]
-            root["journey"] = journey
-        }
-        do {
-            _ = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
-                .init(delivery: delivery, active: [experimentFirst], pinned: [])
-            )
-            XCTFail("expected experiment before commit to fail closed")
-        } catch let error as ExperienceReleaseAcquisitionError {
-            XCTAssertEqual(error, .invalidProfileEntry)
-        }
-    }
-#endif
 
     func testInvalidReplacementDoesNotClearAuthenticatedCatalog() async throws {
         let (entry, delivery) = try releaseEntry(
@@ -1763,7 +1613,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         _ = try await store.replaceReleaseProfile(.init(
             delivery: delivery, active: [entry], pinned: []
         ))
-        let invalid = ExperienceReleaseProfileEntryV2(
+        let invalid = ExperienceReleaseProfileEntry(
             locator: entry.locator,
             descriptorSha256: String(repeating: "f", count: 64),
             envelopeBytes: try entry.exactEnvelopeBytes()
@@ -2285,114 +2135,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(product.purchaseContext?.displayPrice, "TEST · $39.99")
     }
 
-#if LEGACY_JOURNEY_TESTS
-    func testProfileRejectsPurchaseWhoseLiteralPlacementIsNotSigned() async throws {
-        let (base, delivery) = try releaseEntry(
-            riv: Data("RIVE missing placement".utf8),
-            image: Data([1, 2, 3])
-        )
-        let invalid = try resign(entry: base) { root in
-            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            var handlers = try XCTUnwrap(
-                journey["handlers"] as? [String: [[String: Any]]]
-            )
-            handlers["screen_welcome"] = [[
-                "id": "purchase_handler",
-                "eventName": "buy",
-                "actions": [[
-                    "type": "purchase",
-                    "placementId": "missing:placement",
-                ]],
-            ]]
-            journey["handlers"] = handlers
-            root["journey"] = journey
-        }
-
-        do {
-            _ = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
-                .init(delivery: delivery, active: [invalid], pinned: [])
-            )
-            XCTFail("expected an undeclared literal Placement to fail closed")
-        } catch let error as ExperienceReleaseAcquisitionError {
-            XCTAssertEqual(error, .invalidRuntimeBinding("release"))
-        }
-    }
-
-    func testProfileRejectsPurchaseReferenceToNonPlacementField() async throws {
-        let (base, delivery) = try releaseEntry(
-            riv: Data("RIVE invalid placement reference".utf8),
-            image: Data([1, 2, 3])
-        )
-        let invalid = try resign(entry: base) { root in
-            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            var handlers = try XCTUnwrap(
-                journey["handlers"] as? [String: [[String: Any]]]
-            )
-            handlers["screen_welcome"] = [[
-                "id": "purchase_handler",
-                "eventName": "buy",
-                "actions": [[
-                    "type": "purchase",
-                    "placementId": [
-                        "ref": [
-                            "kind": "path",
-                            "viewModelName": "Paywall",
-                            "path": "paywall.selectedProductId",
-                        ],
-                    ],
-                ]],
-            ]]
-            journey["handlers"] = handlers
-            root["journey"] = journey
-        }
-
-        do {
-            _ = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
-                .init(delivery: delivery, active: [invalid], pinned: [])
-            )
-            XCTFail("expected a non-Placement field reference to fail closed")
-        } catch let error as ExperienceReleaseAcquisitionError {
-            XCTAssertEqual(error, .invalidRuntimeBinding("release"))
-        }
-    }
-
-    func testProfileRejectsUndeclaredPurchasePlacementInDeviceRegion() async throws {
-        let (base, delivery) = try releaseEntry(
-            riv: Data("RIVE invalid device-region placement".utf8),
-            image: Data([1, 2, 3])
-        )
-        let invalid = try resign(entry: base) { root in
-            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            journey["deviceRegions"] = [[
-                "id": "device_checkout",
-                "entryNodeId": "navigate_node",
-                "actions": [
-                    [
-                        "type": "navigate",
-                        "nodeId": "navigate_node",
-                        "screenId": "screen_welcome",
-                    ],
-                    [
-                        "type": "purchase",
-                        "nodeId": "purchase_node",
-                        "placementId": "missing:placement",
-                    ],
-                ],
-            ]]
-            root["journey"] = journey
-        }
-
-        do {
-            _ = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
-                .init(delivery: delivery, active: [invalid], pinned: [])
-            )
-            XCTFail("expected an undeclared device-region Placement to fail closed")
-        } catch let error as ExperienceReleaseAcquisitionError {
-            XCTAssertEqual(error, .invalidRuntimeBinding("release"))
-        }
-    }
-#endif
-
     func testPresentationRequestsOnlyProductsRequiredBySelectedScreen() async throws {
         let riv = Data("RIVE selected root products".utf8)
         let image = Data([2, 7, 1, 8])
@@ -2706,7 +2448,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             releaseStore: releaseStore,
             warmLoadsInitiallySuspended: true
         )
-        let profile = ExperienceReleaseProfileV2(
+        let profile = ExperienceReleaseProfile(
             delivery: delivery,
             active: [entry],
             pinned: []
@@ -3509,11 +3251,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             pinned: []
         ))
         let definition = try XCTUnwrap(catalog.definitions.first)
-        let route = try XCTUnwrap(definition.definitionV2.route(
+        let route = try XCTUnwrap(definition.definition.route(
             host: .journey,
-            eventName: definition.definitionV2.entryRouteEventName
+            eventName: definition.definition.entryRouteEventName
         ))
-        let program = try definition.definitionV2.compiledProgram(for: route)
+        let program = try definition.definition.compiledProgram(for: route)
         guard case .condition(let condition) = try XCTUnwrap(program.first) else {
             return XCTFail("expected canonical conditional entry program")
         }
@@ -3541,7 +3283,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         script: Data = Data("compiled luau".utf8),
         imageRequired: Bool = true,
         includeImage: Bool = true
-    ) throws -> (ExperienceReleaseProfileEntryV2, ExperienceReleaseDeliveryV2) {
+    ) throws -> (ExperienceReleaseProfileEntry, ExperienceReleaseDelivery) {
         _ = script
         var root = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: goldenDescriptorBytes()) as? [String: Any]
@@ -3599,30 +3341,30 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             for: Data(ExperienceReleaseDescriptorLimits.signatureDomain.utf8) + descriptor
         )
         let digest = SHA256Provider.hexDigest(descriptor)
-        let envelope = ExperienceReleaseDescriptorEnvelopeV2(
+        let envelope = ExperienceReleaseDescriptorEnvelope(
             mediaType: ExperienceReleaseDescriptorLimits.mediaType,
             encoding: "base64",
             descriptorSha256: digest,
             descriptorSizeBytes: descriptor.count,
             descriptorBytesBase64: descriptor.base64EncodedString(),
             signature: .init(
-                version: 2,
+                version: 1,
                 algorithm: "ed25519",
                 keyId: "TEST_ONLY_DEV_KEYPAIR",
                 signatureBase64: signature.base64EncodedString()
             )
         )
         let identity = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorV2.self,
+            ExperienceReleaseDescriptor.self,
             from: descriptor
         ).identity
         return (
-            ExperienceReleaseProfileEntryV2(
+            ExperienceReleaseProfileEntry(
                 locator: identity,
                 descriptorSha256: digest,
                 envelopeBytes: try envelope.canonicalBytes()
             ),
-            ExperienceReleaseDeliveryV2(
+            ExperienceReleaseDelivery(
                 renderBaseUrl: "https://cdn.nuxie.test/renders/",
                 assetBaseUrl: "https://cdn.nuxie.test/assets/"
             )
@@ -3630,9 +3372,9 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
     }
 
     private func resign(
-        entry: ExperienceReleaseProfileEntryV2,
+        entry: ExperienceReleaseProfileEntry,
         mutate: (inout [String: Any]) throws -> Void
-    ) throws -> ExperienceReleaseProfileEntryV2 {
+    ) throws -> ExperienceReleaseProfileEntry {
         var root = try XCTUnwrap(
             JSONSerialization.jsonObject(with: try validDescriptorBytes(entry)) as? [String: Any]
         )
@@ -3642,21 +3384,21 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             for: Data(ExperienceReleaseDescriptorLimits.signatureDomain.utf8) + descriptor
         )
         let digest = SHA256Provider.hexDigest(descriptor)
-        let envelope = ExperienceReleaseDescriptorEnvelopeV2(
+        let envelope = ExperienceReleaseDescriptorEnvelope(
             mediaType: ExperienceReleaseDescriptorLimits.mediaType,
             encoding: "base64",
             descriptorSha256: digest,
             descriptorSizeBytes: descriptor.count,
             descriptorBytesBase64: descriptor.base64EncodedString(),
             signature: .init(
-                version: 2,
+                version: 1,
                 algorithm: "ed25519",
                 keyId: "TEST_ONLY_DEV_KEYPAIR",
                 signatureBase64: signature.base64EncodedString()
             )
         )
         let identity = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorV2.self,
+            ExperienceReleaseDescriptor.self,
             from: descriptor
         ).identity
         return .init(
@@ -3742,15 +3484,15 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
     }
 
     private func budgetEntry(
-        locator: ExperienceReleaseIdentityV2,
+        locator: ExperienceReleaseIdentity,
         seed: UInt8
-    ) throws -> ExperienceReleaseProfileEntryV2 {
+    ) throws -> ExperienceReleaseProfileEntry {
         let descriptor = Data(
             repeating: seed,
             count: ExperienceReleaseDescriptorLimits.descriptorBytes
         )
         let digest = SHA256Provider.hexDigest(descriptor)
-        let envelope = ExperienceReleaseDescriptorEnvelopeV2(
+        let envelope = ExperienceReleaseDescriptorEnvelope(
             mediaType: ExperienceReleaseDescriptorLimits.mediaType,
             encoding: "base64",
             descriptorSha256: digest,
@@ -3786,7 +3528,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     ed25519PublicKeyBytes: signingKey.publicKey.rawRepresentation
                 )
             ],
-            supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+            supportedRuntime: ExperienceReleaseRuntime.current,
             admission: ExperienceReleaseAdmission(
                 store: InMemoryExperienceReleaseHighWaterStore()
             )
@@ -3800,18 +3542,18 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: Data(contentsOf: root
-                .appendingPathComponent("fixtures/experience-release-descriptor-v2/envelope.json"))
+                .appendingPathComponent("fixtures/experience-release-descriptor/envelope.json"))
         )
         return try XCTUnwrap(Data(base64Encoded: envelope.descriptorBytesBase64))
     }
 
     private func validDescriptorBytes(
-        _ entry: ExperienceReleaseProfileEntryV2
+        _ entry: ExperienceReleaseProfileEntry
     ) throws -> Data {
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: entry.exactEnvelopeBytes()
         )
         return try XCTUnwrap(Data(base64Encoded: envelope.descriptorBytesBase64))
@@ -3908,7 +3650,7 @@ private actor SuspendedPresentationPackageReleaseStore: ExperienceReleaseAcquiri
     }
 
     func authenticateProfile(
-        _ profile: ExperienceReleaseProfileV2
+        _ profile: ExperienceReleaseProfile
     ) async throws -> AuthenticatedExperienceReleaseCatalog {
         try await underlying.authenticateProfile(profile)
     }
@@ -3970,7 +3712,7 @@ private actor BoundedWarmProbeReleaseStore: ExperienceReleaseAcquiring {
     }
 
     func authenticateProfile(
-        _ profile: ExperienceReleaseProfileV2
+        _ profile: ExperienceReleaseProfile
     ) async throws -> AuthenticatedExperienceReleaseCatalog {
         try await underlying.authenticateProfile(profile)
     }
@@ -4038,7 +3780,7 @@ private actor ConstrainedPreloadFailureReleaseStore: ExperienceReleaseAcquiring 
     }
 
     func authenticateProfile(
-        _ profile: ExperienceReleaseProfileV2
+        _ profile: ExperienceReleaseProfile
     ) async throws -> AuthenticatedExperienceReleaseCatalog {
         try await underlying.authenticateProfile(profile)
     }

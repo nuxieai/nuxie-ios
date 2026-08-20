@@ -14,9 +14,9 @@ enum ExperienceReleaseInitialPresentationResolver {
         cacheRootURL _: URL,
         environment _: Environment
     ) async throws -> String {
-        guard let route = definition.definitionV2.route(
+        guard let route = definition.definition.route(
             host: .journey,
-            eventName: definition.definitionV2.entryRouteEventName
+            eventName: definition.definition.entryRouteEventName
         ) else {
             throw ResolverError.entryDidNotPresent
         }

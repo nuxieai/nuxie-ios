@@ -130,7 +130,6 @@ final class JourneyRendererBridge:
     frameNumber: UInt64
   ) {
     // Presentation tracing requires the immutable token supplied by the host.
-    // The unscoped callback remains for non-trace delegates and compatibility.
   }
 
   @MainActor
@@ -140,7 +139,6 @@ final class JourneyRendererBridge:
     screenId: String
   ) {
     // Presentation tracing requires the immutable token supplied by the host.
-    // The unscoped callback remains for non-trace delegates and compatibility.
   }
 
   @MainActor

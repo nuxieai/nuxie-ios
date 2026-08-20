@@ -70,7 +70,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         envelopeBytes: Data,
         authorizationKeys: [ExperiencePackageAuthorizationKey],
         expectedIdentity: ExperienceReleaseIdentityExpectation,
-        supportedCompatibility: ExperienceReleaseSupportedCompatibility,
+        supportedRuntime: ExperienceReleaseSupportedRuntime,
         replayPolicy: ExperienceReleaseReplayPolicy
     ) throws -> AuthenticatedExperienceReleaseDescriptor {
         let envelope = try decodeEnvelope(envelopeBytes)
@@ -105,9 +105,9 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         guard descriptor.identity == expectedIdentity.identity else {
             throw ExperienceReleaseDescriptorAuthenticationError.identityMismatch
         }
-        try validateCompatibility(
+        try validateRuntimeRequirements(
             descriptor.requirements,
-            supported: supportedCompatibility
+            supported: supportedRuntime
         )
         try validateRuntimeBindings(descriptor)
         let publishedAtSeqToPromote = try validateReplayPolicy(
@@ -126,7 +126,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
 
     private func validateReplayPolicy(
         _ policy: ExperienceReleaseReplayPolicy,
-        descriptor: ExperienceReleaseDescriptorV2,
+        descriptor: ExperienceReleaseDescriptor,
         descriptorSHA256: String
     ) throws -> Int? {
         switch policy {
@@ -147,7 +147,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func decodeEnvelope(_ bytes: Data) throws
-        -> ExperienceReleaseDescriptorEnvelopeV2
+        -> ExperienceReleaseDescriptorEnvelope
     {
         guard bytes.count <= ExperienceReleaseDescriptorLimits.envelopeBytes else {
             throw ExperienceReleaseDescriptorAuthenticationError.descriptorLimitExceeded
@@ -166,12 +166,12 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidEnvelope
             }
             let envelope = try JSONDecoder().decode(
-                ExperienceReleaseDescriptorEnvelopeV2.self,
+                ExperienceReleaseDescriptorEnvelope.self,
                 from: bytes
             )
             guard envelope.mediaType == ExperienceReleaseDescriptorLimits.mediaType,
                   envelope.encoding == "base64",
-                  envelope.signature.version == 2,
+                  envelope.signature.version == 1,
                   envelope.signature.algorithm == "ed25519",
                   !envelope.signature.keyId.isEmpty,
                   envelope.signature.keyId.utf8.count
@@ -191,7 +191,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func decodeDescriptorBytes(
-        _ envelope: ExperienceReleaseDescriptorEnvelopeV2
+        _ envelope: ExperienceReleaseDescriptorEnvelope
     ) throws -> Data {
         guard let bytes = canonicalBase64(
             envelope.descriptorBytesBase64,
@@ -209,7 +209,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func decodeAndValidateDescriptor(_ bytes: Data) throws
-        -> ExperienceReleaseDescriptorV2
+        -> ExperienceReleaseDescriptor
     {
         do {
             try StrictJSONDuplicateKeyValidator.validate(bytes)
@@ -219,7 +219,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             }
             try validateShapeAndBounds(object)
             let descriptor = try JSONDecoder().decode(
-                ExperienceReleaseDescriptorV2.self,
+                ExperienceReleaseDescriptor.self,
                 from: bytes
             )
             guard descriptor.schemaVersion == ExperienceReleaseDescriptorLimits.schemaVersion,
@@ -357,9 +357,9 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         return capabilities
     }
 
-    private func validateCompatibility(
+    private func validateRuntimeRequirements(
         _ requirements: [String: ExperienceReleaseJSONValue],
-        supported: ExperienceReleaseSupportedCompatibility
+        supported: ExperienceReleaseSupportedRuntime
     ) throws {
         guard case .string(let minimumSdkVersion) = requirements["minimumSdkVersion"],
               case .string(let runtimeRevision) = requirements["runtimeRevision"],
@@ -386,7 +386,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
               timezoneRevision == supported.timezoneDataRevision,
               timezoneSHA256 == supported.timezoneDataSHA256,
               SignedTimezoneBundle.installed != nil else {
-            throw ExperienceReleaseDescriptorAuthenticationError.unsupportedCompatibility(
+            throw ExperienceReleaseDescriptorAuthenticationError.unsupportedRuntime(
                 "runtime"
             )
         }
@@ -399,7 +399,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             return Int(number)
         }
         guard Set(declaredBytecodeVersions).isSubset(of: supportedBytecodeVersions) else {
-            throw ExperienceReleaseDescriptorAuthenticationError.unsupportedCompatibility(
+            throw ExperienceReleaseDescriptorAuthenticationError.unsupportedRuntime(
                 "luau_bytecode"
             )
         }
@@ -435,7 +435,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func validateRuntimeBindings(
-        _ descriptor: ExperienceReleaseDescriptorV2
+        _ descriptor: ExperienceReleaseDescriptor
     ) throws {
         for screen in descriptor.screenBehaviors {
             guard case .array(let controls) = screen["controls"] else { continue }
@@ -443,8 +443,8 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
                 guard case .object(let control) = value,
                       case .object(let behavior) = control["behavior"],
                       case .string("script") = behavior["kind"] else { continue }
-                throw ExperienceReleaseDescriptorAuthenticationError.unsupportedCompatibility(
-                    "screen_actions_v2"
+                throw ExperienceReleaseDescriptorAuthenticationError.unsupportedRuntime(
+                    "screen_actions"
                 )
             }
         }
@@ -456,7 +456,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     ) throws {
         if let object = value as? [String: Any] {
             // Bare sha256 and key fields also occur in timezone pins and response
-            // schemas. Artifact references are the only v2 objects with sizeBytes;
+            // schemas. Artifact references are the only objects with sizeBytes;
             // the schema then requires their storage key and digest as a set.
             if object["sizeBytes"] != nil {
                 guard let key = object["key"] as? String,

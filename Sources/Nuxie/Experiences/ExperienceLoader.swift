@@ -97,7 +97,7 @@ actor ExperienceLoader {
     }
 
     func replaceReleaseProfile(
-        _ profile: ExperienceReleaseProfileV2?
+        _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
         guard let profile else {
             cancelWarmTasks()
@@ -330,7 +330,7 @@ actor ExperienceLoader {
         let experience = Experience(
             behavior: release.behavior,
             journey: release.journey,
-            definitionV2: release.definitionV2,
+            definition: release.definition,
             assetBaseURL: assetBaseURL,
             authenticatedReleaseID: releaseID
         )
@@ -492,7 +492,7 @@ actor ExperienceLoader {
                 }
             }
         }
-        let devicePrograms: [JourneyAction] = release.definitionV2.executionPlans.flatMap { plan -> [JourneyAction] in
+        let devicePrograms: [JourneyAction] = release.definition.executionPlans.flatMap { plan -> [JourneyAction] in
             switch plan.route.host {
             case .journey:
                 break
@@ -501,9 +501,9 @@ actor ExperienceLoader {
             case .screen:
                 return []
             }
-            guard let route = release.definitionV2.routes[plan.route] else { return [] }
+            guard let route = release.definition.routes[plan.route] else { return [] }
             return plan.deviceRegions.reduce(into: [JourneyAction]()) { actions, region in
-                actions.append(contentsOf: (try? release.definitionV2.compiledDeviceRegionProgram(
+                actions.append(contentsOf: (try? release.definition.compiledDeviceRegionProgram(
                     route,
                     plan: plan,
                     region: region
@@ -511,7 +511,7 @@ actor ExperienceLoader {
             }
         }
         collectPurchasePlacementIDs(in: devicePrograms, into: &referenced)
-        // A v2 purchase may resolve its placement from Response.Field,
+        // A purchase may resolve its placement from Response.Field,
         // Event.Field, or another runtime value. There is no safe placement
         // identity to derive during release admission in that case, while
         // ExperienceViewController requires the StoreKit product to already
@@ -553,18 +553,18 @@ actor ExperienceLoader {
                 collectPurchasePlacementIDs(in: purchase.onFailed ?? [], into: &result)
                 collectPurchasePlacementIDs(in: purchase.onCancelled ?? [], into: &result)
             case .timeWindow(let window):
-                collectPurchasePlacementIDs(in: window.successActions ?? [], into: &result)
+                collectPurchasePlacementIDs(in: window.onInside, into: &result)
             case .waitUntil(let wait):
-                collectPurchasePlacementIDs(in: wait.successActions ?? [], into: &result)
-                collectPurchasePlacementIDs(in: wait.timeoutActions ?? [], into: &result)
+                collectPurchasePlacementIDs(in: wait.onSatisfied, into: &result)
+                collectPurchasePlacementIDs(in: wait.onTimeout, into: &result)
             case .condition(let condition):
                 for branch in condition.branches {
-                    collectPurchasePlacementIDs(in: branch.actions, into: &result)
+                    collectPurchasePlacementIDs(in: branch.program, into: &result)
                 }
-                collectPurchasePlacementIDs(in: condition.defaultActions ?? [], into: &result)
+                collectPurchasePlacementIDs(in: condition.defaultProgram, into: &result)
             case .experiment(let experiment):
                 for variant in experiment.variants {
-                    collectPurchasePlacementIDs(in: variant.actions, into: &result)
+                    collectPurchasePlacementIDs(in: variant.program, into: &result)
                 }
             case .restore(let restore):
                 collectPurchasePlacementIDs(in: restore.onRestored ?? [], into: &result)
@@ -595,19 +595,19 @@ actor ExperienceLoader {
                     return true
                 }
             case .timeWindow(let window):
-                if containsDynamicPurchase(in: window.successActions ?? []) { return true }
+                if containsDynamicPurchase(in: window.onInside) { return true }
             case .waitUntil(let wait):
-                if containsDynamicPurchase(in: wait.successActions ?? [])
-                    || containsDynamicPurchase(in: wait.timeoutActions ?? []) { return true }
+                if containsDynamicPurchase(in: wait.onSatisfied)
+                    || containsDynamicPurchase(in: wait.onTimeout) { return true }
             case .condition(let condition):
                 if condition.branches.contains(where: {
-                    containsDynamicPurchase(in: $0.actions)
-                }) || containsDynamicPurchase(in: condition.defaultActions ?? []) {
+                    containsDynamicPurchase(in: $0.program)
+                }) || containsDynamicPurchase(in: condition.defaultProgram) {
                     return true
                 }
             case .experiment(let experiment):
                 if experiment.variants.contains(where: {
-                    containsDynamicPurchase(in: $0.actions)
+                    containsDynamicPurchase(in: $0.program)
                 }) { return true }
             case .restore(let restore):
                 if containsDynamicPurchase(in: restore.onRestored ?? [])
@@ -819,7 +819,7 @@ actor ExperienceLoader {
         return Experience(
             behavior: release.behavior,
             journey: release.journey,
-            definitionV2: release.definitionV2,
+            definition: release.definition,
             assetBaseURL: assetBaseURL,
             authenticatedReleaseID: release.releaseID
         )

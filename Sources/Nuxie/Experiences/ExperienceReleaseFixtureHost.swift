@@ -67,7 +67,7 @@ import UIKit
         initialNavigationStack: [String] = [],
         statusObserver: (@MainActor (String) -> Void)? = nil
     ) throws -> UIViewController {
-        guard profileData.count <= 4 * 1_024 * 1_024 else {
+        guard profileData.count <= ExperienceReleaseDescriptorLimits.profileBytes else {
             throw ExperienceReleaseFixtureHostError.invalidProfile
         }
         return try makeViewController(
@@ -81,14 +81,14 @@ import UIKit
         )
     }
 
-    private static func decodeProfile(_ data: Data) throws -> ExperienceReleaseProfileV2 {
+    private static func decodeProfile(_ data: Data) throws -> ExperienceReleaseProfile {
         try StrictJSONDuplicateKeyValidator.validate(data)
-        return try JSONDecoder().decode(ExperienceReleaseProfileV2.self, from: data)
+        return try JSONDecoder().decode(ExperienceReleaseProfile.self, from: data)
     }
 
     @MainActor
     private static func makeViewController(
-        profile: ExperienceReleaseProfileV2,
+        profile: ExperienceReleaseProfile,
         cacheRootURL: URL,
         environment: Environment,
         urlSession: URLSession,
@@ -132,13 +132,13 @@ import UIKit
 
     @MainActor
     struct PresentationInputs {
-        let profile: ExperienceReleaseProfileV2
+        let profile: ExperienceReleaseProfile
         let acquisitionStore: ExperienceReleaseAcquisitionStore
         let cacheRootURL: URL
         let environment: Environment
 
         init(
-            profile: ExperienceReleaseProfileV2,
+            profile: ExperienceReleaseProfile,
             cacheRootURL: URL,
             environment: Environment,
             urlSession: URLSession
@@ -153,7 +153,7 @@ import UIKit
                 ),
                 urlSession: urlSession,
                 authorizationKeys: try ExperienceTrustRoots.keys(for: environment),
-                supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+                supportedRuntime: ExperienceReleaseRuntime.current,
                 admission: ExperienceReleaseAdmission(
                     store: InMemoryExperienceReleaseHighWaterStore()
                 )
@@ -246,10 +246,10 @@ import UIKit
     @MainActor
     private static func registeredFixtureProfile(
         at fixtureBaseURL: URL
-    ) throws -> (ExperienceReleaseProfileV2, URLSession) {
+    ) throws -> (ExperienceReleaseProfile, URLSession) {
         let read = try BoundedFileIO.read(
             at: fixtureBaseURL.appendingPathComponent("profile.json"),
-            maximumBytes: 4 * 1_024 * 1_024
+            maximumBytes: ExperienceReleaseDescriptorLimits.profileBytes
         )
         let profile = try decodeProfile(read.data)
         guard let deliveryOrigin = URL(string: profile.delivery.renderBaseUrl),

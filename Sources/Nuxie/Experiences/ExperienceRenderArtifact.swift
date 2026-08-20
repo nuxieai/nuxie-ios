@@ -18,7 +18,7 @@ struct AuthenticatedRuntimePayload: Sendable {
     let authenticatedKeyID: String
     let renderPlan: NativeExperienceRenderPlan
     let journey: JourneyDocument
-    let definitionV2: ExperienceDefinitionV2?
+    let definition: ExperienceDefinition?
     let sceneBytes: Data
     let assets: [AuthenticatedRuntimeAsset]
 
@@ -26,14 +26,14 @@ struct AuthenticatedRuntimePayload: Sendable {
         authenticatedKeyID: String,
         renderPlan: NativeExperienceRenderPlan,
         journey: JourneyDocument,
-        definitionV2: ExperienceDefinitionV2? = nil,
+        definition: ExperienceDefinition? = nil,
         sceneBytes: Data,
         assets: [AuthenticatedRuntimeAsset]
     ) {
         self.authenticatedKeyID = authenticatedKeyID
         self.renderPlan = renderPlan
         self.journey = journey
-        self.definitionV2 = definitionV2
+        self.definition = definition
         self.sceneBytes = sceneBytes
         self.assets = assets
     }

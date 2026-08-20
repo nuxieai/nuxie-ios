@@ -67,7 +67,7 @@ private final class ChunkedProfileURLProtocol: URLProtocol, @unchecked Sendable 
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         DispatchQueue.global().async { [self] in
             let chunk = Data(repeating: 0x20, count: 64 * 1_024)
-            for _ in 0..<96 {
+            for _ in 0..<400 {
                 stateLock.lock()
                 let stopped = isStopped
                 stateLock.unlock()
@@ -146,11 +146,11 @@ final class NuxieApiTests: AsyncSpec {
                     expect(result.releases).to(beNil())
                 }
 
-                it("rejects a profile body over 4 MiB before decoding") {
+                it("rejects a profile body over 24 MiB before decoding") {
                     StubURLProtocol.register(
                         matcher: RequestMatchers.post("/profile"),
                         handler: { request in
-                            let data = Data(repeating: 0x20, count: 4 * 1_024 * 1_024 + 1)
+                            let data = Data(repeating: 0x20, count: 24 * 1_024 * 1_024 + 1)
                             let response = HTTPURLResponse(
                                 url: request.url!,
                                 statusCode: 200,
@@ -196,7 +196,7 @@ final class NuxieApiTests: AsyncSpec {
                     }.to(throwError())
                 }
 
-                it("cancels a chunked profile response at the 4 MiB body limit") {
+                it("cancels a chunked profile response at the 24 MiB body limit") {
                     let controller = ChunkedProfileController()
                     ChunkedProfileURLProtocol.configure(controller)
                     let configuration = URLSessionConfiguration.ephemeral
@@ -217,7 +217,7 @@ final class NuxieApiTests: AsyncSpec {
                         fail("Expected invalidResponse, got \(error)")
                     }
                     expect(controller.stopped.wait(timeout: .now() + 2)).to(equal(.success))
-                    expect(controller.sentBytes).to(beLessThanOrEqualTo(6 * 1_024 * 1_024))
+                    expect(controller.sentBytes).to(beLessThanOrEqualTo(26 * 1_024 * 1_024))
                 }
                 
                 it("should handle network errors") {

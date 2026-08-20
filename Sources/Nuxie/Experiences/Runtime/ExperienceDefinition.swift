@@ -1,64 +1,64 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
 
-enum JourneyRouteHostV2: Hashable, Sendable {
+enum JourneyRouteHost: Hashable, Sendable {
     case journey
     case screen(String)
 }
 
-struct JourneyRouteKeyV2: Hashable, Sendable {
-    let host: JourneyRouteHostV2
+struct JourneyRouteKey: Hashable, Sendable {
+    let host: JourneyRouteHost
     let eventName: String
 }
 
-struct JourneyRouteV2: Sendable {
-    let key: JourneyRouteKeyV2
+struct JourneyRoute: Sendable {
+    let key: JourneyRouteKey
     let revisionSHA256: String
     let program: [ExperienceReleaseJSONValue]
 }
 
-struct JourneyExecutionCursorV2: Equatable, Sendable {
+struct JourneyExecutionCursor: Equatable, Sendable {
     let programPath: String
     let actionIndex: Int
 }
 
-struct JourneyExecutionRegionV2: Equatable, Sendable {
+struct JourneyExecutionRegion: Equatable, Sendable {
     let id: String
     let plane: JourneyPlane
-    let entryCursor: JourneyExecutionCursorV2
+    let entryCursor: JourneyExecutionCursor
     let actionPaths: [String]
 }
 
-struct JourneyExecutionHandoffEdgeV2: Equatable, Sendable {
+struct JourneyExecutionHandoffEdge: Equatable, Sendable {
     let id: String
     let fromRegionId: String
-    let fromCursor: JourneyExecutionCursorV2
+    let fromCursor: JourneyExecutionCursor
     let toRegionId: String
-    let toCursor: JourneyExecutionCursorV2
+    let toCursor: JourneyExecutionCursor
     let direction: String
     let deviceClaimTimeoutMs: Int?
     let onDeviceUnavailableRegionId: String?
-    let onDeviceUnavailableCursor: JourneyExecutionCursorV2?
+    let onDeviceUnavailableCursor: JourneyExecutionCursor?
 }
 
-struct JourneyExecutionPlanV2: Equatable, Sendable {
+struct JourneyExecutionPlan: Equatable, Sendable {
     let id: String
-    let route: JourneyRouteKeyV2
+    let route: JourneyRouteKey
     let revisionSHA256: String
     let startPlane: JourneyPlane
     let entryRegionId: String
-    let entryCursor: JourneyExecutionCursorV2
-    let deviceRegions: [JourneyExecutionRegionV2]
-    let serverRegions: [JourneyExecutionRegionV2]
-    let handoffEdges: [JourneyExecutionHandoffEdgeV2]
+    let entryCursor: JourneyExecutionCursor
+    let deviceRegions: [JourneyExecutionRegion]
+    let serverRegions: [JourneyExecutionRegion]
+    let handoffEdges: [JourneyExecutionHandoffEdge]
 
-    var allRegions: [JourneyExecutionRegionV2] { deviceRegions + serverRegions }
+    var allRegions: [JourneyExecutionRegion] { deviceRegions + serverRegions }
 
-    func region(id: String) -> JourneyExecutionRegionV2? {
+    func region(id: String) -> JourneyExecutionRegion? {
         allRegions.first { $0.id == id }
     }
 
-    func edge(fromRegionId: String, at cursor: JourneyExecutionCursorV2) -> JourneyExecutionHandoffEdgeV2? {
+    func edge(fromRegionId: String, at cursor: JourneyExecutionCursor) -> JourneyExecutionHandoffEdge? {
         handoffEdges.first {
             $0.fromRegionId == fromRegionId
                 && $0.fromCursor == cursor
@@ -66,28 +66,22 @@ struct JourneyExecutionPlanV2: Equatable, Sendable {
     }
 }
 
-struct JourneyScreenV2: Sendable {
-    let id: String
-    let defaultViewModelName: String?
-    let defaultInstanceId: String?
-}
-
-struct ExperienceDefinitionV2: Sendable {
+struct ExperienceDefinition: Sendable {
     let entryRouteEventName: String
-    let screens: [JourneyScreenV2]
+    let screens: [JourneyScreen]
     let viewModelValues: [JourneyViewModelValue]
-    let routes: [JourneyRouteKeyV2: JourneyRouteV2]
-    let executionPlans: [JourneyExecutionPlanV2]
+    let routes: [JourneyRouteKey: JourneyRoute]
+    let executionPlans: [JourneyExecutionPlan]
     let responseSchema: PinnedResponseSessionSchema?
     let controlsByScreen: [String: [String: ScreenControlActionDefinition]]
     let appDefaultTimezone: String?
 
     init(
         entryRouteEventName: String,
-        screens: [JourneyScreenV2],
+        screens: [JourneyScreen],
         viewModelValues: [JourneyViewModelValue],
-        routes: [JourneyRouteKeyV2: JourneyRouteV2],
-        executionPlans: [JourneyExecutionPlanV2],
+        routes: [JourneyRouteKey: JourneyRoute],
+        executionPlans: [JourneyExecutionPlan],
         responseSchema: PinnedResponseSessionSchema?,
         controlsByScreen: [String: [String: ScreenControlActionDefinition]],
         appDefaultTimezone: String? = nil
@@ -102,7 +96,7 @@ struct ExperienceDefinitionV2: Sendable {
         self.appDefaultTimezone = appDefaultTimezone
     }
 
-    init(descriptor: ExperienceReleaseDescriptorV2) throws {
+    init(descriptor: ExperienceReleaseDescriptor) throws {
         guard case .string(let entryRouteEventName) = descriptor.journey["entryRouteEventName"],
               case .array(let screenValues) = descriptor.journey["screens"],
               case .array(let viewModelValueValues) = descriptor.journey["viewModelValues"],
@@ -121,7 +115,7 @@ struct ExperienceDefinitionV2: Sendable {
                   case .string(let id) = screen["id"] else {
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
             }
-            return JourneyScreenV2(
+            return JourneyScreen(
                 id: id,
                 defaultViewModelName: screen["defaultViewModelName"]?.stringValue,
                 defaultInstanceId: screen["defaultInstanceId"]?.stringValue
@@ -142,7 +136,7 @@ struct ExperienceDefinitionV2: Sendable {
                 value: AnyCodable(value.foundationValue)
             )
         }
-        var routeTable: [JourneyRouteKeyV2: JourneyRouteV2] = [:]
+        var routeTable: [JourneyRouteKey: JourneyRoute] = [:]
         for value in routeValues {
             guard case .object(let route) = value,
                   case .object(let host) = route["host"],
@@ -152,7 +146,7 @@ struct ExperienceDefinitionV2: Sendable {
                   case .array(let program) = route["program"] else {
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
             }
-            let routeHost: JourneyRouteHostV2
+            let routeHost: JourneyRouteHost
             switch kind {
             case "journey": routeHost = .journey
             case "screen":
@@ -163,11 +157,11 @@ struct ExperienceDefinitionV2: Sendable {
             default:
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
             }
-            let key = JourneyRouteKeyV2(host: routeHost, eventName: eventName)
+            let key = JourneyRouteKey(host: routeHost, eventName: eventName)
             guard routeTable[key] == nil else {
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
             }
-            routeTable[key] = JourneyRouteV2(
+            routeTable[key] = JourneyRoute(
                 key: key,
                 revisionSHA256: revision,
                 program: program
@@ -189,14 +183,14 @@ struct ExperienceDefinitionV2: Sendable {
         controlsByScreen = try Self.controlActions(descriptor.screenBehaviors)
     }
 
-    func route(host: JourneyRouteHostV2, eventName: String) -> JourneyRouteV2? {
-        routes[JourneyRouteKeyV2(host: host, eventName: eventName)]
+    func route(host: JourneyRouteHost, eventName: String) -> JourneyRoute? {
+        routes[JourneyRouteKey(host: host, eventName: eventName)]
     }
 
     func executionPlan(
-        for route: JourneyRouteV2,
+        for route: JourneyRoute,
         startPlane: JourneyPlane
-    ) -> JourneyExecutionPlanV2? {
+    ) -> JourneyExecutionPlan? {
         executionPlans.first {
             $0.route == route.key
                 && $0.revisionSHA256 == route.revisionSHA256
@@ -204,12 +198,12 @@ struct ExperienceDefinitionV2: Sendable {
         }
     }
 
-    func executionPlan(id: String) -> JourneyExecutionPlanV2? {
+    func executionPlan(id: String) -> JourneyExecutionPlan? {
         executionPlans.first { $0.id == id }
     }
 
     func routeProgram(
-        _ route: JourneyRouteV2,
+        _ route: JourneyRoute,
         at programPath: String
     ) -> [ExperienceReleaseJSONValue]? {
         guard programPath.hasPrefix("/") else { return nil }
@@ -234,8 +228,8 @@ struct ExperienceDefinitionV2: Sendable {
     }
 
     func compiledProgram(
-        _ route: JourneyRouteV2,
-        at cursor: JourneyExecutionCursorV2
+        _ route: JourneyRoute,
+        at cursor: JourneyExecutionCursor
     ) throws -> [JourneyAction] {
         guard let values = routeProgram(route, at: cursor.programPath),
               cursor.actionIndex >= 0,
@@ -252,9 +246,9 @@ struct ExperienceDefinitionV2: Sendable {
     /// exact cursor where ownership changes; authored route actions are never
     /// reinterpreted as handoffs.
     func compiledDeviceRegionProgram(
-        _ route: JourneyRouteV2,
-        plan: JourneyExecutionPlanV2,
-        region: JourneyExecutionRegionV2
+        _ route: JourneyRoute,
+        plan: JourneyExecutionPlan,
+        region: JourneyExecutionRegion
     ) throws -> [JourneyAction] {
         try compiledDeviceRegionProgramWithPaths(route, plan: plan, region: region).actions
     }
@@ -262,9 +256,9 @@ struct ExperienceDefinitionV2: Sendable {
     /// Returns the projected device actions together with their SDK-owned
     /// RFC 6901 addresses in the accepted signed route revision.
     func compiledDeviceRegionProgramWithPaths(
-        _ route: JourneyRouteV2,
-        plan: JourneyExecutionPlanV2,
-        region: JourneyExecutionRegionV2
+        _ route: JourneyRoute,
+        plan: JourneyExecutionPlan,
+        region: JourneyExecutionRegion
     ) throws -> (actions: [JourneyAction], actionPaths: [String]) {
         guard region.plane == .device else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
@@ -297,14 +291,14 @@ struct ExperienceDefinitionV2: Sendable {
     private func projectedRootActionPaths(
         _ actions: [ExperienceReleaseJSONValue],
         path: String,
-        plan: JourneyExecutionPlanV2,
-        region: JourneyExecutionRegionV2,
+        plan: JourneyExecutionPlan,
+        region: JourneyExecutionRegion,
         minimumIndex: Int
     ) throws -> [String] {
         var result: [String] = []
         for index in actions.indices where index >= minimumIndex {
             let actionPath = "\(path)/\(index)"
-            let cursor = JourneyExecutionCursorV2(programPath: path, actionIndex: index)
+            let cursor = JourneyExecutionCursor(programPath: path, actionIndex: index)
             if let edge = plan.edge(fromRegionId: region.id, at: cursor) {
                 guard edge.direction == "device_to_server" else {
                     throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
@@ -314,7 +308,7 @@ struct ExperienceDefinitionV2: Sendable {
                 result.append(actionPath)
             }
         }
-        let terminalCursor = JourneyExecutionCursorV2(
+        let terminalCursor = JourneyExecutionCursor(
             programPath: path,
             actionIndex: actions.count
         )
@@ -330,8 +324,8 @@ struct ExperienceDefinitionV2: Sendable {
     private func projectProgram(
         _ value: ExperienceReleaseJSONValue,
         path: String,
-        plan: JourneyExecutionPlanV2,
-        region: JourneyExecutionRegionV2,
+        plan: JourneyExecutionPlan,
+        region: JourneyExecutionRegion,
         minimumIndex: Int = 0
     ) throws -> [ExperienceReleaseJSONValue] {
         guard case .array(let actions) = value else {
@@ -345,7 +339,7 @@ struct ExperienceDefinitionV2: Sendable {
                   case .string(let type) = object["type"] else {
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
             }
-            let cursor = JourneyExecutionCursorV2(
+            let cursor = JourneyExecutionCursor(
                 programPath: path,
                 actionIndex: index
             )
@@ -372,7 +366,7 @@ struct ExperienceDefinitionV2: Sendable {
                 region: region
             ))
         }
-        let terminalCursor = JourneyExecutionCursorV2(
+        let terminalCursor = JourneyExecutionCursor(
             programPath: path,
             actionIndex: actions.count
         )
@@ -396,8 +390,8 @@ struct ExperienceDefinitionV2: Sendable {
         _ value: ExperienceReleaseJSONValue,
         type: String,
         path: String,
-        plan: JourneyExecutionPlanV2,
-        region: JourneyExecutionRegionV2
+        plan: JourneyExecutionPlan,
+        region: JourneyExecutionRegion
     ) throws -> ExperienceReleaseJSONValue {
         guard case .object(var object) = value else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
@@ -459,16 +453,16 @@ struct ExperienceDefinitionV2: Sendable {
         controlsByScreen[screenId]?[actionId]
     }
 
-    func compiledProgram(for route: JourneyRouteV2) throws -> [JourneyAction] {
+    func compiledProgram(for route: JourneyRoute) throws -> [JourneyAction] {
         try compiledProgram(
             route,
-            at: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0)
+            at: JourneyExecutionCursor(programPath: "/program", actionIndex: 0)
         )
     }
 
     var renderShell: JourneyDocument {
         JourneyDocument(
-            schemaVersion: 2,
+            schemaVersion: 1,
             screens: screens.map {
                 JourneyScreen(
                     id: $0.id,
@@ -550,7 +544,7 @@ struct ExperienceDefinitionV2: Sendable {
 
     private static func executionPlan(
         _ value: ExperienceReleaseJSONValue
-    ) throws -> JourneyExecutionPlanV2 {
+    ) throws -> JourneyExecutionPlan {
         guard case .object(let plan) = value,
               case .string(let id) = plan["id"],
               case .object(let route) = plan["route"],
@@ -564,7 +558,7 @@ struct ExperienceDefinitionV2: Sendable {
               let entryCursor = try cursor(plan["entryCursor"]) else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
         }
-        let routeHost: JourneyRouteHostV2
+        let routeHost: JourneyRouteHost
         switch kind {
         case "journey": routeHost = .journey
         case "screen":
@@ -609,9 +603,9 @@ struct ExperienceDefinitionV2: Sendable {
               }) else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
         }
-        return JourneyExecutionPlanV2(
+        return JourneyExecutionPlan(
             id: id,
-            route: JourneyRouteKeyV2(host: routeHost, eventName: eventName),
+            route: JourneyRouteKey(host: routeHost, eventName: eventName),
             revisionSHA256: revision,
             startPlane: startPlane,
             entryRegionId: entryRegionId,
@@ -624,7 +618,7 @@ struct ExperienceDefinitionV2: Sendable {
 
     private static func cursor(
         _ value: ExperienceReleaseJSONValue?
-    ) throws -> JourneyExecutionCursorV2? {
+    ) throws -> JourneyExecutionCursor? {
         guard let value else { return nil }
         guard case .object(let cursor) = value,
               case .string(let path) = cursor["programPath"],
@@ -635,13 +629,13 @@ struct ExperienceDefinitionV2: Sendable {
               let actionIndex = Int(exactly: index) else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
         }
-        return JourneyExecutionCursorV2(programPath: path, actionIndex: actionIndex)
+        return JourneyExecutionCursor(programPath: path, actionIndex: actionIndex)
     }
 
     private static func region(
         _ value: ExperienceReleaseJSONValue,
         expectedPlane: JourneyPlane
-    ) throws -> JourneyExecutionRegionV2 {
+    ) throws -> JourneyExecutionRegion {
         guard case .object(let region) = value,
               case .string(let id) = region["id"],
               case .string(let rawPlane) = region["plane"],
@@ -662,7 +656,7 @@ struct ExperienceDefinitionV2: Sendable {
         guard Set(paths).count == paths.count else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
         }
-        return JourneyExecutionRegionV2(
+        return JourneyExecutionRegion(
             id: id,
             plane: plane,
             entryCursor: entryCursor,
@@ -672,7 +666,7 @@ struct ExperienceDefinitionV2: Sendable {
 
     private static func edge(
         _ value: ExperienceReleaseJSONValue
-    ) throws -> JourneyExecutionHandoffEdgeV2 {
+    ) throws -> JourneyExecutionHandoffEdge {
         guard case .object(let edge) = value,
               case .string(let id) = edge["id"],
               case .string(let fromRegionId) = edge["fromRegionId"],
@@ -700,7 +694,7 @@ struct ExperienceDefinitionV2: Sendable {
                 || (timeout != nil && fallbackRegion != nil && fallbackCursor != nil) else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
         }
-        return JourneyExecutionHandoffEdgeV2(
+        return JourneyExecutionHandoffEdge(
             id: id,
             fromRegionId: fromRegionId,
             fromCursor: fromCursor,
@@ -733,8 +727,8 @@ struct ExperienceDefinitionV2: Sendable {
                 let compiled: ScreenControlActionBinding
                 switch kind {
                 case "script":
-                    throw ExperienceReleaseDescriptorAuthenticationError.unsupportedCompatibility(
-                        "screen_actions_v2"
+                    throw ExperienceReleaseDescriptorAuthenticationError.unsupportedRuntime(
+                        "screen_actions"
                     )
                 case "declarative":
                     guard case .array(let actions) = binding["program"] else {

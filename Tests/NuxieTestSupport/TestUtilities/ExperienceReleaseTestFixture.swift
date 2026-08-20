@@ -4,8 +4,8 @@ import Foundation
 @testable import NuxieRuntime
 
 struct ExperienceReleaseTestFixture {
-    let entry: ExperienceReleaseProfileEntryV2
-    let delivery: ExperienceReleaseDeliveryV2
+    let entry: ExperienceReleaseProfileEntry
+    let delivery: ExperienceReleaseDelivery
     let riv: Data
     let image: Data
     let script: Data
@@ -23,9 +23,9 @@ struct ExperienceReleaseTestFixture {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: Data(contentsOf: rootURL.appendingPathComponent(
-                "fixtures/experience-release-descriptor-v2/envelope.json"
+                "fixtures/experience-release-descriptor/envelope.json"
             ))
         )
         guard let descriptorBytes = Data(base64Encoded: envelope.descriptorBytesBase64),
@@ -181,21 +181,21 @@ struct ExperienceReleaseTestFixture {
             for: Data(ExperienceReleaseDescriptorLimits.signatureDomain.utf8) + exactDescriptor
         )
         let digest = SHA256Provider.hexDigest(exactDescriptor)
-        let exactEnvelope = try ExperienceReleaseDescriptorEnvelopeV2(
+        let exactEnvelope = try ExperienceReleaseDescriptorEnvelope(
                 mediaType: ExperienceReleaseDescriptorLimits.mediaType,
                 encoding: "base64",
                 descriptorSha256: digest,
                 descriptorSizeBytes: exactDescriptor.count,
                 descriptorBytesBase64: exactDescriptor.base64EncodedString(),
                 signature: .init(
-                    version: 2,
+                    version: 1,
                     algorithm: "ed25519",
                     keyId: "TEST_ONLY_DEV_KEYPAIR",
                     signatureBase64: signature.base64EncodedString()
                 )
             ).canonicalBytes()
         let authenticatedIdentity = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorV2.self,
+            ExperienceReleaseDescriptor.self,
             from: exactDescriptor
         ).identity
         return Self(

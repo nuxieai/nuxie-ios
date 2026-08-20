@@ -72,7 +72,7 @@ final class ConformanceVectorTests: XCTestCase {
 
     func testExperienceReleaseSegmentTriggerVector() throws {
         let vectorURL = Self.fixturesRoot.appendingPathComponent(
-            "experience-release-descriptor-v2/segment-trigger.json"
+            "experience-release-descriptor/segment-trigger.json"
         )
         let vector = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: vectorURL)) as? [String: Any]
@@ -81,7 +81,7 @@ final class ConformanceVectorTests: XCTestCase {
         XCTAssertEqual((vector["version"] as? NSNumber)?.intValue, 1)
 
         let envelopeURL = Self.fixturesRoot.appendingPathComponent(
-            "experience-release-descriptor-v2/envelope.json"
+            "experience-release-descriptor/envelope.json"
         )
         let envelope = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: envelopeURL)) as? [String: Any]
@@ -114,7 +114,7 @@ final class ConformanceVectorTests: XCTestCase {
 
             let suite: String
             let version: Int
-            let wire: ExperienceReleaseProfileV2
+            let wire: ExperienceReleaseProfile
             let expect: Expectation
         }
 

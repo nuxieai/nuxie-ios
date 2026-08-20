@@ -1,19 +1,8 @@
 import Foundation
 
 // MARK: - Journey Action Schema
-//
-// The wire schema for journey actions (the behavioral half of an experience).
-// Moved out of JourneyDocument.swift (cleanup Phase 2): these types belong to the
-// Journey domain, not the experience/screens wire model.
 
-struct DynamicCodingKey: CodingKey, Sendable {
-    var stringValue: String
-    var intValue: Int? { nil }
-    init?(stringValue: String) { self.stringValue = stringValue }
-    init?(intValue: Int) { return nil }
-}
-
-/// The portable value vocabulary used by the signed Journey v2 route contract.
+/// The portable value vocabulary used by the signed Journey route contract.
 ///
 /// This is deliberately distinct from `AnyCodable`: the tagged reference cases
 /// (`Event.Field` and `Response.Field`) must survive decoding all the way to the
@@ -256,13 +245,6 @@ public enum JourneyTimezone: Codable, Sendable, Equatable {
         }
     }
 
-    static func fromLegacy(_ raw: String) -> JourneyTimezone {
-        switch raw {
-        case "device", "__current_device__": .device
-        case "app_default": .appDefault
-        default: .iana(raw)
-        }
-    }
 }
 
 public struct EventPayloadFieldSchema: Codable, Sendable, Equatable {
@@ -330,7 +312,6 @@ public enum JourneyAction: Codable, Sendable {
     case sendEvent(SendEventAction)
     case milestone(MilestoneAction)
     case updateCustomer(UpdateCustomerAction)
-    case setResponseField(SetResponseFieldAction)
     case submitResponse(SubmitResponseAction)
     case purchase(PurchaseAction)
     case restore(RestoreAction)
@@ -352,7 +333,6 @@ public enum JourneyAction: Codable, Sendable {
     case listClear(ListClearAction)
     case handoff(HandoffAction)
     case exit(ExitAction)
-    case unknown(type: String, payload: [String: AnyCodable])
 
     private enum CodingKeys: String, CodingKey, Sendable {
         case type
@@ -371,7 +351,6 @@ public enum JourneyAction: Codable, Sendable {
         case sendEvent = "send_event"
         case milestone
         case updateCustomer = "update_customer"
-        case setResponseField = "set_response_field"
         case submitResponse = "submit_response"
         case purchase
         case restore
@@ -423,8 +402,6 @@ public enum JourneyAction: Codable, Sendable {
             self = .milestone(try MilestoneAction(from: decoder))
         case .updateCustomer:
             self = .updateCustomer(try UpdateCustomerAction(from: decoder))
-        case .setResponseField:
-            self = .setResponseField(try SetResponseFieldAction(from: decoder))
         case .submitResponse:
             self = .submitResponse(try SubmitResponseAction(from: decoder))
         case .purchase:
@@ -468,13 +445,11 @@ public enum JourneyAction: Codable, Sendable {
         case .exit:
             self = .exit(try ExitAction(from: decoder))
         case .none:
-            let rawType = (try? container.decode(String.self, forKey: .type)) ?? "unknown"
-            let dynamic = try decoder.container(keyedBy: DynamicCodingKey.self)
-            var payload: [String: AnyCodable] = [:]
-            for key in dynamic.allKeys where key.stringValue != "type" {
-                payload[key.stringValue] = (try? dynamic.decode(AnyCodable.self, forKey: key)) ?? AnyCodable(NSNull())
-            }
-            self = .unknown(type: rawType, payload: payload)
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "unknown journey action"
+            )
         }
     }
 
@@ -503,8 +478,6 @@ public enum JourneyAction: Codable, Sendable {
         case .milestone(let action):
             try action.encode(to: encoder)
         case .updateCustomer(let action):
-            try action.encode(to: encoder)
-        case .setResponseField(let action):
             try action.encode(to: encoder)
         case .submitResponse(let action):
             try action.encode(to: encoder)
@@ -548,17 +521,6 @@ public enum JourneyAction: Codable, Sendable {
             try action.encode(to: encoder)
         case .exit(let action):
             try action.encode(to: encoder)
-        case .unknown(let type, let payload):
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(type, forKey: .type)
-            if !payload.isEmpty {
-                var extra = encoder.container(keyedBy: DynamicCodingKey.self)
-                for (key, value) in payload {
-                    if let codingKey = DynamicCodingKey(stringValue: key) {
-                        try extra.encode(value, forKey: codingKey)
-                    }
-                }
-            }
         }
     }
 }
@@ -591,8 +553,6 @@ extension JourneyAction {
             return action.nodeId
         case .updateCustomer(let action):
             return action.nodeId
-        case .setResponseField(let action):
-            return action.nodeId
         case .submitResponse(let action):
             return action.nodeId
         case .purchase(let action):
@@ -635,8 +595,6 @@ extension JourneyAction {
             return action.nodeId
         case .exit(let action):
             return action.nodeId
-        case .unknown(_, let payload):
-            return payload["nodeId"]?.value as? String
         }
     }
 }
@@ -725,17 +683,13 @@ public struct StartAnimationAction: Codable, Sendable {
 
 public struct TimeWindowAction: Codable, Sendable {
     public let type: String
-    /// Internal execution identity. It is not part of the signed v2 wire shape.
+    /// Internal execution identity. It is not part of the signed wire shape.
     public let nodeId: String?
     public let startTime: String
     public let endTime: String
     public let timezone: JourneyTimezone
     public let daysOfWeek: [Int]
     public let onInside: [JourneyAction]
-
-    /// Source compatibility for existing in-memory test fixtures. Canonical
-    /// route JSON uses `onInside` and a required `daysOfWeek` array.
-    var successActions: [JourneyAction]? { onInside }
 
     public init(
         type: String = "time_window",
@@ -753,28 +707,6 @@ public struct TimeWindowAction: Codable, Sendable {
         self.timezone = timezone
         self.daysOfWeek = daysOfWeek
         self.onInside = onInside
-    }
-
-    /// Legacy fixture initializer. It is intentionally not used by wire
-    /// decoding; the canonical decoder below only accepts the v2 shape.
-    public init(
-        type: String = "time_window",
-        nodeId: String? = nil,
-        startTime: String,
-        endTime: String,
-        timezone: String,
-        daysOfWeek: [Int]? = nil,
-        successActions: [JourneyAction]? = nil
-    ) {
-        self.init(
-            type: type,
-            nodeId: nodeId,
-            startTime: startTime,
-            endTime: endTime,
-            timezone: JourneyTimezone.fromLegacy(timezone),
-            daysOfWeek: daysOfWeek ?? [],
-            onInside: successActions ?? []
-        )
     }
 
     private enum CodingKeys: String, CodingKey { case type, startTime, endTime, timezone, daysOfWeek, onInside }
@@ -806,15 +738,10 @@ public struct WaitUntilAction: Codable, Sendable {
     public let type: String
     public let nodeId: String?
     public let trigger: JourneyWaitTrigger
-    public let condition: JourneyCondition?
-    public let legacyCondition: IREnvelope?
+    public let condition: JourneyCondition
     public let maxTimeMs: Int
     public let onSatisfied: [JourneyAction]
     public let onTimeout: [JourneyAction]
-
-    var successActions: [JourneyAction]? { onSatisfied }
-    var timeoutActions: [JourneyAction]? { onTimeout }
-    var bindResultTo: String? { nil }
 
     public init(
         type: String = "wait_until",
@@ -829,31 +756,9 @@ public struct WaitUntilAction: Codable, Sendable {
         self.nodeId = nodeId
         self.trigger = trigger
         self.condition = condition
-        self.legacyCondition = nil
         self.maxTimeMs = maxTimeMs
         self.onSatisfied = onSatisfied
         self.onTimeout = onTimeout
-    }
-
-    /// Legacy fixture initializer. Canonical route decoding never accepts IR
-    /// conditions or `bindResultTo`.
-    public init(
-        type: String = "wait_until",
-        nodeId: String? = nil,
-        condition: IREnvelope?,
-        maxTimeMs: Int? = nil,
-        bindResultTo: String? = nil,
-        successActions: [JourneyAction]? = nil,
-        timeoutActions: [JourneyAction]? = nil
-    ) {
-        self.type = type
-        self.nodeId = nodeId
-        self.trigger = .responseChange
-        self.condition = nil
-        self.legacyCondition = condition
-        self.maxTimeMs = maxTimeMs ?? 0
-        self.onSatisfied = successActions ?? []
-        self.onTimeout = timeoutActions ?? []
     }
 
     private enum CodingKeys: String, CodingKey { case type, trigger, condition, maxTimeMs, onSatisfied, onTimeout }
@@ -865,7 +770,6 @@ public struct WaitUntilAction: Codable, Sendable {
         nodeId = nil
         trigger = try c.decode(JourneyWaitTrigger.self, forKey: .trigger)
         condition = try c.decode(JourneyCondition.self, forKey: .condition)
-        legacyCondition = nil
         maxTimeMs = try c.decode(Int.self, forKey: .maxTimeMs)
         onSatisfied = try c.decode([JourneyAction].self, forKey: .onSatisfied)
         onTimeout = try c.decode([JourneyAction].self, forKey: .onTimeout)
@@ -888,8 +792,6 @@ public struct ConditionAction: Codable, Sendable {
     public let branches: [ConditionBranch]
     public let defaultProgram: [JourneyAction]
 
-    var defaultActions: [JourneyAction]? { defaultProgram }
-
     public init(
         type: String = "condition",
         nodeId: String? = nil,
@@ -900,15 +802,6 @@ public struct ConditionAction: Codable, Sendable {
         self.nodeId = nodeId
         self.branches = branches
         self.defaultProgram = defaultProgram
-    }
-
-    public init(
-        type: String = "condition",
-        nodeId: String? = nil,
-        branches: [ConditionBranch],
-        defaultActions: [JourneyAction]? = nil
-    ) {
-        self.init(type: type, nodeId: nodeId, branches: branches, defaultProgram: defaultActions ?? [])
     }
 
     private enum CodingKeys: String, CodingKey { case type, branches, defaultProgram }
@@ -932,24 +825,13 @@ public struct ConditionAction: Codable, Sendable {
 
 public struct ConditionBranch: Codable, Sendable {
     public let id: String
-    public let condition: JourneyCondition?
-    public let legacyCondition: IREnvelope?
+    public let condition: JourneyCondition
     public let program: [JourneyAction]
-
-    var actions: [JourneyAction] { program }
 
     public init(id: String, condition: JourneyCondition, program: [JourneyAction]) {
         self.id = id
         self.condition = condition
-        self.legacyCondition = nil
         self.program = program
-    }
-
-    public init(id: String, label: String? = nil, condition: IREnvelope?, actions: [JourneyAction]) {
-        self.id = id
-        self.condition = nil
-        self.legacyCondition = condition
-        self.program = actions
     }
 
     private enum CodingKeys: String, CodingKey { case id, condition, program }
@@ -958,7 +840,6 @@ public struct ConditionBranch: Codable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         condition = try c.decode(JourneyCondition.self, forKey: .condition)
-        legacyCondition = nil
         program = try c.decode([JourneyAction].self, forKey: .program)
     }
 
@@ -1042,7 +923,6 @@ public struct ExperimentVariant: Codable, Sendable {
     public let percentage: Double
     public let isHoldout: Bool
     public let program: [JourneyAction]
-    public let actions: [JourneyAction]
 
     public init(
         id: String,
@@ -1056,12 +936,6 @@ public struct ExperimentVariant: Codable, Sendable {
         self.percentage = percentage
         self.isHoldout = isHoldout
         self.program = program
-        self.actions = program
-    }
-
-    /// Legacy source-level initializer for in-memory fixtures.
-    public init(id: String, name: String? = nil, percentage: Double, actions: [JourneyAction]) {
-        self.init(id: id, name: name, percentage: percentage, isHoldout: false, program: actions)
     }
 
     private enum CodingKeys: String, CodingKey { case id, name, percentage, isHoldout, program }
@@ -1073,7 +947,6 @@ public struct ExperimentVariant: Codable, Sendable {
         percentage = try c.decode(Double.self, forKey: .percentage)
         isHoldout = try c.decode(Bool.self, forKey: .isHoldout)
         program = try c.decode([JourneyAction].self, forKey: .program)
-        actions = program
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1285,58 +1158,13 @@ public struct UpdateCustomerAction: Codable, Sendable {
     }
 }
 
-public struct SetResponseFieldAction: Codable, Sendable {
-    public let type: String
-    /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let responseSchemaId: String
-    public let schemaVersion: Int?
-    public let key: String
-    public let value: AnyCodable
-
-    public init(
-        type: String = "set_response_field",
-        nodeId: String? = nil,
-        responseSchemaId: String,
-        schemaVersion: Int? = nil,
-        key: String,
-        value: AnyCodable
-    ) {
-        self.type = type
-        self.nodeId = nodeId
-        self.responseSchemaId = responseSchemaId
-        self.schemaVersion = schemaVersion
-        self.key = key
-        self.value = value
-    }
-}
-
 public struct SubmitResponseAction: Codable, Sendable {
     public let type: String
     /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
-    /// Legacy in-memory fixtures may provide this value, but canonical v2 wire
-    /// actions never carry authored response schema identity.
-    public let responseSchemaId: String?
-    public let schemaVersion: Int?
-
     public init(type: String = "submit_response") {
         self.type = type
         self.nodeId = nil
-        self.responseSchemaId = nil
-        self.schemaVersion = nil
-    }
-
-    public init(
-        type: String = "submit_response",
-        nodeId: String? = nil,
-        responseSchemaId: String,
-        schemaVersion: Int? = nil
-    ) {
-        self.type = type
-        self.nodeId = nodeId
-        self.responseSchemaId = responseSchemaId
-        self.schemaVersion = schemaVersion
     }
 
     private enum CodingKeys: String, CodingKey { case type }
@@ -1348,8 +1176,6 @@ public struct SubmitResponseAction: Codable, Sendable {
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "invalid submit_response action")
         }
         nodeId = nil
-        responseSchemaId = nil
-        schemaVersion = nil
     }
 
     public func encode(to encoder: Encoder) throws {
