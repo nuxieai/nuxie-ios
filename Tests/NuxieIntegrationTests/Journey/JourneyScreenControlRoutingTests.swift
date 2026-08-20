@@ -795,6 +795,45 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(values).to(equal(["first", "first", "second"]))
         }
 
+        it("completes a dismissal after an in-flight response write synchronizes") {
+            let experience = signedExperience(definition: responseDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            await mocks.nuxieApi.setResponseWriteDelay(0.5)
+
+            let write = Task {
+                await service.handleRendererControlAction(
+                    journeyId: journey.id,
+                    screenId: "screen-1",
+                    invocation: ScreenActionInvocation(
+                        actionId: "answer",
+                        value: .string("premium")
+                    )
+                )
+            }
+            for _ in 0..<100 {
+                if await mocks.nuxieApi.lastResponseFieldCall != nil { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let inFlightCall = await mocks.nuxieApi.lastResponseFieldCall
+            expect(inFlightCall).toNot(beNil())
+
+            await service.handleRuntimeDismiss(
+                journeyId: journey.id,
+                reason: .userDismissed,
+                controller: controller
+            )
+            let activeDuringWrite = await service.getActiveJourneys(for: distinctId).map(\.id)
+            expect(activeDuringWrite).to(contain(journey.id))
+
+            await write.value
+
+            let activeAfterWrite = await service.getActiveJourneys(for: distinctId).map(\.id)
+            expect(activeAfterWrite).toNot(contain(journey.id))
+        }
+
         it("compacts a generated event dropped by beforeSend after its batch commits") {
             let eventName = "survey_filtered"
             let experience = signedExperience(definition: definition(eventName: eventName))

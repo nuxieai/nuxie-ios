@@ -1416,6 +1416,7 @@ actor JourneyService: JourneyServiceProtocol {
       field: field
     )
     persistJourney(await journey.snapshot())
+    await completeDeferredDismissIfReady(journeyId: journey.id)
     return result
   }
 
@@ -1915,6 +1916,9 @@ actor JourneyService: JourneyServiceProtocol {
     // into an abandonment merely because the renderer was dismissed.
     let runnerHasFailedResponseOperation = await runner.hasFailedResponseOperation()
     if state.responseSessionRetryRequired || runnerHasFailedResponseOperation {
+      if await runner.isSynchronizingResponseFields() {
+        await runner.deferDismiss(reason: reason)
+      }
       return
     }
 

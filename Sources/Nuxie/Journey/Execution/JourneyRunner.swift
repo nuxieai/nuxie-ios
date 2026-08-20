@@ -253,6 +253,7 @@ actor JourneyRunner {
     private var didAttemptResponseDraftWrite = false
     private var didFailResponseWrite = false
     private var didFailSubmitResponse = false
+    private var responseFieldSynchronizationDepth = 0
     private var responseOperationFailureRevision: UInt64 = 0
     private var presentationEpochAdvancedForScreenId: String?
     private var authoredEvents: [AuthoredEvent] = []
@@ -1090,6 +1091,8 @@ actor JourneyRunner {
     }
 
     private func synchronizePendingResponseFieldWrites() async -> Bool {
+        responseFieldSynchronizationDepth += 1
+        defer { responseFieldSynchronizationDepth -= 1 }
         guard let responseSessionModule, let responseSessionRun,
               let responseSchema = responseSessionRun.schema else {
             return false
@@ -1647,8 +1650,16 @@ actor JourneyRunner {
         deferredDismissReason = reason
     }
 
-    func consumeDeferredDismissReasonIfReady() -> CloseReason? {
-        guard !hasPendingPermissionWork() else { return nil }
+    func isSynchronizingResponseFields() -> Bool {
+        responseFieldSynchronizationDepth > 0
+    }
+
+    func consumeDeferredDismissReasonIfReady() async -> CloseReason? {
+        guard !hasPendingPermissionWork(),
+              responseFieldSynchronizationDepth == 0,
+              !didFailResponseWrite,
+              !didFailSubmitResponse,
+              (await journey.snapshot()).pendingResponseFieldWrites.isEmpty else { return nil }
         let reason = deferredDismissReason
         deferredDismissReason = nil
         return reason
