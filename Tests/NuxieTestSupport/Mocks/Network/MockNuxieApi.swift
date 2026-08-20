@@ -26,6 +26,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         version: nil
     )
     public var responseWriteError: Error?
+    public var responseWriteDelay: TimeInterval = 0
     public var responseSubmitResponse = ResponseSubmitResponse(
         status: "ok",
         response: nil
@@ -121,6 +122,10 @@ public actor MockNuxieApi: NuxieApiProtocol {
 
     public func setResponseWriteError(_ error: Error?) {
         self.responseWriteError = error
+    }
+
+    public func setResponseWriteDelay(_ delay: TimeInterval) {
+        responseWriteDelay = delay
     }
 
     public func setResponseSubmitError(_ error: Error?) {
@@ -321,6 +326,11 @@ public actor MockNuxieApi: NuxieApiProtocol {
         )
         lastResponseFieldCall = call
         responseFieldCalls.append(call)
+        if responseWriteDelay > 0 {
+            try await Task.sleep(
+                nanoseconds: UInt64(responseWriteDelay * 1_000_000_000)
+            )
+        }
         if let responseWriteError {
             throw responseWriteError
         }
@@ -379,6 +389,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         checkFeatureResponse = nil
         responseWriteResponse = ResponseWriteResponse(status: "ok", response: nil, version: nil)
         responseWriteError = nil
+        responseWriteDelay = 0
         responseSubmitResponse = ResponseSubmitResponse(status: "ok", response: nil)
         responseSubmitError = nil
         responseAbandonResponse = ResponseAbandonResponse(status: "ok", responses: [])
