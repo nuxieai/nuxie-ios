@@ -76,6 +76,44 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
+        func responseDefinition() -> ExperienceDefinition {
+            ExperienceDefinition(
+                entryRouteEventName: "paywall_trigger",
+                screens: [JourneyScreen(
+                    id: "screen-1",
+                    defaultViewModelName: nil,
+                    defaultInstanceId: nil
+                )],
+                viewModelValues: [],
+                routes: [:],
+                executionPlans: [],
+                responseSchema: PinnedResponseSessionSchema(
+                    key: "survey",
+                    versionId: "survey-v1",
+                    version: 1,
+                    fields: [ResponseSessionField(
+                        key: "answer",
+                        type: .text,
+                        required: true,
+                        options: nil,
+                        minimum: nil,
+                        maximum: nil
+                    )],
+                    capturesByScreen: ["screen-1": ["answer"]]
+                ),
+                controlsByScreen: [
+                    "screen-1": [
+                        "answer": ScreenControlActionDefinition(
+                            actionId: "answer",
+                            binding: .declarative([
+                                .responseSet(field: "answer", value: .invocationValue)
+                            ])
+                        )
+                    ]
+                ]
+            )
+        }
+
         func signedExperience(
             definition: ExperienceDefinition,
             goal: GoalConfig? = nil,
@@ -673,6 +711,31 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(routing.pendingBatches).to(beEmpty())
             let encoded = try JSONEncoder().encode(await journey.snapshot())
             expect(encoded).toNot(beEmpty())
+        }
+
+        it("persists a declarative response emission in the pinned response session") {
+            let experience = signedExperience(definition: responseDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(
+                    actionId: "answer",
+                    value: .string("premium"),
+                    componentId: "answer-field",
+                    instanceId: "survey-1"
+                )
+            )
+
+            let snapshot = await journey.snapshot()
+            expect(snapshot.responseSession?.state).to(equal(.draft))
+            expect(snapshot.responseSession?.values["answer"]).to(equal(.string("premium")))
+            expect(snapshot.executionState.screenRouting.batchReceipts["0"]?.result.status)
+                .to(equal(.drained))
         }
 
         it("compacts a generated event dropped by beforeSend after its batch commits") {

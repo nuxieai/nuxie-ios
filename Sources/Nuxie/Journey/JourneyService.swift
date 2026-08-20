@@ -1410,27 +1410,13 @@ actor JourneyService: JourneyServiceProtocol {
           before.executionState.pendingAction == nil else {
       return .rejected(message: "journey cannot accept a response mutation")
     }
-    let event = NuxieEvent(
-      id: emission.id,
-      name: emission.name,
-      distinctId: journey.distinctId,
-      properties: emission.payload.mapValues(\.foundationValue),
-      timestamp: parseExecutionDate(emission.occurredAt) ?? dateProvider.now()
-    )
-    let failureRevision = await runner.responseFailureRevision()
-    let outcome = await runner.dispatchScreenEvent(
-      event,
+    let result = await runner.applyScreenResponseEmission(
+      emission,
       screenId: source.screenId,
-      componentId: source.componentId,
-      instanceId: source.instanceId
+      field: field
     )
-    await handleOutcome(outcome, journey: journey)
     persistJourney(await journey.snapshot())
-    guard await runner.responseFailureRevision() == failureRevision,
-          (await journey.snapshot()).status.isLive else {
-      return .rejected(message: "response mutation failed")
-    }
-    return .accepted
+    return result
   }
 
   private func acceptScreenCustomerEvent(
