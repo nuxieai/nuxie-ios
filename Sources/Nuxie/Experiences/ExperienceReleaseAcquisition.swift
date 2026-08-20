@@ -786,7 +786,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
 
     private var authenticatedDescriptorDirectory: URL {
         cacheDirectory.appendingPathComponent(
-            "authenticated_descriptors",
+            // UNIV-2491 is a hard cache boundary for the final commerce
+            // descriptor contract. Deliberately do not read or migrate the
+            // pre-cutover namespace; current signed profiles rehydrate it.
+            "authenticated_descriptors_commerce_v2",
             isDirectory: true
         )
     }
