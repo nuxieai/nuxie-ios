@@ -52,6 +52,7 @@ final class ExperienceRuntimeLifecycleSessionTests: XCTestCase {
         let generation = session.generation
         _ = session.beginMount()
         XCTAssertTrue(session.becomeReady(generation: generation))
+        XCTAssertTrue(session.crossInitialActivationBoundary(generation: generation))
 
         session.enqueue("first")
         session.enqueue("second")
@@ -69,6 +70,7 @@ final class ExperienceRuntimeLifecycleSessionTests: XCTestCase {
 
         _ = session.beginMount()
         XCTAssertTrue(session.becomeReady(generation: retryGeneration))
+        XCTAssertTrue(session.crossInitialActivationBoundary(generation: retryGeneration))
         XCTAssertTrue(session.beginCommandDrain(generation: retryGeneration))
         XCTAssertEqual(session.nextCommand(generation: retryGeneration), "navigate")
         XCTAssertEqual(session.nextCommand(generation: retryGeneration), "second")
@@ -128,11 +130,34 @@ final class ExperienceRuntimeLifecycleSessionTests: XCTestCase {
         let generation = session.generation
         _ = session.beginMount()
         _ = session.becomeReady(generation: generation)
+        _ = session.crossInitialActivationBoundary(generation: generation)
 
         XCTAssertTrue(session.beginNavigation(.init(id: 1, command: "first"), generation: generation))
         XCTAssertFalse(session.clearNavigation { $0.id == 2 })
         XCTAssertEqual(session.activeNavigation, .init(id: 1, command: "first"))
         XCTAssertTrue(session.clearNavigation { $0.id == 1 })
         XCTAssertNil(session.activeNavigation)
+    }
+
+    func testActivationCommandsAndReadyNotificationWaitForRecoveryBoundary() {
+        let session = ExperienceRuntimeLifecycleSession<String, Navigation>()
+        _ = session.beginLoading()
+        let generation = session.generation
+        _ = session.beginMount()
+        XCTAssertTrue(session.becomeReady(generation: generation))
+
+        // Entry-screen activation may synchronously emit navigation before the
+        // persisted screen-routing journal has been recovered.
+        session.enqueue("activation-navigation")
+        XCTAssertFalse(session.beginCommandDrain(generation: generation))
+        XCTAssertFalse(session.consumeReadyNotification(generation: generation))
+        XCTAssertEqual(session.pendingCommands, ["activation-navigation"])
+
+        XCTAssertTrue(session.crossInitialActivationBoundary(generation: generation))
+        XCTAssertTrue(session.beginCommandDrain(generation: generation))
+        XCTAssertEqual(session.nextCommand(generation: generation), "activation-navigation")
+        XCTAssertNil(session.nextCommand(generation: generation))
+        session.endCommandDrain()
+        XCTAssertTrue(session.consumeReadyNotification(generation: generation))
     }
 }
