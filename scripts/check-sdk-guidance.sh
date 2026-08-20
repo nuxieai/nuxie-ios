@@ -61,6 +61,25 @@ for provider_adapter in Examples/Adapters/NuxieRevenueCatPurchaseDelegate.swift 
     fail "provider adapter takes transaction sync/finish ownership: $provider_adapter"
   fi
 done
+
+for provider_example in \
+  Examples/SwiftUI-RevenueCat/Sources/App/MoodLogApp.swift \
+  Examples/UIKit-RevenueCat/Sources/App/AppDelegate.swift \
+  Examples/SwiftUI-Superwall/Sources/App/MoodLogApp.swift \
+  Examples/UIKit-Superwall/Sources/App/AppDelegate.swift; do
+  grep -Fq 'purchaseHandlingMode = .observer' "$provider_example" \
+    || fail "provider example does not assign StoreKit finishing ownership: $provider_example"
+  grep -Fq 'purchaseDelegate = Nuxie' "$provider_example" \
+    || fail "provider example does not configure the maintained delegate: $provider_example"
+done
+
+for completion_contract in \
+  'one checkout-scoped completion' \
+  'callback and StoreKit observer' \
+  'idempotent by StoreKit transaction ID'; do
+  grep -Fq "$completion_contract" README.md \
+    || fail "README is missing durable completion guidance: $completion_contract"
+done
 if grep -R -Fq 'shouldObservePurchases = true' \
   Examples/SwiftUI-Superwall Examples/UIKit-Superwall; then
   fail 'Superwall examples disable its transaction finisher'

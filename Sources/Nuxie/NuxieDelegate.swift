@@ -21,7 +21,7 @@ public protocol NuxieDelegate: AnyObject {
     /// Called when a feature's access status changes
     ///
     /// This is triggered after:
-    /// - Real-time feature checks via `checkFeature()` or `refreshFeature()`
+    /// - Feature checks via `hasFeature()`
     /// - Profile refresh (on app foreground or manual refresh)
     /// - User identity changes
     ///

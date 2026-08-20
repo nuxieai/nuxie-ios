@@ -278,7 +278,7 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
     // product.productType: consumable, non-consumable, or subscription type
     // product.rawProduct: the retained StoreKit.Product
     // product.storeKitPurchaseOptions: the exact StoreKit checkout options
-    // product.introductoryOfferEligibilityJWS: fresh JWS for provider APIs
+    // product.introductoryOfferEligibilityJWS: fresh checkout-scoped JWS
     //
     // Custom StoreKit delegates use the retained product and exact options.
     guard let rawProduct = product.rawProduct else {
@@ -322,10 +322,14 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
 
 The delegate reports only `.purchased`, `.pending`, `.cancelled`, or `.failed`
 and `.restored`, `.noPurchases`, or `.failed`. It never transports receipts,
-transaction identifiers, or finish closures. Nuxie's StoreKit listener records,
-syncs, and finishes verified native updates internally; connected providers
-send their own evidence through Connector synchronization. Use
-`purchaseHandlingMode = .observer` only when the app owns purchases without a delegate.
+transaction identifiers, or finish closures. Before a signed Connector cutover,
+Nuxie's StoreKit listener may separately record and sync a verified native update;
+`.observer` suppresses only Nuxie's finish call. Signed provider authority then
+suppresses Nuxie's native receipt path, and the Connector synchronizes durable
+state. Set
+`purchaseHandlingMode = .observer` whenever the app or another SDK owns
+StoreKit finishing; configuring a delegate does not silently change that
+explicit choice.
 
 Native checkout records the authenticated release, Experience, Placement,
 Product, customer, and StoreKit account token before Apple opens checkout. The
@@ -336,7 +340,7 @@ customer owner needed to attribute later renewals; it does not retain the
 one-shot Experience or Placement context. An interrupted checkout may be
 retried after its 15-minute recovery window, while an explicit Ask-to-Buy/SCA
 pending result remains recoverable for 30 days. Purchase recovery, account
-ownership, receipt evidence, and optimistic local access are stored in separate
+ownership, receipt evidence, and immediate local access are stored in separate
 app, SDK-environment, and Test Store/App Store namespaces. Receipt/JWS retry
 evidence is removed after backend acceptance and expires after 90 days; the
 smaller StoreKit-reconciled local-access ledger does not retain receipt bytes.
@@ -348,10 +352,13 @@ TTL. After the bound, the one-shot Experience/Placement context is retired; a
 later verified update carrying Nuxie's deterministic account token still syncs
 and finishes, but cannot resurrect stale Journey context or local grants.
 Before delegate invocation, Nuxie also persists one checkout-scoped completion
-event identity. The callback and StoreKit observer use that same stable capture;
-only a successful durable capture acknowledges completion, while capture or
-storage failure leaves recovery retryable without turning a successful charge
-into a failed purchase result.
+ID. The callback and StoreKit observer both attempt to claim that same ID. The
+winner durably captures Journey and analytics completion; the loser observes
+that it is already complete and does nothing. The 30-second window helps
+correlate a StoreKit update to the checkout, but this shared claim prevents
+duplicates. Receipt synchronization and finishing remain separately
+idempotent by StoreKit transaction ID. Capture or storage failure leaves recovery
+retryable without turning a successful charge into a failed purchase result.
 
 Fresh-device current-entitlement recovery uses authenticated Products from the
 active release profile as receipt authority. A Product with signed Connector
@@ -379,34 +386,45 @@ command, and ambiguous receipts or unrelated Product mappings fail closed.
 
 ### Connected provider Feature Access
 
-RevenueCat, Superwall, and custom billing delegates remain the owners of their
-receipts, transaction finishing, and durable subscription state. Importing a
+RevenueCat, Superwall, and custom billing delegates own checkout, their provider
+reporting, transaction finishing, and durable subscription state. Importing a
 provider entitlement into the Nuxie dashboard is initially evidence only. An
 app builder must review the provider-to-Product mapping and explicitly enable
-it as a Nuxie Boolean Feature before the published Product contains a local
-Feature Access mapping.
+Nuxie Feature Access before the published Product contains a local access
+mapping.
 
-That boundary gives the paywall the same optimistic experience as the provider:
-a successful delegate purchase can immediately expose the reviewed Boolean
-Feature locally, without waiting for Nuxie's backend. It does not invent quota
-or credit balances. Those remain provider/server-authoritative and reconcile
-through the configured provider connector. Before explicit enablement, a
-delegate success still completes the purchase Journey but grants no Nuxie
-Feature Access.
+#### Before Connector cutover
+
+The app keeps using its RevenueCat, Superwall, or custom-provider access checks.
+A delegate success completes the purchase Journey but is not purchase evidence.
+If StoreKit separately emits a verified update, Nuxie may sync it and apply the
+authenticated Product's Boolean or unlimited local grants. Observer mode still
+leaves finishing to the app or provider.
+
+#### After Connector cutover
+
+Signed provider authority suppresses Nuxie's native receipt sync and finish path.
+That boundary gives the paywall the same immediate experience as the provider:
+a successful delegate purchase can immediately expose the reviewed Boolean or
+unlimited Feature locally, without waiting for Nuxie's backend. It does not invent
+fixed quota or credit balances. Those remain server-authoritative and reconcile
+through the configured provider Connector.
 
 Add the matching maintained adapter source from `Examples/Adapters` to the app
 target that already depends on RevenueCat or Superwall, then configure checkout:
 
 ```swift
+configuration.purchaseHandlingMode = .observer
 configuration.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 
 // Or:
+configuration.purchaseHandlingMode = .observer
 configuration.purchaseDelegate = NuxieSuperwallPurchaseDelegate()
 ```
 
 A hand-written `NuxiePurchaseDelegate` can provide the same checkout result for
 a custom billing stack. The delegate does not choose Feature Access: only the
-reviewed mapping embedded in the signed Product can supply optimistic local
+reviewed mapping embedded in the signed Product can supply immediate local
 Boolean grants. Durable subscription state, quotas, and credits still require
 provider or Nuxie backend synchronization.
 

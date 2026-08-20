@@ -84,7 +84,8 @@ struct MoodLogApp: App {
         config.environment = .development
         config.logLevel = .debug
 
-        // Use RevenueCat bridge for purchases
+        // RevenueCat owns StoreKit finishing; Nuxie consumes outcomes.
+        config.purchaseHandlingMode = .observer
         config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 
         try? NuxieSDK.shared.setup(with: config)
@@ -169,8 +170,9 @@ User opens app
 
 #### 4. RevenueCat Adapter
 ```swift
-// The maintained adapter owns RevenueCat checkout. Signed Product mappings,
-// not the delegate implementation, bound optimistic local Feature Access.
+// RevenueCat owns checkout and finishing. Only a signed, reviewed Connector
+// Product mapping can enable immediate local Boolean/unlimited Feature Access.
+config.purchaseHandlingMode = .observer
 config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 ```
 

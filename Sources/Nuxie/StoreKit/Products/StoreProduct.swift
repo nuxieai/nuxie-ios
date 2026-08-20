@@ -17,17 +17,29 @@ public enum StoreProductType: String, Codable, Equatable, Sendable {
 
 // MARK: - Subscription Period
 
+/// A StoreKit subscription duration expressed as a count and calendar unit.
 public struct SubscriptionPeriod: Equatable, Sendable {
+    /// The calendar unit used by a subscription duration.
     public enum Unit: String, Equatable, Sendable {
+        /// Calendar days.
         case day
+        /// Calendar weeks.
         case week
+        /// Calendar months.
         case month
+        /// Calendar years.
         case year
     }
-    
+
+    /// The number of `unit` values in the duration.
     public let value: Int
+    /// The duration's calendar unit.
     public let unit: Unit
-    
+
+    /// Creates an exact StoreKit subscription duration.
+    /// - Parameters:
+    ///   - value: The number of calendar units.
+    ///   - unit: The duration's calendar unit.
     public init(value: Int, unit: Unit) {
         self.value = value
         self.unit = unit
@@ -186,9 +198,9 @@ public struct StoreProduct: Equatable, Codable, Sendable {
     /// The fresh eligibility JWS for this checkout, when Nuxie selected an
     /// explicit introductory-eligibility override.
     ///
-    /// Provider delegates such as RevenueCat pass this value through their
-    /// purchase-parameter API. The value is short-lived and absent from
-    /// serialized products.
+    /// Maintained provider delegates preserve this value by launching the
+    /// retained `rawProduct` with `storeKitPurchaseOptions`. The value is
+    /// short-lived and absent from serialized products.
     public var introductoryOfferEligibilityJWS: String? {
         checkoutIntroEligibilityToken
     }
@@ -235,9 +247,11 @@ public struct StoreProduct: Equatable, Codable, Sendable {
     public var introductoryPaymentMode: IntroductoryTerms.PaymentMode? {
         introductoryTerms?.paymentMode
     }
+    /// Paywall-binding display alias for `hasFreeTrial`.
     public var hasTrial: Bool { hasFreeTrial }
     /// The localized free-trial duration, empty for a base product.
     public var trialPeriodText: String { introductoryTerms?.trialPeriodText ?? "" }
+    /// The localized free-trial label, empty when no free trial is available.
     public var trialLabel: String { hasFreeTrial ? trialPeriodText : "" }
     /// The localized introductory-offer description, empty for a base product.
     public var introOfferLabel: String {

@@ -1,4 +1,5 @@
 import Foundation
+import StoreKit
 import XCTest
 
 @testable import Nuxie
@@ -99,7 +100,7 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     // Errors
     requireSendable(NuxieError.self)
     requireSendable(NuxieNetworkError.self)
-    requireSendable(StoreKitError.self)
+    requireSendable(Nuxie.StoreKitError.self)
     requireSendable(TriggerError.self)
 
     // IR value model (crosses the EventLog actor boundary)
@@ -185,6 +186,64 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     }
   }
 
+  /// Exact commerce shapes copied by the maintained public documentation.
+  /// This is intentionally compile-only: docs checks pin the snippets to
+  /// these call sites, and this target proves that the public Swift surface
+  /// accepts them.
+  private func _compileOnlyCommerceDocumentationSurface() async throws {
+    let terms = StoreProduct.IntroductoryTerms(
+      price: "$0.00",
+      period: .week,
+      periodCount: 1,
+      cycles: 1,
+      paymentMode: .freeTrial,
+      trialPeriodText: "1 week"
+    )
+    let product = StoreProduct(
+      productId: "product-pro",
+      storeProductId: "com.example.pro.monthly",
+      placementId: "primary",
+      name: "Pro Monthly",
+      price: "$9.99",
+      period: .month,
+      productType: .autoRenewable,
+      billingPlan: .default,
+      introductoryTerms: terms
+    )
+    _ = product.rawProduct
+    _ = product.storeKitPurchaseOptions
+    _ = product.introductoryOfferEligibilityJWS
+
+    let ordinary = FeatureUsageResult(
+      success: true,
+      featureId: "api_calls",
+      amountUsed: 1,
+      message: nil,
+      usage: .init(current: 1, limit: 10, remaining: 9)
+    )
+    let atomic = FeatureUsageResult(
+      success: true,
+      featureId: "api_calls",
+      amountUsed: 1,
+      message: nil,
+      usage: nil,
+      authoritativeAccess: nil
+    )
+    _ = ordinary.usage?.remaining
+    _ = atomic.authoritativeAccess?.allowed
+
+    let purchaseOutcomes: [PurchaseResult] = [
+      .purchased, .pending, .cancelled,
+      .failed(NuxieError.invalidConfiguration("failed")),
+    ]
+    let restoreOutcomes: [RestoreResult] = [
+      .restored, .noPurchases,
+      .failed(NuxieError.invalidConfiguration("failed")),
+    ]
+    _ = purchaseOutcomes
+    _ = restoreOutcomes
+  }
+
   /// Delegate wired from a @MainActor consumer type.
   @MainActor
   private final class CompileCheckDelegate: NuxieDelegate {
@@ -223,12 +282,46 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
 
   /// A hand-written StoreKit stack conforms without an adapter protocol.
   private final class CompileCheckCustomPurchaseDelegate: NuxiePurchaseDelegate {
-    func purchase(product: StoreProduct) async -> PurchaseResult {
-      _ = product.rawProduct
-      return .cancelled
+    private enum PurchaseError: Error {
+      case productUnavailable
+      case unknown
     }
+
+    func purchase(product: StoreProduct) async -> PurchaseResult {
+      guard let rawProduct = product.rawProduct else {
+        return .failed(PurchaseError.productUnavailable)
+      }
+      do {
+        switch try await rawProduct.purchase(
+          options: product.storeKitPurchaseOptions
+        ) {
+        case .success(let verification):
+          switch verification {
+          case .verified: return .purchased
+          case .unverified(_, let error): return .failed(error)
+          }
+        case .pending: return .pending
+        case .userCancelled: return .cancelled
+        @unknown default: return .failed(PurchaseError.unknown)
+        }
+      } catch {
+        return .failed(error)
+      }
+    }
+
     func restorePurchases() async -> RestoreResult {
-      .noPurchases
+      do {
+        try await AppStore.sync()
+        for await result in Transaction.currentEntitlements {
+          guard case .verified(let transaction) = result,
+                transaction.revocationDate == nil,
+                !transaction.isUpgraded else { continue }
+          return .restored
+        }
+        return .noPurchases
+      } catch {
+        return .failed(error)
+      }
     }
   }
 

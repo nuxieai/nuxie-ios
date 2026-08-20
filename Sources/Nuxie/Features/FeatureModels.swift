@@ -287,6 +287,11 @@ public struct FeatureUsageResult: Sendable {
         /// Remaining balance (if available)
         public let remaining: Double?
 
+        /// Creates authoritative usage counters returned by the server.
+        /// - Parameters:
+        ///   - current: The amount consumed in the current interval.
+        ///   - limit: The interval limit, or `nil` for no fixed limit.
+        ///   - remaining: The remaining balance, when the server supplies one.
         public init(current: Double, limit: Double?, remaining: Double?) {
             self.current = current
             self.limit = limit
