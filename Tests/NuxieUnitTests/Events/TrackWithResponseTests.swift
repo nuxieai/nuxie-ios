@@ -628,6 +628,27 @@ final class TrackWithResponseTests: AsyncSpec {
             }
 
             context("online") {
+                it("does not flush accepted events before the direct trigger request") {
+                    eventLog.track(
+                        "queued_event",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await eventLog.drain()
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(1))
+                    await mockNuxieApi.setTrackEventResponse(.success())
+
+                    _ = try await eventLog.trackForTrigger(
+                        "trigger_event",
+                        properties: ["screen": "home"]
+                    )
+
+                    await expect { await mockNuxieApi.trackEventCallCount }.to(equal(1))
+                    await expect { await mockNuxieApi.sendBatchCallCount }.to(equal(0))
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(1))
+                }
+
                 it("persists the event pending and acks it after the direct round trip succeeds") {
                     await mockNuxieApi.setTrackEventResponse(.success())
 

@@ -146,6 +146,129 @@ final class NuxieApiTests: AsyncSpec {
                     expect(result.releases).to(beNil())
                 }
 
+                it("revalidates a cached profile without decoding a response body") {
+                    let validator = ProfileCacheValidator(
+                        rawValue: "\"profile-v1\"",
+                        resourceScope: "https://test.nuxie.ai/profile"
+                    )
+                    var capturedRequest: URLRequest?
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            capturedRequest = request
+                            return (
+                                HTTPURLResponse(
+                                    url: request.url!,
+                                    statusCode: 304,
+                                    httpVersion: nil,
+                                    headerFields: ["ETag": validator.rawValue]
+                                )!,
+                                Data()
+                            )
+                        }
+                    )
+
+                    let result = try await api.fetchProfile(
+                        for: distinctId,
+                        locale: nil,
+                        revalidating: validator
+                    )
+
+                    expect(capturedRequest?.value(forHTTPHeaderField: "If-None-Match"))
+                        .to(equal(validator.rawValue))
+                    switch result {
+                    case .notModified:
+                        break
+                    case .modified:
+                        fail("Expected the cached profile to remain authoritative")
+                    }
+                }
+
+                it("captures a valid profile validator from a modified response") {
+                    let validator = ProfileCacheValidator(
+                        rawValue: "\"profile-v2\"",
+                        resourceScope: "https://test.nuxie.ai/profile"
+                    )
+                    let profileResponse = ResponseBuilders.buildProfileResponse(
+                        experiences: [ResponseBuilders.buildExperience()],
+                        segments: []
+                    )
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            (
+                                HTTPURLResponse(
+                                    url: request.url!,
+                                    statusCode: 200,
+                                    httpVersion: nil,
+                                    headerFields: [
+                                        "Content-Type": "application/json",
+                                        "ETag": validator.rawValue,
+                                    ]
+                                )!,
+                                try ResponseBuilders.toJSON(profileResponse)
+                            )
+                        }
+                    )
+
+                    let result = try await api.fetchProfile(
+                        for: distinctId,
+                        locale: nil,
+                        revalidating: nil
+                    )
+
+                    switch result {
+                    case .modified(_, let responseValidator):
+                        expect(responseValidator).to(equal(validator))
+                    case .notModified:
+                        fail("Expected a modified profile response")
+                    }
+                }
+
+                it("does not send a profile validator issued for another origin") {
+                    let foreignValidator = ProfileCacheValidator(
+                        rawValue: "\"profile-foreign\"",
+                        resourceScope: "https://other.nuxie.ai/profile"
+                    )
+                    let profileResponse = ResponseBuilders.buildProfileResponse(
+                        experiences: [ResponseBuilders.buildExperience()],
+                        segments: []
+                    )
+                    var capturedRequest: URLRequest?
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            capturedRequest = request
+                            return (
+                                HTTPURLResponse(
+                                    url: request.url!,
+                                    statusCode: 200,
+                                    httpVersion: nil,
+                                    headerFields: [
+                                        "Content-Type": "application/json",
+                                        "ETag": "\"profile-local\"",
+                                    ]
+                                )!,
+                                try ResponseBuilders.toJSON(profileResponse)
+                            )
+                        }
+                    )
+
+                    let result = try await api.fetchProfile(
+                        for: distinctId,
+                        locale: nil,
+                        revalidating: foreignValidator
+                    )
+
+                    expect(capturedRequest?.value(forHTTPHeaderField: "If-None-Match")).to(beNil())
+                    switch result {
+                    case .modified(_, let validator):
+                        expect(validator?.resourceScope).to(equal("https://test.nuxie.ai/profile"))
+                    case .notModified:
+                        fail("Expected a full profile response for a foreign validator")
+                    }
+                }
+
                 it("rejects a profile body over 24 MiB before decoding") {
                     StubURLProtocol.register(
                         matcher: RequestMatchers.post("/profile"),

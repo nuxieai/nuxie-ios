@@ -70,11 +70,21 @@ struct CachedProfile: Codable, Sendable {
     public let response: ProfileResponse
     public let distinctId: String
     public let cachedAt: Date
+    public let validator: ProfileCacheValidator?
+    public let locale: String?
     
-    public init(response: ProfileResponse, distinctId: String, cachedAt: Date) {
+    public init(
+        response: ProfileResponse,
+        distinctId: String,
+        cachedAt: Date,
+        validator: ProfileCacheValidator? = nil,
+        locale: String? = nil
+    ) {
         self.response = response
         self.distinctId = distinctId
         self.cachedAt = cachedAt
+        self.validator = validator
+        self.locale = locale
     }
 }
 
@@ -356,9 +366,15 @@ internal actor ProfileService: ProfileServiceProtocol {
     private func refreshProfile(distinctId: String) async throws -> ProfileResponse {
         do {
             let locale = effectiveLocale
-            let previousProfile = cachedProfileForDistinctId(distinctId)?.response
+            let cached = cachedProfileForDistinctId(distinctId)
+            let previousProfile = cached?.response
+            let validator = cached?.locale == locale ? cached?.validator : nil
             let generation = beginProfileRequest()
-            let fresh = try await api.fetchProfile(for: distinctId, locale: locale)
+            let result = try await api.fetchProfile(
+                for: distinctId,
+                locale: locale,
+                revalidating: validator
+            )
 
             // Staleness guard: if the user changed while this fetch was in
             // flight, applying it would push the OLD user's properties,
@@ -369,23 +385,57 @@ internal actor ProfileService: ProfileServiceProtocol {
                 LogWarning("Discarding stale profile fetch for \(NuxieLogger.shared.logDistinctID(distinctId)) — user changed mid-flight")
                 throw NuxieError.invalidConfiguration("stale profile fetch discarded")
             }
-            guard claimProfileGeneration(generation) else {
-                LogDebug("Discarding stale profile generation \(generation)")
-                return fresh
-            }
+            switch result {
+            case .modified(let fresh, let nextValidator):
+                guard claimProfileGeneration(generation) else {
+                    LogDebug("Discarding stale profile generation \(generation)")
+                    return fresh
+                }
 
-            LogInfo("Network fetch succeeded; updating cache (locale: \(locale))")
-            _ = try await updateCache(
-                profile: fresh,
-                distinctId: distinctId
-            )
-            await handleProfileUpdate(
-                fresh,
-                for: distinctId,
-                previousProfile: previousProfile,
-                generation: generation
-            )
-            return fresh
+                LogInfo("Network fetch succeeded; updating cache (locale: \(locale))")
+                _ = try await updateCache(
+                    profile: fresh,
+                    distinctId: distinctId,
+                    validator: nextValidator,
+                    locale: locale
+                )
+                await handleProfileUpdate(
+                    fresh,
+                    for: distinctId,
+                    previousProfile: previousProfile,
+                    generation: generation
+                )
+                return fresh
+
+            case .notModified:
+                guard let validator,
+                      let cached = cachedProfileForDistinctId(distinctId),
+                      cached.validator == validator,
+                      cached.locale == locale else {
+                    throw NuxieNetworkError.invalidResponse
+                }
+                guard claimProfileGeneration(generation) else {
+                    LogDebug("Discarding stale profile generation \(generation)")
+                    return cached.response
+                }
+
+                let refreshed = CachedProfile(
+                    response: cached.response,
+                    distinctId: distinctId,
+                    cachedAt: dateProvider.now(),
+                    validator: validator,
+                    locale: locale
+                )
+                cachedProfile = refreshed
+                do {
+                    try await diskCache.store(refreshed, forKey: distinctId)
+                } catch {
+                    LogWarning("Failed to revalidate disk cache: \(error)")
+                }
+                startRefreshTimer()
+                LogInfo("Cached profile revalidated (locale: \(locale))")
+                return refreshed.response
+            }
         } catch {
             LogError("Network fetch failed: \(error)")
             throw error
@@ -417,9 +467,17 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Update both memory and disk cache (write-through)
     private func updateCache(
         profile: ProfileResponse,
-        distinctId: String
+        distinctId: String,
+        validator: ProfileCacheValidator?,
+        locale: String
     ) async throws -> [ExperienceReference] {
-        let item = CachedProfile(response: profile, distinctId: distinctId, cachedAt: dateProvider.now())
+        let item = CachedProfile(
+            response: profile,
+            distinctId: distinctId,
+            cachedAt: dateProvider.now(),
+            validator: validator,
+            locale: locale
+        )
 
         let authoritative = try await experienceService.replaceReleaseProfile(profile.releases)
         let nextEffective = authoritative ?? []
@@ -556,7 +614,13 @@ internal actor ProfileService: ProfileServiceProtocol {
     func refetchProfile(distinctId: String?) async throws -> ProfileResponse {
         let resolvedId = distinctId ?? identityService.getDistinctId()
 
-        // Force refresh from network (bypasses cache)
+        // Let a valid startup snapshot contribute its validator before the
+        // network request. Invalid disk state still performs its own recovery
+        // through the private refresh path without recursively awaiting this
+        // task.
+        await awaitInitialDiskLoad()
+
+        // Force revalidation from the network (bypasses cache freshness).
         LogInfo("Force refreshing profile from network")
         return try await refreshProfile(distinctId: resolvedId)
     }

@@ -4,6 +4,41 @@ import Nimble
 @testable import Nuxie
 @testable import NuxieTestSupport
 
+private actor ConditionalProfileAPI: ProfileFetching {
+    private let result: ProfileFetchResult
+    private(set) var lastValidator: ProfileCacheValidator?
+
+    init(result: ProfileFetchResult) {
+        self.result = result
+    }
+
+    func fetchProfile(for distinctId: String, locale: String?) async throws -> ProfileResponse {
+        switch result {
+        case .modified(let profile, _):
+            return profile
+        case .notModified:
+            throw NuxieNetworkError.invalidResponse
+        }
+    }
+
+    func fetchProfile(
+        for distinctId: String,
+        locale: String?,
+        revalidating validator: ProfileCacheValidator?
+    ) async throws -> ProfileFetchResult {
+        lastValidator = validator
+        return result
+    }
+
+    func fetchProfileWithTimeout(
+        for distinctId: String,
+        locale: String?,
+        timeout: TimeInterval
+    ) async throws -> ProfileResponse {
+        try await fetchProfile(for: distinctId, locale: locale)
+    }
+}
+
 final class ProfileServiceCacheTests: AsyncSpec {
     override class func spec() {
         describe("ProfileService cache identity checks") {
@@ -12,6 +47,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
 
             beforeEach {
                 mockFactory = MockFactory.shared
+                await mockFactory.nuxieApi.reset()
                 mockFactory.experienceService.reset()
                 profileService = ProfileService(
                     cache: InMemoryCachedProfileStore(ttl: nil),
@@ -101,6 +137,100 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 expect(mockFactory.experienceService.releaseProfiles.last ?? nil)
                     .to(equal(profile.releases))
                 expect(mockFactory.experienceService.prefetchedExperiences).to(beEmpty())
+            }
+
+            it("revalidates a fresh disk profile and keeps its cached authority on 304") {
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let distinctId = "cached-validator-user"
+                let profile = Self.makeProfile(experienceId: "cached-validator")
+                let validator = ProfileCacheValidator(rawValue: "\"profile-v1\"")
+                let cachedAt = mockFactory.dateProvider.now()
+                try await cache.store(
+                    CachedProfile(
+                        response: profile,
+                        distinctId: distinctId,
+                        cachedAt: cachedAt,
+                        validator: validator,
+                        locale: "en_US"
+                    ),
+                    forKey: distinctId
+                )
+                mockFactory.identityService.setDistinctId(distinctId)
+                let api = ConditionalProfileAPI(result: .notModified)
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: api,
+                    segments: mockFactory.segmentService,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: ConfigurationLocaleIdentifierProvider(
+                        configuredLocale: { "en_US" }
+                    )
+                )
+                mockFactory.dateProvider.advance(by: 60)
+
+                let refreshed = try await profileService.refetchProfile(
+                    distinctId: distinctId
+                )
+
+                expect(refreshed.releases).to(equal(profile.releases))
+                await expect { await api.lastValidator }
+                    .to(equal(validator))
+                let stored = await cache.retrieve(forKey: distinctId, allowStale: true)
+                expect(stored?.cachedAt).to(equal(mockFactory.dateProvider.now()))
+                expect(stored?.response.releases).to(equal(profile.releases))
+            }
+
+            it("does not reuse a validator from another locale") {
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let distinctId = "locale-validator-user"
+                let oldValidator = ProfileCacheValidator(rawValue: "\"profile-en\"")
+                let newValidator = ProfileCacheValidator(rawValue: "\"profile-fr\"")
+                try await cache.store(
+                    CachedProfile(
+                        response: Self.makeProfile(experienceId: "english-profile"),
+                        distinctId: distinctId,
+                        cachedAt: mockFactory.dateProvider.now(),
+                        validator: oldValidator,
+                        locale: "en_US"
+                    ),
+                    forKey: distinctId
+                )
+                mockFactory.identityService.setDistinctId(distinctId)
+                let api = ConditionalProfileAPI(
+                    result: .modified(
+                        Self.makeProfile(experienceId: "french-profile"),
+                        validator: newValidator
+                    )
+                )
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: api,
+                    segments: mockFactory.segmentService,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: ConfigurationLocaleIdentifierProvider(
+                        configuredLocale: { "fr_FR" }
+                    )
+                )
+
+                let refreshed = try await profileService.refetchProfile(
+                    distinctId: distinctId
+                )
+
+                expect(refreshed.releases?.active.first?.locator.experienceId)
+                    .to(equal("french-profile"))
+                await expect { await api.lastValidator }
+                    .to(beNil())
+                let stored = await cache.retrieve(forKey: distinctId, allowStale: true)
+                expect(stored?.validator).to(equal(newValidator))
+                expect(stored?.locale).to(equal("fr_FR"))
             }
 
             it("evicts an unauthentic cached release and recovers from the network") {

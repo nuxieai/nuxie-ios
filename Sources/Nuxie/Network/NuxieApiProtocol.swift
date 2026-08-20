@@ -1,5 +1,20 @@
 import Foundation
 
+struct ProfileCacheValidator: Codable, Equatable, Sendable {
+    let rawValue: String
+    let resourceScope: String?
+
+    init(rawValue: String, resourceScope: String? = nil) {
+        self.rawValue = rawValue
+        self.resourceScope = resourceScope
+    }
+}
+
+enum ProfileFetchResult: Sendable {
+    case modified(ProfileResponse, validator: ProfileCacheValidator?)
+    case notModified
+}
+
 protocol EventTransport: AnyObject, Sendable {
     func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse
 
@@ -16,7 +31,25 @@ protocol EventTransport: AnyObject, Sendable {
 
 protocol ProfileFetching: AnyObject, Sendable {
     func fetchProfile(for distinctId: String, locale: String?) async throws -> ProfileResponse
+    func fetchProfile(
+        for distinctId: String,
+        locale: String?,
+        revalidating validator: ProfileCacheValidator?
+    ) async throws -> ProfileFetchResult
     func fetchProfileWithTimeout(for distinctId: String, locale: String?, timeout: TimeInterval) async throws -> ProfileResponse
+}
+
+extension ProfileFetching {
+    func fetchProfile(
+        for distinctId: String,
+        locale: String?,
+        revalidating validator: ProfileCacheValidator?
+    ) async throws -> ProfileFetchResult {
+        .modified(
+            try await fetchProfile(for: distinctId, locale: locale),
+            validator: nil
+        )
+    }
 }
 
 protocol FeatureChecking: AnyObject, Sendable {

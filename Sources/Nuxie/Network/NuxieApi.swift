@@ -225,12 +225,12 @@ actor NuxieApi: NuxieApiProtocol {
         return URLSession(configuration: configuration)
     }
     
-    private func request<T: Codable>(
+    private func performRequest(
         endpoint: APIEndpoint,
         body: Encodable? = nil,
-        responseType: T.Type,
-        options: RequestOptions? = nil
-    ) async throws -> T {
+        options: RequestOptions? = nil,
+        additionalHeaders: [String: String] = [:]
+    ) async throws -> (Data, HTTPURLResponse) {
         let options = options ?? .standard(compressBody: useGzipCompression)
         let url = baseURL.appendingPathComponent(endpoint.path)
         var request = URLRequest(url: url)
@@ -239,6 +239,9 @@ actor NuxieApi: NuxieApiProtocol {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("gzip", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("Nuxie-iOS-SDK/\(SDKVersion.current)", forHTTPHeaderField: "User-Agent")
+        for (name, value) in additionalHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         
         // Handle request body
         if let body = body {
@@ -287,21 +290,29 @@ actor NuxieApi: NuxieApiProtocol {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw NuxieNetworkError.invalidResponse
         }
-        
-        guard 200...299 ~= httpResponse.statusCode else {
+        return (data, httpResponse)
+    }
+
+    private func requireSuccess(_ response: HTTPURLResponse, data: Data) throws {
+        guard 200...299 ~= response.statusCode else {
             // Log the raw response for debugging
             if let responseString = String(data: data, encoding: .utf8) {
-                LogError("HTTP \(httpResponse.statusCode) response body: \(responseString)")
+                LogError("HTTP \(response.statusCode) response body: \(responseString)")
             }
-            
+
             let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data)
             throw NuxieNetworkError.httpError(
-                statusCode: httpResponse.statusCode,
+                statusCode: response.statusCode,
                 message: errorResponse?.message ?? "Unknown error"
             )
         }
+    }
 
-        // Decode response
+    private func decode<T: Codable>(
+        _ responseType: T.Type,
+        from data: Data,
+        endpoint: APIEndpoint
+    ) throws -> T {
         do {
             if endpoint.isProfile {
                 try StrictJSONDuplicateKeyValidator.validate(data)
@@ -310,6 +321,36 @@ actor NuxieApi: NuxieApiProtocol {
         } catch {
             throw NuxieNetworkError.decodingError(error)
         }
+    }
+
+    private func request<T: Codable>(
+        endpoint: APIEndpoint,
+        body: Encodable? = nil,
+        responseType: T.Type,
+        options: RequestOptions? = nil
+    ) async throws -> T {
+        let (data, response) = try await performRequest(
+            endpoint: endpoint,
+            body: body,
+            options: options
+        )
+        try requireSuccess(response, data: data)
+        return try decode(responseType, from: data, endpoint: endpoint)
+    }
+
+    private static func profileValidator(
+        from response: HTTPURLResponse,
+        resourceScope: String
+    ) -> ProfileCacheValidator? {
+        guard let raw = response.value(forHTTPHeaderField: "ETag")?.trimmingCharacters(in: .whitespaces),
+              !raw.isEmpty,
+              raw.utf8.count <= 256,
+              !raw.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            return nil
+        }
+        let opaque = raw.hasPrefix("W/") ? String(raw.dropFirst(2)) : raw
+        guard opaque.count >= 2, opaque.first == "\"", opaque.last == "\"" else { return nil }
+        return ProfileCacheValidator(rawValue: raw, resourceScope: resourceScope)
     }
 
 }
@@ -327,6 +368,32 @@ extension NuxieApi {
             endpoint: .profile(request),
             body: request,
             responseType: ProfileResponse.self
+        )
+    }
+
+    func fetchProfile(
+        for distinctId: String,
+        locale: String?,
+        revalidating validator: ProfileCacheValidator?
+    ) async throws -> ProfileFetchResult {
+        let request = ProfileRequest(distinctId: distinctId, locale: locale)
+        let resourceScope = baseURL
+            .appendingPathComponent(APIEndpoint.profile(request).path)
+            .absoluteString
+        let scopedValidator = validator?.resourceScope == resourceScope ? validator : nil
+        let (data, response) = try await performRequest(
+            endpoint: .profile(request),
+            body: request,
+            additionalHeaders: scopedValidator.map { ["If-None-Match": $0.rawValue] } ?? [:]
+        )
+        if response.statusCode == 304 {
+            guard scopedValidator != nil else { throw NuxieNetworkError.invalidResponse }
+            return .notModified
+        }
+        try requireSuccess(response, data: data)
+        return .modified(
+            try decode(ProfileResponse.self, from: data, endpoint: .profile(request)),
+            validator: Self.profileValidator(from: response, resourceScope: resourceScope)
         )
     }
 
