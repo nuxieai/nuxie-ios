@@ -1330,6 +1330,12 @@ public class ExperienceViewController: NuxiePlatformViewController {
               screenTransitionCoordinator === coordinator else {
             return
         }
+        // Activation can synchronously enqueue authored commands, including a
+        // navigation. Keep them behind this boundary until durable screen-work
+        // recovery and the initial lifecycle callback have both completed.
+        guard runtimeSession.crossInitialActivationBoundary(generation: generation) else {
+            return
+        }
         drainPendingNativeRuntimeCommands(
             generation: generation,
             coordinator: coordinator

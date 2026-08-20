@@ -38,6 +38,7 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
     private(set) var pendingCommands: [Command] = []
     private(set) var activeNavigation: Navigation?
     private(set) var isDrainingCommands = false
+    private(set) var hasCrossedInitialActivationBoundary = false
     private(set) var readyNotificationGeneration: UInt64?
     private(set) var mountTask: Task<Void, Never>?
     private(set) var failureTask: Task<Void, Never>?
@@ -53,6 +54,7 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
         failureTask = nil
         activeNavigation = nil
         isDrainingCommands = false
+        hasCrossedInitialActivationBoundary = false
         readyNotificationGeneration = nil
         state = .loading(generation: generation &+ 1)
         return work
@@ -67,6 +69,7 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
         failureTask = nil
         activeNavigation = nil
         isDrainingCommands = false
+        hasCrossedInitialActivationBoundary = false
         readyNotificationGeneration = nil
         state = .inactive(generation: nextGeneration)
         return (nextGeneration, work)
@@ -103,7 +106,15 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
     func becomeReady(generation: UInt64) -> Bool {
         guard isCurrent(generation), case .mounting = state else { return false }
         state = .ready(generation: generation)
+        hasCrossedInitialActivationBoundary = false
         readyNotificationGeneration = generation
+        return true
+    }
+
+    @discardableResult
+    func crossInitialActivationBoundary(generation: UInt64) -> Bool {
+        guard isReady(generation) else { return false }
+        hasCrossedInitialActivationBoundary = true
         return true
     }
 
@@ -115,6 +126,7 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
             state = .terminalFailure(generation: generation)
             activeNavigation = nil
             isDrainingCommands = false
+            hasCrossedInitialActivationBoundary = false
             readyNotificationGeneration = nil
             return true
         case .inactive, .terminalFailure, .tearingDown:
@@ -155,6 +167,7 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
         pendingCommands.removeAll()
         activeNavigation = nil
         isDrainingCommands = false
+        hasCrossedInitialActivationBoundary = false
         readyNotificationGeneration = nil
         return work
     }
@@ -170,7 +183,10 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
     }
 
     func beginCommandDrain(generation: UInt64) -> Bool {
-        guard isReady(generation), !isDrainingCommands, activeNavigation == nil else {
+        guard isReady(generation),
+              hasCrossedInitialActivationBoundary,
+              !isDrainingCommands,
+              activeNavigation == nil else {
             return false
         }
         isDrainingCommands = true
@@ -178,7 +194,9 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
     }
 
     func nextCommand(generation: UInt64) -> Command? {
-        guard isReady(generation), !pendingCommands.isEmpty else { return nil }
+        guard isReady(generation),
+              hasCrossedInitialActivationBoundary,
+              !pendingCommands.isEmpty else { return nil }
         return pendingCommands.removeFirst()
     }
 
@@ -187,7 +205,9 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
     }
 
     func beginNavigation(_ navigation: Navigation, generation: UInt64) -> Bool {
-        guard isReady(generation), activeNavigation == nil else { return false }
+        guard isReady(generation),
+              hasCrossedInitialActivationBoundary,
+              activeNavigation == nil else { return false }
         activeNavigation = navigation
         return true
     }
@@ -201,6 +221,7 @@ final class ExperienceRuntimeLifecycleSession<Command, Navigation> {
     func consumeReadyNotification(generation: UInt64) -> Bool {
         guard readyNotificationGeneration == generation,
               isReady(generation),
+              hasCrossedInitialActivationBoundary,
               activeNavigation == nil,
               pendingCommands.isEmpty,
               !isDrainingCommands else {
