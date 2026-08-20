@@ -819,8 +819,6 @@ actor EventLog: EventLogProtocol {
 
     await ready.wait()
 
-    _ = await flushEvents()
-
     let distinctId = distinctIdOverride ?? identityService.getDistinctId()
 
     // Boxed so the same snapshot can cross into the API client while
