@@ -16,17 +16,17 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: Data(contentsOf: fixtureRoot.appendingPathComponent(
-                "fixtures/experience-release-descriptor-v2/envelope.json"
+                "fixtures/experience-release-descriptor/envelope.json"
             ))
         )
         let descriptorBytes = try XCTUnwrap(Data(base64Encoded: envelope.descriptorBytesBase64))
         let descriptor = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorV2.self,
+            ExperienceReleaseDescriptor.self,
             from: descriptorBytes
         )
-        let definition = try ExperienceDefinitionV2(descriptor: descriptor)
+        let definition = try ExperienceDefinition(descriptor: descriptor)
         let experience = Experience(
             behavior: ExperienceBehaviorDefinition(
                 reference: ExperienceReference(
@@ -50,7 +50,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ]
             ),
             journey: definition.renderShell,
-            definitionV2: definition,
+            definition: definition,
             assetBaseURL: URL(string: "https://assets.nuxie.test/")!
         )
         let runtime = try makeJourneyRunner(experience: experience)
@@ -498,7 +498,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/scripted-resources")
         let profile = try JSONDecoder().decode(
-            ExperienceReleaseProfileV2.self,
+            ExperienceReleaseProfile.self,
             from: Data(contentsOf: fixture.appendingPathComponent("profile.json"))
         )
         let deliveryHost = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
@@ -533,7 +533,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             cacheDirectory: cache,
             urlSession: TestURLSessionProvider.createTestSession(),
             authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
-            supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+            supportedRuntime: ExperienceReleaseRuntime.current,
             admission: ExperienceReleaseAdmission(
                 store: InMemoryExperienceReleaseHighWaterStore()
             )
@@ -756,41 +756,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await screen.close()
     }
 
-#if LEGACY_JOURNEY_TESTS
-    // Quarantined with the listenerAction signed fixture removed by Journey v2.
-    @MainActor
-    func testPresentationSessionDefersOrderedEffectsUntilMainActorDelivery() async throws {
-        let payload = try await authenticatedScriptedPayload()
-        let screen = try await ExperienceInteractiveScreen.open(
-            payload: payload,
-            player: .stateMachine("Generated Nuxie Pressable Interaction"),
-            pixelWidth: 64,
-            pixelHeight: 64
-        )
-        defer { Task { try? await screen.close() } }
-        let delivered = InteractiveEffectRecorder()
-        let session = screen.presentationSession { effects, _ in
-            delivered.append(contentsOf: effects)
-        }
-
-        _ = try await render(screen)
-        _ = try await session.perform(.step(ExperienceRuntimePresentationStep(
-            elapsedSeconds: 0.016,
-            pointers: []
-        )))
-        let result = try await session.perform(.step(ExperienceRuntimePresentationStep(
-            elapsedSeconds: 0.016,
-            pointers: [
-                ExperienceInteractivePointerEvent(kind: .down, x: 100, y: 728, pointerID: 1),
-                ExperienceInteractivePointerEvent(kind: .up, x: 100, y: 728, pointerID: 1),
-            ]
-        )))
-        XCTAssertTrue(delivered.values.isEmpty)
-
-        await result.deliver()
-        XCTAssertEqual(delivered.values.map(\.sequence), Array(0...4))
-    }
-#endif
 
     @MainActor
     func testPresentationSessionCapturesSnapshotBeforeMainActorDelivery() async throws {
@@ -940,84 +905,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(metrics.openedSessionCount, 2)
     }
 
-#if LEGACY_JOURNEY_TESTS
-    // Quarantined with the listenerAction signed fixture removed by Journey v2.
-    func testAuthenticatedScriptedScreenRoutesExactProductEffectsInAuthoredOrder() async throws {
-        let payload = try await authenticatedScriptedPayload()
-        XCTAssertEqual(payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")
-        let screen = try await ExperienceInteractiveScreen.open(
-            payload: payload,
-            player: .stateMachine("Generated Nuxie Pressable Interaction"),
-            pixelWidth: 64,
-            pixelHeight: 64
-        )
-        defer { Task { try? await screen.close() } }
-
-        _ = try await render(screen)
-        _ = try await screen.step(elapsedSeconds: 0.016)
-        let result = try await screen.step(
-            pointers: [
-                ExperienceInteractivePointerEvent(
-                    kind: .down,
-                    x: 100,
-                    y: 728,
-                    pointerID: 1
-                ),
-                ExperienceInteractivePointerEvent(
-                    kind: .up,
-                    x: 100,
-                    y: 728,
-                    pointerID: 1
-                ),
-            ],
-            elapsedSeconds: 0.016,
-            correlationID: 42
-        )
-
-        XCTAssertEqual(result.effects.map(\.sequence), Array(0...4))
-        XCTAssertEqual(result.effects.map(\.correlationID), Array(repeating: 42, count: 5))
-        XCTAssertEqual(
-            result.effects.map(\.kind),
-            [
-                .responseSet(field: "plan", value: .string("pro")),
-                .journeyEvent(name: "purchase_tapped", payload: Self.object([
-                    ("placementId", .string("pro_paywall:annual")),
-                ])),
-                .hostCommand(name: "selection_changed", payload: Self.object([
-                    ("value", .string("annual"))
-                ])),
-                .hostCommand(name: "custom.analytics", payload: Self.object([
-                    ("channel", .string("editor")),
-                    ("sampled", .bool(true)),
-                ])),
-                .rejectedHostCommand(
-                    name: "$response_set",
-                    reason: "expected a non-empty string field and a value"
-                ),
-            ]
-        )
-
-        let journey = try makeJourneyRunner(document: payload.journey)
-        let navigated = InteractiveNavigatedScreenRecorder()
-        await journey.runner.setOnShowScreen { screenID, _ in
-            navigated.append(screenID)
-        }
-        for effect in result.effects {
-            guard case .journeyEvent(let name, let payload) = effect.kind else { continue }
-            _ = await journey.runner.dispatchScreenEvent(
-                NuxieEvent(
-                    name: name,
-                    distinctId: "interactive-user",
-                    properties: try Self.eventProperties(payload)
-                ),
-                screenId: "screen_1",
-                componentId: nil,
-                instanceId: nil
-            )
-        }
-        XCTAssertEqual(navigated.values, ["screen_1"])
-    }
-#endif
 
     func testStoreKitProductsReplaceSignedCatalogValuesBeforeRuntimeOpen() throws {
         let values = [
@@ -1275,103 +1162,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(projected[3].value.value as? String, "$79.99")
     }
 
-#if LEGACY_JOURNEY_TESTS
-    // Quarantined with the listenerAction signed fixture removed by Journey v2.
-    func testAuthenticatedScriptedFixtureRejectsTamperedDescriptorBeforeRuntime() async throws {
-        do {
-            _ = try await authenticatedScriptedPayload(profileTransform: { profileBytes in
-                var profile = try XCTUnwrap(
-                    JSONSerialization.jsonObject(with: profileBytes) as? [String: Any]
-                )
-                var active = try XCTUnwrap(profile["active"] as? [[String: Any]])
-                var entry = try XCTUnwrap(active.first)
-                let envelopeBase64 = try XCTUnwrap(entry["envelopeBytesBase64"] as? String)
-                let envelopeBytes = try XCTUnwrap(Data(base64Encoded: envelopeBase64))
-                var envelope = try XCTUnwrap(String(data: envelopeBytes, encoding: .utf8))
-                let marker = "\"descriptorBytesBase64\":\""
-                let markerRange = try XCTUnwrap(envelope.range(of: marker))
-                let valueIndex = markerRange.upperBound
-                envelope.replaceSubrange(
-                    valueIndex...valueIndex,
-                    with: envelope[valueIndex] == "A" ? "B" : "A"
-                )
-                entry["envelopeBytesBase64"] = Data(envelope.utf8).base64EncodedString()
-                active[0] = entry
-                profile["active"] = active
-                return try JSONSerialization.data(withJSONObject: profile)
-            })
-            XCTFail("Expected the tampered signed descriptor to be rejected")
-        } catch {}
-    }
-
-    func testAuthenticatedScriptedFixtureRejectsTamperedRIVBeforeRuntime() async throws {
-        let requestedRIV = InteractiveBooleanRecorder()
-        do {
-            _ = try await authenticatedScriptedPayload(
-                artifactTransform: { url, bytes in
-                    guard url.pathExtension == "riv" else { return bytes }
-                    requestedRIV.record()
-                    return bytes + Data([0])
-                }
-            )
-            XCTFail("Expected the tampered signed RIV to be rejected")
-        } catch {}
-        XCTAssertTrue(requestedRIV.value)
-    }
-
-    func testAuthenticatedFactoryRejectsScreenOutsideSignedManifest() async throws {
-        let payload = try await authenticatedScriptedPayload()
-        do {
-            _ = try await ExperienceInteractiveScreen.open(
-                payload: payload,
-                screenID: "unsigned-screen",
-                player: .staticArtboard,
-                pixelWidth: 16,
-                pixelHeight: 16
-            )
-            XCTFail("Expected an unsigned screen to be rejected")
-        } catch {
-            XCTAssertEqual(
-                error as? ExperienceInteractiveScreenError,
-                .screenNotFound("unsigned-screen")
-            )
-        }
-    }
-
-    func testAuthenticatedFactoryRejectsAssetOutsideSignedManifestAndSceneCatalog() async throws {
-        let payload = try await authenticatedScriptedPayload()
-        let tampered = AuthenticatedRuntimePayload(
-            authenticatedKeyID: payload.authenticatedKeyID,
-            renderPlan: payload.renderPlan,
-            journey: payload.journey,
-            sceneBytes: payload.sceneBytes,
-            assets: [AuthenticatedRuntimeAsset(
-                kind: .image,
-                riveAssetID: 7,
-                riveUniqueName: "unsigned-image-7",
-                sourceKey: "assets/unsigned.png",
-                contentType: "image/png",
-                sha256: String(repeating: "0", count: 64),
-                required: false,
-                bytes: nil
-            )]
-        )
-        do {
-            _ = try await ExperienceInteractiveScreen.open(
-                payload: tampered,
-                player: .staticArtboard,
-                pixelWidth: 16,
-                pixelHeight: 16
-            )
-            XCTFail("Expected an unsigned asset to be rejected")
-        } catch {
-            XCTAssertEqual(
-                error as? ExperienceInteractiveScreenError,
-                .assetContract("unsigned-image-7")
-            )
-        }
-    }
-#endif
 
     func testFactoryValidatesRootSchemaAndAtomicallyAppliesSignedSDKState() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
@@ -3572,7 +3362,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             contentsOf: fixture.appendingPathComponent("profile.json")
         )
         let profile = try JSONDecoder().decode(
-            ExperienceReleaseProfileV2.self,
+            ExperienceReleaseProfile.self,
             from: try profileTransform?(receivedProfileBytes) ?? receivedProfileBytes
         )
         let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
@@ -3613,7 +3403,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             cacheDirectory: cache,
             urlSession: TestURLSessionProvider.createTestSession(),
             authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
-            supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+            supportedRuntime: ExperienceReleaseRuntime.current,
             admission: ExperienceReleaseAdmission(store: InMemoryExperienceReleaseHighWaterStore())
         )
         let catalog = try await store.authenticateProfile(profile)

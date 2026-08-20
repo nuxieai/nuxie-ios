@@ -83,7 +83,7 @@ func raceRequestAgainstDeadline<Value: Sendable>(
 /// Main API client for Nuxie SDK - fully async/await
 actor NuxieApi: NuxieApiProtocol {
 
-    private static let maximumProfileResponseBytes = 4 * 1_024 * 1_024
+    private static let maximumProfileResponseBytes = 24 * 1_024 * 1_024
 
     // MARK: - Configuration
     

@@ -22,10 +22,9 @@ const profilePaths = [
   "Tests/ExperienceRuntimeHostApp/PresentationStates/sheet-large/profile.json",
   "Tests/ExperienceRuntimeHostApp/PresentationStates/sheet-medium/profile.json",
   "Tests/ExperienceRuntimeHostApp/PresentationStates/sheet-non-dismissible/profile.json",
-  "Tests/NuxieUnitTests/Fixtures/scripted-generic-commands/profile.json",
 ];
 const envelopePaths = [
-  "fixtures/experience-release-descriptor-v2/envelope.json",
+  "fixtures/experience-release-descriptor/envelope.json",
 ];
 const privateKey = createPrivateKey({
   key: Buffer.concat([
@@ -36,15 +35,43 @@ const privateKey = createPrivateKey({
   type: "pkcs8",
 });
 const signatureDomain = Buffer.from(
-  "nuxie.experience-release-descriptor.v2\0",
+  "nuxie.experience-release-descriptor.v1\0",
   "utf8",
 );
 
-const upgradeEnvelope = (envelope) => {
+const canonicalJson = (value) => {
+  if (value === null || typeof value !== "object") {
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new Error("canonical-json.invalid-value");
+    return encoded;
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(",")}}`;
+};
+
+const canonicalEnvelopeJson = (envelope) =>
+  `{${[
+    `"mediaType":${canonicalJson(envelope.mediaType)}`,
+    `"encoding":${canonicalJson(envelope.encoding)}`,
+    `"descriptorSha256":${canonicalJson(envelope.descriptorSha256)}`,
+    `"descriptorSizeBytes":${envelope.descriptorSizeBytes}`,
+    `"descriptorBytesBase64":${canonicalJson(envelope.descriptorBytesBase64)}`,
+    `"signature":{${[
+      `"version":${envelope.signature.version}`,
+      `"algorithm":${canonicalJson(envelope.signature.algorithm)}`,
+      `"keyId":${canonicalJson(envelope.signature.keyId)}`,
+      `"signatureBase64":${canonicalJson(envelope.signature.signatureBase64)}`,
+    ].join(",")}}`,
+  ].join(",")}}`;
+
+const refreshEnvelope = (envelope) => {
   const descriptor = JSON.parse(
     Buffer.from(envelope.descriptorBytesBase64, "base64").toString("utf8"),
   );
-  descriptor.schemaVersion = "nuxie.experience-release.v2";
+  descriptor.schemaVersion = "nuxie.experience-release.v1";
   descriptor.products = (descriptor.products ?? []).map((product) => ({
     ...product,
     preview: product.preview ?? {
@@ -65,11 +92,11 @@ const upgradeEnvelope = (envelope) => {
     descriptor.requirements.timezoneData.sha256 =
       "d4ad5c12a6be491076f333c9b4f96f60cb8ab552495bbfae0d8cdc9730ecb198";
   }
-  // Current V2 presentation chrome is runtime-owned. Older committed
+  // Current presentation chrome is runtime-owned. Older committed
   // descriptors carried an authored loading treatment that the current strict
   // grammar intentionally rejects.
   delete descriptor.presentation?.loading;
-  const descriptorBytes = Buffer.from(JSON.stringify(descriptor), "utf8");
+  const descriptorBytes = Buffer.from(canonicalJson(descriptor), "utf8");
   const descriptorSha256 = createHash("sha256")
     .update(descriptorBytes)
     .digest("hex");
@@ -80,7 +107,7 @@ const upgradeEnvelope = (envelope) => {
   );
   return {
     ...envelope,
-    mediaType: "application/vnd.nuxie.experience-release+json;version=2",
+    mediaType: "application/vnd.nuxie.experience-release+json;version=1",
     descriptorSha256,
     descriptorSizeBytes: descriptorBytes.length,
     descriptorBytesBase64: descriptorBytes.toString("base64"),
@@ -95,10 +122,10 @@ const upgradeEntry = (entry) => {
   const envelope = JSON.parse(
     Buffer.from(entry.envelopeBytesBase64, "base64").toString("utf8"),
   );
-  const upgradedEnvelope = upgradeEnvelope(envelope);
-  entry.descriptorSha256 = upgradedEnvelope.descriptorSha256;
+  const refreshedEnvelope = refreshEnvelope(envelope);
+  entry.descriptorSha256 = refreshedEnvelope.descriptorSha256;
   entry.envelopeBytesBase64 = Buffer.from(
-    JSON.stringify(upgradedEnvelope),
+    canonicalEnvelopeJson(refreshedEnvelope),
     "utf8",
   ).toString("base64");
 };
@@ -117,6 +144,6 @@ for (const relativePath of envelopePaths) {
   const envelope = JSON.parse(await readFile(path, "utf8"));
   await writeFile(
     path,
-    `${JSON.stringify(upgradeEnvelope(envelope), null, 2)}\n`,
+    `${JSON.stringify(refreshEnvelope(envelope), null, 2)}\n`,
   );
 }

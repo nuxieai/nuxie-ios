@@ -485,163 +485,6 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 }
             }
 
-#if LEGACY_JOURNEY_TESTS
-            // Quarantined with the pre-v2 JourneyAction fixture vocabulary.
-            it("preserves stable node ids for the either-node vocabulary") {
-                let fixtureData = try Data(
-                    contentsOf: Self.fixtureURL(
-                        "journeys/conformance/either-vocabulary.json"
-                    )
-                )
-                let fixtureHash = SHA256.hash(data: fixtureData)
-                    .map { String(format: "%02x", $0) }
-                    .joined()
-                expect(fixtureHash).to(equal(
-                    "373dffb2ed610370291ea9c1fa979d46ed61066535c3271fd1c295250a8d780d"
-                ))
-                let fixture = try Self.loadObject(
-                    "journeys/conformance/either-vocabulary.json"
-                )
-                let actions = try JSONDecoder().decode(
-                    [JourneyAction].self,
-                    from: JSONSerialization.data(
-                        withJSONObject: try Self.required(
-                            fixture["actions"] as? [[String: Any]],
-                            "actions"
-                        )
-                    )
-                )
-                let expected = try Self.required(
-                    fixture["expected"] as? [String: Any],
-                    "expected"
-                )
-
-                expect(Self.nodeIds(in: actions)).to(equal(
-                    expected["decodedNodeIds"] as? [String]
-                ))
-            }
-
-            it("preserves compiler node ids for every device action shape") {
-                let path: [String: Any] = [
-                    "kind": "path",
-                    "viewModelName": "Main",
-                    "path": "items",
-                ]
-                let actions: [[String: Any]] = [
-                    ["type": "navigate", "nodeId": "device.navigate", "screenId": "screen"],
-                    ["type": "back", "nodeId": "device.back"],
-                    [
-                        "type": "set_response_field",
-                        "nodeId": "device.set-response-field",
-                        "responseSchemaId": "response",
-                        "key": "email",
-                        "value": "person@example.com",
-                    ],
-                    [
-                        "type": "submit_response",
-                        "nodeId": "device.submit-response",
-                        "responseSchemaId": "response",
-                    ],
-                    [
-                        "type": "purchase",
-                        "nodeId": "device.purchase",
-                        "placementId": "placement",
-                    ],
-                    ["type": "restore", "nodeId": "device.restore"],
-                    [
-                        "type": "request_notifications",
-                        "nodeId": "device.request-notifications",
-                    ],
-                    [
-                        "type": "request_permission",
-                        "nodeId": "device.request-permission",
-                        "permissionType": "camera",
-                    ],
-                    ["type": "request_tracking", "nodeId": "device.request-tracking"],
-                    [
-                        "type": "open_link",
-                        "nodeId": "device.open-link",
-                        "url": "https://example.com",
-                    ],
-                    [
-                        "type": "start_animation",
-                        "nodeId": "device.start-animation",
-                        "animationId": "animation.press.fade",
-                        "direction": "reverse",
-                        "restart": false,
-                    ],
-                    ["type": "dismiss", "nodeId": "device.dismiss"],
-                    [
-                        "type": "call_delegate",
-                        "nodeId": "device.call-delegate",
-                        "message": "complete",
-                    ],
-                    [
-                        "type": "set_view_model",
-                        "nodeId": "device.set-view-model",
-                        "path": path,
-                        "value": 1,
-                    ],
-                    [
-                        "type": "fire_trigger",
-                        "nodeId": "device.fire-trigger",
-                        "path": path,
-                    ],
-                    [
-                        "type": "list_insert",
-                        "nodeId": "device.list-insert",
-                        "path": path,
-                        "value": "first",
-                    ],
-                    [
-                        "type": "list_remove",
-                        "nodeId": "device.list-remove",
-                        "path": path,
-                        "index": 0,
-                    ],
-                    [
-                        "type": "list_swap",
-                        "nodeId": "device.list-swap",
-                        "path": path,
-                        "indexA": 0,
-                        "indexB": 1,
-                    ],
-                    [
-                        "type": "list_move",
-                        "nodeId": "device.list-move",
-                        "path": path,
-                        "from": 0,
-                        "to": 1,
-                    ],
-                    [
-                        "type": "list_set",
-                        "nodeId": "device.list-set",
-                        "path": path,
-                        "index": 0,
-                        "value": "updated",
-                    ],
-                    [
-                        "type": "list_clear",
-                        "nodeId": "device.list-clear",
-                        "path": path,
-                    ],
-                ]
-                let decoded = try JSONDecoder().decode(
-                    [JourneyAction].self,
-                    from: JSONSerialization.data(withJSONObject: actions)
-                )
-
-                expect(decoded.compactMap(\.nodeId)).to(equal(
-                    actions.compactMap { $0["nodeId"] as? String }
-                ))
-                expect(decoded.contains { action in
-                    if case .unknown(let type, _) = action {
-                        return type == "start_animation"
-                    }
-                    return false
-                }).to(beFalse())
-            }
-#endif
         }
     }
 
@@ -676,15 +519,15 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
             let nested: [JourneyAction]
             switch action {
             case .condition(let condition):
-                nested = condition.branches.flatMap(\.actions)
-                    + (condition.defaultActions ?? [])
+                nested = condition.branches.flatMap(\.program)
+                    + condition.defaultProgram
             case .experiment(let experiment):
-                nested = experiment.variants.flatMap(\.actions)
+                nested = experiment.variants.flatMap(\.program)
             case .timeWindow(let timeWindow):
-                nested = timeWindow.successActions ?? []
+                nested = timeWindow.onInside
             case .waitUntil(let waitUntil):
-                nested = (waitUntil.successActions ?? [])
-                    + (waitUntil.timeoutActions ?? [])
+                nested = waitUntil.onSatisfied
+                    + waitUntil.onTimeout
             default:
                 nested = []
             }

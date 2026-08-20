@@ -1,6 +1,6 @@
 import Foundation
 
-/// Structural mirror of the frozen v2 Zod grammar. This validator exists in
+/// Structural mirror of the canonical Zod grammar. This validator exists in
 /// addition to Codable because dictionary-backed behavior sections would
 /// otherwise silently discard the distinction between a known optional field
 /// and a future field whose semantics this SDK does not understand.
@@ -247,7 +247,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
               zip(placements, placements.dropFirst()).allSatisfy({
                   javascriptStringPrecedes($0, $1)
               }) else { try invalid("placements") }
-        let journeyScreenIDs = try validateJourneyV2(
+        let journeyScreenIDs = try validateJourney(
             root["journey"],
             placementIDs: Set(placements)
         )
@@ -510,7 +510,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
     }
 
     @discardableResult
-    private static func validateJourneyV2(
+    private static func validateJourney(
         _ value: Any?,
         placementIDs: Set<String>
     ) throws -> Set<String> {
@@ -581,7 +581,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             }
             try identifier(route["eventName"], path: "\(path).eventName")
             try lowercaseSHA256(route["revisionSha256"], path: "\(path).revisionSha256")
-            try validateJourneyV2Program(
+            try validateJourneyProgram(
                 route["program"],
                 path: "\(path).program",
                 screenIDs: Set(screenIDs),
@@ -605,7 +605,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         return Set(screenIDs)
     }
 
-    private static func validateJourneyV2Program(
+    private static func validateJourneyProgram(
         _ value: Any?,
         path: String,
         screenIDs: Set<String>,
@@ -755,7 +755,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         screenIDs: Set<String>,
         placementIDs: Set<String>
     ) throws {
-        try validateJourneyV2Program(
+        try validateJourneyProgram(
             value,
             path: path,
             screenIDs: screenIDs,
@@ -960,7 +960,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             if let script = behavior["script"] {
                 guard !scriptedActionIDs.isEmpty else { try invalid("screenBehaviors[\(index)].script") }
                 let script = try object(script, required: ["protocol", "artifact", "exportedActionIds"], path: "screenBehaviors[\(index)].script")
-                guard script["protocol"] as? String == "screen-actions-v2" else { try invalid("screenBehaviors[\(index)].script.protocol") }
+                guard script["protocol"] as? String == "screen-actions" else { try invalid("screenBehaviors[\(index)].script.protocol") }
                 try validateScreenBehaviorArtifact(script["artifact"], path: "screenBehaviors[\(index)].script.artifact")
                 let artifact = try dictionary(script["artifact"], path: "screenBehaviors[\(index)].script.artifact")
                 scriptArtifactSizes[artifact["sha256"] as! String] = artifact["sizeBytes"] as! Int
@@ -1264,235 +1264,6 @@ enum ExperienceReleaseDescriptorSchemaValidator {
     private static func validateEndpoint(_ value: Any?, path: String) throws {
         let endpoint = try object(value, required: ["completeEventName"], path: path)
         try identifier(endpoint["completeEventName"], path: "\(path).completeEventName")
-    }
-
-    private static func validateActions(
-        _ value: Any?,
-        path: String,
-        maximum: Int = 256
-    ) throws {
-        let actions = try array(value, path: path)
-        guard actions.count <= maximum else { try invalid(path) }
-        try actions.enumerated().forEach { index, item in
-            try validateAction(item, path: "\(path)[\(index)]")
-        }
-    }
-
-    private static func validateAction(_ value: Any, path: String) throws {
-        let typed = try typedObject(value, path: path)
-        let common: Set<String> = ["id", "nodeId", "unclaimed"]
-        let fieldsByType: [String: (required: Set<String>, optional: Set<String>)] = [
-            "navigate": ([], ["artboardId", "screenId", "transition", "ui"]),
-            "back": ([], ["steps", "transition"]), "delay": (["durationMs"], []),
-            "start_animation": (["animationId"], ["direction", "restart"]),
-            "time_window": (["startTime", "endTime", "timezone"], ["daysOfWeek", "successActions"]),
-            "wait_until": ([], ["condition", "maxTimeMs", "bindResultTo", "successActions", "timeoutActions"]),
-            "condition": (["branches"], ["defaultActions", "defaultTargetActionId", "defaultTargetActionIndex"]),
-            "experiment": (["experimentId", "variants"], ["name", "hypothesis"]),
-            "send_event": (["eventName"], ["properties"]), "milestone": (["milestoneId"], ["label"]),
-            "update_customer": (["attributes"], []),
-            "set_response_field": (["responseSchemaId", "key", "value"], ["schemaVersion"]),
-            "submit_response": (["responseSchemaId"], ["schemaVersion"]),
-            "purchase": (["placementId"], ["onCompleted", "onFailed", "onCancelled"]),
-            "restore": ([], ["onRestored", "onNoPurchases", "onFailed"]),
-            "request_notifications": ([], []), "request_permission": (["permissionType"], []),
-            "request_tracking": ([], []), "open_link": (["url"], ["target"]),
-            "dismiss": ([], ["reason"]), "exit": ([], ["reason"]),
-            "call_delegate": (["message"], ["payload"]),
-            "connector_action": (["accountRef", "toolKey", "payload"], ["onSucceeded", "onFailed", "onTimeout", "timeoutMs"]),
-            "grant_entitlement": (["featureId"], ["balance", "unlimited", "onSucceeded", "onFailed", "onTimeout"]),
-            "set_view_model": (["path", "value"], []), "fire_trigger": (["path"], []),
-            "list_insert": (["path", "value"], ["index"]), "list_remove": (["path", "index"], []),
-            "list_swap": (["path", "indexA", "indexB"], []), "list_move": (["path", "from", "to"], []),
-            "list_set": (["path", "index", "value"], []), "list_clear": (["path"], []),
-            "handoff": (["nodeId", "edgeId", "direction", "toRegionId", "toNodeId"], ["unclaimedAfterMs", "unclaimedRegionId", "unclaimedNodeId"]),
-        ]
-        guard let fields = fieldsByType[typed.type] else { try invalid("\(path).type") }
-        let allowedCommon = typed.type == "handoff" ? Set<String>() : common
-        _ = try object(
-            typed.object,
-            required: fields.required.union(["type"]),
-            optional: fields.optional.union(allowedCommon),
-            path: path
-        )
-        if typed.type == "navigate" {
-            guard (typed.object["artboardId"] != nil) != (typed.object["screenId"] != nil) else {
-                try invalid(path)
-            }
-        }
-        if typed.type == "grant_entitlement" {
-            let balance = typed.object["balance"] as? NSNumber
-            let unlimited = (typed.object["unlimited"] as? NSNumber).flatMap {
-                isJSONBoolean($0) ? $0.boolValue : nil
-            }
-            if typed.object["balance"] != nil {
-                guard let balance,
-                      isJSONNumber(balance),
-                      balance.doubleValue.isFinite,
-                      balance.doubleValue > 0 else { try invalid("\(path).balance") }
-            }
-            if typed.object["unlimited"] != nil, unlimited != true {
-                try invalid("\(path).unlimited")
-            }
-            guard balance != nil || unlimited == true else { try invalid(path) }
-        }
-        try validateActionScalars(typed.object, type: typed.type, path: path)
-        for field in ["successActions", "timeoutActions", "defaultActions", "onCompleted", "onFailed", "onCancelled", "onRestored", "onNoPurchases", "onSucceeded", "onTimeout"] {
-            if let nested = typed.object[field] { try validateActions(nested, path: "\(path).\(field)") }
-        }
-        if let unclaimed = typed.object["unclaimed"] {
-            let value = try object(unclaimed, required: ["afterMs", "actions"], path: "\(path).unclaimed")
-            try integer(
-                value["afterMs"],
-                minimum: 1,
-                maximum: 366 * 24 * 60 * 60 * 1_000,
-                path: "\(path).unclaimed.afterMs"
-            )
-            guard let actions = value["actions"] as? [Any], !actions.isEmpty else {
-                try invalid("\(path).unclaimed.actions")
-            }
-            try validateActions(value["actions"], path: "\(path).unclaimed.actions")
-        }
-        if let transition = typed.object["transition"] {
-            let transition = try typedObject(transition, path: "\(path).transition")
-            guard ["none", "push", "modal", "fade", "custom"].contains(transition.type) else {
-                try invalid("\(path).transition.type")
-            }
-            let required: Set<String> = transition.type == "custom" ? ["type", "transitionId"] : ["type"]
-            _ = try object(transition.object, required: required, path: "\(path).transition")
-            if transition.type == "custom" {
-                try identifier(transition.object["transitionId"], path: "\(path).transition.transitionId")
-            }
-        }
-        if let pathValue = typed.object["path"] {
-            let pathObject = try object(pathValue, required: ["kind", "path"], optional: ["viewModelName", "isRelative"], path: "\(path).path")
-            guard pathObject["kind"] as? String == "path",
-                  let memberPath = pathObject["path"] as? String,
-                  !memberPath.isEmpty,
-                  memberPath.utf16.count <= 512 else { try invalid("\(path).path") }
-            if let viewModelName = pathObject["viewModelName"] { try identifier(viewModelName, path: "\(path).path.viewModelName") }
-            if let relative = pathObject["isRelative"], !isJSONBoolean(relative) { try invalid("\(path).path.isRelative") }
-        }
-        if let ui = typed.object["ui"] {
-            let ui = try object(ui, required: [], optional: ["sourceRect"], path: "\(path).ui")
-            if let rect = ui["sourceRect"] {
-                let rect = try object(rect, required: ["x", "y", "width", "height"], path: "\(path).ui.sourceRect")
-                for field in ["x", "y", "width", "height"] {
-                    guard let number = rect[field] as? NSNumber,
-                          isJSONNumber(number), number.doubleValue.isFinite,
-                          (["width", "height"].contains(field) ? number.doubleValue >= 0 : true)
-                    else { try invalid("\(path).ui.sourceRect.\(field)") }
-                }
-            }
-        }
-        if let branches = typed.object["branches"] {
-            let branches = try array(branches, path: "\(path).branches")
-            guard (1...64).contains(branches.count) else { try invalid("\(path).branches") }
-            try branches.enumerated().forEach { index, item in
-                let branch = try object(item, required: ["id", "actions"], optional: ["label", "condition", "targetActionId", "targetActionIndex"], path: "\(path).branches[\(index)]")
-                try identifier(branch["id"], path: "\(path).branches[\(index)].id")
-                if let label = branch["label"] { try boundedString(label, minimum: 0, maximumUTF16: 256, path: "\(path).branches[\(index)].label") }
-                if let target = branch["targetActionId"] { try identifier(target, path: "\(path).branches[\(index)].targetActionId") }
-                if let target = branch["targetActionIndex"] { try integer(target, minimum: 0, maximum: 65_535, path: "\(path).branches[\(index)].targetActionIndex") }
-                try validateActions(branch["actions"], path: "\(path).branches[\(index)].actions")
-            }
-        }
-        if let variants = typed.object["variants"] {
-            let variants = try array(variants, path: "\(path).variants")
-            guard (2...5).contains(variants.count) else { try invalid("\(path).variants") }
-            try variants.enumerated().forEach { index, item in
-                let variant = try object(item, required: ["id", "percentage", "actions"], optional: ["name", "isHoldout", "targetActionId", "targetActionIndex"], path: "\(path).variants[\(index)]")
-                try identifier(variant["id"], path: "\(path).variants[\(index)].id")
-                if let name = variant["name"] { try boundedString(name, minimum: 0, maximumUTF16: 256, path: "\(path).variants[\(index)].name") }
-                guard let percentage = variant["percentage"] as? NSNumber,
-                      isJSONNumber(percentage), percentage.doubleValue.isFinite,
-                      (0...100).contains(percentage.doubleValue) else {
-                    try invalid("\(path).variants[\(index)].percentage")
-                }
-                if let holdout = variant["isHoldout"], !isJSONBoolean(holdout) { try invalid("\(path).variants[\(index)].isHoldout") }
-                if let target = variant["targetActionId"] { try identifier(target, path: "\(path).variants[\(index)].targetActionId") }
-                if let target = variant["targetActionIndex"] { try integer(target, minimum: 0, maximum: 65_535, path: "\(path).variants[\(index)].targetActionIndex") }
-                try validateActions(variant["actions"], path: "\(path).variants[\(index)].actions")
-            }
-        }
-    }
-
-    private static func validateActionScalars(
-        _ action: [String: Any],
-        type: String,
-        path: String
-    ) throws {
-        let identifierFields = [
-            "id", "nodeId", "artboardId", "screenId", "animationId", "bindResultTo",
-            "defaultTargetActionId", "experimentId", "eventName", "milestoneId",
-            "responseSchemaId", "key", "permissionType", "accountRef", "toolKey",
-            "featureId", "edgeId", "toRegionId", "toNodeId", "unclaimedRegionId",
-            "unclaimedNodeId",
-        ]
-        for field in identifierFields where action[field] != nil {
-            try identifier(action[field], path: "\(path).\(field)")
-        }
-        for field in ["index", "indexA", "indexB", "from", "to"] where action[field] != nil {
-            try integer(action[field], minimum: 0, maximum: Double(Int.max), path: "\(path).\(field)")
-        }
-        if let schemaVersion = action["schemaVersion"] {
-            try integer(schemaVersion, minimum: 1, maximum: 65_535, path: "\(path).schemaVersion")
-        }
-        if let target = action["defaultTargetActionIndex"] {
-            try integer(target, minimum: 0, maximum: 65_535, path: "\(path).defaultTargetActionIndex")
-        }
-        switch type {
-        case "back":
-            if let steps = action["steps"] { try integer(steps, minimum: 1, maximum: 256, path: "\(path).steps") }
-        case "delay":
-            try integer(action["durationMs"], minimum: 0, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).durationMs")
-        case "start_animation":
-            if let direction = action["direction"] { try enumeration(direction, values: ["forward", "reverse"], path: "\(path).direction") }
-            if let restart = action["restart"], !isJSONBoolean(restart) { try invalid("\(path).restart") }
-        case "time_window":
-            try timeOfDay(action["startTime"], path: "\(path).startTime")
-            try timeOfDay(action["endTime"], path: "\(path).endTime")
-            try boundedString(action["timezone"], minimum: 1, maximumUTF16: 128, path: "\(path).timezone")
-            if let days = action["daysOfWeek"] {
-                let days = try array(days, path: "\(path).daysOfWeek")
-                guard days.count <= 7 else { try invalid("\(path).daysOfWeek") }
-                for (index, day) in days.enumerated() { try integer(day, minimum: 0, maximum: 6, path: "\(path).daysOfWeek[\(index)]") }
-            }
-        case "wait_until":
-            if let maximum = action["maxTimeMs"] { try integer(maximum, minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).maxTimeMs") }
-        case "send_event":
-            if let properties = action["properties"] { try validateJSONRecord(properties, path: "\(path).properties") }
-        case "update_customer":
-            try validateJSONRecord(action["attributes"], path: "\(path).attributes")
-        case "open_link":
-            if let target = action["target"] { try enumeration(target, values: ["external", "in_app"], path: "\(path).target") }
-        case "dismiss", "exit":
-            if let reason = action["reason"] { try boundedString(reason, minimum: 0, maximumUTF16: 256, path: "\(path).reason") }
-        case "call_delegate":
-            try boundedString(action["message"], minimum: 1, maximumUTF16: 2_048, path: "\(path).message")
-        case "connector_action":
-            if let timeout = action["timeoutMs"] { try integer(timeout, minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).timeoutMs") }
-        case "grant_entitlement":
-            if let unlimited = action["unlimited"],
-               !isJSONBoolean(unlimited) || (unlimited as! NSNumber).boolValue != true {
-                try invalid("\(path).unlimited")
-            }
-        case "purchase":
-            try validateJourneyPurchasePlacementId(
-                action["placementId"],
-                path: "\(path).placementId"
-            )
-        case "handoff":
-            try enumeration(action["direction"], values: ["device_to_server", "server_to_device"], path: "\(path).direction")
-            if let after = action["unclaimedAfterMs"] { try integer(after, minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).unclaimedAfterMs") }
-        case "condition": break
-        case "experiment":
-            if let name = action["name"] { try boundedString(name, minimum: 0, maximumUTF16: 256, path: "\(path).name") }
-            if let hypothesis = action["hypothesis"] { try boundedString(hypothesis, minimum: 0, maximumUTF16: 2_048, path: "\(path).hypothesis") }
-        case "milestone":
-            if let label = action["label"] { try boundedString(label, minimum: 0, maximumUTF16: 256, path: "\(path).label") }
-        default: break
-        }
     }
 
     private static func recordArrays(

@@ -6,7 +6,7 @@ import Foundation
 public struct Experience: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, versionId, buildId, artifactContentHash, authenticatedReleaseID
-        case behaviorPresentationStyle, behaviorPresentation
+        case behaviorPresentation
         case behaviorPresentationScreens, assetBaseURL, name, reentry, publishedAt
         case trigger, goal, exitPolicy, conversionAnchor, timeLimitSeconds
         case experienceType, journey, products
@@ -21,10 +21,10 @@ public struct Experience: Codable, Sendable {
     /// Verified delivery content digest used by artifact telemetry.
     let artifactContentHash: String?
     let authenticatedReleaseID: AuthenticatedExperienceReleaseID?
-    let behaviorPresentation: ExperienceBehaviorPresentation?
+    let behaviorPresentation: ExperienceBehaviorPresentation
     let behaviorPresentationScreens: [String: ExperienceBehaviorScreenGeometry]
-    var behaviorPresentationStyle: ExperienceBehaviorPresentationStyle? {
-        behaviorPresentation?.style
+    var behaviorPresentationStyle: ExperienceBehaviorPresentationStyle {
+        behaviorPresentation.style
     }
     /// Base URL used to resolve content-addressed external assets.
     public let assetBaseURL: URL
@@ -48,7 +48,7 @@ public struct Experience: Codable, Sendable {
     public let experienceType: String?
     /// Authenticated execution content from the package journey member.
     public let journey: JourneyDocument
-    let definitionV2: ExperienceDefinitionV2?
+    let definition: ExperienceDefinition?
     /// StoreKit products resolved only after descriptor authentication.
     public var products: [StoreProduct]
     /// Server-owned Journey authority used only while resolving live commerce.
@@ -61,7 +61,7 @@ public struct Experience: Codable, Sendable {
     init(
         behavior: ExperienceBehaviorDefinition,
         journey: JourneyDocument,
-        definitionV2: ExperienceDefinitionV2? = nil,
+        definition: ExperienceDefinition? = nil,
         assetBaseURL: URL,
         authenticatedReleaseID: AuthenticatedExperienceReleaseID? = nil,
         products: [StoreProduct] = [],
@@ -85,7 +85,7 @@ public struct Experience: Codable, Sendable {
         timeLimitSeconds = behavior.timeLimitSeconds
         experienceType = behavior.experienceType
         self.journey = journey
-        self.definitionV2 = definitionV2
+        self.definition = definition
         self.products = products
         self.introEligibilityAuthorization = introEligibilityAuthorization
     }
@@ -135,7 +135,7 @@ public struct Experience: Codable, Sendable {
         self.timeLimitSeconds = timeLimitSeconds
         self.experienceType = experienceType
         self.journey = journey
-        definitionV2 = nil
+        definition = nil
         self.products = products
         introEligibilityAuthorization = nil
     }
@@ -165,25 +165,23 @@ public struct Experience: Codable, Sendable {
         timeLimitSeconds = metadata.timeLimitSeconds
         experienceType = metadata.experienceType
         self.journey = journey
-        definitionV2 = metadata.definitionV2
+        definition = metadata.definition
         products = metadata.products
         introEligibilityAuthorization = metadata.introEligibilityAuthorization
     }
 
     func shellContract(screenId: String?) -> ExperienceShellContract? {
-        guard let presentation = behaviorPresentation,
-              let screenId = screenId
+        guard let screenId = screenId
                 ?? (behaviorPresentationScreens.count == 1
                     ? behaviorPresentationScreens.keys.first
                     : nil),
               let screen = behaviorPresentationScreens[screenId] else {
             return nil
         }
-        return ExperienceShellContract(presentation: presentation, screen: screen)
+        return ExperienceShellContract(presentation: behaviorPresentation, screen: screen)
     }
 
-    /// Decodes a persisted experience while retaining compatibility with
-    /// records written before descriptor-native shell metadata was added.
+    /// Decodes the canonical persisted Experience projection.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -197,23 +195,10 @@ public struct Experience: Codable, Sendable {
             AuthenticatedExperienceReleaseID.self,
             forKey: .authenticatedReleaseID
         )
-        let legacyStyle = try container.decodeIfPresent(
-            ExperienceBehaviorPresentationStyle.self,
-            forKey: .behaviorPresentationStyle
-        )
-        behaviorPresentation = try container.decodeIfPresent(
+        behaviorPresentation = try container.decode(
             ExperienceBehaviorPresentation.self,
             forKey: .behaviorPresentation
-        ) ?? legacyStyle.map { style in
-            let fallback = ExperienceBehaviorPresentation.fullScreenDefault
-            return ExperienceBehaviorPresentation(
-                style: style,
-                orientation: fallback.orientation,
-                backgroundColor: fallback.backgroundColor,
-                sheet: nil,
-                drawer: nil
-            )
-        }
+        )
         behaviorPresentationScreens = try container.decodeIfPresent(
             [String: ExperienceBehaviorScreenGeometry].self,
             forKey: .behaviorPresentationScreens
@@ -238,7 +223,7 @@ public struct Experience: Codable, Sendable {
             forKey: .experienceType
         )
         journey = try container.decode(JourneyDocument.self, forKey: .journey)
-        definitionV2 = nil
+        definition = nil
         products = try container.decodeIfPresent(
             [StoreProduct].self,
             forKey: .products
@@ -254,8 +239,7 @@ public struct Experience: Codable, Sendable {
         try container.encode(buildId, forKey: .buildId)
         try container.encodeIfPresent(artifactContentHash, forKey: .artifactContentHash)
         try container.encodeIfPresent(authenticatedReleaseID, forKey: .authenticatedReleaseID)
-        try container.encodeIfPresent(behaviorPresentationStyle, forKey: .behaviorPresentationStyle)
-        try container.encodeIfPresent(behaviorPresentation, forKey: .behaviorPresentation)
+        try container.encode(behaviorPresentation, forKey: .behaviorPresentation)
         try container.encode(behaviorPresentationScreens, forKey: .behaviorPresentationScreens)
         try container.encode(assetBaseURL, forKey: .assetBaseURL)
         try container.encode(name, forKey: .name)

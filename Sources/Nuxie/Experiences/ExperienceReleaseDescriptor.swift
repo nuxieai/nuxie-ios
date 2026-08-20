@@ -1,13 +1,14 @@
 import Foundation
 
 enum ExperienceReleaseDescriptorLimits {
-    static let mediaType = "application/vnd.nuxie.experience-release+json;version=2"
-    static let schemaVersion = "nuxie.experience-release.v2"
-    static let signatureDomain = "nuxie.experience-release-descriptor.v2\u{0}"
-    static let descriptorBytes = 128 * 1_024
-    static let envelopeBytes = 192 * 1_024
+    static let mediaType = "application/vnd.nuxie.experience-release+json;version=1"
+    static let schemaVersion = "nuxie.experience-release.v1"
+    static let signatureDomain = "nuxie.experience-release-descriptor.v1\u{0}"
+    static let descriptorBytes = 4 * 1_024 * 1_024
+    static let envelopeBytes = 6 * 1_024 * 1_024
     static let profileEntryCount = 256
-    static let profileEnvelopeAggregateBytes = 1_024 * 1_024
+    static let profileEnvelopeAggregateBytes = 16 * 1_024 * 1_024
+    static let profileBytes = 24 * 1_024 * 1_024
     static let genericStringBytes = 4 * 1_024
     static let keyIDBytes = 256
     static let requiredCapabilityCount = 256
@@ -22,20 +23,20 @@ enum ExperienceReleaseDescriptorLimits {
     static let artifactAggregateBytes = 128 * 1_024 * 1_024
 }
 
-struct ExperienceReleaseDescriptorSignatureV2: Codable, Equatable, Sendable {
+struct ExperienceReleaseDescriptorSignature: Codable, Equatable, Sendable {
     let version: Int
     let algorithm: String
     let keyId: String
     let signatureBase64: String
 }
 
-struct ExperienceReleaseDescriptorEnvelopeV2: Codable, Equatable, Sendable {
+struct ExperienceReleaseDescriptorEnvelope: Codable, Equatable, Sendable {
     let mediaType: String
     let encoding: String
     let descriptorSha256: String
     let descriptorSizeBytes: Int
     var descriptorBytesBase64: String
-    let signature: ExperienceReleaseDescriptorSignatureV2
+    let signature: ExperienceReleaseDescriptorSignature
 
     func canonicalBytes() throws -> Data {
         func string(_ value: String) -> String {
@@ -97,7 +98,7 @@ private func requireExactReleaseKeys(
     }
 }
 
-struct ExperienceReleaseDeliveryV2: Codable, Equatable, Sendable {
+struct ExperienceReleaseDelivery: Codable, Equatable, Sendable {
     let renderBaseUrl: String
     let assetBaseUrl: String
 
@@ -118,14 +119,14 @@ struct ExperienceReleaseDeliveryV2: Codable, Equatable, Sendable {
     }
 }
 
-struct ExperienceReleaseProfileEntryV2: Codable, Equatable, Sendable {
-    let locator: ExperienceReleaseIdentityV2
+struct ExperienceReleaseProfileEntry: Codable, Equatable, Sendable {
+    let locator: ExperienceReleaseIdentity
     let descriptorSha256: String
     /// Canonical padded base64 of the exact compact envelope JSON bytes.
     let envelopeBytesBase64: String
 
     init(
-        locator: ExperienceReleaseIdentityV2,
+        locator: ExperienceReleaseIdentity,
         descriptorSha256: String,
         envelopeBytesBase64: String
     ) {
@@ -135,7 +136,7 @@ struct ExperienceReleaseProfileEntryV2: Codable, Equatable, Sendable {
     }
 
     init(
-        locator: ExperienceReleaseIdentityV2,
+        locator: ExperienceReleaseIdentity,
         descriptorSha256: String,
         envelopeBytes: Data
     ) {
@@ -152,7 +153,7 @@ struct ExperienceReleaseProfileEntryV2: Codable, Equatable, Sendable {
             ["locator", "descriptorSha256", "envelopeBytesBase64"]
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        locator = try container.decode(ExperienceReleaseIdentityV2.self, forKey: .locator)
+        locator = try container.decode(ExperienceReleaseIdentity.self, forKey: .locator)
         descriptorSha256 = try container.decode(String.self, forKey: .descriptorSha256)
         envelopeBytesBase64 = try container.decode(String.self, forKey: .envelopeBytesBase64)
         _ = try exactEnvelopeBytes()
@@ -168,7 +169,7 @@ struct ExperienceReleaseProfileEntryV2: Codable, Equatable, Sendable {
             ))
         }
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV2.self,
+            ExperienceReleaseDescriptorEnvelope.self,
             from: bytes
         )
         guard let descriptorBytes = Data(base64Encoded: envelope.descriptorBytesBase64),
@@ -191,15 +192,15 @@ struct ExperienceReleaseProfileEntryV2: Codable, Equatable, Sendable {
     }
 }
 
-struct ExperienceReleaseProfileV2: Codable, Equatable, Sendable {
-    let delivery: ExperienceReleaseDeliveryV2
-    let active: [ExperienceReleaseProfileEntryV2]
-    let pinned: [ExperienceReleaseProfileEntryV2]
+struct ExperienceReleaseProfile: Codable, Equatable, Sendable {
+    let delivery: ExperienceReleaseDelivery
+    let active: [ExperienceReleaseProfileEntry]
+    let pinned: [ExperienceReleaseProfileEntry]
 
     init(
-        delivery: ExperienceReleaseDeliveryV2,
-        active: [ExperienceReleaseProfileEntryV2],
-        pinned: [ExperienceReleaseProfileEntryV2]
+        delivery: ExperienceReleaseDelivery,
+        active: [ExperienceReleaseProfileEntry],
+        pinned: [ExperienceReleaseProfileEntry]
     ) {
         self.delivery = delivery
         self.active = active
@@ -209,9 +210,9 @@ struct ExperienceReleaseProfileV2: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         try requireExactReleaseKeys(decoder, ["delivery", "active", "pinned"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        delivery = try container.decode(ExperienceReleaseDeliveryV2.self, forKey: .delivery)
-        active = try container.decode([ExperienceReleaseProfileEntryV2].self, forKey: .active)
-        pinned = try container.decode([ExperienceReleaseProfileEntryV2].self, forKey: .pinned)
+        delivery = try container.decode(ExperienceReleaseDelivery.self, forKey: .delivery)
+        active = try container.decode([ExperienceReleaseProfileEntry].self, forKey: .active)
+        pinned = try container.decode([ExperienceReleaseProfileEntry].self, forKey: .pinned)
         guard active.count <= ExperienceReleaseDescriptorLimits.profileEntryCount,
               pinned.count <= ExperienceReleaseDescriptorLimits.profileEntryCount else {
             throw DecodingError.dataCorrupted(.init(
@@ -223,7 +224,7 @@ struct ExperienceReleaseProfileV2: Codable, Equatable, Sendable {
         for entry in active + pinned {
             let bytes = try entry.exactEnvelopeBytes()
             let envelope = try JSONDecoder().decode(
-                ExperienceReleaseDescriptorEnvelopeV2.self,
+                ExperienceReleaseDescriptorEnvelope.self,
                 from: bytes
             )
             if let existing = descriptorSizeByDigest[envelope.descriptorSha256],
@@ -290,7 +291,7 @@ enum ExperienceReleaseJSONValue: Codable, Sendable {
     }
 }
 
-struct ExperienceReleaseIdentityV2: Codable, Equatable, Hashable, Sendable {
+struct ExperienceReleaseIdentity: Codable, Equatable, Hashable, Sendable {
     let appId: String
     let environment: String
     let experienceId: String
@@ -352,8 +353,8 @@ struct ExperienceReleaseIdentityExpectation: Equatable, Sendable {
     let publishedAt: String
     let publishedAtSeq: Int
 
-    var identity: ExperienceReleaseIdentityV2 {
-        ExperienceReleaseIdentityV2(
+    var identity: ExperienceReleaseIdentity {
+        ExperienceReleaseIdentity(
             appId: appId,
             environment: environment,
             experienceId: experienceId,
@@ -375,7 +376,7 @@ enum ExperienceReleaseReplayPolicy: Equatable, Sendable {
     )
 }
 
-struct ExperienceReleaseSupportedCompatibility: Equatable, Sendable {
+struct ExperienceReleaseSupportedRuntime: Equatable, Sendable {
     let currentSdkVersion: String
     let supportedRuntimeRevisions: Set<String>
     let supportedLuauRevisions: [String: Set<Int>]
@@ -393,9 +394,9 @@ struct ExperienceReleaseSupportedCompatibility: Equatable, Sendable {
 /// Swift-owned representation of the signed device control plane. The exact
 /// signed bytes remain the wire authority while behavior numbers retain the
 /// same IEEE-754 semantics as JavaScript JSON numbers.
-struct ExperienceReleaseDescriptorV2: Codable, Sendable {
+struct ExperienceReleaseDescriptor: Codable, Sendable {
     let schemaVersion: String
-    let identity: ExperienceReleaseIdentityV2
+    let identity: ExperienceReleaseIdentity
     let metadata: [String: ExperienceReleaseJSONValue]
     let enrollment: [String: ExperienceReleaseJSONValue]
     let lifecycle: [String: ExperienceReleaseJSONValue]
@@ -415,7 +416,7 @@ struct AuthenticatedExperienceReleaseDescriptor: Sendable {
     let authenticatedKeyID: String
     let exactDescriptorBytes: Data
     let descriptorSHA256: String
-    let descriptor: ExperienceReleaseDescriptorV2
+    let descriptor: ExperienceReleaseDescriptor
     /// Active releases return the authenticated sequence for monotonic
     /// high-water promotion. Pinned rollback releases deliberately return nil.
     let publishedAtSeqToPromote: Int?
@@ -434,7 +435,7 @@ enum ExperienceReleaseDescriptorAuthenticationError: LocalizedError, Equatable, 
     case malformedBounds(String)
     case unsafeArtifactKey(String)
     case replayRejected
-    case unsupportedCompatibility(String)
+    case unsupportedRuntime(String)
 
     var contractCode: String {
         switch self {
@@ -450,7 +451,7 @@ enum ExperienceReleaseDescriptorAuthenticationError: LocalizedError, Equatable, 
         case .malformedBounds: "experience_release.descriptor.malformed_bounds"
         case .unsafeArtifactKey: "experience_release.artifact.unsafe_key"
         case .replayRejected: "experience_release.replay.rejected"
-        case .unsupportedCompatibility: "experience_release.compatibility.unsupported"
+        case .unsupportedRuntime: "experience_release.runtime.unsupported"
         }
     }
 

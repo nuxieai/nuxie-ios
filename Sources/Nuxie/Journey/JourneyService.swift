@@ -141,7 +141,7 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private struct ScreenControlRuntime: Sendable {
-    let definition: ExperienceDefinitionV2
+    let definition: ExperienceDefinition
     let dispatcher: ScreenEmissionDispatcher
     let router: ScreenEmissionRouter
     let operationGate: ExperienceInteractiveOperationGate
@@ -854,7 +854,7 @@ actor JourneyService: JourneyServiceProtocol {
           ) else {
       return
     }
-    guard let definition = experience.definitionV2,
+    guard let definition = experience.definition,
           let planId = state.executionState.planId,
           let plan = definition.executionPlan(id: planId),
           state.executionState.routeRevisionSHA256 == plan.revisionSHA256,
@@ -1223,7 +1223,7 @@ actor JourneyService: JourneyServiceProtocol {
   ) async {
     guard let runtime = screenControlRuntimes[journeyId] else {
       LogWarning(
-        "JourneyService: rejected screen action \(invocation.actionId); no signed Journey v2 runtime for \(journeyId)"
+        "JourneyService: rejected screen action \(invocation.actionId); no signed Journey canonical runtime for \(journeyId)"
       )
       return
     }
@@ -2228,7 +2228,7 @@ actor JourneyService: JourneyServiceProtocol {
       if let admissionId = authored.screenRouteAdmissionId,
          let hostId = authoredHostId,
          let definition = screenControlRuntimes[journeyId]?.definition {
-        let routeHost: JourneyRouteHostV2 = hostId == JourneyDocument.journeyEventHostKey
+        let routeHost: JourneyRouteHost = hostId == JourneyDocument.journeyEventHostKey
           ? .journey
           : .screen(hostId)
         if let route = definition.route(host: routeHost, eventName: confirmedEvent.name) {
@@ -2552,7 +2552,7 @@ actor JourneyService: JourneyServiceProtocol {
         apiClient: api,
         dateProvider: dateProvider,
         irRuntime: irRuntime,
-        responseSessionModule: controlExperience.definitionV2?.responseSchema.map { _ in
+        responseSessionModule: controlExperience.definition?.responseSchema.map { _ in
           ResponseSessionModule(
             store: JourneyResponseSessionStore(
               journey: journey,
@@ -2594,7 +2594,7 @@ actor JourneyService: JourneyServiceProtocol {
       return false
     }
     experienceRunners[journey.id] = runner
-    if let definition = controlExperience.definitionV2 {
+    if let definition = controlExperience.definition {
       let dateProvider = self.dateProvider
       let router = makeScreenEmissionRouter()
       let dispatcher = ScreenEmissionDispatcher(
@@ -2648,7 +2648,7 @@ actor JourneyService: JourneyServiceProtocol {
           experienceId: experience.id,
           experienceVersionId: experience.versionId,
           releaseID: experience.authenticatedReleaseID,
-          presentationStyle: experience.behaviorPresentationStyle ?? .fullScreen,
+          presentationStyle: experience.behaviorPresentationStyle,
           shell: experience.shellContract(screenId: screenId),
           screenId: screenId,
           transition: nil,

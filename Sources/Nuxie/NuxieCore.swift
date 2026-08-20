@@ -161,7 +161,7 @@ final class NuxieCore: @unchecked Sendable {
       cacheDirectory: releasePaths.objects,
       urlSession: configuration.urlSession ?? .shared,
       authorizationKeys: authorizationKeys,
-      supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+      supportedRuntime: ExperienceReleaseRuntime.current,
       admission: ExperienceReleaseAdmission(store: highWaterStore)
     )
     let experiences = overrides.experiences ?? ExperienceService(

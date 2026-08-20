@@ -14,7 +14,11 @@
       "executionState": {
         "plane": "device",
         "regionId": "device-region-1",
-        "currentNodeId": "paywall-node"
+        "currentNodeId": "paywall-node",
+        "lifecycleGeneration": 1,
+        "presentationEpoch": 0,
+        "screenRouting": {},
+        "navigationStack": []
       },
       "snapshots": {},
       "responseSession": null

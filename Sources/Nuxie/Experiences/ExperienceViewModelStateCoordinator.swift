@@ -94,7 +94,7 @@ final class ExperienceViewModelStateCoordinator {
                 )
             }
         )
-        // Journey v2 cannot author view-model trigger actions. Screen-local
+        // Journey cannot author view-model trigger actions. Screen-local
         // trigger ownership lives in the Screen Script runtime.
         self.triggerPaths = []
         hydrate(ExperienceViewModelSnapshot(values: screens.viewModelValues ?? []))

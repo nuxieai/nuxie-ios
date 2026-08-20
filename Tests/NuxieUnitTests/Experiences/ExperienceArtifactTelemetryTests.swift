@@ -290,7 +290,7 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         XCTAssertTrue(closeOwners.isEmpty)
     }
 
-    func testPreviouslyEncodedExperienceWithoutShellFieldsStillDecodes() throws {
+    func testPersistedExperienceRequiresCanonicalPresentationContract() throws {
         let experience = Experience(
             id: "experience-legacy-codable",
             versionId: "version-legacy-codable",
@@ -311,13 +311,10 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         object.removeValue(forKey: "behaviorPresentationScreens")
         object["behaviorPresentationStyle"] = "full_screen"
 
-        let decoded = try JSONDecoder().decode(
+        XCTAssertThrowsError(try JSONDecoder().decode(
             Experience.self,
             from: JSONSerialization.data(withJSONObject: object)
-        )
-
-        XCTAssertEqual(decoded.behaviorPresentationStyle, .fullScreen)
-        XCTAssertTrue(decoded.behaviorPresentationScreens.isEmpty)
+        ))
     }
 
     func testPresentationScopeCarriesCurrentAuthorityWithoutMutatingRelease() {

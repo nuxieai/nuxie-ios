@@ -160,7 +160,11 @@ final class ResponseModelContractTests: QuickSpec {
                           "executionState": {
                             "plane": "device",
                             "regionId": "device-2",
-                            "currentNodeId": "screen-a"
+                            "currentNodeId": "screen-a",
+                            "lifecycleGeneration": 1,
+                            "presentationEpoch": 0,
+                            "screenRouting": {},
+                            "navigationStack": []
                           },
                           "snapshots": {},
                           "responseSession": null
@@ -235,16 +239,20 @@ final class ResponseModelContractTests: QuickSpec {
                 expect(superseded.winnerJourneyId).to(equal("journey-2"))
             }
 
-            it("decodes legacy flowState and encodes canonical executionState") {
-                let legacyData = Data(
+            it("round-trips canonical executionState") {
+                let data = Data(
                     """
                     {
                       "stateVersion": 3,
-                      "context": {"source": "legacy-client"},
-                      "flowState": {
+                      "context": {"source": "canonical-client"},
+                      "executionState": {
                         "plane": "device",
-                        "regionId": "device-legacy",
-                        "currentNodeId": "screen-legacy"
+                        "regionId": "device-main",
+                        "currentNodeId": "screen-main",
+                        "lifecycleGeneration": 1,
+                        "presentationEpoch": 0,
+                        "screenRouting": {},
+                        "navigationStack": []
                       },
                       "snapshots": {},
                       "responseSession": null
@@ -254,14 +262,14 @@ final class ResponseModelContractTests: QuickSpec {
 
                 let envelope = try JSONDecoder().decode(
                     JourneyStateEnvelope.self,
-                    from: legacyData
+                    from: data
                 )
                 let encoded = try JSONSerialization.jsonObject(
                     with: JSONEncoder().encode(envelope)
                 ) as? [String: Any]
 
                 expect(envelope.executionState.regionId)
-                    .to(equal("device-legacy"))
+                    .to(equal("device-main"))
                 expect(encoded?["executionState"]).toNot(beNil())
                 expect(encoded?["flowState"]).to(beNil())
             }

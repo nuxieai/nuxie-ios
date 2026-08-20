@@ -544,7 +544,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
 
     private static func makeProfile(
         experienceId: String,
-        releases: ExperienceReleaseProfileV2? = nil
+        releases: ExperienceReleaseProfile? = nil
     ) -> ProfileResponse {
         return ProfileResponse(
             segments: [],
@@ -563,10 +563,10 @@ final class ProfileServiceCacheTests: AsyncSpec {
         versionId: String = "version_release",
         pinnedExperienceId: String? = nil,
         pinnedVersionId: String? = nil
-    ) -> ExperienceReleaseProfileV2 {
+    ) -> ExperienceReleaseProfile {
         let digest = String(repeating: "a", count: 64)
-        func entry(experienceId: String, versionId: String) -> ExperienceReleaseProfileEntryV2 {
-            ExperienceReleaseProfileEntryV2(
+        func entry(experienceId: String, versionId: String) -> ExperienceReleaseProfileEntry {
+            ExperienceReleaseProfileEntry(
             locator: .init(
                 appId: "app_test",
                 environment: "test",
@@ -578,7 +578,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 publishedAtSeq: 1
             ),
             descriptorSha256: digest,
-            envelopeBytes: try! JSONEncoder().encode(ExperienceReleaseDescriptorEnvelopeV2(
+            envelopeBytes: try! JSONEncoder().encode(ExperienceReleaseDescriptorEnvelope(
                 mediaType: ExperienceReleaseDescriptorLimits.mediaType,
                 encoding: "base64",
                 descriptorSha256: digest,
@@ -594,7 +594,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
             )
         }
         let activeEntry = entry(experienceId: experienceId, versionId: versionId)
-        let pinnedEntry: ExperienceReleaseProfileEntryV2? = if let pinnedExperienceId,
+        let pinnedEntry: ExperienceReleaseProfileEntry? = if let pinnedExperienceId,
                                                                let pinnedVersionId {
             entry(experienceId: pinnedExperienceId, versionId: pinnedVersionId)
         } else {

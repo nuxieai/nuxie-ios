@@ -29,13 +29,10 @@ not capture. An intentional API change therefore requires both code review and
 an explicit baseline update with
 `scripts/check-public-api.sh --update`.
 
-The Journey v2 cutover intentionally removed the public legacy behavior
-surface from `JourneyDocument`: `events`, `handlers`, `scripts`,
-`deviceRegions`, and `JourneyDeviceRegion`. Published releases now carry
-behavior exclusively through authenticated v2 routes, execution plans,
-screen behaviors, and response sessions. This is a pre-1.0 breaking change;
-the SDK does not retain deprecated declarations or compatibility decoding for
-the retired behavior model.
+Published releases carry behavior through authenticated routes, execution
+plans, screen behaviors, and response sessions. `JourneyDocument` exposes
+only the canonical package-authored journey schema; runtime behavior and
+persistence remain private implementation details.
 
 ## Lifecycle
 

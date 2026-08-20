@@ -178,30 +178,17 @@ public struct JourneyDocument: Codable, Sendable {
 
     public let schemaVersion: Int
     public let screens: [JourneyScreen]
-    /// Test-fixture-only remnants. Authenticated v2 decoding and runtime
-    /// execution never read or write these legacy behavior collections.
-    let events: [String: [EventDeclaration]]
-    let handlers: [String: [JourneyEventHandler]]
-    let scripts: [String: [ScreenScriptRef]]
     public let viewModelValues: [JourneyViewModelValue]?
-    /// Experience-scoped response schemas (Experience Logic 2026-07-04). Optional for
-    /// payload forward-compatibility; the $response_set Script Verb built-in
-    /// resolves the experience schema from the first entry.
+    /// Experience-scoped response schemas projected from the signed definition.
     public let responseSchemas: [JourneyResponseSchema]?
     public init(
         schemaVersion: Int = 1,
         screens: [JourneyScreen],
-        events: [String: [EventDeclaration]] = [:],
-        handlers: [String: [JourneyEventHandler]] = [:],
-        scripts: [String: [ScreenScriptRef]] = [:],
         viewModelValues: [JourneyViewModelValue]? = nil,
         responseSchemas: [JourneyResponseSchema]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.screens = screens
-        self.events = events
-        self.handlers = handlers
-        self.scripts = scripts
         self.viewModelValues = viewModelValues
         self.responseSchemas = responseSchemas
     }
@@ -219,9 +206,6 @@ public struct JourneyDocument: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         screens = try container.decode([JourneyScreen].self, forKey: .screens)
-        events = [:]
-        handlers = [:]
-        scripts = [:]
         viewModelValues = try container.decodeIfPresent([JourneyViewModelValue].self, forKey: .viewModelValues)
         responseSchemas = try container.decodeIfPresent([JourneyResponseSchema].self, forKey: .responseSchemas)
     }
@@ -270,85 +254,6 @@ public struct JourneyScreen: Codable, Sendable {
         self.id = id
         self.defaultViewModelName = defaultViewModelName
         self.defaultInstanceId = defaultInstanceId
-    }
-}
-
-public typealias JourneyEventMap = [String: [EventDeclaration]]
-public typealias JourneyHandlerMap = [String: [JourneyEventHandler]]
-
-public enum EventPayloadFieldType: String, Codable, Sendable {
-    case string
-    case number
-    case boolean
-    case object
-    case array
-}
-
-public typealias EventPayloadSchema = [String: EventPayloadFieldType]
-
-public struct EventDeclaration: Codable, Sendable {
-    public let id: String
-    public let eventName: String
-    public let payloadSchema: EventPayloadSchema?
-
-    public init(
-        id: String,
-        eventName: String,
-        payloadSchema: EventPayloadSchema? = nil
-    ) {
-        self.id = id
-        self.eventName = eventName
-        self.payloadSchema = payloadSchema
-    }
-}
-
-public struct JourneyEventHandler: Codable, Sendable {
-    public let id: String
-    public let eventName: String
-    public let enabled: Bool?
-    public let order: Int?
-    public let actions: [JourneyAction]
-
-    public init(
-        id: String,
-        eventName: String,
-        enabled: Bool? = nil,
-        order: Int? = nil,
-        actions: [JourneyAction]
-    ) {
-        self.id = id
-        self.eventName = eventName
-        self.enabled = enabled
-        self.order = order
-        self.actions = actions
-    }
-}
-
-public struct ScreenScriptRef: Codable, Sendable {
-    public let id: String
-    public let scriptId: String
-    public let assetId: String
-    public let `protocol`: String
-    public let name: String?
-    public let enabled: Bool?
-    public let eventNames: [String]?
-
-    public init(
-        id: String,
-        scriptId: String,
-        assetId: String,
-        `protocol`: String = "listenerAction",
-        name: String? = nil,
-        enabled: Bool? = nil,
-        eventNames: [String]? = nil
-    ) {
-        self.id = id
-        self.scriptId = scriptId
-        self.assetId = assetId
-        self.`protocol` = `protocol`
-        self.name = name
-        self.enabled = enabled
-        self.eventNames = eventNames
     }
 }
 

@@ -27,11 +27,11 @@ final class ResponseSessionModuleTests: XCTestCase {
     func testDeterministicIdentityUsesPortableUTF8Vector() throws {
         XCTAssertEqual(
             try deriveResponseSessionId(journeyId: "journey-1"),
-            "rsp_c2f57dfc6a81edf7fe7dbf80d32a660820341f0f5b698d9f1ded40e06cbd69c8"
+            "rsp_fdf96a130d4da11a334943fddeae435c692b09f043d68c86a2c0298edbe8def7"
         )
         XCTAssertEqual(
             try deriveResponseSessionId(journeyId: "é"),
-            "rsp_2d4f9269c1e90438161001805708d70b287d1c6614c83f01d0ea1cb301b2b7dc"
+            "rsp_10c43ce5a71ba6aef1b16665f36c31e8c6c3c9cd0906b971535336dc659148fa"
         )
     }
 

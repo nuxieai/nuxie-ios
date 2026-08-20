@@ -510,13 +510,12 @@ struct JourneyResumePoint: Codable, Equatable, Sendable {
 }
 
 struct JourneyExecutionState: Codable, Sendable {
-    /// Execution plane that produced this state. Legacy persisted device state
-    /// without the discriminator decodes as `.device`.
+    /// Execution plane that produced this state.
     public var plane: JourneyPlane
     /// Signed execution-plan identity and route revision selected for this run.
     public var planId: String?
     public var routeRevisionSHA256: String?
-    /// Device-region address. Optional for legacy device-only journeys.
+    /// Device-region address when execution is inside a compiled region.
     public var regionId: String?
     /// Stable compiler-authored action address within the active region.
     public var currentNodeId: String?
@@ -536,10 +535,8 @@ struct JourneyExecutionState: Codable, Sendable {
     var prePresentationContinuation: [JourneyContinuationStep]?
     public var pendingPresentation: JourneyPendingPresentation?
     /// Exact authenticated presentation currently owned by the renderer.
-    /// Older snapshots decode this as nil and retain legacy behavior.
     var currentPresentation: JourneyPendingPresentation?
     var postPresentationContinuation: [JourneyContinuationStep]?
-    /// Optional (decode-compatible with pre-existing persisted journeys)
     public var pendingPurchaseOutlets: PersistedOutcomeOutlets?
     public var pendingRestoreOutlets: PersistedOutcomeOutlets?
 
@@ -612,8 +609,7 @@ struct JourneyExecutionState: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        plane = try container.decodeIfPresent(JourneyPlane.self, forKey: .plane)
-            ?? .device
+        plane = try container.decode(JourneyPlane.self, forKey: .plane)
         planId = try container.decodeIfPresent(String.self, forKey: .planId)
         routeRevisionSHA256 = try container.decodeIfPresent(String.self, forKey: .routeRevisionSHA256)
         regionId = try container.decodeIfPresent(String.self, forKey: .regionId)
@@ -621,19 +617,19 @@ struct JourneyExecutionState: Codable, Sendable {
         cursorProgramPath = try container.decodeIfPresent(String.self, forKey: .cursorProgramPath)
         cursorActionIndex = try container.decodeIfPresent(Int.self, forKey: .cursorActionIndex)
         currentScreenId = try container.decodeIfPresent(String.self, forKey: .currentScreenId)
-        lifecycleGeneration = try container.decodeIfPresent(
+        lifecycleGeneration = try container.decode(
             UInt64.self,
             forKey: .lifecycleGeneration
-        ) ?? 1
-        presentationEpoch = try container.decodeIfPresent(
+        )
+        presentationEpoch = try container.decode(
             UInt64.self,
             forKey: .presentationEpoch
-        ) ?? 0
-        screenRouting = try container.decodeIfPresent(
+        )
+        screenRouting = try container.decode(
             JourneyScreenRoutingState.self,
             forKey: .screenRouting
-        ) ?? JourneyScreenRoutingState()
-        navigationStack = try container.decodeIfPresent([String].self, forKey: .navigationStack) ?? []
+        )
+        navigationStack = try container.decode([String].self, forKey: .navigationStack)
         viewModelSnapshot = try container.decodeIfPresent(
             ExperienceViewModelSnapshot.self,
             forKey: .viewModelSnapshot
@@ -667,13 +663,12 @@ struct JourneyExecutionState: Codable, Sendable {
 }
 
 /// Canonical state transported by mailbox offers, handoff facts, and disk
-/// persistence. Version 3 carries durable screen-routing authority and the
-/// exact run-owned response snapshot.
+/// persistence.
 struct JourneyStateEnvelope: Codable, Sendable {
     /// Latest state-envelope schema version understood by this SDK.
     public static let currentVersion = 3
 
-    /// Schema version for compatibility checks before applying the envelope.
+    /// Schema version checked before applying the envelope.
     public let stateVersion: Int
     /// Interpreter variables transferred between owners.
     public var context: [String: AnyCodable]
@@ -708,7 +703,6 @@ struct JourneyStateEnvelope: Codable, Sendable {
         case stateVersion
         case context
         case executionState
-        case legacyExecutionState = "flowState"
         case snapshots
         case responseSession
     }
@@ -720,17 +714,10 @@ struct JourneyStateEnvelope: Codable, Sendable {
             [String: AnyCodable].self,
             forKey: .context
         )
-        executionState = if let canonical = try container.decodeIfPresent(
+        executionState = try container.decode(
             JourneyExecutionState.self,
             forKey: .executionState
-        ) {
-            canonical
-        } else {
-            try container.decode(
-                JourneyExecutionState.self,
-                forKey: .legacyExecutionState
-            )
-        }
+        )
         snapshots = try container.decode(
             [String: AnyCodable].self,
             forKey: .snapshots
@@ -905,10 +892,9 @@ struct JourneySnapshot: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        stateVersion = try container.decodeIfPresent(Int.self, forKey: .stateVersion)
-            ?? JourneyStateEnvelope.currentVersion
-        epoch = try container.decodeIfPresent(Int.self, forKey: .epoch) ?? 0
-        isGhost = try container.decodeIfPresent(Bool.self, forKey: .isGhost) ?? false
+        stateVersion = try container.decode(Int.self, forKey: .stateVersion)
+        epoch = try container.decode(Int.self, forKey: .epoch)
+        isGhost = try container.decode(Bool.self, forKey: .isGhost)
         id = try container.decode(String.self, forKey: .id)
         experienceId = try container.decode(String.self, forKey: .experienceId)
         experienceVersion = try container.decode(String.self, forKey: .experienceVersion)
@@ -924,14 +910,14 @@ struct JourneySnapshot: Codable, Sendable {
             ResponseSessionSnapshot?.self,
             forKey: .responseSession
         )
-        responseSessionReceipts = try container.decodeIfPresent(
+        responseSessionReceipts = try container.decode(
             [String: ResponseSessionOperationResult].self,
             forKey: .responseSessionReceipts
-        ) ?? [:]
-        responseSessionRetryRequired = try container.decodeIfPresent(
+        )
+        responseSessionRetryRequired = try container.decode(
             Bool.self,
             forKey: .responseSessionRetryRequired
-        ) ?? false
+        )
         startedAt = try container.decode(Date.self, forKey: .startedAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)

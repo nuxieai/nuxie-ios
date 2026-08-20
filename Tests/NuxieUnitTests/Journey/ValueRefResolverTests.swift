@@ -117,35 +117,5 @@ final class ValueRefResolverTests: QuickSpec {
             }
         }
 
-        describe("EventPayloadSchemaMatcher") {
-            it("matches when every declared field has the declared type") {
-                let schema: EventPayloadSchema = [
-                    "name": .string,
-                    "count": .number,
-                    "flag": .boolean,
-                    "meta": .object,
-                    "items": .array,
-                ]
-                let payload: [String: Any] = [
-                    "name": "a",
-                    "count": 2,
-                    "flag": true,
-                    "meta": ["k": "v"],
-                    "items": [1, 2],
-                ]
-                expect(EventPayloadSchemaMatcher.matches(payload, schema: schema)) == true
-            }
-
-            it("fails on missing or mistyped fields") {
-                let schema: EventPayloadSchema = ["name": .string]
-                expect(EventPayloadSchemaMatcher.matches([:], schema: schema)) == false
-                expect(EventPayloadSchemaMatcher.matches(["name": 4], schema: schema)) == false
-            }
-
-            it("unwraps AnyCodable before type checking") {
-                let schema: EventPayloadSchema = ["name": .string]
-                expect(EventPayloadSchemaMatcher.matches(["name": AnyCodable("x")], schema: schema)) == true
-            }
-        }
     }
 }

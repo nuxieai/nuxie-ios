@@ -1775,7 +1775,7 @@ actor ExperienceInteractiveScreen {
             screenID: screenID,
             validScreenIDs: manifestScreenIDs.intersection(journeyScreenIDs),
             declaredEventNames: Set(
-                payload.definitionV2?.routes.keys.compactMap { key in
+                payload.definition?.routes.keys.compactMap { key in
                     guard key.host == .screen(screenID) else { return nil }
                     return key.eventName
                 } ?? []

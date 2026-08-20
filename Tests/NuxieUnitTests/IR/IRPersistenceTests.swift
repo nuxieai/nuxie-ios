@@ -224,9 +224,9 @@ final class IRPersistenceTests: AsyncSpec {
                 expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
             }
 
-            it("defaults versionless journeys to the current state version") {
+            it("rejects versionless journey snapshots") {
                 let journey = JourneySnapshot(
-                    id: "journey_legacy",
+                    id: "journey_versionless",
                     experience: makeExperience(),
                     distinctId: "user_1",
                     now: Date()
@@ -250,11 +250,9 @@ final class IRPersistenceTests: AsyncSpec {
                     options: .atomic
                 )
 
-                let loaded = store.loadJourney(id: journey.id)
-
-                expect(loaded?.stateVersion).to(equal(JourneyStateEnvelope.currentVersion))
-                expect(loaded?.epoch).to(equal(0))
-                expect(loaded?.isGhost).to(beFalse())
+                expect(store.loadJourney(id: journey.id)).to(beNil())
+                expect(store.loadActiveJourneys()).to(beEmpty())
+                expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
             }
         }
     }

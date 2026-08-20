@@ -150,35 +150,3 @@ struct ValueRefResolver {
         return value
     }
 }
-
-/// Payload-schema gating for host event declarations: an event only
-/// dispatches when its payload satisfies the declared field types.
-enum EventPayloadSchemaMatcher {
-    static func matches(_ payload: [String: Any], schema: EventPayloadSchema) -> Bool {
-        for (field, expectedType) in schema {
-            guard let value = ValueRefResolver.resolvePayloadPath(field, in: payload) else {
-                return false
-            }
-            if !self.value(value, matches: expectedType) {
-                return false
-            }
-        }
-        return true
-    }
-
-    static func value(_ value: Any, matches expectedType: EventPayloadFieldType) -> Bool {
-        let unwrapped = ValueRefResolver.unwrapRuntimeValue(value)
-        switch expectedType {
-        case .string:
-            return unwrapped is String
-        case .number:
-            return unwrapped is Int || unwrapped is Double || unwrapped is Float || unwrapped is NSNumber
-        case .boolean:
-            return unwrapped is Bool
-        case .object:
-            return unwrapped is [String: Any] || unwrapped is [String: AnyCodable]
-        case .array:
-            return unwrapped is [Any] || unwrapped is [AnyCodable]
-        }
-    }
-}
