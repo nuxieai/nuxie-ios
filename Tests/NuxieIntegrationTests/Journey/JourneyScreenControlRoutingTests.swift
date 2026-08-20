@@ -5,6 +5,37 @@ import Quick
 @testable import Nuxie
 @testable import NuxieTestSupport
 
+private final class RoutingClaimFailingJourneyStore: MockJourneyStore, @unchecked Sendable {
+    private let failureLock = NSLock()
+    private var failNextRoutingClaim = false
+
+    func failNextAuthoredRoutingClaim() {
+        failureLock.lock()
+        failNextRoutingClaim = true
+        failureLock.unlock()
+    }
+
+    public override func saveJourney(_ journey: JourneySnapshot) throws {
+        failureLock.lock()
+        let shouldFail = failNextRoutingClaim
+            && journey.executionState.screenRouting.eventRecords.values.contains { record in
+                record.pendingAuthoredEvents.contains { $0.phase == .routingClaimed }
+            }
+        if shouldFail {
+            failNextRoutingClaim = false
+        }
+        failureLock.unlock()
+        if shouldFail {
+            throw NSError(
+                domain: "RoutingClaimFailingJourneyStore",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Injected routing-claim save failure"]
+            )
+        }
+        try super.saveJourney(journey)
+    }
+}
+
 final class JourneyScreenControlRoutingTests: AsyncSpec {
     override class func spec() {
         nonisolated(unsafe) var mocks: MockFactory!
@@ -46,7 +77,9 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
         }
 
         func signedExperience(
-            definition: ExperienceDefinitionV2
+            definition: ExperienceDefinitionV2,
+            goal: GoalConfig? = nil,
+            exitPolicy: ExitPolicy? = nil
         ) -> Experience {
             let identity = ExperienceReleaseIdentityV2(
                 appId: "test-app",
@@ -67,8 +100,8 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     reentry: .everyTime,
                     publishedAt: identity.publishedAt,
                     trigger: .event(.init(eventName: "paywall_trigger", condition: nil)),
-                    goal: nil,
-                    exitPolicy: nil,
+                    goal: goal,
+                    exitPolicy: exitPolicy,
                     conversionAnchor: nil,
                     timeLimitSeconds: nil,
                     experienceType: nil,
@@ -716,6 +749,97 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(Array(routing.pendingBatches.keys)).to(beEmpty())
             expect(routing.lastProcessedBatchSequence).to(equal(0))
             expect(routing.batchReceipts["0"]?.result.status).to(equal(.drained))
+        }
+
+        it("keeps a failed authored routing claim recoverable without blocking later responses") {
+            let claimFailingStore = RoutingClaimFailingJourneyStore()
+            store = claimFailingStore
+            service = mocks.makeJourneyService(journeyStore: store)
+            let experience = signedExperience(definition: renamedRouteDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            mocks.eventLog.preparedTriggerBeforeSend = { event in
+                guard event.name == "original_submit" else { return event }
+                return NuxieEvent(
+                    id: event.id,
+                    name: "renamed_submit",
+                    distinctId: event.distinctId,
+                    properties: event.properties,
+                    timestamp: event.timestamp
+                )
+            }
+            mocks.eventLog.setTrackWithResponseResult(
+                gatePlanResponse(flowId: "authored-response-flow"),
+                for: "renamed_route_ran"
+            )
+            claimFailingStore.failNextAuthoredRoutingClaim()
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(actionId: "submit")
+            )
+
+            let failed = await journey.snapshot()
+            expect(failed.executionState.screenRouting.eventRecords.values
+                .flatMap(\.pendingAuthoredEvents)).toNot(beEmpty())
+            expect(mocks.experiencePresentationService.presentedExperiences.filter {
+                $0.experienceVersionId == "authored-response-flow"
+            })
+                .to(beEmpty())
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(actionId: "submit")
+            )
+
+            await expect {
+                mocks.experiencePresentationService.presentedExperiences.filter {
+                    $0.experienceVersionId == "authored-response-flow"
+                }.count
+            }.toEventually(equal(1), timeout: .seconds(2))
+
+            await restartAndRecover(experience)
+
+            await expect {
+                store.loadJourney(id: journey.id)?.executionState.screenRouting
+                    .eventRecords.values.flatMap(\.pendingAuthoredEvents) ?? []
+            }.toEventually(beEmpty(), timeout: .seconds(2))
+        }
+
+        it("does not recreate a screen routing snapshot after its journey exits") {
+            let experience = signedExperience(
+                definition: renamedRouteDefinition(),
+                goal: GoalConfig(kind: .event, eventName: "renamed_route_ran"),
+                exitPolicy: ExitPolicy(mode: .onGoal)
+            )
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            mocks.eventLog.preparedTriggerBeforeSend = { event in
+                guard event.name == "original_submit" else { return event }
+                return NuxieEvent(
+                    id: event.id,
+                    name: "renamed_submit",
+                    distinctId: event.distinctId,
+                    properties: event.properties,
+                    timestamp: event.timestamp
+                )
+            }
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(actionId: "submit")
+            )
+
+            let activeJourneys = await service.getActiveJourneys(for: distinctId)
+            expect(activeJourneys).to(beEmpty())
+            expect(store.loadJourney(id: journey.id)).to(beNil())
         }
 
         it("recovers pending authored events retained by a finished admission") {
