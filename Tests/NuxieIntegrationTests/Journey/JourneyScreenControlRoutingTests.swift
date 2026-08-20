@@ -290,6 +290,52 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
+        func backReplayDefinition() -> ExperienceDefinitionV2 {
+            let routeKey = JourneyRouteKeyV2(
+                host: .screen("screen-1"),
+                eventName: "go_back"
+            )
+            let revision = String(repeating: "9", count: 64)
+            let route = JourneyRouteV2(
+                key: routeKey,
+                revisionSHA256: revision,
+                program: [.object([
+                    "type": .string("back"),
+                    "steps": .number(1),
+                ])]
+            )
+            let cursor = JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0)
+            let region = JourneyExecutionRegionV2(
+                id: "back-device",
+                plane: .device,
+                entryCursor: cursor,
+                actionPaths: ["/program/0"]
+            )
+            return ExperienceDefinitionV2(
+                entryRouteEventName: "paywall_trigger",
+                screens: [JourneyScreenV2(
+                    id: "screen-1",
+                    defaultViewModelName: nil,
+                    defaultInstanceId: nil
+                )],
+                viewModelValues: [],
+                routes: [routeKey: route],
+                executionPlans: [JourneyExecutionPlanV2(
+                    id: "back-route-plan",
+                    route: routeKey,
+                    revisionSHA256: revision,
+                    startPlane: .device,
+                    entryRegionId: region.id,
+                    entryCursor: cursor,
+                    deviceRegions: [region],
+                    serverRegions: [],
+                    handoffEdges: []
+                )],
+                responseSchema: nil,
+                controlsByScreen: [:]
+            )
+        }
+
         func journeyEntryEventDefinition(eventName: String) -> ExperienceDefinitionV2 {
             let routeKey = JourneyRouteKeyV2(host: .journey, eventName: "paywall_trigger")
             let revision = String(repeating: "d", count: 64)
@@ -935,6 +981,87 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             }
             expect(restored.executionState.screenRouting.eventRecords.values
                 .flatMap(\.pendingAuthoredEvents)).to(beEmpty())
+        }
+
+        it("does not execute a durably claimed back action again after restart") {
+            let definition = backReplayDefinition()
+            let experience = signedExperience(definition: definition)
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            let admissionId = "claimed-back-source"
+            let source = ScreenCustomerEvent(
+                id: admissionId,
+                customerId: distinctId,
+                occurredAt: Date().ISO8601Format(),
+                name: "go_back",
+                payload: [:],
+                source: .screen(
+                    experienceId: experienceId,
+                    journeyId: journey.id,
+                    source: ScreenEmissionSource(
+                        screenId: "screen-1",
+                        actionId: "back",
+                        componentId: nil,
+                        instanceId: nil
+                    )
+                ),
+                causality: ExperienceEventCausality(
+                    chainId: journey.id,
+                    parentEventId: nil,
+                    visitedExperienceIds: [experienceId],
+                    hopCount: 0
+                )
+            )
+            let request = JourneyContinuationRequest(
+                rootId: admissionId,
+                isPriority: false,
+                actions: [.back(BackAction(steps: 1))],
+                actionPaths: ["/program/0"],
+                hostId: "screen-1",
+                screenId: "screen-1",
+                componentId: nil,
+                handlerId: "route:\(String(repeating: "9", count: 64))",
+                instanceId: nil,
+                payload: ["__nuxie_emission_id": AnyCodable(admissionId)],
+                requiresTerminalTransfer: false,
+                startIndex: 0,
+                usesPendingResumeContext: false,
+                resume: nil,
+                screenRouteAdmissionId: admissionId
+            )
+            var snapshot = await journey.snapshot()
+            snapshot.executionState.navigationStack = ["screen-a", "screen-b"]
+            snapshot.executionState.screenRouting.eventRecords[admissionId] =
+                JourneyScreenEventRecord(
+                    sourceEvent: source,
+                    preparedId: admissionId,
+                    preparedName: source.name,
+                    preparedDistinctId: distinctId,
+                    preparedProperties: [:],
+                    preparedOccurredAt: Date(),
+                    localRoute: .ready(AcceptedScreenLocalRoute(
+                        admissionId: admissionId,
+                        key: .screen(screenId: "screen-1", eventName: source.name),
+                        routeRevision: String(repeating: "9", count: 64)
+                    )),
+                    excludedExperienceId: experienceId,
+                    phase: .routeExecuting,
+                    routeContinuation: [JourneyContinuationStep(
+                        rootId: admissionId,
+                        operation: .request(request)
+                    )],
+                    claimedEffectPaths: ["\(admissionId):action:/program/0"],
+                    pendingAuthoredEvents: []
+                )
+            try store.saveJourney(snapshot)
+
+            await restartAndRecover(experience)
+
+            let restored = store.loadJourney(id: journey.id)
+            expect(restored?.executionState.navigationStack)
+                .to(equal(["screen-a", "screen-b"]))
         }
     }
 }

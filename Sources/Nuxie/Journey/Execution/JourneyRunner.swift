@@ -258,6 +258,8 @@ actor JourneyRunner {
     private var presentationEpochAdvancedForScreenId: String?
     private var authoredEvents: [AuthoredEvent] = []
     private var activeScreenRouteAdmissionId: String?
+    private var activeScreenRouteAuthoredEventId: String?
+    private var activeScreenRoutePreservesAdmissionPhase = false
     init(
         journey: Journey,
         initialState: JourneySnapshot? = nil,
@@ -1036,37 +1038,97 @@ actor JourneyRunner {
         instanceId: String?,
         admission: AcceptedScreenLocalRoute
     ) async -> RunOutcome? {
+        await dispatchAdmittedEvent(
+            event,
+            hostId: screenId,
+            screenId: screenId,
+            componentId: componentId,
+            instanceId: instanceId,
+            admission: admission,
+            completionAuthoredEventId: nil
+        )
+    }
+
+    /// Routes a screen-authored event through the same durable admission that
+    /// produced it. The nested route's continuation and completion receipt are
+    /// checkpointed in the parent admission, closing the post-route/pre-receipt
+    /// crash window without publishing action identity on the wire.
+    func dispatchAdmittedEvent(
+        _ event: NuxieEvent,
+        hostId: String,
+        screenId: String?,
+        componentId: String?,
+        instanceId: String?,
+        admission: AcceptedScreenLocalRoute,
+        completionAuthoredEventId: String
+    ) async -> RunOutcome? {
+        await dispatchAdmittedEvent(
+            event,
+            hostId: hostId,
+            screenId: screenId,
+            componentId: componentId,
+            instanceId: instanceId,
+            admission: admission,
+            completionAuthoredEventId: Optional(completionAuthoredEventId)
+        )
+    }
+
+    private func dispatchAdmittedEvent(
+        _ event: NuxieEvent,
+        hostId: String,
+        screenId: String?,
+        componentId: String?,
+        instanceId: String?,
+        admission: AcceptedScreenLocalRoute,
+        completionAuthoredEventId: String?
+    ) async -> RunOutcome? {
         guard !isPaused else { return nil }
         let state = await journey.snapshot()
         guard let record = state.executionState.screenRouting.eventRecords[admission.admissionId]
         else { return .exited(.error) }
 
         let continuation: [JourneyContinuationStep]
-        if record.phase == .routeExecuting,
+        let effectiveCompletionAuthoredEventId: String?
+        if (record.phase == .routeExecuting || record.routeContinuationAuthoredEventId != nil),
            let stored = record.routeContinuation {
             continuation = stored
+            effectiveCompletionAuthoredEventId = record.routeContinuationAuthoredEventId
         } else {
             let requests = await eventRequests(
-                hostId: screenId,
+                hostId: hostId,
                 event: event,
                 screenId: screenId,
                 componentId: componentId,
                 instanceId: instanceId,
                 expectedRouteRevision: admission.routeRevision,
-                stableRootId: admission.admissionId
+                stableRootId: completionAuthoredEventId ?? admission.admissionId,
+                screenRouteAdmissionId: admission.admissionId,
+                actionPathPrefix: completionAuthoredEventId.map {
+                    "/authoredEvents/\($0)"
+                }
             )
             guard !requests.isEmpty else { return nil }
             continuation = requests.map(checkpointStep)
+            effectiveCompletionAuthoredEventId = completionAuthoredEventId
             guard await persistScreenRouteRecord(admission.admissionId, update: { record in
-                record.phase = .routeExecuting
+                if completionAuthoredEventId == nil {
+                    record.phase = .routeExecuting
+                }
                 record.routeContinuation = continuation
+                record.routeContinuationAuthoredEventId = completionAuthoredEventId
             }) else {
                 return .exited(.error)
             }
         }
 
         activeScreenRouteAdmissionId = admission.admissionId
-        defer { activeScreenRouteAdmissionId = nil }
+        activeScreenRouteAuthoredEventId = effectiveCompletionAuthoredEventId
+        activeScreenRoutePreservesAdmissionPhase = effectiveCompletionAuthoredEventId != nil
+        defer {
+            activeScreenRouteAdmissionId = nil
+            activeScreenRouteAuthoredEventId = nil
+            activeScreenRoutePreservesAdmissionPhase = false
+        }
         continuationQueue = materializePresentationContinuation(continuation)
         return await processQueue(resumeContext: nil)
     }
@@ -1173,7 +1235,9 @@ actor JourneyRunner {
         componentId: String?,
         instanceId: String?,
         expectedRouteRevision: String? = nil,
-        stableRootId: String? = nil
+        stableRootId: String? = nil,
+        screenRouteAdmissionId: String? = nil,
+        actionPathPrefix: String? = nil
     ) async -> [ActionRequest] {
         guard let definition = experience.definitionV2,
               !hasUnresolvedPersistedExecutionPlan else { return [] }
@@ -1237,7 +1301,9 @@ actor JourneyRunner {
         return [ActionRequest(
             rootId: stableRootId ?? UUID.v7().uuidString,
             actions: compiled.actions,
-            actionPaths: compiled.actionPaths,
+            actionPaths: actionPathPrefix.map { prefix in
+                compiled.actionPaths.map { "\(prefix)\($0)" }
+            } ?? compiled.actionPaths,
             context: TriggerContext(
                 hostId: hostId,
                 screenId: screenId,
@@ -1245,7 +1311,8 @@ actor JourneyRunner {
                 handlerId: routeIdentity,
                 instanceId: instanceId,
                 payload: eventPayload(event),
-                screenRouteAdmissionId: expectedRouteRevision == nil ? nil : stableRootId
+                screenRouteAdmissionId: screenRouteAdmissionId
+                    ?? (expectedRouteRevision == nil ? nil : stableRootId)
             ),
             identity: .queued(handlerId: routeIdentity)
         )]
@@ -2065,7 +2132,7 @@ actor JourneyRunner {
         case .purchase, .restore, .requestNotifications, .requestPermission,
              .requestTracking, .openLink, .callDelegate, .updateCustomer:
             replayResult = .continue
-        case .dismiss:
+        case .dismiss, .back:
             replayResult = .stopSequence
         default:
             return .execute
@@ -2223,16 +2290,27 @@ actor JourneyRunner {
     private func checkpointActiveScreenRoute() async -> Bool {
         guard let admissionId = activeScreenRouteAdmissionId else { return true }
         let continuation = currentInterpreterContinuation()
+        let preservesAdmissionPhase = activeScreenRoutePreservesAdmissionPhase
         return await persistScreenRouteRecord(admissionId, update: { record in
-            record.phase = .routeExecuting
+            if !preservesAdmissionPhase {
+                record.phase = .routeExecuting
+            }
             record.routeContinuation = continuation
         })
     }
 
     private func completeActiveScreenRouteCheckpoint() async -> Bool {
         guard let admissionId = activeScreenRouteAdmissionId else { return true }
+        let authoredEventId = activeScreenRouteAuthoredEventId
         return await persistScreenRouteRecord(admissionId, update: { record in
             record.routeContinuation = []
+            record.routeContinuationAuthoredEventId = nil
+            if let authoredEventId,
+               let index = record.pendingAuthoredEvents.firstIndex(where: {
+                   $0.id == authoredEventId
+               }) {
+                record.pendingAuthoredEvents[index].phase = .routed
+            }
         })
     }
 

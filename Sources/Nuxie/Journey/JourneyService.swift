@@ -2138,9 +2138,46 @@ actor JourneyService: JourneyServiceProtocol {
     if belongsToSourceIdentity,
        !sourceCompleted,
        let runner = experienceRunners[journeyId],
-       (await journey.snapshot()).status.isLive {
+      (await journey.snapshot()).status.isLive {
       let outcome: JourneyRunner.RunOutcome?
-      if authored.hostId == JourneyDocument.journeyEventHostKey {
+      let authoredHostId = authored.hostId ?? authored.screenId
+      if let admissionId = authored.screenRouteAdmissionId,
+         let hostId = authoredHostId,
+         let definition = screenControlRuntimes[journeyId]?.definition {
+        let routeHost: JourneyRouteHostV2 = hostId == JourneyDocument.journeyEventHostKey
+          ? .journey
+          : .screen(hostId)
+        if let route = definition.route(host: routeHost, eventName: confirmedEvent.name) {
+          let key: ScreenLocalRouteRequest = switch routeHost {
+          case .journey:
+            .journey(eventName: confirmedEvent.name)
+          case .screen(let screenId):
+            .screen(screenId: screenId, eventName: confirmedEvent.name)
+          }
+          outcome = await runner.dispatchAdmittedEvent(
+            confirmedEvent,
+            hostId: hostId,
+            screenId: authored.screenId,
+            componentId: nil,
+            instanceId: nil,
+            admission: AcceptedScreenLocalRoute(
+              admissionId: admissionId,
+              key: key,
+              routeRevision: route.revisionSHA256
+            ),
+            completionAuthoredEventId: authored.id
+          )
+        } else if hostId == JourneyDocument.journeyEventHostKey {
+          outcome = await runner.dispatchEventTrigger(confirmedEvent)
+        } else {
+          outcome = await runner.dispatchScreenEvent(
+            confirmedEvent,
+            screenId: hostId,
+            componentId: nil,
+            instanceId: nil
+          )
+        }
+      } else if authored.hostId == JourneyDocument.journeyEventHostKey {
         outcome = await runner.dispatchEventTrigger(confirmedEvent)
       } else if let hostId = authored.hostId, !hostId.isEmpty {
         outcome = await runner.dispatchScreenEvent(

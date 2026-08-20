@@ -322,6 +322,7 @@ struct JourneyScreenEventRecord: Codable, Sendable {
     let excludedExperienceId: String?
     var phase: JourneyScreenEventPhase
     var routeContinuation: [JourneyContinuationStep]?
+    var routeContinuationAuthoredEventId: String?
     var claimedEffectPaths: [String]
     var pendingAuthoredEvents: [JourneyScreenAuthoredEvent]
 
@@ -329,6 +330,7 @@ struct JourneyScreenEventRecord: Codable, Sendable {
         case sourceEvent, preparedId, preparedName, preparedDistinctId
         case preparedProperties, preparedOccurredAt, localRoute
         case excludedExperienceId, phase, routeContinuation
+        case routeContinuationAuthoredEventId
         case claimedEffectPaths, pendingAuthoredEvents
     }
 
@@ -344,7 +346,8 @@ struct JourneyScreenEventRecord: Codable, Sendable {
         phase: JourneyScreenEventPhase,
         routeContinuation: [JourneyContinuationStep]?,
         claimedEffectPaths: [String],
-        pendingAuthoredEvents: [JourneyScreenAuthoredEvent]
+        pendingAuthoredEvents: [JourneyScreenAuthoredEvent],
+        routeContinuationAuthoredEventId: String? = nil
     ) {
         self.sourceEvent = sourceEvent
         self.preparedId = preparedId
@@ -356,6 +359,7 @@ struct JourneyScreenEventRecord: Codable, Sendable {
         self.excludedExperienceId = excludedExperienceId
         self.phase = phase
         self.routeContinuation = routeContinuation
+        self.routeContinuationAuthoredEventId = routeContinuationAuthoredEventId
         self.claimedEffectPaths = claimedEffectPaths
         self.pendingAuthoredEvents = pendingAuthoredEvents
     }
@@ -377,6 +381,10 @@ struct JourneyScreenEventRecord: Codable, Sendable {
         routeContinuation = try container.decodeIfPresent(
             [JourneyContinuationStep].self,
             forKey: .routeContinuation
+        )
+        routeContinuationAuthoredEventId = try container.decodeIfPresent(
+            String.self,
+            forKey: .routeContinuationAuthoredEventId
         )
         claimedEffectPaths = try container.decodeIfPresent(
             [String].self,
