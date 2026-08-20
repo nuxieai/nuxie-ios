@@ -28,6 +28,94 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         super.tearDown()
     }
 
+    func testCommerceDescriptorCacheEpochIgnoresObsoleteMappingsAndCachedSignedProfileRehydratesActiveAndPinned() async throws {
+        let cache = temporaryDirectory()
+        let (active, delivery) = try releaseEntry(
+            riv: Data("RIVE commerce cache epoch".utf8),
+            image: Data([2, 4, 9, 1])
+        )
+        let pinned = try resign(entry: active) { root in
+            var identity = try XCTUnwrap(root["identity"] as? [String: Any])
+            identity["experienceId"] = "experience-pinned-commerce-epoch"
+            identity["experienceVersionId"] = "version-pinned-commerce-epoch"
+            identity["buildId"] = "build-pinned-commerce-epoch"
+            identity["publishedAtSeq"] = 41
+            root["identity"] = identity
+        }
+
+        let obsoleteDirectory = cache.appendingPathComponent(
+            "authenticated_descriptors",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: obsoleteDirectory,
+            withIntermediateDirectories: true
+        )
+        try validDescriptorBytes(active).write(
+            to: obsoleteDirectory.appendingPathComponent(active.descriptorSha256 + ".json")
+        )
+        let retainedRenderObject = cache.appendingPathComponent(
+            String(repeating: "a", count: 64)
+        )
+        let retainedHighWater = cache.appendingPathComponent("high-water-v1.json")
+        try Data("render-object".utf8).write(to: retainedRenderObject)
+        try Data("high-water".utf8).write(to: retainedHighWater)
+
+        let store = makeStore(cache: cache)
+        let obsoleteProducts = await store.cachedProducts(
+            descriptorSHA256: active.descriptorSha256
+        )
+        XCTAssertNil(obsoleteProducts)
+
+        // ProfileServiceCacheTests proves startup forwards a signed profile
+        // restored from disk through replaceReleaseProfile. This test starts
+        // at that admission boundary and proves it repersists both active and
+        // pinned current authority into the new commerce epoch.
+        let cachedSignedProfile = ExperienceReleaseProfile(
+            delivery: delivery,
+            active: [active],
+            pinned: [pinned]
+        )
+        let catalog = try await store.authenticateProfile(cachedSignedProfile)
+        XCTAssertEqual(catalog.definitions.count, 2)
+
+        let currentDirectory = cache.appendingPathComponent(
+            "authenticated_descriptors_commerce_v2",
+            isDirectory: true
+        )
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: currentDirectory.appendingPathComponent(
+                active.descriptorSha256 + ".json"
+            ).path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: currentDirectory.appendingPathComponent(
+                pinned.descriptorSha256 + ".json"
+            ).path
+        ))
+
+        let reopened = makeStore(cache: cache)
+        let reopenedActiveProducts = await reopened.cachedProducts(
+            descriptorSHA256: active.descriptorSha256
+        )
+        let reopenedPinnedProducts = await reopened.cachedProducts(
+            descriptorSHA256: pinned.descriptorSha256
+        )
+        XCTAssertNotNil(reopenedActiveProducts)
+        XCTAssertNotNil(reopenedPinnedProducts)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: obsoleteDirectory.path
+        ))
+        XCTAssertEqual(
+            try Data(contentsOf: retainedRenderObject),
+            Data("render-object".utf8)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: retainedHighWater),
+            Data("high-water".utf8)
+        )
+    }
+
     func testAuthenticatesAcquiresCachesAndBuildsNativeRuntimePayload() async throws {
         let riv = Data("RIVE descriptor fixture".utf8)
         let image = Data([1, 2, 3, 4])
