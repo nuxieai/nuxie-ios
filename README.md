@@ -62,6 +62,12 @@ Add the package to your app:
 The SDK pins an immutable runtime release URL and checksum. Selecting an SDK
 branch or commit therefore also selects one qualified runtime artifact.
 
+This private-beta SDK uses one hard-cut Experience contract. Apps adopting a
+new SDK commit must republish their Experiences so they contain authenticated
+routes, named screen actions, and response sessions in the current canonical
+shape. Unsupported descriptors and actions fail closed; the SDK does not keep
+compatibility aliases or fallback decoders for superseded authored behavior.
+
 Or via `Package.swift`:
 
 ```swift

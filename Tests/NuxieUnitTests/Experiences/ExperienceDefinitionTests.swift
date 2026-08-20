@@ -353,6 +353,15 @@ final class ExperienceDefinitionTests: XCTestCase {
         }
     }
 
+    func testCanonicalActionUnionRejectsUnknownActionKinds() throws {
+        let data = try JSONSerialization.data(withJSONObject: [[
+            "type": "unsupported_action",
+            "payload": ["value": true],
+        ]])
+
+        XCTAssertThrowsError(try JSONDecoder().decode([JourneyAction].self, from: data))
+    }
+
     private func fixtureData(_ name: String) throws -> Data {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -366,7 +375,7 @@ final class ExperienceDefinitionTests: XCTestCase {
         )
     }
 
-    func testValidatorRejectsLegacyJourneyActionMetadata() throws {
+    func testValidatorRejectsUnsupportedJourneyActionMetadata() throws {
         var descriptor = try goldenDescriptorObject()
         var journey = try XCTUnwrap(descriptor["journey"] as? [String: Any])
         var routes = try XCTUnwrap(journey["routes"] as? [[String: Any]])
@@ -381,7 +390,7 @@ final class ExperienceDefinitionTests: XCTestCase {
         XCTAssertThrowsError(try ExperienceReleaseDescriptorSchemaValidator.validate(descriptor))
     }
 
-    func testValidatorRejectsLegacyScreenScriptManifest() throws {
+    func testValidatorRejectsUnsupportedScreenScriptManifest() throws {
         var descriptor = try goldenDescriptorObject()
         descriptor["screenBehaviors"] = [[
             "screenId": "screen_welcome",

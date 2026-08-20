@@ -52,20 +52,7 @@ const canonicalJson = (value) => {
     .join(",")}}`;
 };
 
-const canonicalEnvelopeJson = (envelope) =>
-  `{${[
-    `"mediaType":${canonicalJson(envelope.mediaType)}`,
-    `"encoding":${canonicalJson(envelope.encoding)}`,
-    `"descriptorSha256":${canonicalJson(envelope.descriptorSha256)}`,
-    `"descriptorSizeBytes":${envelope.descriptorSizeBytes}`,
-    `"descriptorBytesBase64":${canonicalJson(envelope.descriptorBytesBase64)}`,
-    `"signature":{${[
-      `"version":${envelope.signature.version}`,
-      `"algorithm":${canonicalJson(envelope.signature.algorithm)}`,
-      `"keyId":${canonicalJson(envelope.signature.keyId)}`,
-      `"signatureBase64":${canonicalJson(envelope.signature.signatureBase64)}`,
-    ].join(",")}}`,
-  ].join(",")}}`;
+const canonicalEnvelopeJson = canonicalJson;
 
 const refreshEnvelope = (envelope) => {
   const descriptor = JSON.parse(
