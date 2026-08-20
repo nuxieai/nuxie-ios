@@ -141,6 +141,12 @@ actor JourneyService: JourneyServiceProtocol {
     let excludedExperienceId: String?
   }
 
+  private enum ScreenAuthoredEventRoutingClaim: Equatable {
+    case claimed
+    case notClaimable
+    case persistenceFailed
+  }
+
   // MARK: - Dependencies
 
   private let journeyStore: JourneyStoreProtocol
@@ -1560,7 +1566,11 @@ actor JourneyService: JourneyServiceProtocol {
       )
       routing.pendingBatches.removeValue(forKey: key)
       for eventId in result.acceptedEmissionIds {
-        if !retainedAdmissionIds.contains(eventId) {
+        if !retainedAdmissionIds.contains(eventId),
+           let record = routing.eventRecords[eventId],
+           record.phase == .finished,
+           record.pendingAuthoredEvents.isEmpty,
+           record.routeContinuation?.isEmpty != false {
           routing.eventRecords.removeValue(forKey: eventId)
           if !routing.recentEventIds.contains(eventId) {
             routing.recentEventIds.append(eventId)
@@ -1647,12 +1657,14 @@ actor JourneyService: JourneyServiceProtocol {
   ) async -> Bool {
     for _ in 0..<4 {
       let versioned = await journey.versionedSnapshot()
+      guard inMemoryJourneysById[journey.id] === journey else { return false }
       var candidate = versioned.snapshot
       update(&candidate.executionState.screenRouting)
       candidate.updatedAt = dateProvider.now()
       guard await journey.replace(candidate, ifRevisionEquals: versioned.revision) else {
         continue
       }
+      guard inMemoryJourneysById[journey.id] === journey else { return false }
       do {
         try journeyStore.saveJourney(candidate)
       } catch {
@@ -2479,6 +2491,12 @@ actor JourneyService: JourneyServiceProtocol {
         router: router,
         operationGate: ExperienceInteractiveOperationGate()
       )
+      let routing = (await journey.snapshot()).executionState.screenRouting
+      await dispatcher.restoreProgress(
+        journeyId: journey.id,
+        nextBatchSequence: routing.nextBatchSequence,
+        nextEmissionSequence: routing.nextEmissionSequence
+      )
     }
 
     switch stimulus {
@@ -2790,10 +2808,17 @@ actor JourneyService: JourneyServiceProtocol {
           holdsScopedAuthoredResponseScheduling = true
         }
         if event.authored.screenRouteAdmissionId != nil {
-          guard await claimScreenAuthoredEventRouting(
+          let claim = await claimScreenAuthoredEventRouting(
             event.authored.id,
             journey: journey
-          ) else { continue }
+          )
+          guard claim == .claimed else {
+            // Every committed event allocates a prepared-response sequence. A
+            // failed/no-op durable claim leaves recovery as the routing owner,
+            // so retire this attempt's sequence rather than blocking its tail.
+            markPreparedResponseSequenceHandledDirectly(event.commit.sequence)
+            continue
+          }
         }
         let routed = await routeCommittedScopedAuthoredEvent(
           event,
@@ -2920,10 +2945,18 @@ actor JourneyService: JourneyServiceProtocol {
       let shouldRoute: Bool
       switch stored.phase {
       case .intent, .prepared:
-        shouldRoute = await claimScreenAuthoredEventRouting(
+        let claim = await claimScreenAuthoredEventRouting(
           stored.id,
           journey: journey
         )
+        guard claim == .claimed else {
+          // Keep the durable authored event for a later recovery pass. The
+          // idempotent EventLog commit can be retried, but this attempt's
+          // response sequence must not stall unrelated prepared responses.
+          markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
+          continue
+        }
+        shouldRoute = true
       case .routingClaimed:
         shouldRoute = true
       case .routed, .dropped:
@@ -3051,14 +3084,23 @@ actor JourneyService: JourneyServiceProtocol {
   private func claimScreenAuthoredEventRouting(
     _ eventId: String,
     journey: Journey
-  ) async -> Bool {
-    await updateScreenAuthoredEvent(eventId, journey: journey) { stored in
-      if stored.phase == .prepared || stored.phase == .intent {
-        stored.phase = .routingClaimed
-        return true
+  ) async -> ScreenAuthoredEventRoutingClaim {
+    var didClaim = false
+    let didPersist = await updateDurableScreenRouting(journey: journey) { routing in
+      for key in Array(routing.eventRecords.keys) {
+        guard var record = routing.eventRecords[key],
+              let index = record.pendingAuthoredEvents.firstIndex(where: { $0.id == eventId })
+        else { continue }
+        guard record.pendingAuthoredEvents[index].phase == .prepared
+                || record.pendingAuthoredEvents[index].phase == .intent else { return }
+        record.pendingAuthoredEvents[index].phase = .routingClaimed
+        routing.eventRecords[key] = record
+        didClaim = true
+        return
       }
-      return false
     }
+    guard didPersist else { return .persistenceFailed }
+    return didClaim ? .claimed : .notClaimable
   }
 
   private func markScreenAuthoredEventRouted(
