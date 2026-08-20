@@ -50,6 +50,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _shouldFailMarkDelivered = false
     private var _pendingDeliveryQueryDelay: TimeInterval = 0
     private var _pendingInsertDelayNanoseconds: UInt64 = 0
+    private var _stableCaptureDelayNanoseconds: UInt64 = 0
+    private var _stableCaptureCommitCallCount = 0
 
     public var shouldFailInitialize: Bool {
         get { lock.withLock { _shouldFailInitialize } }
@@ -74,6 +76,13 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public var pendingInsertDelayNanoseconds: UInt64 {
         get { lock.withLock { _pendingInsertDelayNanoseconds } }
         set { lock.withLock { _pendingInsertDelayNanoseconds = newValue } }
+    }
+    public var stableCaptureDelayNanoseconds: UInt64 {
+        get { lock.withLock { _stableCaptureDelayNanoseconds } }
+        set { lock.withLock { _stableCaptureDelayNanoseconds = newValue } }
+    }
+    public var stableCaptureCommitCallCount: Int {
+        lock.withLock { _stableCaptureCommitCallCount }
     }
 
     // Call tracking (lock-guarded)
@@ -166,7 +175,14 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         event: StoredEvent?,
         recordedAt: Date
     ) async throws -> StableEventCaptureOutcome {
-        try lock.withLock {
+        let delayNanoseconds = lock.withLock {
+            _stableCaptureCommitCallCount += 1
+            return _stableCaptureDelayNanoseconds
+        }
+        if delayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+        return try lock.withLock {
             _storeEventCallCount += 1
             if _shouldFailStore { throw mockError(2, "Mock store error") }
             if let existing = _storedEvents.first(where: { $0.id == eventId }) {
