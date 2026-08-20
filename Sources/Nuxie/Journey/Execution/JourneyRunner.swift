@@ -458,6 +458,28 @@ actor JourneyRunner {
         committed.executionState.currentPresentation = pending
         committed.executionState.currentScreenId = pending.screenId
         committed.executionState.presentationEpoch &+= 1
+        let previousRun = ScreenEmissionRun(
+            journeyId: state.id,
+            executionOwnershipEpoch: UInt64(max(state.epoch, 0)),
+            lifecycleGeneration: state.executionState.lifecycleGeneration,
+            presentationEpoch: state.executionState.presentationEpoch
+        )
+        let remountedRun = ScreenEmissionRun(
+            journeyId: committed.id,
+            executionOwnershipEpoch: UInt64(max(committed.epoch, 0)),
+            lifecycleGeneration: committed.executionState.lifecycleGeneration,
+            presentationEpoch: committed.executionState.presentationEpoch
+        )
+        committed.executionState.screenRouting.pendingBatches = committed.executionState
+            .screenRouting.pendingBatches.mapValues { batch in
+                guard batch.journeyId == previousRun.journeyId,
+                      batch.executionOwnershipEpoch == previousRun.executionOwnershipEpoch,
+                      batch.lifecycleGeneration == previousRun.lifecycleGeneration,
+                      batch.presentationEpoch == previousRun.presentationEpoch else {
+                    return batch
+                }
+                return batch.rebased(to: remountedRun)
+            }
         committed.executionState.postPresentationContinuation = pending.continuation
         committed.updatedAt = dateProvider.now()
         guard await persistEntryActionClaim(committed) else { return false }

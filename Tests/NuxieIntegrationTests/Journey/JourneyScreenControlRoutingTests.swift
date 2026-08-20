@@ -515,6 +515,12 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             mocks.experiencePresentationService.defaultMockViewController = controller
             await install(experience)
             await service.initialize()
+            for journey in await service.getActiveJourneys(for: distinctId) {
+                await service.handleRuntimeReady(
+                    journeyId: journey.id,
+                    controller: controller
+                )
+            }
         }
 
         func persistAuthoredIntentBeforeParentCursor(
@@ -656,6 +662,91 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(routing.pendingBatches).to(beEmpty())
             let encoded = try JSONEncoder().encode(await journey.snapshot())
             expect(encoded).toNot(beEmpty())
+        }
+
+        it("compacts a generated event dropped by beforeSend after its batch commits") {
+            let eventName = "survey_filtered"
+            let experience = signedExperience(definition: definition(eventName: eventName))
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            mocks.eventLog.preparedTriggerBeforeSend = { event in
+                event.name == eventName ? nil : event
+            }
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(
+                    actionId: "submit",
+                    value: .string("filtered"),
+                    componentId: "submit-button",
+                    instanceId: "survey-1"
+                )
+            )
+
+            let routing = (await journey.snapshot()).executionState.screenRouting
+            expect(routing.eventRecords).to(beEmpty())
+            expect(routing.recentEventIds).to(haveCount(1))
+            expect(routing.pendingBatches).to(beEmpty())
+            expect(routing.batchReceipts["0"]?.result.status).to(equal(.drained))
+            expect(mocks.eventLog.routedEvents.map(\.name)).toNot(contain(eventName))
+        }
+
+        it("waits for the remounted renderer before replaying an admitted screen batch") {
+            let experience = signedExperience(definition: replayRecoveryDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            var snapshot = await journey.snapshot()
+            let batch = ScreenEmissionBatch(
+                journeyId: journey.id,
+                executionOwnershipEpoch: UInt64(max(snapshot.epoch, 0)),
+                lifecycleGeneration: snapshot.executionState.lifecycleGeneration,
+                presentationEpoch: snapshot.executionState.presentationEpoch,
+                batchSequence: 0,
+                previousCommittedBatchSequence: nil,
+                invocationId: "restored-invocation",
+                source: ScreenEmissionSource(
+                    screenId: "screen-1",
+                    actionId: "submit",
+                    componentId: "submit-button",
+                    instanceId: nil
+                ),
+                emissions: [ScreenEmission(
+                    id: "restored-emission",
+                    sequence: 0,
+                    occurredAt: Date().ISO8601Format(),
+                    name: "replay_source",
+                    payload: [:]
+                )]
+            )
+            snapshot.executionState.screenRouting.pendingBatches["0"] = batch
+            snapshot.executionState.screenRouting.nextBatchSequence = 1
+            snapshot.executionState.screenRouting.nextEmissionSequence = 1
+            try store.saveJourney(snapshot)
+
+            await service.shutdown()
+            service = mocks.makeJourneyService(journeyStore: store)
+            mocks.experiencePresentationService.defaultMockViewController = controller
+            await install(experience)
+            await service.initialize()
+
+            expect(mocks.eventLog.routedEvents.map(\.name)).toNot(contain("replay_child"))
+            expect(store.loadJourney(id: journey.id)?.executionState.screenRouting.pendingBatches)
+                .to(haveCount(1))
+
+            await service.handleRuntimeReady(journeyId: journey.id, controller: controller)
+
+            await expect {
+                mocks.eventLog.routedEvents.filter { $0.name == "replay_child" }.count
+            }.toEventually(equal(1), timeout: .seconds(2))
+            let restored = store.loadJourney(id: journey.id)
+            expect(restored?.executionState.screenRouting.pendingBatches).to(beEmpty())
+            expect(restored?.executionState.screenRouting.batchReceipts["0"]?.result.status)
+                .to(equal(.drained))
         }
 
         it("commits a signed journey-route event without requiring a screen journal") {
