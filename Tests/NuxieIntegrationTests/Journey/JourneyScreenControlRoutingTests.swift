@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Nimble
 import Quick
 @testable import Nuxie
@@ -143,6 +144,116 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                         )
                     ]
                 ]
+            )
+        }
+
+        func pausedRouteDefinition() -> ExperienceDefinitionV2 {
+            let eventName = "pause_route"
+            let routeKey = JourneyRouteKeyV2(
+                host: .screen("screen-1"),
+                eventName: eventName
+            )
+            let revision = String(repeating: "e", count: 64)
+            let route = JourneyRouteV2(
+                key: routeKey,
+                revisionSHA256: revision,
+                program: [
+                    .object([
+                        "type": .string("delay"),
+                        "durationMs": .number(60_000),
+                    ]),
+                    .object([
+                        "type": .string("send_event"),
+                        "eventName": .string("after_delay"),
+                        "payload": .object([:]),
+                    ]),
+                ]
+            )
+            let cursor = JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0)
+            let region = JourneyExecutionRegionV2(
+                id: "paused-device",
+                plane: .device,
+                entryCursor: cursor,
+                actionPaths: ["/program/0", "/program/1"]
+            )
+            return ExperienceDefinitionV2(
+                entryRouteEventName: "paywall_trigger",
+                screens: [JourneyScreenV2(
+                    id: "screen-1",
+                    defaultViewModelName: nil,
+                    defaultInstanceId: nil
+                )],
+                viewModelValues: [],
+                routes: [routeKey: route],
+                executionPlans: [JourneyExecutionPlanV2(
+                    id: "paused-route-plan",
+                    route: routeKey,
+                    revisionSHA256: revision,
+                    startPlane: .device,
+                    entryRegionId: region.id,
+                    entryCursor: cursor,
+                    deviceRegions: [region],
+                    serverRegions: [],
+                    handoffEdges: []
+                )],
+                responseSchema: nil,
+                controlsByScreen: [
+                    "screen-1": [
+                        "submit": ScreenControlActionDefinition(
+                            actionId: "submit",
+                            binding: .declarative([
+                                .emit(eventName: eventName, payload: [:])
+                            ])
+                        )
+                    ]
+                ]
+            )
+        }
+
+        func replayRecoveryDefinition() -> ExperienceDefinitionV2 {
+            let routeKey = JourneyRouteKeyV2(
+                host: .screen("screen-1"),
+                eventName: "replay_source"
+            )
+            let revision = String(repeating: "f", count: 64)
+            let route = JourneyRouteV2(
+                key: routeKey,
+                revisionSHA256: revision,
+                program: [.object([
+                    "type": .string("send_event"),
+                    "eventName": .string("replay_child"),
+                    "payload": .object([:]),
+                ])]
+            )
+            let cursor = JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0)
+            let region = JourneyExecutionRegionV2(
+                id: "replay-device",
+                plane: .device,
+                entryCursor: cursor,
+                actionPaths: ["/program/0"]
+            )
+            return ExperienceDefinitionV2(
+                entryRouteEventName: "paywall_trigger",
+                screens: [JourneyScreenV2(
+                    id: "screen-1",
+                    defaultViewModelName: nil,
+                    defaultInstanceId: nil
+                )],
+                viewModelValues: [],
+                routes: [routeKey: route],
+                executionPlans: [JourneyExecutionPlanV2(
+                    id: "replay-route-plan",
+                    route: routeKey,
+                    revisionSHA256: revision,
+                    startPlane: .device,
+                    entryRegionId: region.id,
+                    entryCursor: cursor,
+                    deviceRegions: [region],
+                    serverRegions: [],
+                    handoffEdges: []
+                )],
+                responseSchema: nil,
+                controlsByScreen: [:]
             )
         }
 
@@ -292,6 +403,106 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             mocks.experiencePresentationService.defaultMockViewController = controller
             await install(experience)
             await service.initialize()
+        }
+
+        func persistAuthoredIntentBeforeParentCursor(
+            journey: Journey
+        ) async throws {
+            let admissionId = "cursor-cut-source"
+            let revision = String(repeating: "f", count: 64)
+            let routeIdentity = "route:\(revision)"
+            let actionPath = "/program/0"
+            let eventName = "replay_child"
+            let material = [
+                admissionId,
+                routeIdentity,
+                "screen-1",
+                actionPath,
+                eventName,
+            ].joined(separator: "|")
+            let authoredId = SHA256.hash(data: Data(material.utf8))
+                .map { String(format: "%02x", $0) }
+                .joined()
+            let occurredAt = Date()
+            let source = ScreenCustomerEvent(
+                id: admissionId,
+                customerId: distinctId,
+                occurredAt: occurredAt.ISO8601Format(),
+                name: "replay_source",
+                payload: [:],
+                source: .screen(
+                    experienceId: experienceId,
+                    journeyId: journey.id,
+                    source: ScreenEmissionSource(
+                        screenId: "screen-1",
+                        actionId: "submit",
+                        componentId: nil,
+                        instanceId: nil
+                    )
+                ),
+                causality: ExperienceEventCausality(
+                    chainId: journey.id,
+                    parentEventId: nil,
+                    visitedExperienceIds: [experienceId],
+                    hopCount: 0
+                )
+            )
+            let request = JourneyContinuationRequest(
+                rootId: admissionId,
+                isPriority: false,
+                actions: [.sendEvent(SendEventAction(eventName: eventName))],
+                actionPaths: [actionPath],
+                hostId: "screen-1",
+                screenId: "screen-1",
+                componentId: nil,
+                handlerId: routeIdentity,
+                instanceId: nil,
+                payload: ["__nuxie_emission_id": AnyCodable(admissionId)],
+                requiresTerminalTransfer: false,
+                startIndex: 0,
+                usesPendingResumeContext: false,
+                resume: nil,
+                screenRouteAdmissionId: admissionId
+            )
+            let authored = JourneyScreenAuthoredEvent(
+                id: authoredId,
+                name: eventName,
+                properties: [:],
+                occurredAt: occurredAt,
+                hostId: "screen-1",
+                screenId: "screen-1",
+                handlerId: routeIdentity,
+                phase: .intent,
+                preparedId: nil,
+                preparedName: nil,
+                preparedDistinctId: nil,
+                preparedProperties: nil,
+                preparedOccurredAt: nil
+            )
+            var snapshot = await journey.snapshot()
+            snapshot.executionState.screenRouting.eventRecords[admissionId] =
+                JourneyScreenEventRecord(
+                    sourceEvent: source,
+                    preparedId: admissionId,
+                    preparedName: source.name,
+                    preparedDistinctId: distinctId,
+                    preparedProperties: [:],
+                    preparedOccurredAt: occurredAt,
+                    localRoute: .ready(AcceptedScreenLocalRoute(
+                        admissionId: admissionId,
+                        key: .screen(screenId: "screen-1", eventName: source.name),
+                        routeRevision: revision
+                    )),
+                    excludedExperienceId: experienceId,
+                    phase: .routeExecuting,
+                    routeContinuation: [JourneyContinuationStep(
+                        rootId: admissionId,
+                        operation: .request(request)
+                    )],
+                    claimedEffectPaths: [],
+                    pendingAuthoredEvents: [authored]
+                )
+            try store.saveJourney(snapshot)
         }
 
         beforeEach { @MainActor in
@@ -554,6 +765,52 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             }
             expect(restored.executionState.screenRouting.eventRecords)
                 .to(beEmpty())
+        }
+
+        it("retains a screen-route admission while its delayed continuation is pending") {
+            let experience = signedExperience(definition: pausedRouteDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(actionId: "submit")
+            )
+
+            let snapshot = await journey.snapshot()
+            let admissionId = snapshot.executionState.pendingAction?.continuation?
+                .compactMap { step -> String? in
+                    guard case .request(let request) = step.operation else { return nil }
+                    return request.screenRouteAdmissionId
+                }
+                .first
+            expect(admissionId).toNot(beNil())
+            expect(snapshot.executionState.screenRouting.eventRecords[admissionId ?? ""])
+                .toNot(beNil())
+        }
+
+        it("reconciles an authored intent before resuming its stale parent cursor") {
+            let experience = signedExperience(definition: replayRecoveryDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            try await persistAuthoredIntentBeforeParentCursor(journey: journey)
+
+            await restartAndRecover(experience)
+
+            await expect {
+                mocks.eventLog.routedEvents.filter { $0.name == "replay_child" }.count
+            }.toEventually(equal(1), timeout: .seconds(2))
+            guard let restored = store.loadJourney(id: journey.id) else {
+                fail("expected restored journey")
+                return
+            }
+            expect(restored.executionState.screenRouting.eventRecords.values
+                .flatMap(\.pendingAuthoredEvents)).to(beEmpty())
         }
     }
 }
