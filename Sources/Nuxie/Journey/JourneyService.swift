@@ -903,6 +903,30 @@ actor JourneyService: JourneyServiceProtocol {
     return true
   }
 
+  func handleWillDispatchInitialScreenLifecycle(
+    journeyId: String,
+    controller: ExperienceViewController,
+    screenId: String
+  ) async -> Bool {
+    guard let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId],
+          await runner.viewController === controller,
+          await runner.isRuntimeReady else { return false }
+    let state = await journey.snapshot()
+    guard state.status.isLive,
+          state.executionState.currentScreenId == screenId else { return false }
+
+    await resumePendingScreenEvents(journeyId: journeyId)
+    await resumePendingScreenBatches(journeyId: journeyId)
+
+    guard inMemoryJourneysById[journeyId] === journey,
+          experienceRunners[journeyId] === runner,
+          await runner.viewController === controller,
+          await runner.isRuntimeReady,
+          (await journey.snapshot()).status.isLive else { return false }
+    return true
+  }
+
   func handleRuntimeReady(
     journeyId: String,
     controller: ExperienceViewController
@@ -913,10 +937,6 @@ actor JourneyService: JourneyServiceProtocol {
 
     let outcome = await runner.handleRuntimeReady()
     await handleOutcome(outcome, journey: journey)
-    guard inMemoryJourneysById[journeyId] === journey,
-          (await journey.snapshot()).status.isLive else { return }
-    await resumePendingScreenEvents(journeyId: journeyId)
-    await resumePendingScreenBatches(journeyId: journeyId)
   }
 
   func handleRuntimeProductsUnavailable(

@@ -206,14 +206,20 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         await entryController.enter(reduceMotion: reduceMotionEnabled)
     }
 
-    func activateInitialScreen() async {
+    func activateInitialScreen() async -> String? {
         guard lifecycle == .installed,
               let activeScreenId,
               let controller = cachedControllersByScreenId[activeScreenId] else {
-            return
+            return nil
         }
         await controller.activate(reduceMotion: reduceMotionEnabled)
-        await onScreenActive(activeScreenId)
+        return activeScreenId
+    }
+
+    func announceInitialScreenActive(_ screenId: String) async {
+        guard lifecycle == .installed,
+              activeScreenId == screenId else { return }
+        await onScreenActive(screenId)
     }
 
     func exitActiveScreenForTeardown(reason: CloseReason?) async {

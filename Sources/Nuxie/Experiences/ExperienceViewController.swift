@@ -78,6 +78,13 @@ protocol ExperienceRuntimeDelegate: AnyObject {
         _ controller: ExperienceViewController
     ) async -> Bool
 
+    /// Runs after the initial native screen is active but before its journey
+    /// lifecycle callback is dispatched.
+    func experienceViewControllerWillDispatchInitialScreenLifecycle(
+        _ controller: ExperienceViewController,
+        screenId: String
+    ) async -> Bool
+
     func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController)
 
     func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController)
@@ -170,6 +177,11 @@ protocol RequestPermissionEventReceiver: AnyObject {
 extension ExperienceRuntimeDelegate {
     func experienceViewControllerWillActivateInitialScreen(
         _ controller: ExperienceViewController
+    ) async -> Bool { true }
+
+    func experienceViewControllerWillDispatchInitialScreenLifecycle(
+        _ controller: ExperienceViewController,
+        screenId: String
     ) async -> Bool { true }
 
     func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController) {}
@@ -1296,7 +1308,24 @@ public class ExperienceViewController: NuxiePlatformViewController {
         // presented drawable and the post-activation input-ready boundary.
         setExperienceContentHidden(false)
         platformBringPresentationShellToFront()
-        await coordinator.activateInitialScreen()
+        guard let activatedScreenId = await coordinator.activateInitialScreen() else {
+            return
+        }
+        guard runtimeSession.isReady(generation),
+              screenTransitionCoordinator === coordinator else {
+            return
+        }
+        guard await runtimeDelegate?.experienceViewControllerWillDispatchInitialScreenLifecycle(
+            self,
+            screenId: activatedScreenId
+        ) ?? true else {
+            return
+        }
+        guard runtimeSession.isReady(generation),
+              screenTransitionCoordinator === coordinator else {
+            return
+        }
+        await coordinator.announceInitialScreenActive(activatedScreenId)
         guard runtimeSession.isReady(generation),
               screenTransitionCoordinator === coordinator else {
             return

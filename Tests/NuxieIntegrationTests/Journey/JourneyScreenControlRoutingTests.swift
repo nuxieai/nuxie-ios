@@ -516,10 +516,21 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             await install(experience)
             await service.initialize()
             for journey in await service.getActiveJourneys(for: distinctId) {
-                await service.handleRuntimeReady(
+                let committed = await service.handleWillActivateInitialScreen(
                     journeyId: journey.id,
                     controller: controller
                 )
+                if committed {
+                    _ = await service.handleWillDispatchInitialScreenLifecycle(
+                        journeyId: journey.id,
+                        controller: controller,
+                        screenId: "screen-1"
+                    )
+                    await service.handleRuntimeReady(
+                        journeyId: journey.id,
+                        controller: controller
+                    )
+                }
             }
         }
 
@@ -738,6 +749,34 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(store.loadJourney(id: journey.id)?.executionState.screenRouting.pendingBatches)
                 .to(haveCount(1))
 
+            store.shouldThrowOnSave = true
+            let rejectedCommit = await service.handleWillActivateInitialScreen(
+                journeyId: journey.id,
+                controller: controller
+            )
+            let rejectedRecovery = await service.handleWillDispatchInitialScreenLifecycle(
+                journeyId: journey.id,
+                controller: controller,
+                screenId: "screen-1"
+            )
+            expect(rejectedCommit).to(beFalse())
+            expect(rejectedRecovery).to(beFalse())
+            expect(mocks.eventLog.routedEvents.map(\.name)).toNot(contain("replay_child"))
+
+            store.shouldThrowOnSave = false
+            let committed = await service.handleWillActivateInitialScreen(
+                journeyId: journey.id,
+                controller: controller
+            )
+            expect(committed).to(beTrue())
+            expect(mocks.eventLog.routedEvents.map(\.name)).toNot(contain("replay_child"))
+            let recoveredBeforeLifecycle = await service
+                .handleWillDispatchInitialScreenLifecycle(
+                    journeyId: journey.id,
+                    controller: controller,
+                    screenId: "screen-1"
+                )
+            expect(recoveredBeforeLifecycle).to(beTrue())
             await service.handleRuntimeReady(journeyId: journey.id, controller: controller)
 
             await expect {

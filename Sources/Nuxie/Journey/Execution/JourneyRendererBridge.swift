@@ -77,6 +77,19 @@ final class JourneyRendererBridge:
   }
 
   @MainActor
+  func experienceViewControllerWillDispatchInitialScreenLifecycle(
+    _ controller: ExperienceViewController,
+    screenId: String
+  ) async -> Bool {
+    guard let journeyService else { return false }
+    return await journeyService.handleWillDispatchInitialScreenLifecycle(
+      journeyId: journeyId,
+      controller: controller,
+      screenId: screenId
+    )
+  }
+
+  @MainActor
   func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController) {
     enqueueRuntimeReady(controller, presentationToken: nil)
   }
