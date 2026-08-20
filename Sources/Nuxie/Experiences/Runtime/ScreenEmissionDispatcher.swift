@@ -142,6 +142,23 @@ struct ScreenEmissionBatch: Codable, Equatable, Sendable {
     let invocationId: String
     let source: ScreenEmissionSource
     let emissions: [ScreenEmission]
+
+    /// Carries already-admitted work across a renderer remount without
+    /// weakening the ordinary presentation fence. Callers must only rebase a
+    /// batch whose persisted run exactly matches the pre-remount run.
+    func rebased(to run: ScreenEmissionRun) -> ScreenEmissionBatch {
+        ScreenEmissionBatch(
+            journeyId: run.journeyId,
+            executionOwnershipEpoch: run.executionOwnershipEpoch,
+            lifecycleGeneration: run.lifecycleGeneration,
+            presentationEpoch: run.presentationEpoch,
+            batchSequence: batchSequence,
+            previousCommittedBatchSequence: previousCommittedBatchSequence,
+            invocationId: invocationId,
+            source: source,
+            emissions: emissions
+        )
+    }
 }
 
 enum ScreenEmissionDispatchError: Error, Equatable, Sendable {

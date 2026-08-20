@@ -909,9 +909,14 @@ actor JourneyService: JourneyServiceProtocol {
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId] else { return }
+    guard await runner.viewController === controller else { return }
 
     let outcome = await runner.handleRuntimeReady()
     await handleOutcome(outcome, journey: journey)
+    guard inMemoryJourneysById[journeyId] === journey,
+          (await journey.snapshot()).status.isLive else { return }
+    await resumePendingScreenEvents(journeyId: journeyId)
+    await resumePendingScreenBatches(journeyId: journeyId)
   }
 
   func handleRuntimeProductsUnavailable(
@@ -1568,7 +1573,7 @@ actor JourneyService: JourneyServiceProtocol {
       for eventId in result.acceptedEmissionIds {
         if !retainedAdmissionIds.contains(eventId),
            let record = routing.eventRecords[eventId],
-           record.phase == .finished,
+           (record.phase == .finished || record.phase == .dropped),
            record.pendingAuthoredEvents.isEmpty,
            record.routeContinuation?.isEmpty != false {
           routing.eventRecords.removeValue(forKey: eventId)
@@ -2595,9 +2600,6 @@ actor JourneyService: JourneyServiceProtocol {
         }
       }
     }
-
-    await resumePendingScreenEvents(journeyId: journey.id)
-    await resumePendingScreenBatches(journeyId: journey.id)
 
     return runner
   }
