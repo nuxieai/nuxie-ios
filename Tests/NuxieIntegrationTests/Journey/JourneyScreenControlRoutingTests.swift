@@ -734,6 +734,12 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             let snapshot = await journey.snapshot()
             expect(snapshot.responseSession?.state).to(equal(.draft))
             expect(snapshot.responseSession?.values["answer"]).to(equal(.string("premium")))
+            let serverWrite = await mocks.nuxieApi.lastResponseFieldCall
+            expect(serverWrite?.journeyId).to(equal(journey.id))
+            expect(serverWrite?.responseSchemaId).to(equal("survey"))
+            expect(serverWrite?.schemaVersion).to(equal(1))
+            expect(serverWrite?.key).to(equal("answer"))
+            expect(serverWrite?.value as? String).to(equal("premium"))
             expect(snapshot.executionState.screenRouting.batchReceipts["0"]?.result.status)
                 .to(equal(.drained))
         }
