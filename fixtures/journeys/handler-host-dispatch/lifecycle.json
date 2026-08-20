@@ -1,7 +1,7 @@
 {
   "suite": "journeys/handler-host-dispatch/lifecycle",
   "version": 1,
-  "description": "Every dispatch host must declare its event. Lifecycle events prefer a declared screen host, then use a declared journey host as a legacy fallback. Handler-only hosts are never dispatchable, matching the canonical TypeScript runtime and compiler handler_without_event warning.",
+  "description": "Every dispatch host must declare its event. Lifecycle events prefer a declared screen host, then use the declared global Journey host. Handler-only hosts are never dispatchable, matching the canonical TypeScript runtime and compiler handler_without_event warning.",
   "vectors": [
     {
       "name": "declared screen host receives screen shown",
@@ -42,7 +42,7 @@
       "expectedMarkers": ["screen_dismissed_via_screen"]
     },
     {
-      "name": "screen shown falls back to legacy journey host",
+      "name": "screen shown falls back to global Journey host",
       "event": "$screen_shown",
       "screenId": "screen-1",
       "screenDeclarations": [],
@@ -56,13 +56,13 @@
         {
           "host": "__journey__",
           "event": "$screen_shown",
-          "marker": "legacy_journey_shown"
+          "marker": "journey_shown"
         }
       ],
-      "expectedMarkers": ["legacy_journey_shown"]
+      "expectedMarkers": ["journey_shown"]
     },
     {
-      "name": "screen dismissed falls back to legacy journey host",
+      "name": "screen dismissed falls back to global Journey host",
       "event": "$screen_dismissed",
       "screenId": "screen-1",
       "screenDeclarations": [],
@@ -76,10 +76,10 @@
         {
           "host": "__journey__",
           "event": "$screen_dismissed",
-          "marker": "legacy_journey_dismissed"
+          "marker": "journey_dismissed"
         }
       ],
-      "expectedMarkers": ["legacy_journey_dismissed"]
+      "expectedMarkers": ["journey_dismissed"]
     },
     {
       "name": "handler-only screen lifecycle host is dropped without journey fallback",
