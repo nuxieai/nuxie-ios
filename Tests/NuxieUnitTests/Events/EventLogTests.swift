@@ -435,6 +435,175 @@ final class EventLogTests: AsyncSpec {
                         .to(equal(["prepared_first", "prepared_second"]))
                 }
 
+                it("keeps a direct trigger behind an in-flight authored delivery") {
+                    let transport = OrderedPreparedEventTransport()
+                    let orderedLog = EventLog(
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
+                        apiClient: transport,
+                        store: mockStore
+                    )
+                    log = orderedLog
+                    try await orderedLog.configure(configuration: testConfig)
+
+                    let first = await orderedLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "prepared-first-id",
+                            name: "prepared_first",
+                            distinctId: "test-distinct-id"
+                        )
+                    )
+                    await transport.waitUntilFirstStarted()
+                    let second = Task {
+                        try await orderedLog.trackForTrigger("direct_second")
+                    }
+
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                    await expect { await transport.startedNames }
+                        .to(equal(["prepared_first"]))
+
+                    await transport.releaseFirst()
+                    _ = await first.response.value
+                    let (_, response) = try await second.value
+                    expect(response.status).to(equal("ok"))
+                    await expect { await transport.startedNames }
+                        .to(equal(["prepared_first", "direct_second"]))
+                }
+
+                it("keeps a trigger behind an in-flight durable system capture") {
+                    mockStore.stableCaptureDelayNanoseconds = 300_000_000
+                    try await log.configure(configuration: testConfig)
+
+                    let capture = Task {
+                        await log.captureSystemEvent(
+                            "$purchase_completed",
+                            properties: nil,
+                            eventId: "durable-system-first",
+                            distinctId: "test-distinct-id"
+                        )
+                    }
+                    await expect { mockStore.stableCaptureCommitCallCount }
+                        .toEventually(equal(1))
+                    let trigger = Task {
+                        try await log.trackForTrigger("direct_second")
+                    }
+
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                    await expect { await mockApi.trackEventCallCount }.to(equal(0))
+
+                    _ = await capture.value
+                    let (_, response) = try await trigger.value
+                    expect(response.status).to(equal("offline"))
+                    await expect { await mockApi.trackEventCallCount }.to(equal(0))
+                    await expect { await log.getQueuedEventCount() }.to(equal(2))
+                }
+
+                it("keeps a later durable system capture behind a direct trigger") {
+                    let transport = OrderedPreparedEventTransport()
+                    let orderedLog = EventLog(
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
+                        apiClient: transport,
+                        store: mockStore
+                    )
+                    log = orderedLog
+                    try await orderedLog.configure(configuration: testConfig)
+
+                    let trigger = Task {
+                        try await orderedLog.trackForTrigger("prepared_first")
+                    }
+                    await transport.waitUntilFirstStarted()
+                    let capture = Task {
+                        await orderedLog.captureSystemEvent(
+                            "$purchase_completed",
+                            properties: nil,
+                            eventId: "durable-system-second",
+                            distinctId: "test-distinct-id"
+                        )
+                    }
+
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                    expect(mockStore.stableCaptureCommitCallCount).to(equal(0))
+
+                    await transport.releaseFirst()
+                    _ = try await trigger.value
+                    _ = await capture.value
+                    expect(mockStore.stableCaptureCommitCallCount).to(equal(1))
+                    await expect { await transport.startedNames }
+                        .to(equal(["prepared_first"]))
+                }
+
+                it("allows a response callback to track a control event") {
+                    try await log.configure(configuration: testConfig)
+                    await mockApi.setTrackEventResponse(
+                        EventResponse(status: "ok", mailboxPending: true)
+                    )
+                    let reentrantLog = log!
+                    let reentrantApi = mockApi!
+                    await reentrantLog.setMailboxPendingHandler {
+                        await reentrantApi.setTrackEventResponse(.success())
+                        _ = try? await reentrantLog.trackForTrigger(
+                            "$journey_claimed",
+                            properties: nil,
+                            userProperties: nil,
+                            userPropertiesSetOnce: nil,
+                            persistToHistory: true,
+                            distinctIdOverride: "test-distinct-id"
+                        )
+                    }
+
+                    let (_, response) = try await reentrantLog.trackForTrigger("direct_first")
+
+                    expect(response.status).to(equal("ok"))
+                    await expect { await mockApi.trackEventCallCount }.to(equal(2))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("does not deadlock a prepared callback behind a waiting trigger") {
+                    let transport = OrderedPreparedEventTransport(
+                        mailboxPendingForFirst: true
+                    )
+                    let orderedLog = EventLog(
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
+                        apiClient: transport,
+                        store: mockStore
+                    )
+                    log = orderedLog
+                    try await orderedLog.configure(configuration: testConfig)
+                    await orderedLog.setMailboxPendingHandler {
+                        _ = try? await orderedLog.trackForTrigger(
+                            "$journey_claimed",
+                            properties: nil,
+                            userProperties: nil,
+                            userPropertiesSetOnce: nil,
+                            persistToHistory: true,
+                            distinctIdOverride: "test-distinct-id"
+                        )
+                    }
+
+                    let first = await orderedLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "prepared-first-id",
+                            name: "prepared_first",
+                            distinctId: "test-distinct-id"
+                        )
+                    )
+                    await transport.waitUntilFirstStarted()
+                    let second = Task {
+                        try await orderedLog.trackForTrigger("direct_second")
+                    }
+
+                    await transport.releaseFirst()
+                    _ = try await second.value
+                    _ = await first.response.value
+                    await expect { await transport.startedNames }
+                        .to(equal(["prepared_first", "direct_second", "$journey_claimed"]))
+                }
+
                 it("keeps later prepared events behind an older failed delivery") {
                     let transport = FailedPredecessorPreparedEventTransport()
                     let orderedLog = EventLog(
@@ -642,10 +811,15 @@ private actor CancellableEventTransport: EventTransport {
 }
 
 private actor OrderedPreparedEventTransport: EventTransport {
+    private let mailboxPendingForFirst: Bool
     private var started: [String] = []
     private var firstStartWaiters: [CheckedContinuation<Void, Never>] = []
     private var firstRelease: CheckedContinuation<Void, Never>?
     private var firstReleased = false
+
+    init(mailboxPendingForFirst: Bool = false) {
+        self.mailboxPendingForFirst = mailboxPendingForFirst
+    }
 
     var startedNames: [String] { started }
 
@@ -695,7 +869,11 @@ private actor OrderedPreparedEventTransport: EventTransport {
                 await withCheckedContinuation { firstRelease = $0 }
             }
         }
-        return EventResponse(status: "ok", eventId: id)
+        return EventResponse(
+            status: "ok",
+            eventId: id,
+            mailboxPending: name == "prepared_first" && mailboxPendingForFirst
+        )
     }
 }
 

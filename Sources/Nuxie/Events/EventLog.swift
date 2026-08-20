@@ -519,6 +519,11 @@ actor EventLog: EventLogProtocol {
     var baseRetryDelay: TimeInterval = 5
   }
 
+  private struct PreparedDeliveryResult: Sendable {
+    let response: EventResponse
+    let shouldHandleResponseSignals: Bool
+  }
+
   private var deliveryConfig = DeliveryConfig()
   private var deliveryQueue: [NuxieEvent] = []
   private var isCurrentlyFlushing = false
@@ -528,10 +533,15 @@ actor EventLog: EventLogProtocol {
   private var isPaused = false
   private var flushTimerTask: Task<Void, Never>?
   private var activeDirectDeliveryIds: Set<String> = []
+  private var isTriggerDeliveryHeld = false
+  private var triggerDeliveryWaiters: [CheckedContinuation<Void, Never>] = []
   private var activeDurableCommitCount = 0
   private var durableCommitDrainWaiters: [CheckedContinuation<Void, Never>] = []
   private var preparedDeliveryTasks: [UUID: Task<EventResponse, Never>] = [:]
-  private var preparedDeliveryTail: (id: UUID, task: Task<EventResponse, Never>)?
+  private var preparedDeliveryBoundaryTasks:
+    [UUID: Task<PreparedDeliveryResult, Never>] = [:]
+  private var preparedDeliveryBoundaryTail:
+    (id: UUID, task: Task<PreparedDeliveryResult, Never>)?
   private var nextPreparedDeliverySequence: UInt64 = 0
   private var nonDurableDeliveryIds: Set<String> = []
   private var isRefillingDeliveryWindow = false
@@ -817,7 +827,31 @@ actor EventLog: EventLogProtocol {
       throw NuxieError.invalidConfiguration("Event name cannot be empty")
     }
 
+    await acquireTriggerDelivery()
+    var ownsTriggerDelivery = true
+    defer {
+      if ownsTriggerDelivery {
+        releaseTriggerDelivery()
+      }
+    }
+
     await ready.wait()
+    await waitForPreparedTriggerDeliveries()
+
+    // An ordinary user trigger must not overtake accepted events or identity
+    // changes captured before this call. When a predecessor exists, keep that
+    // durable trigger on the same batch lane and route locally instead of
+    // issuing the old /batch + /event pair. Internal control events and
+    // non-persistent scoped events still require the direct-response path.
+    await drainCaptureWorker()
+    var hasPredecessors = true
+    do {
+      hasPredecessors = try await store.getPendingDeliveryCount()
+        + nonDurableDeliveryIds.count
+        > 0
+    } catch {
+      LogWarning("Failed to establish the trigger predecessor boundary: \(error)")
+    }
 
     let distinctId = distinctIdOverride ?? identityService.getDistinctId()
 
@@ -861,16 +895,38 @@ actor EventLog: EventLogProtocol {
       }
     }
 
+    if hasPredecessors, persistToHistory, !event.hasPrefix("$") {
+      activeDirectDeliveryIds.remove(localEvent.id)
+      await enqueueForDelivery(localEvent, isPersisted: wasPersisted)
+      let stagedForRetry = wasPersisted
+        || deliveryQueue.contains { $0.id == localEvent.id }
+        || nonDurableDeliveryIds.contains(localEvent.id)
+      guard stagedForRetry else {
+        throw NuxieError.eventRoutingFailed
+      }
+      return (
+        localEvent,
+        EventResponse(status: "offline", eventId: localEvent.id)
+      )
+    }
+
     do {
       let response = try await apiClient.trackEvent(localEvent)
       await commitServerFacts(response.facts ?? [], distinctId: distinctId)
-      await handleEventResponseSignals(response)
 
       if persistToHistory {
         // The direct round trip delivered this event — ack the pending row
         // so the batch path never re-sends it.
         await completeDirectDelivery(ids: [localEvent.id])
       }
+
+      // Response handlers may synchronously track control events (for
+      // example, a mailbox refresh claiming a journey). The delivery and its
+      // durable ack are ordered now, so release before invoking reentrant
+      // callbacks.
+      ownsTriggerDelivery = false
+      releaseTriggerDelivery()
+      await handleEventResponseSignals(response)
 
       let enrichedEvent = NuxieEvent(
         id: response.eventId ?? localEvent.id,
@@ -917,6 +973,9 @@ actor EventLog: EventLogProtocol {
   ) async -> DurableTriggerCapture? {
     guard !event.isEmpty else { return nil }
     guard !closeFlag.isClosed else { return nil }
+    await acquireTriggerDelivery()
+    defer { releaseTriggerDelivery() }
+
     await ready.wait()
     guard !closeFlag.isClosed else { return nil }
     activeDurableCommitCount += 1
@@ -1027,6 +1086,9 @@ actor EventLog: EventLogProtocol {
   public func commitPreparedTriggerEvent(
     _ event: NuxieEvent
   ) async -> PreparedTriggerCommit {
+    await acquireTriggerDelivery()
+    defer { releaseTriggerDelivery() }
+
     await ready.wait()
     guard !closeFlag.isClosed else { return offlinePreparedCommit(for: event) }
 
@@ -1060,26 +1122,41 @@ actor EventLog: EventLogProtocol {
     let taskID = UUID()
     let sequence = nextPreparedDeliverySequence
     nextPreparedDeliverySequence += 1
-    let previousDelivery = preparedDeliveryTail?.task
-    let response = Task { [weak self] in
+    let previousDelivery = preparedDeliveryBoundaryTail?.task
+    let delivery = Task { [weak self] in
       _ = await previousDelivery?.value
       guard let self else {
-        return EventResponse(status: "offline", eventId: event.id)
+        return PreparedDeliveryResult(
+          response: EventResponse(status: "offline", eventId: event.id),
+          shouldHandleResponseSignals: false
+        )
       }
-      let response: EventResponse
+      let result: PreparedDeliveryResult
       if Task.isCancelled {
-        response = EventResponse(status: "offline", eventId: event.id)
+        result = PreparedDeliveryResult(
+          response: EventResponse(status: "offline", eventId: event.id),
+          shouldHandleResponseSignals: false
+        )
       } else {
-        response = await self.deliverPreparedTriggerEvent(
+        result = await self.deliverPreparedTriggerEvent(
           event,
           wasPersisted: wasPersisted
         )
       }
-      await self.preparedDeliveryDidFinish(taskID)
-      return response
+      await self.preparedDeliveryBoundaryDidFinish(taskID)
+      return result
     }
+    let response = Task { [weak self] in
+      let result = await delivery.value
+      if result.shouldHandleResponseSignals {
+        await self?.handleEventResponseSignals(result.response)
+      }
+      await self?.preparedDeliveryDidFinish(taskID)
+      return result.response
+    }
+    preparedDeliveryBoundaryTasks[taskID] = delivery
+    preparedDeliveryBoundaryTail = (taskID, delivery)
     preparedDeliveryTasks[taskID] = response
-    preparedDeliveryTail = (taskID, response)
     return PreparedTriggerCommit(event: event, response: response, sequence: sequence)
   }
 
@@ -1106,17 +1183,26 @@ actor EventLog: EventLogProtocol {
     await withCheckedContinuation { durableCommitDrainWaiters.append($0) }
   }
 
+  private func preparedDeliveryBoundaryDidFinish(_ taskID: UUID) {
+    _ = preparedDeliveryBoundaryTasks.removeValue(forKey: taskID)
+    if preparedDeliveryBoundaryTail?.id == taskID {
+      preparedDeliveryBoundaryTail = nil
+    }
+  }
+
   private func preparedDeliveryDidFinish(_ taskID: UUID) {
     _ = preparedDeliveryTasks.removeValue(forKey: taskID)
-    if preparedDeliveryTail?.id == taskID {
-      preparedDeliveryTail = nil
-    }
+  }
+
+  private func waitForPreparedTriggerDeliveries() async {
+    guard let pending = preparedDeliveryBoundaryTail?.task else { return }
+    _ = await pending.value
   }
 
   private func deliverPreparedTriggerEvent(
     _ event: NuxieEvent,
     wasPersisted: Bool
-  ) async -> EventResponse {
+  ) async -> PreparedDeliveryResult {
     let olderEventsDrained = await deliveryFlushAll()
     guard olderEventsDrained else {
       activeDirectDeliveryIds.remove(event.id)
@@ -1124,29 +1210,43 @@ actor EventLog: EventLogProtocol {
       LogWarning(
         "Deferred prepared trigger '\(event.name)' because older pending delivery did not drain"
       )
-      return EventResponse(status: "offline", eventId: event.id)
+      return PreparedDeliveryResult(
+        response: EventResponse(status: "offline", eventId: event.id),
+        shouldHandleResponseSignals: false
+      )
     }
     guard !Task.isCancelled else {
       activeDirectDeliveryIds.remove(event.id)
-      return EventResponse(status: "offline", eventId: event.id)
+      return PreparedDeliveryResult(
+        response: EventResponse(status: "offline", eventId: event.id),
+        shouldHandleResponseSignals: false
+      )
     }
     do {
       let response = try await apiClient.trackEvent(event)
       try Task.checkCancellation()
       await commitServerFacts(response.facts ?? [], distinctId: event.distinctId)
-      await handleEventResponseSignals(response)
       await completeDirectDelivery(ids: [event.id])
-      return response
+      return PreparedDeliveryResult(
+        response: response,
+        shouldHandleResponseSignals: true
+      )
     } catch {
       activeDirectDeliveryIds.remove(event.id)
       guard !Task.isCancelled else {
-        return EventResponse(status: "offline", eventId: event.id)
+        return PreparedDeliveryResult(
+          response: EventResponse(status: "offline", eventId: event.id),
+          shouldHandleResponseSignals: false
+        )
       }
       await enqueueForDelivery(event, isPersisted: wasPersisted)
       LogWarning(
         "Prepared trigger round trip failed for '\(event.name)'; continuing local-first: \(error)"
       )
-      return EventResponse(status: "offline", eventId: event.id)
+      return PreparedDeliveryResult(
+        response: EventResponse(status: "offline", eventId: event.id),
+        shouldHandleResponseSignals: false
+      )
     }
   }
 
@@ -1307,13 +1407,16 @@ actor EventLog: EventLogProtocol {
     // A prepared authored event owns an independent direct request. Cancel
     // and settle every such request while its durable store is still open;
     // no response callback or fallback queue mutation may outlive teardown.
+    let preparedDeliveryBoundaries = Array(preparedDeliveryBoundaryTasks.values)
     let preparedDeliveries = Array(preparedDeliveryTasks.values)
+    preparedDeliveryBoundaries.forEach { $0.cancel() }
     preparedDeliveries.forEach { $0.cancel() }
     for delivery in preparedDeliveries {
       _ = await delivery.value
     }
+    preparedDeliveryBoundaryTasks.removeAll()
     preparedDeliveryTasks.removeAll()
-    preparedDeliveryTail = nil
+    preparedDeliveryBoundaryTail = nil
 
     // Stop accepting new commands and ask the workers to stop.
     captureContinuation.yield(.shutdown)
@@ -1918,6 +2021,24 @@ actor EventLog: EventLogProtocol {
     await withCheckedContinuation { continuation in
       flushWaiters.append(continuation)
     }
+  }
+
+  private func acquireTriggerDelivery() async {
+    guard isTriggerDeliveryHeld else {
+      isTriggerDeliveryHeld = true
+      return
+    }
+    await withCheckedContinuation { continuation in
+      triggerDeliveryWaiters.append(continuation)
+    }
+  }
+
+  private func releaseTriggerDelivery() {
+    guard !triggerDeliveryWaiters.isEmpty else {
+      isTriggerDeliveryHeld = false
+      return
+    }
+    triggerDeliveryWaiters.removeFirst().resume()
   }
 
   private func finishCurrentFlush() {

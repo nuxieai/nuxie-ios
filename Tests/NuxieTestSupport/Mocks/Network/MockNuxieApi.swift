@@ -149,10 +149,10 @@ public actor MockNuxieApi: NuxieApiProtocol {
     }
     
     // MARK: - NuxieApiProtocol Implementation
-    
+
     public func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
         sendBatchCallCount += 1
-        
+
         // Track the events as NuxieEvents for test assertions
         for item in events {
             // Convert AnyCodable properties back to [String: Any]

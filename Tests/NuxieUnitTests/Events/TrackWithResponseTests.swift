@@ -628,7 +628,7 @@ final class TrackWithResponseTests: AsyncSpec {
             }
 
             context("online") {
-                it("does not flush accepted events before the direct trigger request") {
+                it("queues behind accepted predecessors and delivers both in one batch") {
                     eventLog.track(
                         "queued_event",
                         properties: nil,
@@ -637,16 +637,47 @@ final class TrackWithResponseTests: AsyncSpec {
                     )
                     await eventLog.drain()
                     await expect { await eventLog.getQueuedEventCount() }.to(equal(1))
-                    await mockNuxieApi.setTrackEventResponse(.success())
-
-                    _ = try await eventLog.trackForTrigger(
+                    let (trigger, response) = try await eventLog.trackForTrigger(
                         "trigger_event",
                         properties: ["screen": "home"]
                     )
 
-                    await expect { await mockNuxieApi.trackEventCallCount }.to(equal(1))
+                    expect(response.status).to(equal("offline"))
+                    await expect { await mockNuxieApi.trackEventCallCount }.to(equal(0))
                     await expect { await mockNuxieApi.sendBatchCallCount }.to(equal(0))
-                    await expect { await eventLog.getQueuedEventCount() }.to(equal(1))
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(2))
+
+                    let flushed = await eventLog.flushEvents()
+                    expect(flushed).to(beTrue())
+
+                    await expect { await mockNuxieApi.sendBatchCallCount }.to(equal(1))
+                    await expect { await mockNuxieApi.sentEvents.map(\.name) }
+                        .to(equal(["queued_event", "trigger_event"]))
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(0))
+                    expect(mockEventStore.deliveredIds).to(contain(trigger.id))
+                }
+
+                it("retains the ordered pair when their later batch fails") {
+                    eventLog.track(
+                        "queued_event",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await eventLog.drain()
+                    let (trigger, response) = try await eventLog.trackForTrigger(
+                        "trigger_event",
+                        properties: ["screen": "home"]
+                    )
+                    await mockNuxieApi.setShouldFailBatch(true)
+                    let flushed = await eventLog.flushEvents()
+
+                    expect(response.status).to(equal("offline"))
+                    expect(flushed).to(beFalse())
+                    await expect { await mockNuxieApi.trackEventCallCount }.to(equal(0))
+                    await expect { await mockNuxieApi.sendBatchCallCount }.to(equal(1))
+                    expect(mockEventStore.pendingIds).to(contain(trigger.id))
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(2))
                 }
 
                 it("persists the event pending and acks it after the direct round trip succeeds") {
