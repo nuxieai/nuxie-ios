@@ -106,4 +106,82 @@ final class InternalServiceDependencyTests: XCTestCase {
             XCTFail("unexpected error: \(error)")
         }
     }
+
+    func testCoreWiresEachProductAuthorityAdmissionToOneLifecycleGatedRecovery() async throws {
+        let configuration = NuxieConfiguration(apiKey: "authority-admission")
+        let observer = MockTransactionObserver()
+        var overrides = NuxieCoreOverrides()
+        overrides.transactionObserver = observer
+        let core = NuxieCore(
+            configuration: configuration,
+            overrides: overrides
+        )
+
+        _ = try await core.experiences.replaceReleaseProfile(nil)
+        for _ in 0..<100 where await observer.profileReadyRecoveryCalls == 0 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let firstAdmissionCalls = await observer.profileReadyRecoveryCalls
+        XCTAssertEqual(firstAdmissionCalls, 1)
+
+        _ = try await core.experiences.replaceReleaseProfile(nil)
+        try await Task.sleep(nanoseconds: 25_000_000)
+        let repeatedAdmissionCalls = await observer.profileReadyRecoveryCalls
+        XCTAssertEqual(repeatedAdmissionCalls, 1)
+
+        await observer.stopListening()
+        await core.experiences.clearCache()
+        _ = try await core.experiences.replaceReleaseProfile(nil)
+        try await Task.sleep(nanoseconds: 25_000_000)
+        let postStopCalls = await observer.profileReadyRecoveryCalls
+        XCTAssertEqual(postStopCalls, 1)
+    }
+
+    func testCoreBindsTransactionServiceBeforeDeliveringPendingAuthorityAdmission() async throws {
+        let configuration = NuxieConfiguration(apiKey: "eager-authority-admission")
+        configuration.customStoragePath = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: configuration.customStoragePath!) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let source = RecoveryTransactionSourceProbe()
+        let finishes = FinishCounter()
+        await source.setUnfinished([StoreTransactionRecoveryItem(
+            update: VerifiedStoreTransactionUpdate(
+                transactionId: "eager-authority-transaction",
+                originalTransactionId: "eager-authority-original",
+                productId: "eager-authority-product",
+                appAccountToken: nil,
+                isRevoked: false,
+                isUpgraded: false,
+                finish: { await finishes.increment() }
+            ),
+            jwsRepresentation: "eager-authority-jws"
+        )])
+        let sink = EventSink()
+        var overrides = NuxieCoreOverrides()
+        overrides.api = MockNuxieApi()
+        overrides.identity = identity
+        let experiences = MockExperienceService()
+        experiences.configureEagerProductAuthorityAdmission(.readyNoMatch)
+        overrides.experiences = experiences
+        overrides.systemEvents = sink
+        overrides.transactionRecoverySources = StoreTransactionRecoverySources(
+            unfinished: { await source.unfinishedItems() },
+            currentEntitlements: { await source.currentEntitlementItems() }
+        )
+
+        let core = NuxieCore(configuration: configuration, overrides: overrides)
+        for _ in 0..<100 where await finishes.count() == 0 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        let reads = await source.readCounts()
+        XCTAssertEqual(reads.unfinished, 1)
+        XCTAssertEqual(reads.currentEntitlements, 1)
+        let finishCount = await finishes.count()
+        XCTAssertEqual(finishCount, 1)
+        XCTAssertEqual(sink.names.filter { $0 == SystemEventNames.purchaseSynced }.count, 1)
+        await core.transactionObserver.stopListening()
+    }
 }

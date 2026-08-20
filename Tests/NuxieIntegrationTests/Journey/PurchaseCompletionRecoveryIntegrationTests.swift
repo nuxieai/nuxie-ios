@@ -454,14 +454,14 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                     == [eventId]
                 expect(journeyStore.hasHandledEvent(id: eventId)) == false
 
-                // The profile-ready request is still serialized through the
-                // recovery pump, but cold commercial completion is already
-                // capture-only and must never route the terminated paywall.
+                // Startup retries restored Journey state, while Product
+                // authority admission independently owns the observer wake.
+                // Cold commercial completion is already capture-only and must
+                // never route the terminated paywall.
                 mocks.profileService.effectiveExperienceReferences = []
                 mocks.profileService.activeExperienceReferences = []
                 await NuxieSDK.recoverAfterProfilePrefetch(
-                    journeys: journeys,
-                    transactionObserver: observer
+                    journeys: journeys
                 )
 
                 expect(evidenceStore.load()).to(beEmpty())

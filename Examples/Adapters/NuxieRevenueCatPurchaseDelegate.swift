@@ -41,7 +41,7 @@ final class NuxieRevenueCatPurchaseDelegate:
     func restorePurchases() async -> RestoreResult {
         do {
             let info = try await purchases.restorePurchases()
-            return info.entitlements.active.isEmpty ? .noPurchases : .providerRestored
+            return info.entitlements.active.isEmpty ? .noPurchases : .restored
         } catch {
             return .failed(extractErrorCode(from: error) ?? error)
         }
@@ -63,7 +63,7 @@ final class NuxieRevenueCatPurchaseDelegate:
                     // RevenueCat observes, syncs, and finishes this transaction.
                     // Nuxie consumes only the checkout result and signed local
                     // Feature mapping; it never assumes receipt ownership.
-                    return .providerPurchased
+                    return .purchased
                 case .unverified(_, let error): return .failed(error)
                 }
             case .userCancelled: return .cancelled

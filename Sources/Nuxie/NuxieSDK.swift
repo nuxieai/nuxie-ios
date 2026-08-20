@@ -195,10 +195,9 @@ public final class NuxieSDK: @unchecked Sendable {
       profilePrefetchTask = Task {
         await Self.runProfilePrefetch(
           refetch: { _ = try await core.profile.refetchProfile() },
-          recoverPurchases: {
+          recoverProfileDependentState: {
             await Self.recoverAfterProfilePrefetch(
-              journeys: journeyService,
-              transactionObserver: core.transactionObserver
+              journeys: journeyService
             )
           },
           syncFeatures: { await core.features.syncFeatureInfo() }
@@ -250,33 +249,35 @@ public final class NuxieSDK: @unchecked Sendable {
 
   // MARK: - Startup tasks
 
-  /// Profile refetch is the catalog-ready barrier for cold purchase recovery.
-  /// The observer can scan evidence earlier in parallel, but a retained
-  /// commercial completion must be retried in this same launch once Journey
-  /// routing has profile authority.
+  /// Retry Journey state after the startup profile attempt. Product authority
+  /// admission independently wakes StoreKit recovery when its authenticated
+  /// ownership catalog materially changes, including later refresh, locale,
+  /// foreground, and mailbox paths.
   static func recoverAfterProfilePrefetch(
-    journeys: JourneyServiceProtocol,
-    transactionObserver: TransactionObserverProtocol
+    journeys: JourneyServiceProtocol
   ) async {
+    guard !Task.isCancelled else { return }
     await journeys.retryRestoredPresentations()
-    await transactionObserver.retryStoredEvidence()
   }
 
   static func runProfilePrefetch(
     refetch: @escaping @Sendable () async throws -> Void,
-    recoverPurchases: @escaping @Sendable () async -> Void,
+    recoverProfileDependentState: @escaping @Sendable () async -> Void,
     syncFeatures: @escaping @Sendable () async -> Void
   ) async {
     guard !Task.isCancelled else { return }
     do {
       try await refetch()
       guard !Task.isCancelled else { return }
-      await recoverPurchases()
+      await recoverProfileDependentState()
       guard !Task.isCancelled else { return }
       await syncFeatures()
+    } catch is CancellationError {
+      return
     } catch {
       guard !Task.isCancelled else { return }
       LogWarning("Profile fetch failed: \(error)")
+      await recoverProfileDependentState()
     }
   }
 

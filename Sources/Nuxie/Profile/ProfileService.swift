@@ -337,7 +337,7 @@ internal actor ProfileService: ProfileServiceProtocol {
             } catch {
                 LogError("Cached release profile authentication failed: \(error)")
                 if identityService.getDistinctId() == distinctId {
-                    _ = try? await experienceService.replaceReleaseProfile(nil)
+                    await experienceService.clearCache()
                 }
                 await discardInvalidCachedProfileAndRefresh(distinctId: distinctId)
                 return
@@ -460,7 +460,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         cachedProfile = nil
         effectiveExperienceReferences = []
         activeExperienceReferences = []
-        _ = try? await experienceService.replaceReleaseProfile(nil)
+        await experienceService.clearCache()
         await refreshInBackground(distinctId: distinctId)
     }
 
@@ -704,7 +704,7 @@ internal actor ProfileService: ProfileServiceProtocol {
             } catch {
                 LogError("Cached release profile authentication failed: \(error)")
                 if identityService.getDistinctId() == newDistinctId {
-                    _ = try? await experienceService.replaceReleaseProfile(nil)
+                    await experienceService.clearCache()
                 }
                 await discardInvalidCachedProfileAndRefresh(distinctId: newDistinctId)
                 return

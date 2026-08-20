@@ -4,6 +4,19 @@ struct StoredPurchaseAccountOwnership: Codable, Equatable, Sendable {
     let scope: PurchaseStorageScope
     let appAccountToken: UUID
     let distinctId: String
+    let productAuthorities: [String: PurchaseEvidenceAuthority]
+
+    init(
+        scope: PurchaseStorageScope,
+        appAccountToken: UUID,
+        distinctId: String,
+        productAuthorities: [String: PurchaseEvidenceAuthority] = [:]
+    ) {
+        self.scope = scope
+        self.appAccountToken = appAccountToken
+        self.distinctId = distinctId
+        self.productAuthorities = productAuthorities
+    }
 }
 
 protocol PurchaseAccountOwnershipStoreProtocol: Sendable {
@@ -11,6 +24,12 @@ protocol PurchaseAccountOwnershipStoreProtocol: Sendable {
         for appAccountToken: UUID,
         scope: PurchaseStorageScope
     ) -> String?
+
+    func evidenceAuthority(
+        for appAccountToken: UUID,
+        productId: String,
+        scope: PurchaseStorageScope
+    ) -> PurchaseEvidenceAuthority?
 
     @discardableResult
     func upsert(_ ownership: StoredPurchaseAccountOwnership) -> Bool
@@ -49,10 +68,34 @@ final class PurchaseAccountOwnershipStore:
         }
     }
 
+    func evidenceAuthority(
+        for appAccountToken: UUID,
+        productId: String,
+        scope: PurchaseStorageScope
+    ) -> PurchaseEvidenceAuthority? {
+        lock.withLock {
+            let ownership = loadUnlocked()[appAccountToken.uuidString]
+            guard ownership?.scope == scope else { return nil }
+            return ownership?.productAuthorities[productId]
+        }
+    }
+
     func upsert(_ ownership: StoredPurchaseAccountOwnership) -> Bool {
         lock.withLock {
             var entries = loadUnlocked()
-            entries[ownership.appAccountToken.uuidString] = ownership
+            let key = ownership.appAccountToken.uuidString
+            let retainedAuthorities = entries[key]?.scope == ownership.scope
+                ? entries[key]?.productAuthorities ?? [:]
+                : [:]
+            entries[key] = StoredPurchaseAccountOwnership(
+                scope: ownership.scope,
+                appAccountToken: ownership.appAccountToken,
+                distinctId: ownership.distinctId,
+                productAuthorities: retainedAuthorities.merging(
+                    ownership.productAuthorities,
+                    uniquingKeysWith: { _, new in new }
+                )
+            )
             return saveUnlocked(entries)
         }
     }
@@ -105,9 +148,33 @@ final class InMemoryPurchaseAccountOwnershipStore:
         }
     }
 
+    func evidenceAuthority(
+        for appAccountToken: UUID,
+        productId: String,
+        scope: PurchaseStorageScope
+    ) -> PurchaseEvidenceAuthority? {
+        lock.withLock {
+            let ownership = entries[appAccountToken.uuidString]
+            guard ownership?.scope == scope else { return nil }
+            return ownership?.productAuthorities[productId]
+        }
+    }
+
     func upsert(_ ownership: StoredPurchaseAccountOwnership) -> Bool {
         lock.withLock {
-            entries[ownership.appAccountToken.uuidString] = ownership
+            let key = ownership.appAccountToken.uuidString
+            let retainedAuthorities = entries[key]?.scope == ownership.scope
+                ? entries[key]?.productAuthorities ?? [:]
+                : [:]
+            entries[key] = StoredPurchaseAccountOwnership(
+                scope: ownership.scope,
+                appAccountToken: ownership.appAccountToken,
+                distinctId: ownership.distinctId,
+                productAuthorities: retainedAuthorities.merging(
+                    ownership.productAuthorities,
+                    uniquingKeysWith: { _, new in new }
+                )
+            )
         }
         return true
     }

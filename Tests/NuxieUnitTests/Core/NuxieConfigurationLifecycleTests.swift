@@ -3,6 +3,7 @@ import XCTest
 @testable import NuxieTestSupport
 
 private actor StartupLifecycleProbe {
+    private let failRefetchAfterRelease: Bool
     private var refetchStarted = false
     private var refetchWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
@@ -10,12 +11,19 @@ private actor StartupLifecycleProbe {
     private var featureSyncCalls = 0
     private var observerStopped = false
 
+    init(failRefetchAfterRelease: Bool = false) {
+        self.failRefetchAfterRelease = failRefetchAfterRelease
+    }
+
     func refetch() async throws {
         refetchStarted = true
         let waiters = refetchWaiters
         refetchWaiters.removeAll()
         waiters.forEach { $0.resume() }
         await withCheckedContinuation { releaseContinuations.append($0) }
+        if failRefetchAfterRelease {
+            throw NuxieNetworkError.invalidResponse
+        }
     }
 
     func waitForRefetch() async {
@@ -40,11 +48,11 @@ private actor StartupLifecycleProbe {
 
 final class NuxieConfigurationLifecycleTests: XCTestCase {
     func testShutdownStopsObserverBeforeAwaitingCancelledProfilePrefetch() async {
-        let probe = StartupLifecycleProbe()
+        let probe = StartupLifecycleProbe(failRefetchAfterRelease: true)
         let profilePrefetch = Task {
             await NuxieSDK.runProfilePrefetch(
                 refetch: { try await probe.refetch() },
-                recoverPurchases: { await probe.recordRecovery() },
+                recoverProfileDependentState: { await probe.recordRecovery() },
                 syncFeatures: { await probe.recordFeatureSync() }
             )
         }
@@ -66,6 +74,44 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         XCTAssertTrue(snapshot.stopped)
         XCTAssertEqual(snapshot.recovery, 0)
         XCTAssertEqual(snapshot.featureSync, 0)
+    }
+
+    func testOfflineProfileRefreshStillWakesPurchaseRecoveryWithoutFeatureSync() async {
+        let probe = StartupLifecycleProbe(failRefetchAfterRelease: true)
+        let profilePrefetch = Task {
+            await NuxieSDK.runProfilePrefetch(
+                refetch: { try await probe.refetch() },
+                recoverProfileDependentState: { await probe.recordRecovery() },
+                syncFeatures: { await probe.recordFeatureSync() }
+            )
+        }
+        await probe.waitForRefetch()
+        await probe.releaseRefetch()
+        await profilePrefetch.value
+
+        let snapshot = await probe.snapshot()
+        XCTAssertEqual(snapshot.recovery, 1)
+        XCTAssertEqual(snapshot.featureSync, 0)
+        XCTAssertFalse(snapshot.stopped)
+    }
+
+    func testSuccessfulProfileRefreshWakesRecoveryThenSyncsFeatures() async {
+        let probe = StartupLifecycleProbe()
+        let profilePrefetch = Task {
+            await NuxieSDK.runProfilePrefetch(
+                refetch: { try await probe.refetch() },
+                recoverProfileDependentState: { await probe.recordRecovery() },
+                syncFeatures: { await probe.recordFeatureSync() }
+            )
+        }
+        await probe.waitForRefetch()
+        await probe.releaseRefetch()
+        await profilePrefetch.value
+
+        let snapshot = await probe.snapshot()
+        XCTAssertEqual(snapshot.recovery, 1)
+        XCTAssertEqual(snapshot.featureSync, 1)
+        XCTAssertFalse(snapshot.stopped)
     }
 
     func testSetupSnapshotDoesNotFollowBuilderMutation() {

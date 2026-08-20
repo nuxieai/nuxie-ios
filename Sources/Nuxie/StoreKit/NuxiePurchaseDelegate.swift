@@ -1,38 +1,9 @@
 import Foundation
 
-/// Verified StoreKit evidence returned by a purchase delegate that performs
-/// native StoreKit checkout itself. Nuxie records and syncs this evidence
-/// before invoking `finish`, so a provider bridge cannot strand a successful
-/// native transaction outside Nuxie's entitlement pipeline.
-public struct StoreKitPurchaseEvidence: Sendable {
-    public let transactionJws: String
-    public let transactionId: String
-    public let originalTransactionId: String
-    public let productId: String
-    public let finish: @Sendable () async -> Void
-
-    public init(
-        transactionJws: String,
-        transactionId: String,
-        originalTransactionId: String,
-        productId: String,
-        finish: @escaping @Sendable () async -> Void
-    ) {
-        self.transactionJws = transactionJws
-        self.transactionId = transactionId
-        self.originalTransactionId = originalTransactionId
-        self.productId = productId
-        self.finish = finish
-    }
-}
 /// The result of launching checkout for the StoreProduct shown to the customer.
 public enum PurchaseResult: Equatable, Sendable {
-    /// The configured provider completed the purchase and remains responsible
-    /// for receipt submission, transaction finishing, and durable access.
-    case providerPurchased
-    /// A delegate completed native StoreKit checkout and returned verified
-    /// evidence for Nuxie to record, sync, and finish.
-    case purchasedWithStoreKitEvidence(StoreKitPurchaseEvidence)
+    /// Checkout completed successfully.
+    case purchased
     /// The customer cancelled checkout.
     case cancelled
     /// Checkout failed.
@@ -42,13 +13,8 @@ public enum PurchaseResult: Equatable, Sendable {
     
     public static func == (lhs: PurchaseResult, rhs: PurchaseResult) -> Bool {
         switch (lhs, rhs) {
-        case (.providerPurchased, .providerPurchased):
+        case (.purchased, .purchased):
             return true
-        case (.purchasedWithStoreKitEvidence(let lhs), .purchasedWithStoreKitEvidence(let rhs)):
-            return lhs.transactionJws == rhs.transactionJws
-                && lhs.transactionId == rhs.transactionId
-                && lhs.originalTransactionId == rhs.originalTransactionId
-                && lhs.productId == rhs.productId
         case (.cancelled, .cancelled):
             return true
         case (.pending, .pending):
@@ -63,12 +29,8 @@ public enum PurchaseResult: Equatable, Sendable {
 
 /// The result of asking the configured purchase system to restore purchases.
 public enum RestoreResult: Equatable, Sendable {
-    /// The configured provider restored its purchases and remains the source
-    /// of truth for receipt and entitlement state.
-    case providerRestored
-    /// A custom StoreKit delegate completed `AppStore.sync()`. Nuxie must now
-    /// submit the current verified StoreKit entitlements to its backend.
-    case storeKitRestored
+    /// Restore completed and found one or more purchases.
+    case restored
     /// Restore failed.
     case failed(Error)
     /// Restore completed and found no current purchases.
@@ -76,9 +38,7 @@ public enum RestoreResult: Equatable, Sendable {
     
     public static func == (lhs: RestoreResult, rhs: RestoreResult) -> Bool {
         switch (lhs, rhs) {
-        case (.providerRestored, .providerRestored):
-            return true
-        case (.storeKitRestored, .storeKitRestored):
+        case (.restored, .restored):
             return true
         case (.noPurchases, .noPurchases):
             return true

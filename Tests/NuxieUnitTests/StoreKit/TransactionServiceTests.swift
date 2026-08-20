@@ -567,7 +567,23 @@ final class TransactionServiceTests: AsyncSpec {
                         ]
                     }
 
-                    it("passes signed provider grants into delegate StoreKit evidence") {
+                    it("routes one completion for a signed provider outcome without StoreKit evidence") {
+                        mockProduct.providerFeatureAccess = "revenuecat"
+                        mockPurchaseDelegate.configureForSuccess()
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.toNot(throwError())
+
+                        expect(eventSink.events.filter {
+                            $0.name == SystemEventNames.purchaseCompleted
+                        }.count) == 1
+                        // The pre-delegate checkout identity gives provider-only
+                        // completion the same stable capture semantics.
+                        expect(eventSink.routedCaptureCount) == 1
+                    }
+
+                    it("passes signed provider grants through the outcome-only delegate") {
                         mockProduct.providerFeatureAccess = "revenuecat"
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
@@ -577,15 +593,7 @@ final class TransactionServiceTests: AsyncSpec {
                                 allowance: nil
                             )
                         ]
-                        mockPurchaseDelegate.purchaseResult = .purchasedWithStoreKitEvidence(
-                            StoreKitPurchaseEvidence(
-                                transactionJws: "generic-jws",
-                                transactionId: "generic-transaction",
-                                originalTransactionId: "generic-original",
-                                productId: mockProduct.storeProductId,
-                                finish: {}
-                            )
-                        )
+                        mockPurchaseDelegate.purchaseResult = .purchased
 
                         await expect {
                             try await transactionService.purchase(mockProduct)
@@ -597,8 +605,7 @@ final class TransactionServiceTests: AsyncSpec {
                         ).to(equal(["feature_premium"]))
                     }
 
-                    it("retains matching provider grants through delegate StoreKit evidence") {
-                        mockProduct.providerFeatureAccess = "revenuecat"
+                    it("keeps an unsigned purchased outcome briefly observable by StoreKit") {
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_premium",
@@ -607,24 +614,41 @@ final class TransactionServiceTests: AsyncSpec {
                                 allowance: nil
                             )
                         ]
-                        mockPurchaseDelegate.purchaseResult = .purchasedWithStoreKitEvidence(
-                            StoreKitPurchaseEvidence(
-                                transactionJws: "provider-jws",
-                                transactionId: "provider-transaction",
-                                originalTransactionId: "provider-original",
-                                productId: mockProduct.storeProductId,
-                                finish: {}
-                            )
-                        )
+                        mockPurchaseDelegate.purchaseResult = .purchased
 
                         await expect {
                             try await transactionService.purchase(mockProduct)
                         }.toNot(throwError())
 
-                        expect(
-                            mockPurchaseDelegate.lastPurchasedProduct?
-                                .localEntitlementGrants.map(\.featureId)
-                        ) == ["feature_premium"]
+                        let token = purchaseStorageScope.appAccountToken(
+                            distinctId: "test-user"
+                        )
+                        let recovery = await transactionService.checkoutRecoveryRecord(
+                            appAccountToken: token,
+                            productId: mockProduct.storeProductId
+                        )
+                        expect(recovery?.evidenceAuthority) == .outcomeOnlyDelegate
+                        expect(recovery?.localEntitlementGrants.map(\.featureId)) == [
+                            "feature_premium"
+                        ]
+                        let localPurchases = await featureService.localPurchases
+                        expect(localPurchases).to(beEmpty())
+
+                        await expect {
+                            await transactionService.checkoutRecoveryRecord(
+                                appAccountToken: token,
+                                productId: mockProduct.storeProductId
+                            )
+                        }.toNot(beNil())
+
+                        dateProvider.advance(by: 31)
+
+                        await expect {
+                            await transactionService.checkoutRecoveryRecord(
+                                appAccountToken: token,
+                                productId: mockProduct.storeProductId
+                            )
+                        }.to(beNil())
                     }
 
                     it("does not attribute a suspended checkout to a new customer") {
@@ -839,9 +863,9 @@ final class TransactionServiceTests: AsyncSpec {
                         }.to(throwError(StoreKitError.purchasePending))
                         
                         expect(mockPurchaseDelegate.purchaseCalled).to(beTrue())
-                        // Provider-owned StoreKit paths still need a durable
-                        // marker so a later Transaction.updates approval can
-                        // resolve the paywall action.
+                        // An unsigned delegate may be a direct StoreKit checkout.
+                        // Keep protected recovery context so a later verified
+                        // Transaction.updates approval can resolve the paywall.
                         await expect {
                             await transactionService.pendingPurchaseDistinctId(
                                 productId: mockProduct.storeProductId
@@ -861,8 +885,10 @@ final class TransactionServiceTests: AsyncSpec {
                         await expect {
                             await transactionService.pendingPurchaseGrants(
                                 productId: mockProduct.storeProductId
-                            )
-                        }.to(beEmpty())
+                            )?.map(\.featureId)
+                        }.to(equal(["feature_premium"]))
+                        let purchasesBeforeApproval = await featureService.localPurchases
+                        expect(purchasesBeforeApproval).to(beEmpty())
 
                         let activeTransactionService = transactionService!
                         let observer = TransactionObserver(
@@ -900,6 +926,8 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(eventSink.events.map(\.name).filter {
                             $0 == SystemEventNames.purchaseCompleted
                         }.count) == 1
+                        let purchasesAfterApproval = await featureService.localPurchases
+                        expect(purchasesAfterApproval.count) == 1
                     }
 
                     it("persists pending grants only with signed provider cutover state") {
@@ -1977,23 +2005,8 @@ final class TransactionServiceTests: AsyncSpec {
                 }
 
                 context("with purchase delegate configured") {
-                    it("leaves restore ownership with the provider") {
-                        mockPurchaseDelegate.restoreResult = .providerRestored
-
-                        await expect {
-                            try await transactionService.restore()
-                        }.toNot(throwError())
-
-                        await expect { await mockTransactionObserver.syncCurrentEntitlementsCalled }
-                            .to(beFalse())
-                        expect(eventSink.events.map(\.name).filter {
-                            $0 == SystemEventNames.restoreCompleted
-                        }.count) == 1
-                        expect(eventSink.events.first?.properties).to(beNil())
-                    }
-
-                    it("syncs current StoreKit entitlements after a custom StoreKit restore") {
-                        mockPurchaseDelegate.restoreResult = .storeKitRestored
+                    it("syncs current StoreKit entitlements after a restored outcome") {
+                        mockPurchaseDelegate.restoreResult = .restored
                         
                         await expect {
                             try await transactionService.restore()
@@ -2005,6 +2018,10 @@ final class TransactionServiceTests: AsyncSpec {
                         await expect {
                             await mockTransactionObserver.syncCurrentEntitlementsDistinctIds
                         }.to(equal(["test-user"]))
+                        expect(eventSink.events.map(\.name).filter {
+                            $0 == SystemEventNames.restoreCompleted
+                        }.count) == 1
+                        expect(eventSink.events.first?.properties).to(beNil())
                     }
 
                     it("emits purchase events without configuring the SDK singleton") {

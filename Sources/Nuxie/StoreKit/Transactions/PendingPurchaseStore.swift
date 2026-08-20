@@ -18,6 +18,27 @@ enum PendingPurchaseState: String, Codable, Equatable, Sendable {
     case pending
 }
 
+/// Internal authority inferred before checkout. It never crosses the public
+/// delegate API: signed connector state is definitive, while an outcome-only
+/// delegate gets a short StoreKit correlation window.
+enum PurchaseEvidenceAuthority: String, Codable, Equatable, Sendable {
+    case nativeStoreKit
+    case providerConnector
+    case outcomeOnlyDelegate
+    /// Conflicting authenticated active Products for the same store identity.
+    /// Recovery must wait rather than guessing who owns receipt processing.
+    case ambiguous
+
+    var durableProductAuthority: PurchaseEvidenceAuthority {
+        switch self {
+        case .providerConnector, .ambiguous:
+            return self
+        case .nativeStoreKit, .outcomeOnlyDelegate:
+            return .nativeStoreKit
+        }
+    }
+}
+
 struct PendingPurchaseRecord: Codable, Equatable, Sendable {
     let scope: PurchaseStorageScope
     let distinctId: String
@@ -30,6 +51,20 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
     let productFeatureIds: [String]
     let localEntitlementGrants: [StoredLocalEntitlementGrant]
     let state: PendingPurchaseState
+    let evidenceAuthority: PurchaseEvidenceAuthority
+    /// Stable identity for this checkout's commercial completion. It exists
+    /// before delegate invocation, so callback and StoreKit recovery can use
+    /// the same durable EventLog key without a transaction identifier.
+    let checkoutCompletionEventId: String
+    /// Bounds commercial-context correlation for an ambiguous successful
+    /// delegate outcome. Stable SDK account-token ownership survives expiry.
+    let storeKitObservationDeadline: Date?
+    /// Set after either race participant durably reports commercial
+    /// completion. The other participant must not report it again.
+    let completionReportedAt: Date?
+    /// Set after verified evidence is durable so the callback and observer can
+    /// race on the same transaction-scoped completion claim.
+    let observedTransactionId: String?
 
     init(
         scope: PurchaseStorageScope,
@@ -39,7 +74,12 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
         recordedAt: Date,
         productFeatureIds: [String] = [],
         localEntitlementGrants: [StoredLocalEntitlementGrant],
-        state: PendingPurchaseState
+        state: PendingPurchaseState,
+        evidenceAuthority: PurchaseEvidenceAuthority = .nativeStoreKit,
+        checkoutCompletionEventId: String = UUID().uuidString.lowercased(),
+        storeKitObservationDeadline: Date? = nil,
+        completionReportedAt: Date? = nil,
+        observedTransactionId: String? = nil
     ) {
         self.scope = scope
         self.distinctId = distinctId
@@ -49,6 +89,11 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
         self.productFeatureIds = productFeatureIds
         self.localEntitlementGrants = localEntitlementGrants
         self.state = state
+        self.evidenceAuthority = evidenceAuthority
+        self.checkoutCompletionEventId = checkoutCompletionEventId
+        self.storeKitObservationDeadline = storeKitObservationDeadline
+        self.completionReportedAt = completionReportedAt
+        self.observedTransactionId = observedTransactionId
     }
 }
 

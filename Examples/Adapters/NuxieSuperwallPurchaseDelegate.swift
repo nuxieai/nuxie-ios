@@ -48,7 +48,7 @@ final class NuxieSuperwallPurchaseDelegate:
                     // Superwall observes, syncs, and finishes this transaction.
                     // Nuxie consumes only the checkout result and signed local
                     // Feature mapping; it never assumes receipt ownership.
-                    return .providerPurchased
+                    return .purchased
                 case .unverified(_, let error): return .failed(error)
                 }
             case .userCancelled: return .cancelled
@@ -72,7 +72,7 @@ final class NuxieSuperwallPurchaseDelegate:
                 }
                 return false
             }
-            return active ? .providerRestored : .noPurchases
+            return active ? .restored : .noPurchases
         case .failed(let error):
             return .failed(error ?? NuxieSuperwallBridgeError.unknownRestoreFailure)
         }

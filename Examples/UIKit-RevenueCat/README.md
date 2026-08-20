@@ -202,7 +202,7 @@ The app is fully functional without any dashboard configuration, but to see Nuxi
 1. Run the app
 2. Tap "Go Pro" button
 3. Your configured flow should appear!
-4. Complete purchase → app receives `.providerPurchased`
+4. Complete purchase → app receives `.purchased`
 
 ### 5. Create Additional Experiences
 

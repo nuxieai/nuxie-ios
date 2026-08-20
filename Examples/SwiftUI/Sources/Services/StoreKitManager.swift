@@ -110,7 +110,7 @@ final class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
             switch result {
             case .success(let verification):
                 // Verify the transaction
-                let transaction = try await verifyTransaction(verification)
+                _ = try await verifyTransaction(verification)
 
                 // Unlock Pro features
                 await MainActor.run {
@@ -118,13 +118,7 @@ final class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
                 }
 
                 print("[StoreKitManager] Purchase successful: \(product.storeProductId)")
-                return .purchasedWithStoreKitEvidence(.init(
-                    transactionJws: verification.jwsRepresentation,
-                    transactionId: String(transaction.id),
-                    originalTransactionId: String(transaction.originalID),
-                    productId: transaction.productID,
-                    finish: { await transaction.finish() }
-                ))
+                return .purchased
 
             case .userCancelled:
                 print("[StoreKitManager] Purchase cancelled by user")
@@ -177,7 +171,7 @@ final class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
 
             if restoredCount > 0 {
                 print("[StoreKitManager] Restored \(restoredCount) purchase(s)")
-                return .storeKitRestored
+                return .restored
             } else {
                 print("[StoreKitManager] No purchases to restore")
                 return .noPurchases
@@ -206,8 +200,8 @@ final class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
                         }
                     }
 
-                    // Finish transaction
-                    await transaction.finish()
+                    // Nuxie's StoreKit observer synchronizes and finishes the
+                    // transaction. This listener only updates app-owned UI.
 
                     print("[StoreKitManager] Transaction updated: \(transaction.productID)")
                 } catch {

@@ -33,6 +33,8 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     private var _backgroundPreparationPauseCallCount = 0
     private var _foregroundPreparationResumeCallCount = 0
     private var _onAppBecameActiveHandler: (@Sendable () async -> Void)?
+    private var _productAuthorityResolution: ActiveProductEvidenceAuthorityResolution = .unavailable
+    private var _deliverProductAuthorityOnHandlerRegistration = false
 
     public var prefetchedExperiences: [ExperienceReference] {
         get { withLock { _prefetchedExperiences } }
@@ -141,6 +143,37 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
             return _onAppBecameActiveHandler
         }
         await handler?()
+    }
+
+    func configureEagerProductAuthorityAdmission(
+        _ resolution: ActiveProductEvidenceAuthorityResolution
+    ) {
+        withLock {
+            _productAuthorityResolution = resolution
+            _deliverProductAuthorityOnHandlerRegistration = true
+        }
+    }
+
+    public func purchaseEvidenceAuthority(
+        storeProductId: String
+    ) async -> ActiveProductEvidenceAuthorityResolution {
+        _ = storeProductId
+        return withLock { _productAuthorityResolution }
+    }
+
+    public func setProductAuthorityChangeHandler(
+        _ handler: @escaping @Sendable () async -> Void
+    ) {
+        guard withLock({ _deliverProductAuthorityOnHandlerRegistration }) else { return }
+        let delivered = DispatchSemaphore(value: 0)
+        Task.detached {
+            await handler()
+            delivered.signal()
+        }
+        _ = delivered.wait(timeout: .now() + 1)
+        // Model eager disk admission delivering its pending notification
+        // before the composition root returns from registration.
+        Thread.sleep(forTimeInterval: 0.05)
     }
 
     public func validatesPresentationCommit(
@@ -317,6 +350,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         withLock {
             _prefetchedExperiences = []
             _removedExperienceVersionIds = []
+            _releaseProfiles.append(nil)
         }
     }
     
@@ -341,6 +375,8 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
             _presentationCommitValidationResults = []
             _backgroundPreparationPauseCallCount = 0
             _foregroundPreparationResumeCallCount = 0
+            _productAuthorityResolution = .unavailable
+            _deliverProductAuthorityOnHandlerRegistration = false
         }
     }
     

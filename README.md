@@ -290,14 +290,8 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
       ) {
       case .success(let verification):
         switch verification {
-        case .verified(let transaction):
-          return .purchasedWithStoreKitEvidence(.init(
-            transactionJws: verification.jwsRepresentation,
-            transactionId: String(transaction.id),
-            originalTransactionId: String(transaction.originalID),
-            productId: transaction.productID,
-            finish: { await transaction.finish() }
-          ))
+        case .verified:
+          return .purchased
         case .unverified(_, let error): return .failed(error)
         }
       case .userCancelled: return .cancelled
@@ -312,7 +306,13 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
   func restorePurchases() async -> RestoreResult {
     do {
       try await AppStore.sync()
-      return .storeKitRestored
+      for await result in Transaction.currentEntitlements {
+        guard case .verified(let transaction) = result,
+              transaction.revocationDate == nil,
+              !transaction.isUpgraded else { continue }
+        return .restored
+      }
+      return .noPurchases
     } catch {
       return .failed(error)
     }
@@ -320,10 +320,11 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
 }
 ```
 
-Return `.providerPurchased`/`.providerRestored` only when an external provider
-owns receipt submission and durable access. A custom StoreKit delegate returns
-verified evidence and `.storeKitRestored`; Nuxie records, syncs, and finishes
-that StoreKit work. Use
+The delegate reports only `.purchased`, `.pending`, `.cancelled`, or `.failed`
+and `.restored`, `.noPurchases`, or `.failed`. It never transports receipts,
+transaction identifiers, or finish closures. Nuxie's StoreKit listener records,
+syncs, and finishes verified native updates internally; connected providers
+send their own evidence through Connector synchronization. Use
 `purchaseHandlingMode = .observer` only when the app owns purchases without a delegate.
 
 Native checkout records the authenticated release, Experience, Placement,
@@ -339,6 +340,25 @@ ownership, receipt evidence, and optimistic local access are stored in separate
 app, SDK-environment, and Test Store/App Store namespaces. Receipt/JWS retry
 evidence is removed after backend acceptance and expires after 90 days; the
 smaller StoreKit-reconciled local-access ledger does not retain receipt bytes.
+For an outcome-only custom delegate without signed Connector authority, Nuxie
+starts a 30-second exact-checkout window before invoking the delegate and
+re-bounds it for 30 seconds after a successful callback. A crash while the
+callback is suspended therefore cannot retain context for the ordinary pending
+TTL. After the bound, the one-shot Experience/Placement context is retired; a
+later verified update carrying Nuxie's deterministic account token still syncs
+and finishes, but cannot resurrect stale Journey context or local grants.
+Before delegate invocation, Nuxie also persists one checkout-scoped completion
+event identity. The callback and StoreKit observer use that same stable capture;
+only a successful durable capture acknowledges completion, while capture or
+storage failure leaves recovery retryable without turning a successful charge
+into a failed purchase result.
+
+Fresh-device current-entitlement recovery uses authenticated Products from the
+active release profile as receipt authority. A Product with signed Connector
+Feature Access remains provider-owned even when local checkout history is
+empty; an unsigned Product remains native StoreKit-owned. Conflicting active
+Products for the same App Store identifier fail closed until release authority
+converges, so Nuxie does not guess, sync, or finish the receipt.
 
 ### Atomic purchase-backed Feature use
 

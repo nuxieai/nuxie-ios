@@ -10,8 +10,8 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
 
     // MARK: - Locked Storage
 
-    private var _purchaseResult: PurchaseResult = .providerPurchased
-    private var _restoreResult: RestoreResult = .providerRestored
+    private var _purchaseResult: PurchaseResult = .purchased
+    private var _restoreResult: RestoreResult = .restored
     private var _simulatedDelay: TimeInterval = 0.5
     private var _shouldThrowError: Bool = false
     private var _customError: Error = StoreKitError.networkUnavailable
@@ -139,8 +139,8 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
             _restoreCalled = false
             _purchaseCallCount = 0
             _restoreCallCount = 0
-            _purchaseResult = .providerPurchased
-            _restoreResult = .providerRestored
+            _purchaseResult = .purchased
+            _restoreResult = .restored
             _simulatedDelay = 0.5
             _shouldThrowError = false
             _customError = StoreKitError.networkUnavailable
@@ -150,8 +150,8 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
     /// Configure to simulate successful purchase
     public func configureForSuccess() {
         lock.withLock {
-            _purchaseResult = .providerPurchased
-            _restoreResult = .providerRestored
+            _purchaseResult = .purchased
+            _restoreResult = .restored
             _shouldThrowError = false
         }
     }

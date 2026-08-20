@@ -7,6 +7,12 @@ import XCTest
 @testable import NuxieTestSupport
 #endif
 
+private actor ProductAuthorityAdmissionWakeCounter {
+    private var wakeCount = 0
+    func recordWake() { wakeCount += 1 }
+    func count() -> Int { wakeCount }
+}
+
 final class ExperienceReleaseAcquisitionTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(
         rawRepresentation: Data(repeating: 0x42, count: 32)
@@ -1206,6 +1212,249 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             experienceId: entry.locator.experienceId
         ))
         XCTAssertEqual(admitted?.publishedAtSeq, entry.locator.publishedAtSeq)
+    }
+
+    func testActiveSignedProductAuthorityFailsClosedOnConflictingReleases() throws {
+        func product(provider: Any) throws -> ExperienceReleaseProductDocument {
+            let json: [String: Any] = [
+                "id": "shared-product",
+                "type": "subscription",
+                "store": [
+                    "platform": "apple_app_store",
+                    "productId": "shared-store-product",
+                    "productType": "autoRenewable",
+                ],
+                "preview": productPreview("Shared Product"),
+                "providerFeatureAccess": provider,
+                "entitlements": [],
+            ]
+            return try JSONDecoder().decode(
+                ExperienceReleaseProductDocument.self,
+                from: JSONSerialization.data(withJSONObject: json)
+            )
+        }
+        let native = try product(provider: NSNull())
+        let provider = try product(provider: ["provider": "revenuecat"])
+
+        XCTAssertEqual(
+            activeProductEvidenceAuthority(
+                products: [native],
+                storeProductId: "shared-store-product"
+            ),
+            .nativeStoreKit
+        )
+        XCTAssertEqual(
+            activeProductEvidenceAuthority(
+                products: [provider],
+                storeProductId: "shared-store-product"
+            ),
+            .providerConnector
+        )
+        XCTAssertEqual(
+            activeProductEvidenceAuthority(
+                products: [native, provider],
+                storeProductId: "shared-store-product"
+            ),
+            .ambiguous
+        )
+    }
+
+    func testProductEvidenceAuthorityReadinessTracksProfileAdmission() async throws {
+        let loader = ExperienceLoader(
+            productService: ProductService(),
+            releaseStore: makeStore(cache: temporaryDirectory())
+        )
+
+        let beforeAdmission = await loader.purchaseEvidenceAuthority(
+            storeProductId: "store-product-1"
+        )
+        XCTAssertEqual(beforeAdmission, .unavailable)
+
+        _ = try await loader.replaceReleaseProfile(nil)
+        let admittedEmptyProfile = await loader.purchaseEvidenceAuthority(
+            storeProductId: "store-product-1"
+        )
+        XCTAssertEqual(admittedEmptyProfile, .readyNoMatch)
+
+        await loader.clearCache()
+        let afterClear = await loader.purchaseEvidenceAuthority(
+            storeProductId: "store-product-1"
+        )
+        XCTAssertEqual(afterClear, .unavailable)
+    }
+
+    func testProductAuthorityAdmissionQueuesOneWakeAndReadmissionAfterClear() async throws {
+        let loader = ExperienceLoader(
+            productService: ProductService(),
+            releaseStore: makeStore(cache: temporaryDirectory())
+        )
+        let wakes = ProductAuthorityAdmissionWakeCounter()
+        _ = try await loader.replaceReleaseProfile(nil)
+        let beforeHandlerWakeCount = await wakes.count()
+        XCTAssertEqual(beforeHandlerWakeCount, 0)
+
+        await loader.setProductAuthorityChangeHandler {
+            await wakes.recordWake()
+        }
+        _ = try await loader.replaceReleaseProfile(nil)
+        let repeatedReadyWakeCount = await wakes.count()
+        XCTAssertEqual(repeatedReadyWakeCount, 1)
+
+        await loader.clearCache()
+        _ = try await loader.replaceReleaseProfile(nil)
+        let readmittedWakeCount = await wakes.count()
+        XCTAssertEqual(readmittedWakeCount, 2)
+    }
+
+    func testPinnedProviderHistoryDoesNotPoisonActiveNativeRestoreAuthority() async throws {
+        let (base, delivery) = try releaseEntry(
+            riv: Data("RIVE authority recovery".utf8),
+            image: Data([3, 5, 8])
+        )
+        func authorityEntry(
+            suffix: String,
+            provider: Any
+        ) throws -> ExperienceReleaseProfileEntry {
+            try resign(entry: base) { root in
+                var identity = try XCTUnwrap(root["identity"] as? [String: Any])
+                identity["experienceId"] = "experience-recovery-\(suffix)"
+                identity["experienceVersionId"] = "version-recovery-\(suffix)"
+                identity["buildId"] = "build-recovery-\(suffix)"
+                root["identity"] = identity
+                root["products"] = [[
+                    "id": "product-recovery-\(suffix)",
+                    "type": "subscription",
+                    "store": [
+                        "platform": "apple_app_store",
+                        "productId": "shared-recovery-product",
+                        "productType": "autoRenewable",
+                    ],
+                    "preview": productPreview("Recovery \(suffix)"),
+                    "providerFeatureAccess": provider,
+                    "entitlements": [],
+                ]]
+                root["placements"] = []
+            }
+        }
+        let native = try authorityEntry(suffix: "native", provider: NSNull())
+        let provider = try authorityEntry(
+            suffix: "provider",
+            provider: ["provider": "revenuecat"]
+        )
+        let loader = ExperienceLoader(
+            productService: ProductService(),
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let dateProvider = MockDateProvider()
+        let scope = PurchaseStorageScope(
+            appIdentifierHash: "authority-recovery",
+            environment: "production",
+            storeEnvironment: .appStore
+        )
+        let settings = NuxieRuntimeSettings(
+            configuration: NuxieConfiguration(apiKey: "authority-recovery")
+        )
+        let source = RecoveryTransactionSourceProbe()
+        let finishes = FinishCounter()
+        let recoveryItem = StoreTransactionRecoveryItem(
+            update: VerifiedStoreTransactionUpdate(
+                transactionId: "authority-recovery-transaction",
+                originalTransactionId: "authority-recovery-original",
+                productId: "shared-recovery-product",
+                appAccountToken: nil,
+                isRevoked: false,
+                isUpgraded: false,
+                finish: { await finishes.increment() }
+            ),
+            jwsRepresentation: "authority-recovery-jws"
+        )
+        await source.setUnfinished([recoveryItem])
+        await source.setCurrentEntitlements([recoveryItem])
+        let api = RecoverySyncAPI(succeeds: true)
+        let features = RecoveryFeatureRecorder()
+        let eventSink = RecoveryEventSink()
+        let service = TransactionService(
+            productService: ProductService(),
+            transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            accountOwnershipStore: InMemoryPurchaseAccountOwnershipStore(),
+            dateProvider: dateProvider,
+            settings: settings,
+            eventSink: eventSink,
+            purchaseStorageScope: scope,
+            identityService: identity,
+            featureService: features,
+            activeProductEvidenceAuthority: { productId in
+                await loader.purchaseEvidenceAuthority(storeProductId: productId)
+            }
+        )
+        let observer = TransactionObserver(
+            api: api,
+            features: features,
+            identity: identity,
+            settings: settings,
+            eventSink: eventSink,
+            transactionServiceProvider: { service },
+            evidenceStore: InMemoryTransactionEvidenceStore(),
+            localAccessStore: InMemoryLocalPurchaseAccessStore(),
+            purchaseStorageScope: scope,
+            dateProvider: dateProvider,
+            activeStoreOriginalTransactionIDs: { [] },
+            unfinishedRecoveryTransactions: { await source.unfinishedItems() },
+            currentEntitlementRecoveryTransactions: {
+                await source.currentEntitlementItems()
+            }
+        )
+        await loader.setProductAuthorityChangeHandler {
+            await observer.retryAfterProfileReady()
+        }
+
+        _ = try await loader.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [native, provider],
+            pinned: []
+        ))
+        let conflictingActiveAuthority = await loader.purchaseEvidenceAuthority(
+            storeProductId: "shared-recovery-product"
+        )
+        XCTAssertEqual(conflictingActiveAuthority, .ambiguous)
+        XCTAssertTrue(api.recordedCustomers.isEmpty)
+        let ambiguousFinishCount = await finishes.count()
+        XCTAssertEqual(ambiguousFinishCount, 0)
+        let ambiguousReads = await source.readCounts()
+        XCTAssertEqual(ambiguousReads.unfinished, 1)
+        XCTAssertEqual(ambiguousReads.currentEntitlements, 1)
+
+        _ = try await loader.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [native],
+            pinned: [provider]
+        ))
+        let activeOnlyAuthority = await loader.purchaseEvidenceAuthority(
+            storeProductId: "shared-recovery-product"
+        )
+        XCTAssertEqual(activeOnlyAuthority, .nativeStoreKit)
+        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
+        let convergedFinishCount = await finishes.count()
+        XCTAssertEqual(convergedFinishCount, 1)
+        let convergedReads = await source.readCounts()
+        XCTAssertEqual(convergedReads.unfinished, 2)
+        XCTAssertEqual(convergedReads.currentEntitlements, 2)
+
+        _ = try await loader.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [native],
+            pinned: [provider]
+        ))
+        let repeatedReads = await source.readCounts()
+        XCTAssertEqual(repeatedReads.unfinished, 2)
+        XCTAssertEqual(repeatedReads.currentEntitlements, 2)
+        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
+        let repeatedFinishCount = await finishes.count()
+        XCTAssertEqual(repeatedFinishCount, 1)
     }
 
     func testExactPinnedDuplicatesDeduplicateAfterAuthentication() async throws {

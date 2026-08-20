@@ -22,6 +22,9 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     let isRevoked: Bool
     let finishRequired: Bool
     let commercialContext: PurchaseCommercialContext?
+    /// Checkout-scoped stable event identity, when evidence was correlated to
+    /// a durable pre-delegate marker.
+    let checkoutCompletionEventId: String?
     /// Durable stable-event delivery claim. It remains with retry evidence
     /// while receipt sync is offline, preventing a cold relaunch from
     /// replaying or rerouting the same commercial success transition.
@@ -43,6 +46,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         isRevoked: Bool,
         finishRequired: Bool = false,
         commercialContext: PurchaseCommercialContext? = nil,
+        checkoutCompletionEventId: String? = nil,
         completionDeliveredAt: Date? = nil,
         backendSyncedAt: Date? = nil
     ) {
@@ -58,6 +62,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.isRevoked = isRevoked
         self.finishRequired = finishRequired
         self.commercialContext = commercialContext
+        self.checkoutCompletionEventId = checkoutCompletionEventId
         self.completionDeliveredAt = completionDeliveredAt
         self.backendSyncedAt = backendSyncedAt
     }
@@ -79,6 +84,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             isRevoked: isRevoked,
             finishRequired: finishRequired,
             commercialContext: commercialContext,
+            checkoutCompletionEventId: checkoutCompletionEventId,
             completionDeliveredAt: completionDeliveredAt,
             backendSyncedAt: backendSyncedAt
         )
