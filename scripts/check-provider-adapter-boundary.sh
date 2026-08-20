@@ -16,6 +16,27 @@ cp "$repo_root/Examples/Adapters/NuxieRevenueCatPurchaseDelegate.swift" \
 cp "$repo_root/Examples/Adapters/NuxieSuperwallPurchaseDelegate.swift" \
   "$fixture_root/Positive/Sources/"
 
+copy_documented_provider_snippet() {
+  local environment_name="$1"
+  local destination_name="$2"
+  local source_path="${!environment_name:-}"
+  if [[ -z "$source_path" ]]; then
+    return
+  fi
+  if [[ ! -f "$source_path" ]]; then
+    echo "$environment_name does not name a readable Swift source: $source_path" >&2
+    exit 1
+  fi
+  cp "$source_path" "$fixture_root/Positive/Sources/$destination_name"
+}
+
+copy_documented_provider_snippet \
+  NUXIE_REVENUECAT_DOC_SNIPPET \
+  DocumentedRevenueCatConfiguration.swift
+copy_documented_provider_snippet \
+  NUXIE_SUPERWALL_DOC_SNIPPET \
+  DocumentedSuperwallConfiguration.swift
+
 cat > "$fixture_root/Positive/Sources/Smoke.swift" <<'EOF'
 import Nuxie
 
