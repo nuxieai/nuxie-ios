@@ -122,7 +122,12 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 host: .screen("screen-1"),
                 eventName: "renamed_submit"
             )
+            let nestedRouteKey = JourneyRouteKeyV2(
+                host: .screen("screen-1"),
+                eventName: "renamed_route_ran"
+            )
             let revision = String(repeating: "c", count: 64)
+            let nestedRevision = String(repeating: "8", count: 64)
             let route = JourneyRouteV2(
                 key: routeKey,
                 revisionSHA256: revision,
@@ -146,6 +151,21 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 entryCursor: cursor,
                 actionPaths: ["/program/0", "/program/0/defaultProgram/0"]
             )
+            let nestedRoute = JourneyRouteV2(
+                key: nestedRouteKey,
+                revisionSHA256: nestedRevision,
+                program: [.object([
+                    "type": .string("send_event"),
+                    "eventName": .string("nested_route_ran"),
+                    "payload": .object([:]),
+                ])]
+            )
+            let nestedRegion = JourneyExecutionRegionV2(
+                id: "nested-device",
+                plane: .device,
+                entryCursor: cursor,
+                actionPaths: ["/program/0"]
+            )
             return ExperienceDefinitionV2(
                 entryRouteEventName: "paywall_trigger",
                 screens: [JourneyScreenV2(
@@ -154,18 +174,31 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     defaultInstanceId: nil
                 )],
                 viewModelValues: [],
-                routes: [routeKey: route],
-                executionPlans: [JourneyExecutionPlanV2(
-                    id: "renamed-route-plan",
-                    route: routeKey,
-                    revisionSHA256: revision,
-                    startPlane: .device,
-                    entryRegionId: region.id,
-                    entryCursor: cursor,
-                    deviceRegions: [region],
-                    serverRegions: [],
-                    handoffEdges: []
-                )],
+                routes: [routeKey: route, nestedRouteKey: nestedRoute],
+                executionPlans: [
+                    JourneyExecutionPlanV2(
+                        id: "renamed-route-plan",
+                        route: routeKey,
+                        revisionSHA256: revision,
+                        startPlane: .device,
+                        entryRegionId: region.id,
+                        entryCursor: cursor,
+                        deviceRegions: [region],
+                        serverRegions: [],
+                        handoffEdges: []
+                    ),
+                    JourneyExecutionPlanV2(
+                        id: "nested-route-plan",
+                        route: nestedRouteKey,
+                        revisionSHA256: nestedRevision,
+                        startPlane: .device,
+                        entryRegionId: nestedRegion.id,
+                        entryCursor: cursor,
+                        deviceRegions: [nestedRegion],
+                        serverRegions: [],
+                        handoffEdges: []
+                    ),
+                ],
                 responseSchema: nil,
                 controlsByScreen: [
                     "screen-1": [
@@ -687,6 +720,8 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
 
             expect(mocks.eventLog.routedEvents.map(\.name))
                 .to(contain("renamed_route_ran"))
+            expect(mocks.eventLog.routedEvents.map(\.name))
+                .to(contain("nested_route_ran"))
         }
 
         it("applies a source gate plan before a nested authored-event gate plan") {
