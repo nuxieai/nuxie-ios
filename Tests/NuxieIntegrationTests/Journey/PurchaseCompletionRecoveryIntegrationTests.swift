@@ -383,7 +383,7 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                 )
                 let context = PurchaseCommercialContext(
                     release: AuthenticatedExperienceReleaseID(
-                        identity: ExperienceReleaseIdentityV2(
+                        identity: ExperienceReleaseIdentity(
                             appId: "app-1",
                             environment: "live",
                             experienceId: "experience-1",
