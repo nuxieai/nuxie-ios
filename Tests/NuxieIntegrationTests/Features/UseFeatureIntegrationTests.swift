@@ -65,8 +65,12 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     expect(result.success) == true
                     expect(result.usage).to(beNil())
                     expect(result.authoritativeAccess?.balance) == 3
-                    let trackEventCallCount = await mockApi.trackEventCallCount
-                    expect(trackEventCallCount) == 0
+                    // Only the ordinary $feature_used delivery matters here;
+                    // unrelated background captures (lifecycle, identity) can
+                    // race this window, so the aggregate count is not stable.
+                    let featureUsedCalls = await mockApi.trackEventCalls
+                        .filter { $0.event == SystemEventNames.featureUsed }
+                    expect(featureUsedCalls).to(beEmpty())
                     let calls = await transactionObserver.purchaseBackedUsageCalls
                     expect(calls.count) == 1
                     expect(calls.first?.distinctId) == "test-user-123"
