@@ -634,6 +634,12 @@ actor EventLog: EventLogProtocol {
 
     do {
       try await store.initialize(path: snapshot?.customStoragePath)
+    } catch let error as EventStorageError {
+      if case .invalidSchema = error {
+        throw error
+      }
+      // Transient storage failures retain the existing best-effort behavior.
+      LogWarning("EventLog storage initialization failed: \(error)")
     } catch {
       // Storage should never wedge the SDK (or tests). If storage init fails, we still allow
       // network delivery and local evaluation to proceed with a best-effort store.

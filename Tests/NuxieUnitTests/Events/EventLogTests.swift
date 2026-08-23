@@ -40,6 +40,18 @@ final class EventLogTests: AsyncSpec {
                 log = nil
             }
 
+            it("fails setup closed when the event-store schema is unsupported") {
+                mockStore.initializeFailure = .invalidSchema
+
+                await expect {
+                    try await log.configure(configuration: testConfig)
+                }.to(throwError { error in
+                    guard case EventStorageError.invalidSchema = error else {
+                        return fail("Expected invalidSchema, got \(error)")
+                    }
+                })
+            }
+
             // MARK: - Committed-events subscription stream
 
             describe("committed-events subscriptions") {
