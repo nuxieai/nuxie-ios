@@ -60,6 +60,12 @@ public actor MockNuxieApi: NuxieApiProtocol {
         public let entityId: String?
     }
 
+    /// Every recorded trackEvent call, oldest first. Prefer filtering this by
+    /// event name over asserting on trackEventCallCount: unrelated background
+    /// captures (lifecycle, identity) can race a test's window and make the
+    /// aggregate count flaky.
+    public private(set) var trackEventCalls: [TrackEventCall] = []
+
     /// Immutable snapshot of a recorded setResponseField call.
     // @unchecked Sendable: write-once snapshot; the value is never mutated.
     public struct ResponseFieldCall: @unchecked Sendable {
@@ -225,9 +231,11 @@ public actor MockNuxieApi: NuxieApiProtocol {
         entityId: String?
     ) async throws -> EventResponse {
         trackEventCallCount += 1
-        lastTrackEventCall = TrackEventCall(
+        let call = TrackEventCall(
             event: event, distinctId: distinctId, properties: properties,
             value: value, entityId: entityId)
+        lastTrackEventCall = call
+        trackEventCalls.append(call)
         sentEvents.append(NuxieEvent(
             name: event,
             distinctId: distinctId,
@@ -390,6 +398,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         fetchProfileWithTimeoutCallCount = 0
         sendBatchCallCount = 0
         trackEventCallCount = 0
+        trackEventCalls = []
         lastTimeoutUsed = nil
         lastProfileLocale = nil
         sentEvents.removeAll()
