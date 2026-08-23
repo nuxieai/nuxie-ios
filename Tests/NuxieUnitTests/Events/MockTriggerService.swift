@@ -52,8 +52,6 @@ extension MockTriggerService: TriggerServiceProtocol {
     public func trigger(
         _ event: String,
         properties: sending [String: Any]?,
-        userProperties: sending [String: Any]?,
-        userPropertiesSetOnce: sending [String: Any]?,
         handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {
         await performTrigger(
@@ -67,8 +65,6 @@ extension MockTriggerService: PresentationAttemptTriggerServiceProtocol {
     func trigger(
         _ event: String,
         properties: sending [String: Any]?,
-        userProperties: sending [String: Any]?,
-        userPropertiesSetOnce: sending [String: Any]?,
         presentationAttempt: ExperiencePresentationAttempt,
         handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {

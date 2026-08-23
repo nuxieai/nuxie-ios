@@ -29,7 +29,7 @@ Learn more at https://nuxie.ai
 - Purchases: delegate‑based StoreKit integration for buy/restore.
 - Automatic lifecycle events: $app_installed, $app_updated, $app_opened, and $app_backgrounded are always captured; `beforeSend` can drop them.
 - Privacy & controls: sensitive-value log redaction and a `beforeSend` transform/drop hook.
-- Offline-first, precisely: committed events are normally persisted locally before observers run and re-sent after relaunch (deduplicated server-side); a history-write failure advances the durable completeness fence so local evaluation fails closed instead of silently reasoning across a gap. Journey enrollment and gate decisions evaluate from cached config, so network failure degrades freshness, never function.
+- Offline-first, precisely: committed events are normally persisted locally before observers run and re-sent after relaunch (deduplicated server-side); a history-write failure advances the durable completeness fence so local evaluation fails closed instead of silently reasoning across a gap. Journey enrollment and feature-access decisions evaluate from cached config, so network failure degrades freshness, never function.
 - Resilient Experiences: authenticated profile snapshots remain offline-usable for 24 hours, verified release objects use a bounded 256 MiB disk LRU, speculative preparation respects Low Data Mode and app lifecycle, and StoreKit failures block only product-bound selected screens.
 
 ### Local event-history contract
@@ -148,7 +148,7 @@ NuxieSDK.shared.identify(
 )
 ```
 
-Trigger events (optionally observe decisions/entitlements):
+Trigger events (optionally observe experience and feature-access updates):
 
 ```swift
 NuxieSDK.shared.trigger(
@@ -162,7 +162,7 @@ Task {
     properties: ["feature": "pro_filters"]
   ) { update in
     switch update {
-    case .entitlement(.allowed):
+    case .featureAccess(.allowed):
       print("Unlocked")
     case .decision(.noMatch):
       break
@@ -185,8 +185,8 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 
 - `NuxieSDK.shared.setup(with:)`: initialize the SDK (call once).
 - `NuxieSDK.shared.identify(_:userProperties:userPropertiesSetOnce:)`: identify a user and set traits.
-- `NuxieSDK.shared.trigger(_:properties:userProperties:userPropertiesSetOnce:)`: trigger events (analytics-only).
-- `NuxieSDK.shared.trigger(_:properties:userProperties:userPropertiesSetOnce:handler:)`: trigger events with decisions/entitlements.
+- `NuxieSDK.shared.trigger(_:properties:)`: trigger events without observing updates.
+- `NuxieSDK.shared.trigger(_:properties:handler:)`: trigger events with experience and feature-access updates.
 - `NuxieSDK.shared.reset(keepAnonymousId:)`: clear identity (e.g., logout).
 - `NuxieSDK.shared.version`: current SDK version string.
 - `NuxieSDK.shared.getDistinctId()`: current distinct ID (identified or anonymous).

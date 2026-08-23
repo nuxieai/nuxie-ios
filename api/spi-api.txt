@@ -20,3 +20,5 @@ s:5Nuxie10AnyCodableV5valueypvp	Var	value
 s:5Nuxie10AnyCodableV6encode2toys7Encoder_p_tKF	Function	encode(to:)
 s:5Nuxie10AnyCodableVyACypcfc	Constructor	init(_:)
 s:5Nuxie11EnvironmentO7stagingyA2CmF	Var	staging
+s:5Nuxie13TriggerResultO9wireValueSDyS2SGvg	Accessor	Get()
+s:5Nuxie13TriggerResultO9wireValueSDyS2SGvp	Var	wireValue

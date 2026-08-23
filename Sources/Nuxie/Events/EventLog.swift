@@ -156,9 +156,7 @@ protocol EventTriggerTracking: AnyObject, Sendable {
     _ ownership: JourneyEventOwnership
   ) async -> JourneyEventOwnershipState
   func prepareTriggerProperties(
-    _ properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?
+    _ properties: sending [String: Any]?
   ) async -> sending [String: Any]
   func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent?
   func storePreparedEventInHistory(_ event: NuxieEvent) async
@@ -166,17 +164,13 @@ protocol EventTriggerTracking: AnyObject, Sendable {
   func trackForTrigger(
     _ event: String,
     properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?,
     persistToHistory: Bool,
     distinctIdOverride: String?,
     applyBeforeSend: Bool
   ) async throws -> (NuxieEvent, EventResponse)
   func trackForTrigger(
     _ event: String,
-    properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?
+    properties: sending [String: Any]?
   ) async throws -> (NuxieEvent, EventResponse)
   func trackWithResponse(
     _ event: String,
@@ -216,8 +210,6 @@ extension EventTriggerTracking {
     guard let tracked = try? await trackForTrigger(
       event,
       properties: properties,
-      userProperties: nil,
-      userPropertiesSetOnce: nil,
       persistToHistory: true,
       distinctIdOverride: distinctId,
       applyBeforeSend: false
@@ -341,9 +333,7 @@ protocol EventLogProtocol:
   /// Build the enriched trigger properties that local journey evaluation should use before the
   /// synchronous trigger tracking round trip completes.
   func prepareTriggerProperties(
-    _ properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?
+    _ properties: sending [String: Any]?
   ) async -> sending [String: Any]
 
   /// Persist a fully prepared trigger event into local history without re-enqueuing it.
@@ -372,8 +362,6 @@ protocol EventLogProtocol:
   func trackForTrigger(
     _ event: String,
     properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?,
     persistToHistory: Bool,
     distinctIdOverride: String?,
     applyBeforeSend: Bool
@@ -469,14 +457,9 @@ extension EventLogProtocol {
   }
 
   func prepareTriggerProperties(
-    _ properties: sending [String: Any]? = nil,
-    userProperties: sending [String: Any]? = nil,
-    userPropertiesSetOnce: sending [String: Any]? = nil
+    _ properties: sending [String: Any]? = nil
   ) async -> sending [String: Any] {
-    var finalProperties = properties ?? [:]
-    if let userProperties { finalProperties["$set"] = userProperties }
-    if let userPropertiesSetOnce { finalProperties["$set_once"] = userPropertiesSetOnce }
-    return finalProperties
+    properties ?? [:]
   }
 
   func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent? {
@@ -485,15 +468,11 @@ extension EventLogProtocol {
 
   func trackForTrigger(
     _ event: String,
-    properties: sending [String: Any]? = nil,
-    userProperties: sending [String: Any]? = nil,
-    userPropertiesSetOnce: sending [String: Any]? = nil
+    properties: sending [String: Any]? = nil
   ) async throws -> (NuxieEvent, EventResponse) {
     try await trackForTrigger(
       event,
       properties: properties,
-      userProperties: userProperties,
-      userPropertiesSetOnce: userPropertiesSetOnce,
       persistToHistory: true,
       distinctIdOverride: nil,
       applyBeforeSend: true
@@ -919,9 +898,7 @@ actor EventLog: EventLogProtocol {
     // Boxed so the same snapshot can cross into the API client while
     // remaining readable here (each load is a fresh disconnected region).
     var scopedProperties = await buildTriggerProperties(
-      properties,
-      userProperties: nil,
-      userPropertiesSetOnce: nil
+      properties
     )
     scopedProperties["sdk_version"] = SDKVersion.current
     scopedProperties["platform"] = currentPlatform()
@@ -1024,8 +1001,6 @@ actor EventLog: EventLogProtocol {
   public func trackForTrigger(
     _ event: String,
     properties: sending [String: Any]? = nil,
-    userProperties: sending [String: Any]? = nil,
-    userPropertiesSetOnce: sending [String: Any]? = nil,
     persistToHistory: Bool = true,
     distinctIdOverride: String? = nil,
     applyBeforeSend: Bool = false
@@ -1065,9 +1040,7 @@ actor EventLog: EventLogProtocol {
     // Boxed so the same snapshot can cross into the API client while
     // remaining readable here (each load is a fresh disconnected region).
     var scopedProperties = await buildTriggerProperties(
-      properties,
-      userProperties: userProperties,
-      userPropertiesSetOnce: userPropertiesSetOnce
+      properties
     )
     scopedProperties["$distinct_id"] = distinctId
     let finalProperties = UncheckedSendable(scopedProperties)
@@ -1337,9 +1310,7 @@ actor EventLog: EventLogProtocol {
       }
 
       var scopedProperties = await buildTriggerProperties(
-        properties,
-        userProperties: nil,
-        userPropertiesSetOnce: nil
+        properties
       )
       scopedProperties["$distinct_id"] = distinctId
       let finalProperties = UncheckedSendable(scopedProperties)
@@ -1704,16 +1675,10 @@ actor EventLog: EventLogProtocol {
   }
 
   public func prepareTriggerProperties(
-    _ properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?
+    _ properties: sending [String: Any]?
   ) async -> sending [String: Any] {
     await ready.wait()
-    return await buildTriggerProperties(
-      properties,
-      userProperties: userProperties,
-      userPropertiesSetOnce: userPropertiesSetOnce
-    )
+    return await buildTriggerProperties(properties)
   }
 
   public func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent? {
@@ -2236,13 +2201,9 @@ actor EventLog: EventLogProtocol {
   }
 
   private func buildTriggerProperties(
-    _ properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?
+    _ properties: sending [String: Any]?
   ) async -> sending [String: Any] {
     var finalProperties = properties ?? [:]
-    if let userProperties { finalProperties["$set"] = userProperties }
-    if let userPropertiesSetOnce { finalProperties["$set_once"] = userPropertiesSetOnce }
 
     if finalProperties["$session_id"] == nil {
       if let sessionId = sessionService.getSessionId(at: Date(), readOnly: false) {

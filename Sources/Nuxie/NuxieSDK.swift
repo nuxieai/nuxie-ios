@@ -308,12 +308,10 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
   /// Trigger an event: tracks it, evaluates matching experiences, and may
   /// present an experience. Fire-and-forget; pass `handler` to observe progressive
-  /// updates (gate decisions, journey lifecycle) for this specific trigger.
+  /// updates (decisions, journey lifecycle, feature access) for this trigger.
   public func trigger(
     _ event: String,
     properties: [String: Any]? = nil,
-    userProperties: [String: Any]? = nil,
-    userPropertiesSetOnce: [String: Any]? = nil,
     handler: (@Sendable (TriggerUpdate) -> Void)? = nil
   ) {
     guard let operation = runningOperation() else { return }
@@ -327,8 +325,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     let triggerService = core.triggers
     // Boxed: property payloads are write-once snapshots handed to the SDK.
     let propertiesBox = UncheckedSendable(properties)
-    let userPropertiesBox = UncheckedSendable(userProperties)
-    let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
     let launched = run.launchFacadeTask { @MainActor [operation] in
       defer { operation.finish() }
       if let presentationAttempt,
@@ -336,8 +332,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         await tracedTriggerService.trigger(
           event,
           properties: propertiesBox.value,
-          userProperties: userPropertiesBox.value,
-          userPropertiesSetOnce: userPropertiesSetOnceBox.value,
           presentationAttempt: presentationAttempt
         ) { update in
           handler?(update)
@@ -345,9 +339,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       } else {
         await triggerService.trigger(
           event,
-          properties: propertiesBox.value,
-          userProperties: userPropertiesBox.value,
-          userPropertiesSetOnce: userPropertiesSetOnceBox.value
+          properties: propertiesBox.value
         ) { update in
           handler?(update)
         }
@@ -367,18 +359,15 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   /// }
   /// ```
   /// An active journey that is still awaiting a terminal update when SDK
-  /// shutdown begins resolves as an error whose code is `sdk_shutdown`.
+  /// shutdown begins resolves as an error whose code is `trigger_failed`.
   public func triggerAndWait(
     _ event: String,
     properties: [String: Any]? = nil,
-    userProperties: [String: Any]? = nil,
-    userPropertiesSetOnce: [String: Any]? = nil,
     progress: (@Sendable (TriggerUpdate) -> Void)? = nil
   ) async -> TriggerResult {
     guard let operation = runningOperation() else {
-      return .error(TriggerError(code: "not_configured", message: "SDK not configured"))
+      return .error(TriggerError(code: .notConfigured, message: "SDK not configured"))
     }
-    defer { operation.finish() }
     let run = operation.graph
     let core = run.core
 
@@ -389,11 +378,10 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     let triggerService = core.triggers
     // Boxed: property payloads are write-once snapshots handed to the SDK.
     let propertiesBox = UncheckedSendable(properties)
-    let userPropertiesBox = UncheckedSendable(userProperties)
-    let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
     return await withCheckedContinuation { (continuation: CheckedContinuation<TriggerResult, Never>) in
       let state = TriggerCompletionState()
-      let launched = run.launchFacadeTask { @MainActor in
+      let launched = run.launchFacadeTask { @MainActor [operation] in
+        defer { operation.finish() }
         let handleUpdate: @Sendable (TriggerUpdate) -> Void = { update in
           progress?(update)
           if let result = NuxieSDK.terminalResult(for: update), state.claim() {
@@ -407,8 +395,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
           await tracedTriggerService.trigger(
             event,
             properties: propertiesBox.value,
-            userProperties: userPropertiesBox.value,
-            userPropertiesSetOnce: userPropertiesSetOnceBox.value,
             presentationAttempt: presentationAttempt,
             handler: handleUpdate
           )
@@ -416,8 +402,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
           await triggerService.trigger(
             event,
             properties: propertiesBox.value,
-            userProperties: userPropertiesBox.value,
-            userPropertiesSetOnce: userPropertiesSetOnceBox.value,
             handler: handleUpdate
           )
         }
@@ -429,7 +413,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
           await state.waitForCompletion {
             if state.claim() {
               continuation.resume(returning: .error(TriggerError(
-                code: "sdk_shutdown",
+                code: .triggerFailed,
                 message: "SDK shutdown began before the journey completed"
               )))
             }
@@ -440,7 +424,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       }
       if !launched {
         continuation.resume(returning: .error(TriggerError(
-          code: "not_configured",
+          code: .notConfigured,
           message: "SDK shutdown began before trigger work started"
         )))
       }
@@ -474,14 +458,14 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       return .error(error)
     case .decision(let decision):
       switch decision {
-      case .allowedImmediate: return .allowed(source: nil)
+      case .allowedImmediate: return .allowed
       case .deniedImmediate: return .denied
       case .noMatch: return .noMatch
       default: return nil
       }
-    case .entitlement(let entitlement):
-      switch entitlement {
-      case .allowed(let source): return .allowed(source: source)
+    case .featureAccess(let featureAccess):
+      switch featureAccess {
+      case .allowed: return .allowed
       case .denied: return .denied
       case .pending: return nil
       }
@@ -493,7 +477,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   private static func opensJourneyCompletion(_ update: TriggerUpdate) -> Bool {
     guard case .decision(let decision) = update else { return false }
     switch decision {
-    case .journeyStarted, .journeyResumed:
+    case .journeyStarted:
       return true
     default:
       return false

@@ -291,9 +291,7 @@ final class OrchestrationStack {
         let box = TriggerUpdateBox()
         await core.triggers.trigger(
             event,
-            properties: properties,
-            userProperties: nil,
-            userPropertiesSetOnce: nil
+            properties: properties
         ) { update in
             box.append(update)
         }

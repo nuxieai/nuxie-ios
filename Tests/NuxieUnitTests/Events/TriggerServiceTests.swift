@@ -28,10 +28,10 @@ private actor FlowShownBeforeJourneyDecisionService: JourneyServiceProtocol {
     func handleEvent(_ event: NuxieEvent) async {}
 
     func handleEventForTrigger(_ event: NuxieEvent) async -> [JourneyTriggerResult] {
-        let ref = JourneyRef(
-            journeyId: journey.id,
+        let ref = ExperienceRef(
             experienceId: journey.experienceId,
-            experienceVersion: journey.experienceVersion
+            experienceVersion: journey.experienceVersion,
+            journeyId: journey.id
         )
         await broker.emit(eventId: event.id, update: .decision(.experienceShown(ref)))
 
@@ -76,6 +76,7 @@ final class TriggerServiceTests: AsyncSpec {
         var mockFlowPresentationService: MockExperiencePresentationService!
         var mockSleepProvider: MockSleepProvider!
         var mockDateProvider: MockDateProvider!
+        var mockFeatureApi: MockNuxieApi!
         var featureInfo: FeatureInfo!
         var featureService: FeatureService!
         var triggerBroker: TriggerBroker!
@@ -89,9 +90,10 @@ final class TriggerServiceTests: AsyncSpec {
             mockSleepProvider = MockSleepProvider()
             mockSleepProvider.shouldCompleteImmediately = true
             mockDateProvider = MockDateProvider()
+            mockFeatureApi = MockNuxieApi()
             featureInfo = FeatureInfo()
             featureService = FeatureService(
-                api: MockNuxieApi(),
+                api: mockFeatureApi,
                 identity: MockIdentityService(),
                 profile: MockProfileService(),
                 dateProvider: mockDateProvider,
@@ -188,7 +190,7 @@ final class TriggerServiceTests: AsyncSpec {
                     guard case .error(let error) = update else { return nil }
                     return error
                 }.first
-                expect(failure?.code).to(equal("trigger_failed"))
+                expect(failure?.code).to(equal(.triggerFailed))
                 expect(failure?.message).to(equal("Event routing failed"))
             }
 
@@ -207,6 +209,148 @@ final class TriggerServiceTests: AsyncSpec {
                 }).to(beFalse())
             }
 
+            it("reports a typed experienceMissing error when show_flow has no experience") {
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: ["gate": AnyCodable(["decision": "show_flow"])],
+                    customer: nil,
+                    eventId: "event-missing-experience",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                let updates = TriggerUpdateRecorder()
+
+                await triggerService.trigger("test_event") { updates.append($0) }
+
+                expect(updates.errorCodes).to(contain(.experienceMissing))
+            }
+
+            it("reports a typed featureMissing error when require_feature has no feature") {
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: ["gate": AnyCodable(["decision": "require_feature"])],
+                    customer: nil,
+                    eventId: "event-missing-feature",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                let updates = TriggerUpdateRecorder()
+
+                await triggerService.trigger("test_event") { updates.append($0) }
+
+                expect(updates.errorCodes).to(contain(.featureMissing))
+            }
+
+            it("reports featureAccessTimeout after pending access does not arrive") {
+                await mockFeatureApi.setCheckFeatureResponse(FeatureCheckResult(
+                    customerId: "customer",
+                    featureId: "pro",
+                    requiredBalance: 1,
+                    code: "denied",
+                    allowed: false,
+                    unlimited: false,
+                    balance: 0,
+                    type: .boolean,
+                    preview: nil
+                ))
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: [
+                        "gate": AnyCodable([
+                            "decision": "require_feature",
+                            "featureId": "pro",
+                            "policy": "hard",
+                            "timeoutMs": 1
+                        ])
+                    ],
+                    customer: nil,
+                    eventId: "event-feature-timeout",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                let updates = TriggerUpdateRecorder()
+
+                await triggerService.trigger("test_event") { updates.append($0) }
+
+                expect(updates.values).to(contain(.featureAccess(.pending)))
+                expect(updates.errorCodes).to(contain(.featureAccessTimeout))
+            }
+
+            it("reports triggerFailed when event tracking throws") {
+                mockEventLog.trackWithResponseError = NSError(
+                    domain: "TriggerServiceTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "tracking failed"]
+                )
+                let updates = TriggerUpdateRecorder()
+
+                await triggerService.trigger("test_event") { updates.append($0) }
+
+                expect(updates.errorCodes).to(contain(.triggerFailed))
+            }
+
+            it("reports journey start failures as terminal trigger errors") {
+                await mockJourneyService.setTriggerResults([
+                    .suppressed(.alreadyActive),
+                    .error(TriggerError(code: .triggerFailed, message: "start failed")),
+                    .suppressed(.reentryLimited)
+                ])
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: nil,
+                    customer: nil,
+                    eventId: "event-start-failed",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                let updates = TriggerUpdateRecorder()
+
+                await triggerService.trigger("test_event") { updates.append($0) }
+
+                expect(updates.errorCodes).to(contain(.triggerFailed))
+                expect(updates.values).toNot(contain(.decision(.allowedImmediate)))
+                expect(updates.values).toNot(contain(.decision(.noMatch)))
+                expect(updates.values).to(contain(.decision(.suppressed(.alreadyActive))))
+                expect(updates.values).toNot(contain(.decision(.suppressed(.reentryLimited))))
+            }
+
+            it("does not emit a journey after a terminal start error") {
+                let laterJourney = TestJourneyBuilder().build()
+                await mockJourneyService.setTriggerResults([
+                    .error(TriggerError(code: .triggerFailed, message: "start failed")),
+                    .started(laterJourney)
+                ])
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: ["gate": AnyCodable(["decision": "allow"])],
+                    customer: nil,
+                    eventId: "event-start-failed-before-journey",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                let updates = TriggerUpdateRecorder()
+
+                await triggerService.trigger("test_event") { updates.append($0) }
+
+                let emittedLaterJourney = updates.values.contains { update in
+                    guard case .decision(.journeyStarted(let ref)) = update else { return false }
+                    return ref.journeyId == laterJourney.id
+                }
+                expect(updates.errorCodes).to(contain(.triggerFailed))
+                expect(emittedLaterJourney).to(beFalse())
+                expect(updates.values).toNot(contain(.decision(.allowedImmediate)))
+            }
+
             it("emits journeyStarted when a journey starts") {
                 let journey = TestJourneyBuilder().build()
                 await mockJourneyService.setTriggerResults([.started(journey)])
@@ -218,20 +362,20 @@ final class TriggerServiceTests: AsyncSpec {
                     updates.append(update)
                 }
 
-                let expectedRef = JourneyRef(
-                    journeyId: journey.id,
+                let expectedRef = ExperienceRef(
                     experienceId: journey.experienceId,
-                    experienceVersion: journey.experienceVersion
+                    experienceVersion: journey.experienceVersion,
+                    journeyId: journey.id
                 )
                 expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
             }
 
             it("keeps the broker alive when a journey experienceShown arrives before journeyStarted") {
                 let journey = TestJourneyBuilder().build()
-                let expectedRef = JourneyRef(
-                    journeyId: journey.id,
+                let expectedRef = ExperienceRef(
                     experienceId: journey.experienceId,
-                    experienceVersion: journey.experienceVersion
+                    experienceVersion: journey.experienceVersion,
+                    journeyId: journey.id
                 )
                 let finalUpdate = JourneyUpdate(
                     journeyId: journey.id,
@@ -313,6 +457,25 @@ final class TriggerServiceTests: AsyncSpec {
 
             it("continues show_flow gate plans after local journey suppression") {
                 await mockJourneyService.setTriggerResults([.suppressed(.alreadyActive)])
+                let presentedExperience = Experience(
+                    id: "stable-server-experience",
+                    versionId: "published-server-version",
+                    name: "Server Experience",
+                    reentry: .everyTime,
+                    publishedAt: "2026-08-23T00:00:00Z",
+                    trigger: nil,
+                    goal: nil,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil
+                )
+                let presentedController = await MainActor.run {
+                    MockExperienceViewController(
+                        mockExperienceVersionId: presentedExperience.versionId,
+                        mockExperience: presentedExperience
+                    )
+                }
+                mockFlowPresentationService.mockViewControllers["server-flow"] = presentedController
                 mockEventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: [
@@ -340,8 +503,9 @@ final class TriggerServiceTests: AsyncSpec {
                 expect(mockFlowPresentationService.lastPresentedExperienceVersionId).to(equal("server-flow"))
                 let showedServerFlow = updates.values.contains { update in
                     guard case .decision(.experienceShown(let ref)) = update else { return false }
-                    return ref.experienceId == "experience:server-flow"
-                        && ref.experienceVersion == "server-flow"
+                    return ref.experienceId == "stable-server-experience"
+                        && ref.experienceVersion == "published-server-version"
+                        && ref.journeyId == nil
                 }
                 expect(showedServerFlow).to(beTrue())
             }
@@ -373,8 +537,6 @@ final class TriggerServiceTests: AsyncSpec {
                 await tracedTriggerService.trigger(
                     "upgrade_tapped",
                     properties: nil,
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil,
                     presentationAttempt: attempt
                 ) { _ in }
 
@@ -420,8 +582,6 @@ final class TriggerServiceTests: AsyncSpec {
                 await tracedTriggerService.trigger(
                     "upgrade_tapped",
                     properties: nil,
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil,
                     presentationAttempt: attempt
                 ) { _ in }
 
@@ -513,15 +673,14 @@ final class TriggerServiceTests: AsyncSpec {
                     triggerEvent: "upgrade_tapped",
                     startedAt: Date(timeIntervalSince1970: 1)
                 )
+                let updates = TriggerUpdateRecorder()
 
                 let traced = triggerService as! any PresentationAttemptTriggerServiceProtocol
                 await traced.trigger(
                     "upgrade_tapped",
                     properties: nil,
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil,
                     presentationAttempt: attempt
-                ) { _ in }
+                ) { updates.append($0) }
 
                 expect(presentationTrace.events(for: attempt.id).map(\.stage))
                     .to(contain(
@@ -532,6 +691,7 @@ final class TriggerServiceTests: AsyncSpec {
                             )
                         )
                     ))
+                expect(updates.errorCodes).to(contain(.experiencePresentFailed))
             }
 
             it("keeps handling immediate gate plans after a journey starts") {
@@ -558,10 +718,10 @@ final class TriggerServiceTests: AsyncSpec {
                     updates.append(update)
                 }
 
-                let expectedRef = JourneyRef(
-                    journeyId: journey.id,
+                let expectedRef = ExperienceRef(
                     experienceId: journey.experienceId,
-                    experienceVersion: journey.experienceVersion
+                    experienceVersion: journey.experienceVersion,
+                    journeyId: journey.id
                 )
                 expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
                 expect(updates.values).to(contain(.decision(.allowedImmediate)))
@@ -627,16 +787,16 @@ final class TriggerServiceTests: AsyncSpec {
                     updates.append(update)
                 }
 
-                let expectedRef = JourneyRef(
-                    journeyId: journey.id,
+                let expectedRef = ExperienceRef(
                     experienceId: journey.experienceId,
-                    experienceVersion: journey.experienceVersion
+                    experienceVersion: journey.experienceVersion,
+                    journeyId: journey.id
                 )
                 expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
-                expect(updates.values).to(contain(.entitlement(.allowed(source: .cache))))
+                expect(updates.values).to(contain(.featureAccess(.allowed)))
             }
 
-            it("emits entitlement allowed for cache_only gate plan with cached access") {
+            it("emits feature access allowed for cache_only gate plan with cached access") {
                 let payload: [String: AnyCodable] = [
                     "gate": AnyCodable([
                         "decision": "require_feature",
@@ -668,7 +828,7 @@ final class TriggerServiceTests: AsyncSpec {
                     updates.append(update)
                 }
 
-                expect(updates.values).to(contain(.entitlement(.allowed(source: .cache))))
+                expect(updates.values).to(contain(.featureAccess(.allowed)))
             }
 
             it("allows an exact authoritative opaque cache_only decision") {
@@ -711,7 +871,7 @@ final class TriggerServiceTests: AsyncSpec {
                 let updates = TriggerUpdateRecorder()
                 await triggerService.trigger("test_event") { updates.append($0) }
 
-                expect(updates.values).to(contain(.entitlement(.allowed(source: .cache))))
+                expect(updates.values).to(contain(.featureAccess(.allowed)))
             }
 
             it("denies an ordinary metered cache_only record with no balance") {
@@ -748,10 +908,10 @@ final class TriggerServiceTests: AsyncSpec {
                 let updates = TriggerUpdateRecorder()
                 await triggerService.trigger("test_event") { updates.append($0) }
 
-                expect(updates.values).to(contain(.entitlement(.denied)))
+                expect(updates.values).to(contain(.featureAccess(.denied)))
             }
 
-            it("emits entitlement denied for cache_only gate plan without access") {
+            it("emits feature access denied for cache_only gate plan without access") {
                 let payload: [String: AnyCodable] = [
                     "gate": AnyCodable([
                         "decision": "require_feature",
@@ -776,7 +936,7 @@ final class TriggerServiceTests: AsyncSpec {
                     updates.append(update)
                 }
 
-                expect(updates.values).to(contain(.entitlement(.denied)))
+                expect(updates.values).to(contain(.featureAccess(.denied)))
             }
         }
     }
@@ -795,5 +955,12 @@ private final class TriggerUpdateRecorder: @unchecked Sendable {
 
     var values: [TriggerUpdate] {
         lock.withLock { _values }
+    }
+
+    var errorCodes: [TriggerError.Code] {
+        values.compactMap { update in
+            guard case .error(let error) = update else { return nil }
+            return error.code
+        }
     }
 }

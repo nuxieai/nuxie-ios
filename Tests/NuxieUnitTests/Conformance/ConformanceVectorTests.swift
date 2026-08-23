@@ -181,13 +181,7 @@ final class ConformanceVectorTests: XCTestCase {
             case "noMatch":
                 result = .noMatch
             case "allowed":
-                let source: GateSource? = switch vector.result["source"]?.value as? String {
-                case "cache": .cache
-                case "purchase": .purchase
-                case "restore": .restore
-                default: nil
-                }
-                result = .allowed(source: source)
+                result = .allowed
             case "denied":
                 result = .denied
             case "journeyCompleted":
@@ -199,7 +193,12 @@ final class ConformanceVectorTests: XCTestCase {
                     goalMet: vector.result["goal_met"]?.value as? Bool ?? false
                 ))
             case "error":
-                result = .error(TriggerError(code: vector.result["code"]?.value as? String ?? "", message: ""))
+                let rawCode = vector.result["code"]?.value as? String ?? ""
+                guard let code = TriggerError.Code(rawValue: rawCode) else {
+                    XCTFail("[\(vector.name)] unknown trigger error code \(rawCode)")
+                    continue
+                }
+                result = .error(TriggerError(code: code, message: ""))
             default:
                 XCTFail("[\(vector.name)] unknown result kind \(kind ?? "nil")"); continue
             }

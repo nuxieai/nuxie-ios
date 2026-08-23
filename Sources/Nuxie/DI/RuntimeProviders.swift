@@ -71,9 +71,7 @@ final class TriggerSystemEventSink: SystemEventSink, @unchecked Sendable {
         Task { @MainActor in
             await trigger.trigger(
                 name,
-                properties: properties.value,
-                userProperties: nil,
-                userPropertiesSetOnce: nil
+                properties: properties.value
             ) { _ in }
         }
     }

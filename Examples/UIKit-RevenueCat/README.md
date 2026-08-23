@@ -88,7 +88,7 @@ NuxieSDK.shared.trigger("upgrade_tapped", properties: [
     "current_streak": streak
 ]) { update in
     switch update {
-    case .entitlement(.allowed):
+    case .featureAccess(.allowed):
         unlockProFeatures()
     case .decision(.noMatch):
         break

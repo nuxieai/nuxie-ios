@@ -48,11 +48,11 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(TriggerDecision.self)
     requireSendable(TriggerResult.self)
     requireSendable(TriggerError.self)
-    requireSendable(EntitlementUpdate.self)
-    requireSendable(JourneyRef.self)
+    requireSendable(TriggerError.Code.self)
+    requireSendable(FeatureAccessUpdate.self)
+    requireSendable(ExperienceRef.self)
     requireSendable(JourneyUpdate.self)
     requireSendable(SuppressReason.self)
-    requireSendable(GateSource.self)
 
     // Events
     requireSendable(NuxieEvent.self)
@@ -127,7 +127,7 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     // Awaited trigger; result consumed on the main actor.
     let result = await sdk.triggerAndWait("compile_check")
     switch result {
-    case .allowed(let source): _ = source
+    case .allowed: break
     case .denied, .noMatch: break
     case .journeyCompleted(let update): _ = update.journeyId
     case .error(let error): _ = error.code

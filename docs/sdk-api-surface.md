@@ -58,13 +58,19 @@ matching experiences, and may present UI.
 
 | Entry point | Semantics |
 | --- | --- |
-| `trigger(_:properties:userProperties:userPropertiesSetOnce:handler:)` | Fire-and-forget. The optional handler observes progressive `TriggerUpdate`s (gate decisions, journey lifecycle, entitlement outcomes) for this trigger only. |
-| `triggerAndWait(...) async -> TriggerResult` | Same, awaiting the terminal result. Wire encoding of `TriggerResult` is pinned by `fixtures/encodings/trigger-result.json`. |
+| `trigger(_:properties:handler:)` | Fire-and-forget. The optional handler observes progressive `TriggerUpdate`s (experience decisions, journey lifecycle, and feature-access outcomes) for this trigger only. |
+| `triggerAndWait(_:properties:progress:) async -> TriggerResult` | Same, awaiting the terminal result. Its Testing-SPI wire encoding is pinned by `fixtures/encodings/trigger-result.json`. |
+| `flushEvents() async -> Bool` | Force delivery of the pending queue. |
+| `getQueuedEventCount() async -> Int` | Pending delivery-queue size. |
+| `pauseEventQueue() async` / `resumeEventQueue() async` | Suspend/resume automatic delivery (manual flush still works — identity ordering relies on it). |
 
-Journey updates use experience vocabulary throughout:
-`JourneyRef` and `JourneyUpdate` expose `experienceId` and
-`experienceVersion`, and the presentation decision is
-`TriggerDecision.experienceShown`.
+Trigger updates use experience and feature-access vocabulary throughout.
+`ExperienceRef` carries `experienceId`, `experienceVersion`, and an optional
+`journeyId`; `JourneyUpdate` carries the completed journey identity.
+`TriggerUpdate.featureAccess` contains a `FeatureAccessUpdate`, whose
+`.allowed` outcome has no source payload. `TriggerResult` remains
+`.noMatch`, `.allowed`, `.denied`, `.journeyCompleted`, or `.error`.
+`TriggerError.code` is a typed `TriggerError.Code`.
 
 Event names starting with `$` are reserved for the SDK ($identify,
 $app_opened, $journey_*, $experience_*, $purchase_*, $session_*). The full
@@ -106,7 +112,7 @@ view controller or present an experience by version ID.
 | --- | --- |
 | `dismiss() async` | Callable from any task. Dismiss the presented experience; no-op if none is presented. It waits for that experience's in-flight purchase or restore without interrupting StoreKit, abandons its in-progress server-effect wait, then exits the journey as dismissed. `$journey_exited` carries `reason: "dismissed"` and `dismissed_by: "host"`; a pending `triggerAndWait` resolves to `TriggerResult.journeyCompleted` with `JourneyUpdate.exitReason == .dismissed`, never `.denied`. |
 
-## Features (entitlements)
+## Features (feature access)
 
 | Entry point | Semantics |
 | --- | --- |
@@ -160,8 +166,8 @@ those raw values.
   delivered. Kill the app at any point and undelivered events send on next
   launch, deduplicated server-side by the event's UUIDv7 idempotency key.
 - Ordinary trigger events remain durable while offline. Journey enrollment
-  and gate decisions use the synchronous decision lane; segment membership is
-  an authoritative server mirror delivered by profile snapshots.
+  and feature-access decisions use the synchronous decision lane; segment
+  membership is an authoritative server mirror delivered by profile snapshots.
 
 ## Experiences: enrollment and profile state
 

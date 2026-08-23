@@ -123,8 +123,8 @@ Button("Go Pro") {
 
 func handleTriggerUpdate(_ update: TriggerUpdate) {
     switch update {
-    case .entitlement(.allowed):
-        // User purchased - Pro unlocked!
+    case .featureAccess(.allowed):
+        // Feature access is allowed.
         break
     case .decision(.noMatch):
         break

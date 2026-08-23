@@ -357,7 +357,7 @@ private extension TriggerUpdate {
 
     var isDenial: Bool {
         switch self {
-        case .decision(.deniedImmediate), .entitlement(.denied):
+        case .decision(.deniedImmediate), .featureAccess(.denied):
             return true
         default:
             return false
