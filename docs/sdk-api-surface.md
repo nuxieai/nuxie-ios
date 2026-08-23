@@ -1,14 +1,15 @@
 # Nuxie iOS SDK — Public API Surface
 
 This document is the prose companion to the executable contracts in
-`fixtures/`, `api/public-api.txt`, and `api/public-api-ios.txt` (the
-conformance vectors are authoritative for semantics; the platform API
-allowlists are authoritative for exported declarations; this file explains
-the surface). The public surface below is the **wrapper
-contract**: React Native, Flutter, Unity, and Unreal bind to exactly these
-entry points, so every addition or change here fans out across six
-platforms. Pre-1.0, breaking changes are allowed and are batched so
-integrators break once.
+`fixtures/`, the customer API allowlists (`api/public-api.txt` and
+`api/public-api-ios.txt`), and the separate SPI allowlists (`api/spi-api.txt`
+and `api/spi-api-ios.txt`). The conformance vectors are authoritative for
+semantics; the platform API allowlists are authoritative for exported
+declarations; this file explains the surface. The public surface below is the
+**wrapper contract**: React Native, Flutter, Unity, and Unreal bind to exactly
+these entry points, so every addition or change here fans out across six
+platforms. Pre-1.0, breaking changes are allowed and are batched so integrators
+break once.
 
 All entry points live on the `NuxieSDK.shared` singleton facade.
 
@@ -25,9 +26,12 @@ need those seams; applications must not construct or depend on them.
 platform checks: an exact declaration inventory plus Swift API Digester's
 native source-compatibility diagnosis. The native baselines preserve details
 such as protocol conformances and default arguments that declaration names do
-not capture. An intentional API change therefore requires both code review and
-an explicit baseline update with
-`scripts/check-public-api.sh --update`.
+not capture. Customer inventories and digester baselines exclude every
+`@_spi` declaration. SPI declarations are tracked in their own platform
+inventories so SPI growth remains visible, but SPI is not a supported customer
+contract; native source-compatibility diagnosis therefore applies to the
+customer digest only. An intentional API change requires both code review and
+an explicit baseline update with `scripts/check-public-api.sh --update`.
 
 Published releases carry behavior through authenticated routes, execution
 plans, screen behaviors, and response sessions. `JourneyDocument` exposes

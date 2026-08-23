@@ -604,9 +604,9 @@ public struct NavigateAction: Codable, Sendable {
     /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let screenId: String
-    public let transition: AnyCodable?
+    @_spi(Testing) public let transition: AnyCodable?
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "navigate",
         nodeId: String? = nil,
         screenId: String,
@@ -624,9 +624,9 @@ public struct BackAction: Codable, Sendable {
     /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let steps: Int?
-    public let transition: AnyCodable?
+    @_spi(Testing) public let transition: AnyCodable?
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "back",
         nodeId: String? = nil,
         steps: Int? = nil,
@@ -1009,9 +1009,9 @@ public struct SendEventAction: Codable, Sendable {
     public let nodeId: String?
     public let eventName: String
     public let payload: [String: JourneyValue]?
-    public let properties: [String: AnyCodable]?
+    @_spi(Testing) public let properties: [String: AnyCodable]?
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "send_event",
         nodeId: String? = nil,
         eventName: String,
@@ -1124,10 +1124,10 @@ public struct UpdateCustomerAction: Codable, Sendable {
     public let type: String
     /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
-    public let attributes: [String: AnyCodable]
+    @_spi(Testing) public let attributes: [String: AnyCodable]
     public let journeyAttributes: [String: JourneyValue]
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "update_customer",
         nodeId: String? = nil,
         attributes: [String: AnyCodable]
@@ -1201,7 +1201,7 @@ public struct PurchaseAction: Codable, Sendable {
     /// Compiler-authored identity for the Product placement the customer saw.
     /// The runtime resolves this value to the exact signed placement and its
     /// already-fetched StoreKit product before checkout.
-    public let placementId: AnyCodable
+    @_spi(Testing) public let placementId: AnyCodable
     /// Outcome outlets (Experience Logic 2026-07-04): outcome routing lives at the
     /// purchase site as wired chains. When present, the runner correlates the
     /// async purchase outcome back to this node and runs the matching chain.
@@ -1222,7 +1222,7 @@ public struct PurchaseAction: Codable, Sendable {
     ///   - onCompleted: Actions to run after a completed purchase.
     ///   - onFailed: Actions to run after a failed purchase.
     ///   - onCancelled: Actions to run after a cancelled purchase.
-    public init(
+    @_spi(Testing) public init(
         type: String = "purchase",
         nodeId: String? = nil,
         placementId: AnyCodable,
@@ -1341,11 +1341,11 @@ public struct OpenLinkAction: Codable, Sendable {
     public let type: String
     /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
-    public let url: AnyCodable
+    @_spi(Testing) public let url: AnyCodable
     public let journeyURL: JourneyValue
     public let target: String?
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "open_link",
         nodeId: String? = nil,
         url: AnyCodable,
@@ -1402,10 +1402,10 @@ public struct CallDelegateAction: Codable, Sendable {
     /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let message: String
-    public let payload: AnyCodable?
+    @_spi(Testing) public let payload: AnyCodable?
     public let journeyPayload: [String: JourneyValue]?
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "call_delegate",
         nodeId: String? = nil,
         message: String,
@@ -1450,14 +1450,14 @@ public struct ConnectorAction: Codable, Sendable {
     public let nodeId: String?
     public let accountRef: String
     public let toolKey: String
-    public let payload: AnyCodable
+    @_spi(Testing) public let payload: AnyCodable
     public let journeyPayload: [String: JourneyValue]
     public let onSucceeded: [JourneyAction]?
     public let onFailed: [JourneyAction]?
     public let onTimeout: [JourneyAction]?
     public let timeoutMs: Int?
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "connector_action",
         nodeId: String? = nil,
         accountRef: String,
@@ -1555,9 +1555,9 @@ public struct SetViewModelAction: Codable, Sendable {
     /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let path: VmPathRef
-    public let value: AnyCodable
+    @_spi(Testing) public let value: AnyCodable
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "set_view_model",
         nodeId: String? = nil,
         path: VmPathRef,
@@ -1593,9 +1593,9 @@ public struct ListInsertAction: Codable, Sendable {
     public let nodeId: String?
     public let path: VmPathRef
     public let index: Int?
-    public let value: AnyCodable
+    @_spi(Testing) public let value: AnyCodable
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "list_insert",
         nodeId: String? = nil,
         path: VmPathRef,
@@ -1682,9 +1682,9 @@ public struct ListSetAction: Codable, Sendable {
     public let nodeId: String?
     public let path: VmPathRef
     public let index: Int
-    public let value: AnyCodable
+    @_spi(Testing) public let value: AnyCodable
 
-    public init(
+    @_spi(Testing) public init(
         type: String = "list_set",
         nodeId: String? = nil,
         path: VmPathRef,

@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 import Nimble
 import Quick
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
 private final class RoutingClaimFailingJourneyStore: MockJourneyStore, @unchecked Sendable {

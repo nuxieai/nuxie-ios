@@ -2,7 +2,7 @@ import Foundation
 import StoreKit
 import XCTest
 
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 /// Compile-time checks that the PUBLIC API surface is Sendable-correct for a
 /// Swift 6 consumer.

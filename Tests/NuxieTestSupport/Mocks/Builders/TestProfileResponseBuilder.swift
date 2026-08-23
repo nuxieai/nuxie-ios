@@ -1,5 +1,5 @@
 import Foundation
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 /// Builder for creating test profile responses with fluent API
 class TestProfileResponseBuilder {

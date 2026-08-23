@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
 private struct AtomicPurchaseSyncFixture: Decodable {

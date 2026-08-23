@@ -2,7 +2,7 @@
 import Foundation
 import QuartzCore
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 @testable import NuxieRuntime
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
