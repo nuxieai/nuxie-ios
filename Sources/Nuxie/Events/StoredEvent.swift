@@ -33,7 +33,7 @@ struct StoredEvent: Codable, Sendable {
     /// Session ID for efficient database queries (also in properties as $session_id)
     let sessionId: String?
 
-    /// Origin of the committed fact. Legacy rows and device events default to device.
+    /// Origin of the committed fact. Device events are the default.
     public var origin: StoredEventOrigin {
         guard let rawValue = getPropertiesDict()[Self.originProperty] as? String else {
             return .device
@@ -113,6 +113,7 @@ struct StoredEvent: Codable, Sendable {
 enum EventStorageError: Error, LocalizedError {
     case databaseNotInitialized
     case invalidProperties
+    case invalidSchema(EventStoreSchemaError)
     case insertFailed(Error)
     case queryFailed(Error)
     case updateFailed(Error)
@@ -124,6 +125,8 @@ enum EventStorageError: Error, LocalizedError {
             return "Event database not initialized"
         case .invalidProperties:
             return "Invalid event properties - cannot serialize to JSON"
+        case .invalidSchema(let error):
+            return error.localizedDescription
         case .insertFailed(let error):
             return "Failed to insert event: \(error.localizedDescription)"
         case .queryFailed(let error):
@@ -133,5 +136,19 @@ enum EventStorageError: Error, LocalizedError {
         case .deleteFailed(let error):
             return "Failed to delete events: \(error.localizedDescription)"
         }
+    }
+}
+
+/// A typed initialization failure for the event store's on-disk contract.
+struct EventStoreSchemaError: Error, LocalizedError {
+    let targetVersion: Int32?
+    let operation: String
+    let sqliteCode: Int32
+    let sqliteMessage: String
+
+    var errorDescription: String? {
+        let target = targetVersion.map { " v\($0)" } ?? ""
+        return "Invalid event database schema\(target) during \(operation) "
+            + "(SQLite \(sqliteCode)): \(sqliteMessage)"
     }
 }

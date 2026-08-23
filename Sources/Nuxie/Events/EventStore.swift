@@ -87,6 +87,8 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Properties
 
+  private static let currentSchemaVersion: Int32 = 1
+
   // nonisolated(unsafe): accessed from the actor's methods (isolated) and
   // from deinit, which has exclusive access to the last reference.
   private nonisolated(unsafe) var db: OpaquePointer?
@@ -107,7 +109,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     """
 
   /// delivery_state values. Rows default to .delivered so history written by
-  /// direct-delivery paths (and pre-migration rows) never re-sends.
+  /// direct-delivery paths never re-sends.
   public enum DeliveryState: Int32, Sendable {
     case pending = 0
     case delivered = 2
@@ -219,62 +221,503 @@ actor SQLiteEventStore: EventStoreProtocol {
         NSError(domain: "SQLite", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
     }
 
+    // Wait up to 5 seconds if database is locked
+    _ = sqlite3_busy_timeout(db, 5_000)
+
+    do {
+      try prepareCurrentSchema()
+    } catch {
+      sqlite3_close(db)
+      db = nil
+      throw error
+    }
+
     // Set PRAGMAs for proper concurrency handling
     // WAL mode for better concurrent access
     _ = sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil)
-    // Wait up to 5 seconds if database is locked
-    _ = sqlite3_exec(db, "PRAGMA busy_timeout=5000;", nil, nil, nil)
     // Balance between safety and performance
     _ = sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", nil, nil, nil)
     // Ensure referential integrity
     _ = sqlite3_exec(db, "PRAGMA foreign_keys=ON;", nil, nil, nil)
 
-    // Create table
-    if sqlite3_exec(db, createTableSQL, nil, nil, nil) != SQLITE_OK {
-      let errorMessage = String(cString: sqlite3_errmsg(db))
-      throw EventStorageError.insertFailed(
-        NSError(domain: "SQLite", code: 2, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
-    }
-
-    migrateSchemaIfNeeded()
-
-    // Create indexes
-    for indexSQL in createIndexSQL {
-      if sqlite3_exec(db, indexSQL, nil, nil, nil) != SQLITE_OK {
-        let errorMessage = String(cString: sqlite3_errmsg(db))
-        LogWarning("Failed to create index: \(errorMessage)")
-      }
-    }
-
     LogInfo("Event database initialized at: \(dbPath)")
   }
 
-  /// Versioned, additive schema migration (PRAGMA user_version).
-  private func migrateSchemaIfNeeded() {
-    var version: Int32 = 0
-    var stmt: OpaquePointer?
-    if sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK,
-       sqlite3_step(stmt) == SQLITE_ROW {
-      version = sqlite3_column_int(stmt, 0)
-    }
-    sqlite3_finalize(stmt)
+  /// Install the complete launch schema as v1, or verify an existing v1
+  /// store without mutating it. Pre-release layouts are intentionally
+  /// rejected: there are no production databases to preserve.
+  private func prepareCurrentSchema() throws {
+    let version = try readUserVersion(targetVersion: nil)
 
-    if version < 1 {
-      // v1: delivery_state column. CREATE TABLE IF NOT EXISTS already includes
-      // it for fresh databases; pre-existing tables need the ALTER (which
-      // fails harmlessly with "duplicate column" when the column exists).
-      _ = sqlite3_exec(
-        db,
-        "ALTER TABLE events ADD COLUMN delivery_state INTEGER NOT NULL DEFAULT 2;",
-        nil, nil, nil)
-      _ = sqlite3_exec(db, "PRAGMA user_version = 1;", nil, nil, nil)
-      LogInfo("Event store schema migrated to v1 (delivery_state)")
+    switch version {
+    case 0:
+      guard try userSchemaIsEmpty() else {
+        throw schemaError(
+          targetVersion: version,
+          operation: "validate unversioned schema",
+          code: SQLITE_SCHEMA,
+          message: "Unversioned event stores are unsupported; reset local SDK data"
+        )
+      }
+      try installCurrentSchema()
+      LogInfo("Event store schema v1 installed")
+
+    case Self.currentSchemaVersion:
+      try verifyCurrentSchema()
+
+    default:
+      throw schemaError(
+        targetVersion: version,
+        operation: "validate user_version",
+        code: SQLITE_SCHEMA,
+        message: "Event-store schema v\(version) is unsupported; expected v1"
+      )
     }
-    if version < 2 {
-      _ = sqlite3_exec(db, createStableCaptureOutcomesSQL, nil, nil, nil)
-      _ = sqlite3_exec(db, "PRAGMA user_version = 2;", nil, nil, nil)
-      LogInfo("Event store schema migrated to v2 (stable event drops)")
+  }
+
+  private func userSchemaIsEmpty() throws -> Bool {
+    var stmt: OpaquePointer?
+    let sql = """
+      SELECT 1 FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%'
+      LIMIT 1;
+      """
+    let prepareResult = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+    guard prepareResult == SQLITE_OK else {
+      throw schemaError(
+        targetVersion: nil,
+        operation: "inspect unversioned schema",
+        code: prepareResult
+      )
     }
+    defer { sqlite3_finalize(stmt) }
+
+    let stepResult = sqlite3_step(stmt)
+    switch stepResult {
+    case SQLITE_DONE:
+      return true
+    case SQLITE_ROW:
+      return false
+    default:
+      throw schemaError(
+        targetVersion: nil,
+        operation: "inspect unversioned schema",
+        code: stepResult
+      )
+    }
+  }
+
+  private struct TableColumn {
+    let type: String
+    let isNotNull: Bool
+    let defaultValue: String?
+    let primaryKeyPosition: Int32
+
+    var isPrimaryKey: Bool { primaryKeyPosition != 0 }
+  }
+
+  private func installCurrentSchema() throws {
+    let targetVersion = Self.currentSchemaVersion
+    try executeSchemaSQL(
+      "BEGIN IMMEDIATE;",
+      targetVersion: targetVersion,
+      operation: "begin transaction"
+    )
+
+    do {
+      try executeSchemaSQL(
+        createTableSQL,
+        targetVersion: targetVersion,
+        operation: "create events"
+      )
+      try executeSchemaSQL(
+        createStableCaptureOutcomesSQL,
+        targetVersion: targetVersion,
+        operation: "create stable_event_drops"
+      )
+      for indexSQL in createIndexSQL {
+        try executeSchemaSQL(
+          indexSQL,
+          targetVersion: targetVersion,
+          operation: "create event index"
+        )
+      }
+      try verifyCurrentSchema()
+      try executeSchemaSQL(
+        "PRAGMA user_version = \(targetVersion);",
+        targetVersion: targetVersion,
+        operation: "set user_version"
+      )
+      let recordedVersion = try readUserVersion(targetVersion: targetVersion)
+      guard recordedVersion == targetVersion else {
+        throw schemaError(
+          targetVersion: targetVersion,
+          operation: "verify user_version",
+          code: SQLITE_SCHEMA,
+          message: "Expected user_version \(targetVersion), found \(recordedVersion)"
+        )
+      }
+      try executeSchemaSQL(
+        "COMMIT;",
+        targetVersion: targetVersion,
+        operation: "commit transaction"
+      )
+    } catch {
+      let rollbackResult = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+      if rollbackResult != SQLITE_OK {
+        LogError("Failed to roll back event-store schema installation: \(sqliteMessage())")
+      }
+      throw error
+    }
+  }
+
+  private func verifyCurrentSchema() throws {
+    let version = Self.currentSchemaVersion
+    try verifyEventsTable(targetVersion: version)
+    try verifyStableEventDropsTable(targetVersion: version)
+    let requiredIndexes: [(name: String, columns: [(String, Bool)])] = [
+      ("idx_events_delivery", [("delivery_state", false), ("timestamp", false)]),
+      ("idx_events_timestamp", [("timestamp", false)]),
+      ("idx_events_user_id", [("user_id", false)]),
+      ("idx_events_name", [("name", false)]),
+      ("idx_events_session_id", [("session_id", false)]),
+      (
+        "idx_events_user_name_time",
+        [("user_id", false), ("name", false), ("timestamp", true)]
+      ),
+      ("idx_events_user_time", [("user_id", false), ("timestamp", true)]),
+      ("idx_events_session_time", [("session_id", false), ("timestamp", true)]),
+    ]
+    for indexName in requiredIndexes {
+      try verifyIndex(
+        named: indexName.name,
+        expectedColumns: indexName.columns,
+        targetVersion: version
+      )
+    }
+  }
+
+  private func verifyIndex(
+    named indexName: String,
+    expectedColumns: [(String, Bool)],
+    targetVersion: Int32
+  ) throws {
+    guard try schemaObjectType(named: indexName, targetVersion: targetVersion) == "index" else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify \(indexName)",
+        code: SQLITE_SCHEMA,
+        message: "Required event-store index \(indexName) is missing"
+      )
+    }
+
+    var stmt: OpaquePointer?
+    let sql = """
+      SELECT name, "desc"
+      FROM pragma_index_xinfo(?)
+      WHERE key = 1
+      ORDER BY seqno;
+      """
+    let prepareResult = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+    guard prepareResult == SQLITE_OK else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "inspect \(indexName)",
+        code: prepareResult
+      )
+    }
+    defer { sqlite3_finalize(stmt) }
+
+    let bindResult = sqlite3_bind_text(stmt, 1, indexName, -1, SQLITE_TRANSIENT)
+    guard bindResult == SQLITE_OK else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "inspect \(indexName)",
+        code: bindResult
+      )
+    }
+
+    var actualColumns: [(String, Bool)] = []
+    while true {
+      let stepResult = sqlite3_step(stmt)
+      if stepResult == SQLITE_DONE { break }
+      guard stepResult == SQLITE_ROW,
+            let nameBytes = sqlite3_column_text(stmt, 0)
+      else {
+        throw schemaError(
+          targetVersion: targetVersion,
+          operation: "inspect \(indexName)",
+          code: stepResult
+        )
+      }
+      actualColumns.append((
+        String(cString: nameBytes),
+        sqlite3_column_int(stmt, 1) != 0
+      ))
+    }
+
+    guard actualColumns.elementsEqual(
+      expectedColumns,
+      by: { $0.0 == $1.0 && $0.1 == $1.1 }
+    ) else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify \(indexName)",
+        code: SQLITE_SCHEMA,
+        message: "Event-store index \(indexName) has the wrong columns or sort order"
+      )
+    }
+  }
+
+  private func verifyDeliveryStateColumn(targetVersion: Int32) throws {
+    let columns = try tableColumns(named: "events", targetVersion: targetVersion)
+    guard let deliveryState = columns["delivery_state"],
+          deliveryState.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
+          deliveryState.isNotNull,
+          deliveryState.defaultValue == "2"
+    else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify events.delivery_state",
+        code: SQLITE_SCHEMA,
+        message: "events.delivery_state must be INTEGER NOT NULL DEFAULT 2"
+      )
+    }
+  }
+
+  private func verifyEventsTable(targetVersion: Int32) throws {
+    _ = try verifyEventsBaseTable(targetVersion: targetVersion)
+    try verifyDeliveryStateColumn(targetVersion: targetVersion)
+  }
+
+  @discardableResult
+  private func verifyEventsBaseTable(targetVersion: Int32) throws -> [String: TableColumn] {
+    guard try schemaObjectType(named: "events", targetVersion: targetVersion) == "table" else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify events",
+        code: SQLITE_SCHEMA,
+        message: "events is not a table"
+      )
+    }
+
+    let columns = try tableColumns(named: "events", targetVersion: targetVersion)
+    guard columns.count == 7,
+          let id = columns["id"],
+          id.type.caseInsensitiveCompare("TEXT") == .orderedSame,
+          id.primaryKeyPosition == 1,
+          columns.values.filter(\.isPrimaryKey).count == 1,
+          let name = columns["name"],
+          name.type.caseInsensitiveCompare("TEXT") == .orderedSame,
+          name.isNotNull,
+          let properties = columns["properties"],
+          properties.type.caseInsensitiveCompare("BLOB") == .orderedSame,
+          properties.isNotNull,
+          let timestamp = columns["timestamp"],
+          timestamp.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
+          timestamp.isNotNull,
+          let userId = columns["user_id"],
+          userId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
+          userId.isNotNull,
+          let sessionId = columns["session_id"],
+          sessionId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
+          !sessionId.isNotNull
+    else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify events",
+        code: SQLITE_SCHEMA,
+        message: "events must exactly define id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+          + "properties BLOB NOT NULL, timestamp INTEGER NOT NULL, user_id TEXT NOT NULL, "
+          + "nullable session_id TEXT, and delivery_state INTEGER NOT NULL DEFAULT 2"
+      )
+    }
+    return columns
+  }
+
+  private func verifyStableEventDropsTable(targetVersion: Int32) throws {
+    guard try schemaObjectType(named: "stable_event_drops", targetVersion: targetVersion)
+      == "table"
+    else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify stable_event_drops",
+        code: SQLITE_SCHEMA,
+        message: "stable_event_drops is not a table"
+      )
+    }
+
+    let columns = try tableColumns(named: "stable_event_drops", targetVersion: targetVersion)
+    guard columns.count == 2,
+          let eventId = columns["event_id"],
+          eventId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
+          eventId.primaryKeyPosition == 1,
+          columns.values.filter(\.isPrimaryKey).count == 1,
+          let createdAt = columns["created_at"],
+          createdAt.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
+          createdAt.isNotNull
+    else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify stable_event_drops",
+        code: SQLITE_SCHEMA,
+        message: "stable_event_drops must define event_id TEXT as its sole PRIMARY KEY "
+          + "and created_at INTEGER NOT NULL"
+      )
+    }
+  }
+
+  private func tableColumns(
+    named tableName: String,
+    targetVersion: Int32
+  ) throws -> [String: TableColumn] {
+    var stmt: OpaquePointer?
+    let prepareResult = sqlite3_prepare_v2(
+      db,
+      "PRAGMA table_info(\(tableName));",
+      -1,
+      &stmt,
+      nil
+    )
+    guard prepareResult == SQLITE_OK else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "inspect \(tableName)",
+        code: prepareResult
+      )
+    }
+    defer { sqlite3_finalize(stmt) }
+
+    var columns: [String: TableColumn] = [:]
+    while true {
+      let stepResult = sqlite3_step(stmt)
+      if stepResult == SQLITE_DONE {
+        return columns
+      }
+      guard stepResult == SQLITE_ROW else {
+        throw schemaError(
+          targetVersion: targetVersion,
+          operation: "inspect \(tableName)",
+          code: stepResult
+        )
+      }
+
+      guard let nameBytes = sqlite3_column_text(stmt, 1),
+            let typeBytes = sqlite3_column_text(stmt, 2)
+      else {
+        throw schemaError(
+          targetVersion: targetVersion,
+          operation: "inspect \(tableName)",
+          code: SQLITE_SCHEMA,
+          message: "SQLite returned an incomplete column description"
+        )
+      }
+      let name = String(cString: nameBytes)
+      let defaultValue = sqlite3_column_text(stmt, 4).map(String.init(cString:))
+      columns[name] = TableColumn(
+        type: String(cString: typeBytes),
+        isNotNull: sqlite3_column_int(stmt, 3) != 0,
+        defaultValue: defaultValue,
+        primaryKeyPosition: sqlite3_column_int(stmt, 5)
+      )
+    }
+  }
+
+  private func schemaObjectType(
+    named objectName: String,
+    targetVersion: Int32
+  ) throws -> String? {
+    var stmt: OpaquePointer?
+    let sql = "SELECT type FROM sqlite_master WHERE name = ? LIMIT 1;"
+    let prepareResult = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+    guard prepareResult == SQLITE_OK else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "inspect \(objectName)",
+        code: prepareResult
+      )
+    }
+    defer { sqlite3_finalize(stmt) }
+
+    let bindResult = sqlite3_bind_text(stmt, 1, objectName, -1, SQLITE_TRANSIENT)
+    guard bindResult == SQLITE_OK else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "inspect \(objectName)",
+        code: bindResult
+      )
+    }
+
+    let stepResult = sqlite3_step(stmt)
+    if stepResult == SQLITE_DONE {
+      return nil
+    }
+    guard stepResult == SQLITE_ROW else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "inspect \(objectName)",
+        code: stepResult
+      )
+    }
+    return sqlite3_column_text(stmt, 0).map(String.init(cString:))
+  }
+
+  private func readUserVersion(targetVersion: Int32?) throws -> Int32 {
+    var stmt: OpaquePointer?
+    let prepareResult = sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &stmt, nil)
+    guard prepareResult == SQLITE_OK else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "read user_version",
+        code: prepareResult
+      )
+    }
+    defer { sqlite3_finalize(stmt) }
+
+    let stepResult = sqlite3_step(stmt)
+    guard stepResult == SQLITE_ROW else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "read user_version",
+        code: stepResult
+      )
+    }
+    return sqlite3_column_int(stmt, 0)
+  }
+
+  private func executeSchemaSQL(
+    _ sql: String,
+    targetVersion: Int32,
+    operation: String
+  ) throws {
+    let result = sqlite3_exec(db, sql, nil, nil, nil)
+    guard result == SQLITE_OK else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: operation,
+        code: result
+      )
+    }
+  }
+
+  private func schemaError(
+    targetVersion: Int32?,
+    operation: String,
+    code: Int32,
+    message: String? = nil
+  ) -> EventStorageError {
+    .invalidSchema(
+      EventStoreSchemaError(
+        targetVersion: targetVersion,
+        operation: operation,
+        sqliteCode: code,
+        sqliteMessage: message ?? sqliteMessage()
+      )
+    )
+  }
+
+  private func sqliteMessage() -> String {
+    db.map { String(cString: sqlite3_errmsg($0)) } ?? "Event database is not open"
   }
 
   /// Close the database connection

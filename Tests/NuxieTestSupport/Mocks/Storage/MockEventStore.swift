@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 @testable import Nuxie
 
 /// Mock implementation of EventStoreProtocol for testing.
@@ -8,6 +9,12 @@ import Foundation
 /// concurrently on the cooperative pool. Every state access goes through
 /// one lock — an unsynchronized mock segfaults under real load.
 public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
+
+    public enum InitializeFailure: Equatable, Sendable {
+        case none
+        case generic
+        case invalidSchema
+    }
 
     private let lock = NSLock()
 
@@ -44,7 +51,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
 
     // Error simulation (lock-guarded)
-    private var _shouldFailInitialize = false
+    private var _initializeFailure: InitializeFailure = .none
     private var _shouldFailStore = false
     private var _shouldFailQuery = false
     private var _shouldFailMarkDelivered = false
@@ -54,8 +61,12 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _stableCaptureCommitCallCount = 0
 
     public var shouldFailInitialize: Bool {
-        get { lock.withLock { _shouldFailInitialize } }
-        set { lock.withLock { _shouldFailInitialize = newValue } }
+        get { lock.withLock { _initializeFailure != .none } }
+        set { lock.withLock { _initializeFailure = newValue ? .generic : .none } }
+    }
+    public var initializeFailure: InitializeFailure {
+        get { lock.withLock { _initializeFailure } }
+        set { lock.withLock { _initializeFailure = newValue } }
     }
     public var shouldFailStore: Bool {
         get { lock.withLock { _shouldFailStore } }
@@ -116,8 +127,18 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public func initialize(path: URL?) async throws {
         try lock.withLock {
             _initializeCallCount += 1
-            if _shouldFailInitialize {
+            switch _initializeFailure {
+            case .none:
+                break
+            case .generic:
                 throw mockError(1, "Mock initialization error")
+            case .invalidSchema:
+                throw EventStorageError.invalidSchema(EventStoreSchemaError(
+                    targetVersion: 2,
+                    operation: "validate user_version",
+                    sqliteCode: SQLITE_SCHEMA,
+                    sqliteMessage: "unsupported test schema"
+                ))
             }
             _isInitialized = true
         }
@@ -456,7 +477,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
-            _shouldFailInitialize = false
+            _initializeFailure = .none
             _shouldFailStore = false
             _shouldFailQuery = false
             _initializeCallCount = 0
