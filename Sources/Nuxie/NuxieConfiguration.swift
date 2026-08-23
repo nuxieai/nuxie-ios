@@ -72,21 +72,31 @@ public class NuxieConfiguration {
     public var enableConsoleLogging: Bool = true
     public var redactSensitiveData: Bool = true
     
-    /// Network retry settings
+    /// Number of failures over which the retry delay increases exponentially
+    /// before it caps. Zero and one both keep the base delay; delivery itself
+    /// continues retrying on later flush opportunities. Must be nonnegative
+    /// and, together with `retryDelay`, produce a finite schedulable backoff.
     public var retryCount: Int = 3
+    /// Base retry delay in seconds. Must be finite and nonnegative.
     public var retryDelay: TimeInterval = 2
     
     /// Event batching settings
-    public var eventBatchSize: Int = 50 // Maximum events per batch
-    public var flushAt: Int = 20 // Number of events to trigger automatic flush
-    public var flushInterval: TimeInterval = 30 // Time interval to trigger automatic flush in seconds
-    public var maxQueueSize: Int = 1000 // Maximum pending events staged in memory
+    /// Maximum events per batch. Must be in `1...Int32.max`.
+    public var eventBatchSize: Int = 50
+    /// Pending-event count that triggers automatic flush. Must be in `1...Int32.max`.
+    public var flushAt: Int = 20
+    /// Automatic flush interval in seconds. Must be finite, positive, and
+    /// representable by Swift concurrency's nanosecond sleep clock.
+    public var flushInterval: TimeInterval = 30
+    /// Maximum pending events staged in memory. Must be in `1...Int32.max`.
+    public var maxQueueSize: Int = 1000
     
     /// Storage settings
     public var customStoragePath: URL?
 
     /// Feature cache settings
-    /// TTL for real-time feature check results (default: 5 minutes)
+    /// TTL for real-time feature check results (default: 5 minutes). Must be
+    /// finite and greater than zero.
     public var featureCacheTTL: TimeInterval = 5 * 60
     
     /// Initial locale selected during `setup(with:)`.
@@ -131,6 +141,88 @@ public class NuxieConfiguration {
     /// - Parameter apiKey: The publishable key for the selected Nuxie app and environment.
     public init(apiKey: String) {
         self.apiKey = apiKey
+    }
+}
+
+/// Validates the mutable public builder before any runtime state is published.
+/// Keeping every numeric invariant at this seam prevents downstream delivery,
+/// timer, and cache modules from each needing defensive configuration checks.
+enum NuxieConfigurationValidator {
+    static let maximumDeliveryCount = Int(Int32.max)
+    private static let nanosecondsPerSecond: TimeInterval = 1_000_000_000
+    private static let maximumSchedulableSeconds =
+        TimeInterval(UInt64.max) / nanosecondsPerSecond
+
+    static func validate(_ configuration: NuxieConfiguration) throws {
+        try requireSupportedDeliveryCount(
+            configuration.eventBatchSize,
+            field: "eventBatchSize"
+        )
+        try requireSupportedDeliveryCount(configuration.flushAt, field: "flushAt")
+        try requireSupportedDeliveryCount(
+            configuration.maxQueueSize,
+            field: "maxQueueSize"
+        )
+        guard configuration.flushAt <= configuration.maxQueueSize else {
+            throw NuxieError.invalidConfiguration(
+                "flushAt must not exceed maxQueueSize"
+            )
+        }
+
+        guard configuration.retryCount >= 0 else {
+            throw NuxieError.invalidConfiguration("retryCount must be nonnegative")
+        }
+        try requireFiniteNonnegative(configuration.retryDelay, field: "retryDelay")
+        try requireFinitePositive(configuration.flushInterval, field: "flushInterval")
+        try requireFinitePositive(configuration.featureCacheTTL, field: "featureCacheTTL")
+
+        guard configuration.flushInterval < maximumSchedulableSeconds else {
+            throw NuxieError.invalidConfiguration(
+                "flushInterval is too large to schedule safely"
+            )
+        }
+        guard configuration.flushInterval * nanosecondsPerSecond >= 1 else {
+            throw NuxieError.invalidConfiguration(
+                "flushInterval is too small to schedule safely"
+            )
+        }
+
+        let retryExponent = max(configuration.retryCount - 1, 0)
+        let retryMultiplier = pow(2, TimeInterval(retryExponent))
+        let maximumRetryDelay = configuration.retryDelay * retryMultiplier
+        guard retryMultiplier.isFinite,
+              maximumRetryDelay.isFinite,
+              maximumRetryDelay < maximumSchedulableSeconds else {
+            throw NuxieError.invalidConfiguration(
+                "retryCount and retryDelay produce an unschedulable backoff"
+            )
+        }
+    }
+
+    private static func requireSupportedDeliveryCount(_ value: Int, field: String) throws {
+        guard (1...maximumDeliveryCount).contains(value) else {
+            throw NuxieError.invalidConfiguration(
+                "\(field) must be between 1 and \(maximumDeliveryCount)"
+            )
+        }
+    }
+
+    private static func requireFiniteNonnegative(
+        _ value: TimeInterval,
+        field: String
+    ) throws {
+        guard value.isFinite, value >= 0 else {
+            throw NuxieError.invalidConfiguration("\(field) must be finite and nonnegative")
+        }
+    }
+
+    private static func requireFinitePositive(
+        _ value: TimeInterval,
+        field: String
+    ) throws {
+        guard value.isFinite, value > 0 else {
+            throw NuxieError.invalidConfiguration("\(field) must be finite and greater than zero")
+        }
     }
 }
 

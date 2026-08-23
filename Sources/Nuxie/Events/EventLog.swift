@@ -1726,7 +1726,10 @@ actor EventLog: EventLogProtocol {
       guard deliveryQueue.count < capacity else { return }
 
       let pending = await loadPendingDelivery(
-        limit: capacity + activeDirectDeliveryIds.count
+        limit: Self.pendingDeliveryQueryLimit(
+          queueCapacity: capacity,
+          activeDirectDeliveryCount: activeDirectDeliveryIds.count
+        )
       )
       guard !closeFlag.isClosed else { return }
 
@@ -1743,6 +1746,19 @@ actor EventLog: EventLogProtocol {
         )
       }
     } while deliveryWindowRefillRequested && deliveryQueue.count < capacity
+  }
+
+  /// Direct deliveries are present in durable pending state but excluded from
+  /// the delivery window. Ask storage for enough rows to fill around them
+  /// without allowing adversarial counts to overflow `Int`.
+  static func pendingDeliveryQueryLimit(
+    queueCapacity: Int,
+    activeDirectDeliveryCount: Int
+  ) -> Int {
+    let (limit, overflow) = queueCapacity.addingReportingOverflow(
+      activeDirectDeliveryCount
+    )
+    return overflow ? Int.max : limit
   }
 
   /// Stage a newly captured event in the bounded working set. Production
@@ -2113,7 +2129,11 @@ actor EventLog: EventLogProtocol {
       nextRetryDate = nil
     } else {
       retryCount += 1
-      let backoffDelay = deliveryConfig.baseRetryDelay * pow(2, Double(max(retryCount - 1, 0)))
+      let cappedExponent = min(
+        retryCount - 1,
+        max(deliveryConfig.maxRetries - 1, 0)
+      )
+      let backoffDelay = deliveryConfig.baseRetryDelay * pow(2, Double(cappedExponent))
       nextRetryDate = Date().addingTimeInterval(backoffDelay)
       LogWarning("Partial batch made no progress, retrying in \(backoffDelay)s")
     }
@@ -2198,6 +2218,15 @@ actor EventLog: EventLogProtocol {
     deliveryQueue.removeAll()
     nonDurableDeliveryIds.removeAll()
     LogInfo("Cleared \(count) events from delivery queue")
+  }
+
+  /// Internal retry diagnostics used to verify that every failure path obeys
+  /// the configured backoff ceiling.
+  func retryBackoffState(relativeTo date: Date = Date()) -> (
+    attempts: Int,
+    remainingDelay: TimeInterval?
+  ) {
+    (retryCount, nextRetryDate?.timeIntervalSince(date))
   }
 
   private func handleTimerFlush() async {

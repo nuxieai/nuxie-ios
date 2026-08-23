@@ -250,6 +250,13 @@ final class EventStorageTests: AsyncSpec {
         }
 
         describe("durable delivery") {
+            it("accepts a pending query limit wider than Int32") {
+                let pending = try await internalEventStore.queryPendingDelivery(
+                    limit: Int(Int32.max) + 1
+                )
+                expect(pending).to(beEmpty())
+            }
+
             it("persists a terminal stable drop across replay and store relaunch") {
                 let eventId = "purchase-completed:terminal-drop"
                 let dropped = try await internalEventStore.commitStableCapture(

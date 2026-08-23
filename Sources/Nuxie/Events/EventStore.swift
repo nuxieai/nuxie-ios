@@ -1050,7 +1050,7 @@ actor SQLiteEventStore: EventStoreProtocol {
 
     // Bind parameters
     sqlite3_bind_text(statement, 1, distinctId, -1, SQLITE_TRANSIENT)
-    sqlite3_bind_int(statement, 2, Int32(limit))
+    sqlite3_bind_int64(statement, 2, Int64(limit))
 
     // Execute and collect results
     var events: [StoredEvent] = []
@@ -1132,7 +1132,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     sqlite3_bind_int(statement, 1, DeliveryState.pending.rawValue)
-    sqlite3_bind_int(statement, 2, Int32(limit))
+    sqlite3_bind_int64(statement, 2, Int64(limit))
 
     var events: [StoredEvent] = []
     while sqlite3_step(statement) == SQLITE_ROW {

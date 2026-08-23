@@ -212,7 +212,10 @@ Create with `NuxieConfiguration(apiKey:)` and optionally set:
   `pk_test_` key only).
 - Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`.
 - Batching: `eventBatchSize`, `flushAt`, `flushInterval`, `maxQueueSize`,
-  `retryCount`, and `retryDelay`.
+  `retryCount`, and `retryDelay`. Setup requires batch, threshold, and queue
+  counts within `1...Int32.max`; rejects a flush threshold above queue capacity;
+  non-finite intervals; negative retry values; and timer/backoff combinations
+  that cannot be scheduled safely.
 - Hooks: `beforeSend` to transform or drop events.
 - Experience releases use the authenticated delivery origins supplied by the
   profile; applications cannot override signed object locations.

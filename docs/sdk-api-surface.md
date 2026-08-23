@@ -130,6 +130,17 @@ controls, `featureCacheTTL`, `localeIdentifier`, `customStoragePath`, and
 it uses Nuxie's isolated no-charge Test Store instead of StoreKit or a
 purchase delegate.
 
+Setup validates delivery tuning before publishing any SDK state. Batch,
+automatic-flush, and queue counts must be within `1...Int32.max`, and the
+automatic flush threshold cannot exceed queue capacity. `retryCount` controls
+how many failure attempts increase exponential backoff before its delay caps;
+it does not stop later delivery attempts and must be nonnegative. `retryDelay`
+must be finite and nonnegative. `flushInterval` and
+`featureCacheTTL` must be finite and greater than zero, and configured
+timer/backoff values must fit Swift concurrency's nanosecond scheduling range.
+Invalid values fail setup with `NuxieError.invalidConfiguration` naming the
+offending field.
+
 ## Delivery guarantees (what "offline-first" means precisely)
 
 - Every tracked event is persisted to SQLite marked pending **before** the
