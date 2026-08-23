@@ -702,7 +702,7 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 profile: mocks.profileService,
                 dateProvider: mocks.dateProvider,
                 featureInfo: featureInfo,
-                cacheTTL: NuxieConfiguration(apiKey: "test-api-key").featureCacheTTL
+                cacheTTL: NuxieInternalConfiguration().featureCacheTTL
             )
             service = mocks.makeJourneyService(
                 journeyStore: store,

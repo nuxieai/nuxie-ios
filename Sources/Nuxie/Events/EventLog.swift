@@ -169,7 +169,8 @@ protocol EventTriggerTracking: AnyObject, Sendable {
     userProperties: sending [String: Any]?,
     userPropertiesSetOnce: sending [String: Any]?,
     persistToHistory: Bool,
-    distinctIdOverride: String?
+    distinctIdOverride: String?,
+    applyBeforeSend: Bool
   ) async throws -> (NuxieEvent, EventResponse)
   func trackForTrigger(
     _ event: String,
@@ -218,7 +219,8 @@ extension EventTriggerTracking {
       userProperties: nil,
       userPropertiesSetOnce: nil,
       persistToHistory: true,
-      distinctIdOverride: distinctId
+      distinctIdOverride: distinctId,
+      applyBeforeSend: false
     ) else { return nil }
     return DurableTriggerCapture(event: tracked.0)
   }
@@ -311,9 +313,9 @@ protocol EventLogProtocol:
   JourneyEventAccess,
   JourneyRunnerEventAccess
 {
-  /// Configure the log with the SDK configuration. Builds enrichment and
-  /// delivery from the configuration and opens storage.
-  func configure(configuration: NuxieConfiguration?) async throws
+  /// Configure the log from the immutable setup snapshot. Builds enrichment
+  /// and delivery settings and opens storage.
+  func configure(configuration: NuxieSetupConfiguration?) async throws
 
   /// Subscribe to committed events. Handlers run serially, in subscription
   /// order, after each event is persisted and staged for delivery. The
@@ -373,7 +375,8 @@ protocol EventLogProtocol:
     userProperties: sending [String: Any]?,
     userPropertiesSetOnce: sending [String: Any]?,
     persistToHistory: Bool,
-    distinctIdOverride: String?
+    distinctIdOverride: String?,
+    applyBeforeSend: Bool
   ) async throws -> (NuxieEvent, EventResponse)
 
   /// Track an event synchronously and wait for server response
@@ -492,7 +495,8 @@ extension EventLogProtocol {
       userProperties: userProperties,
       userPropertiesSetOnce: userPropertiesSetOnce,
       persistToHistory: true,
-      distinctIdOverride: nil
+      distinctIdOverride: nil,
+      applyBeforeSend: true
     )
   }
 
@@ -728,18 +732,21 @@ actor EventLog: EventLogProtocol {
     )
 
     if let configuration = snapshot {
+      let internalConfiguration = configuration.internalConfiguration
       deliveryConfig = DeliveryConfig(
-        flushAt: configuration.flushAt,
-        flushIntervalSeconds: configuration.flushInterval,
-        maxQueueSize: configuration.maxQueueSize,
-        maxBatchSize: configuration.eventBatchSize,
-        maxRetries: configuration.retryCount,
-        baseRetryDelay: configuration.retryDelay
+        flushAt: internalConfiguration.flushAt,
+        flushIntervalSeconds: internalConfiguration.flushInterval,
+        maxQueueSize: internalConfiguration.maxQueueSize,
+        maxBatchSize: internalConfiguration.eventBatchSize,
+        maxRetries: internalConfiguration.retryCount,
+        baseRetryDelay: internalConfiguration.retryDelay
       )
     }
 
     do {
-      try await store.initialize(path: snapshot?.customStoragePath)
+      try await store.initialize(
+        path: snapshot?.internalConfiguration.customStoragePath
+      )
       _ = try await store.readOrInitializeHistoryCoverage(
         startingAt: dateProvider.now()
       )
@@ -769,7 +776,13 @@ actor EventLog: EventLogProtocol {
     await ready.open()
   }
 
-  nonisolated public func configure(configuration: NuxieConfiguration?) async throws {
+  nonisolated func configure(configuration: NuxieSetupConfiguration?) async throws {
+    try await configure(snapshot: configuration)
+  }
+
+  /// Convenience for direct EventLog tests. Production setup passes the
+  /// immutable NuxieSetupConfiguration through EventLogProtocol.
+  nonisolated func configure(configuration: NuxieConfiguration?) async throws {
     try await configure(snapshot: configuration.map(NuxieSetupConfiguration.init))
   }
 
@@ -896,7 +909,7 @@ actor EventLog: EventLogProtocol {
     case .networkQueue:
       let drained = await deliveryFlushAll()
       guard drained else {
-        throw NuxieError.eventRoutingFailed
+        throw EventRoutingError.eventRoutingFailed
       }
     }
 
@@ -993,7 +1006,7 @@ actor EventLog: EventLogProtocol {
 
     await handleMailboxResponseSignal(response)
     guard case .durable = ownershipFenceCommit else {
-      throw NuxieError.eventRoutingFailed
+      throw EventRoutingError.eventRoutingFailed
     }
     return response
   }
@@ -1014,7 +1027,8 @@ actor EventLog: EventLogProtocol {
     userProperties: sending [String: Any]? = nil,
     userPropertiesSetOnce: sending [String: Any]? = nil,
     persistToHistory: Bool = true,
-    distinctIdOverride: String? = nil
+    distinctIdOverride: String? = nil,
+    applyBeforeSend: Bool = false
   ) async throws -> (NuxieEvent, EventResponse) {
     guard !event.isEmpty else {
       throw NuxieError.invalidConfiguration("Event name cannot be empty")
@@ -1061,11 +1075,33 @@ actor EventLog: EventLogProtocol {
     // The canonical local event exists before anything else observes it. Its
     // UUIDv7 id is the durable-delivery idempotency key if the row later
     // rides the batch queue.
-    let localEvent = NuxieEvent(
+    let originalEvent = NuxieEvent(
       name: event,
       distinctId: distinctId,
       properties: finalProperties.value
     )
+    let localEvent: NuxieEvent
+    if applyBeforeSend, let beforeSend = configuration?.beforeSend {
+      guard let transformed = beforeSend(originalEvent) else {
+        LogDebug("Event '\(event)' terminally dropped by beforeSend hook")
+        throw EventBeforeSendDropError()
+      }
+      // The log owns identity. Hosts may redact properties or rename the
+      // event, but the scoped identity, the durable idempotency key, and the
+      // capture timestamp must survive the transform so the trigger response
+      // and local journey evaluation stay attributed to the scoped user.
+      var transformedProperties = transformed.properties
+      transformedProperties["$distinct_id"] = distinctId
+      localEvent = NuxieEvent(
+        id: originalEvent.id,
+        name: transformed.name,
+        distinctId: distinctId,
+        properties: transformedProperties,
+        timestamp: originalEvent.timestamp
+      )
+    } else {
+      localEvent = originalEvent
+    }
 
     var wasPersisted = false
     if persistToHistory {
@@ -1090,14 +1126,14 @@ actor EventLog: EventLogProtocol {
       }
     }
 
-    if hasPredecessors, persistToHistory, !event.hasPrefix("$") {
+    if hasPredecessors, persistToHistory, !localEvent.name.hasPrefix("$") {
       activeDirectDeliveryIds.remove(localEvent.id)
       await enqueueForDelivery(localEvent, isPersisted: wasPersisted)
       let stagedForRetry = wasPersisted
         || deliveryQueue.contains { $0.id == localEvent.id }
         || nonDurableDeliveryIds.contains(localEvent.id)
       guard stagedForRetry else {
-        throw NuxieError.eventRoutingFailed
+        throw EventRoutingError.eventRoutingFailed
       }
       return (
         localEvent,
@@ -1142,9 +1178,9 @@ actor EventLog: EventLogProtocol {
 
       let enrichedEvent = NuxieEvent(
         id: response.eventId ?? localEvent.id,
-        name: event,
-        distinctId: distinctId,
-        properties: finalProperties.value,
+        name: localEvent.name,
+        distinctId: localEvent.distinctId,
+        properties: localEvent.properties,
         timestamp: localEvent.timestamp
       )
       return (enrichedEvent, response)
@@ -3013,13 +3049,20 @@ actor EventLog: EventLogProtocol {
 
   private func drainCaptureWorker() async {
     await withCheckedContinuation { cont in
-      captureContinuation.yield(.barrier(cont))
+      // A finished stream drops the yielded barrier; resume immediately so a
+      // late caller (for example a startup lifecycle trigger racing close)
+      // can never suspend forever on a closed log.
+      if case .terminated = captureContinuation.yield(.barrier(cont)) {
+        cont.resume()
+      }
     }
   }
 
   private func drainRouteWorker() async {
     await withCheckedContinuation { cont in
-      routeContinuation.yield(.barrier(cont))
+      if case .terminated = routeContinuation.yield(.barrier(cont)) {
+        cont.resume()
+      }
     }
   }
 

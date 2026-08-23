@@ -88,11 +88,11 @@ final class OrchestrationStack {
         )
 
         let config = NuxieConfiguration(apiKey: "orchestration-suite-key")
-        config.customStoragePath = storageURL
-        config.flushAt = 10_000  // delivery is manual-flush only
-        config.flushInterval = 3600
-        config.retryCount = 1
-        config.retryDelay = 0.01
+        config.testingOverrides.customStoragePath = storageURL
+        config.testingOverrides.flushAt = 10_000  // delivery is manual-flush only
+        config.testingOverrides.flushInterval = 3600
+        config.testingOverrides.retryCount = 1
+        config.testingOverrides.retryDelay = 0.01
         configure?(config)
 
         var overrides = NuxieCoreOverrides()
@@ -135,7 +135,7 @@ final class OrchestrationStack {
         await core.eventLog.subscribeCommitted { [weak journeys] event in
             await journeys?.handleEvent(event)
         }
-        try await core.eventLog.configure(configuration: config)
+        try await core.eventLog.configure(configuration: core.configuration)
         await journeys.initialize()
 
         return OrchestrationStack(

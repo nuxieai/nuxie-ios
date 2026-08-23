@@ -48,7 +48,6 @@ MoodLog is a production-quality example app showing how to:
 #### 1. SDK Initialization (AppDelegate)
 ```swift
 let config = NuxieConfiguration(apiKey: "your_api_key")
-config.apiEndpoint = URL(string: "http://localhost:3000")!
 config.environment = .development
 config.logLevel = .debug
 

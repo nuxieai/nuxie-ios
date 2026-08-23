@@ -26,9 +26,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let config = NuxieConfiguration(apiKey: "pk_live_odfbiUwK7nhlzWBLk8vPwQly6hBLokibNl4eUzGrd097HjaXqIpB2ZbcMw3BeRJn1wIkmeGAxRsOa12jPnEL7WwPfEI5")
 
         /// **Step 2: Configure Environment**
-        /// For development, point to localhost. For production, use Nuxie's servers.
+        /// Use development for local qualification and production for releases.
         #if DEBUG
-        config.apiEndpoint = URL(string: "http://localhost:3000")!
         config.environment = .development
         config.logLevel = .debug
         config.enableConsoleLogging = true
@@ -38,16 +37,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         config.enableConsoleLogging = false
         #endif
 
-        /// **Step 3: Configure Sync Settings**
-        /// Control how often events are synced to the server
-        config.eventBatchSize = 25  // Send 25 events per batch
-
-        /// **Step 4: Configure Purchase Delegate**
+        /// **Step 3: Configure Purchase Delegate**
         /// Connect Nuxie SDK to your StoreKit manager
         /// This enables automatic purchase event tracking
         config.purchaseDelegate = StoreKitManager.shared
 
-        /// **Step 5: Initialize SDK**
+        /// **Step 4: Initialize SDK**
         do {
             try NuxieSDK.shared.setup(with: config)
             print("[MoodLog] ✓ Nuxie SDK initialized successfully")

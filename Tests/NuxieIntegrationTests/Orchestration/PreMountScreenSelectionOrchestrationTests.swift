@@ -2,7 +2,7 @@ import Foundation
 import Nimble
 import Quick
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
 final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
@@ -96,12 +96,12 @@ final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
         )
         let configuration = NuxieConfiguration(apiKey: "pre-mount-key")
         configuration.environment = .development
-        configuration.customStoragePath = storageURL
-        configuration.flushAt = 10_000
-        configuration.flushInterval = 3_600
+        configuration.testingOverrides.customStoragePath = storageURL
+        configuration.testingOverrides.flushAt = 10_000
+        configuration.testingOverrides.flushInterval = 3_600
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [StubURLProtocol.self]
-        configuration.urlSession = URLSession(configuration: sessionConfiguration)
+        configuration.testingOverrides.urlSession = URLSession(configuration: sessionConfiguration)
 
         var overrides = NuxieCoreOverrides()
         overrides.api = api
@@ -114,7 +114,7 @@ final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
         await core.eventLog.subscribeCommitted { [weak journeys] event in
             await journeys?.handleEvent(event)
         }
-        try await core.eventLog.configure(configuration: configuration)
+        try await core.eventLog.configure(configuration: core.configuration)
         await journeys.initialize()
         return core
     }

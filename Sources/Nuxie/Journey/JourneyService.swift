@@ -837,7 +837,8 @@ actor JourneyService: JourneyServiceProtocol {
           userProperties: nil,
           userPropertiesSetOnce: nil,
           persistToHistory: true,
-          distinctIdOverride: distinctId
+          distinctIdOverride: distinctId,
+          applyBeforeSend: false
         )
       } catch {
         LogWarning("JourneyService: mailbox claim failed for \(entry.journeyId): \(error)")
@@ -1328,7 +1329,8 @@ actor JourneyService: JourneyServiceProtocol {
         userProperties: nil,
         userPropertiesSetOnce: nil,
         persistToHistory: true,
-        distinctIdOverride: journey.distinctId
+        distinctIdOverride: journey.distinctId,
+        applyBeforeSend: false
       )
       routedEvent = tracked.0
       response = tracked.1
@@ -1487,7 +1489,7 @@ actor JourneyService: JourneyServiceProtocol {
         return await self.applyScreenResponse(run: run, source: source, emission: emission)
       },
       acceptCustomerEvent: { [weak self] acceptance in
-        guard let self else { throw NuxieError.eventRoutingFailed }
+        guard let self else { throw EventRoutingError.eventRoutingFailed }
         return try await self.acceptScreenCustomerEvent(acceptance)
       },
       recoverBatch: { [weak self] batch in
@@ -1615,11 +1617,11 @@ actor JourneyService: JourneyServiceProtocol {
           sourceExperienceId == journey.experienceId,
           acceptance.event.customerId == journey.distinctId,
           await ownsExecutableJourney(journey, runner: runner) else {
-      throw NuxieError.eventRoutingFailed
+      throw EventRoutingError.eventRoutingFailed
     }
     let initial = await journey.snapshot()
     guard await ownsExecutableJourney(journey, runner: runner) else {
-      throw NuxieError.eventRoutingFailed
+      throw EventRoutingError.eventRoutingFailed
     }
     if let record = initial.executionState.screenRouting
       .eventRecords[acceptance.event.id] {
@@ -1628,7 +1630,7 @@ actor JourneyService: JourneyServiceProtocol {
          let event = restoredScreenEvent(from: record) {
         let commit = await eventLog.commitPreparedTriggerEvent(event)
         guard await ownsExecutableJourney(journey, runner: runner) else {
-          throw NuxieError.eventRoutingFailed
+          throw EventRoutingError.eventRoutingFailed
         }
         pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
           journeyId: sourceJourneyId,
@@ -1655,7 +1657,7 @@ actor JourneyService: JourneyServiceProtocol {
       userPropertiesSetOnce: nil
     )
     guard await ownsExecutableJourney(journey, runner: runner) else {
-      throw NuxieError.eventRoutingFailed
+      throw EventRoutingError.eventRoutingFailed
     }
     let exactEvent = NuxieEvent(
       id: acceptance.event.id,
@@ -1666,7 +1668,7 @@ actor JourneyService: JourneyServiceProtocol {
     )
     guard let prepared = await eventLog.applyBeforeSend(to: exactEvent) else {
       guard await ownsExecutableJourney(journey, runner: runner) else {
-        throw NuxieError.eventRoutingFailed
+        throw EventRoutingError.eventRoutingFailed
       }
       let persisted = await persistScreenEventRecord(
         JourneyScreenEventRecord(
@@ -1687,7 +1689,7 @@ actor JourneyService: JourneyServiceProtocol {
       )
       guard persisted,
             await ownsExecutableJourney(journey, runner: runner) else {
-        throw NuxieError.eventRoutingFailed
+        throw EventRoutingError.eventRoutingFailed
       }
       return ScreenCustomerEventAdmission(
         disposition: .accepted,
@@ -1695,7 +1697,7 @@ actor JourneyService: JourneyServiceProtocol {
       )
     }
     guard await ownsExecutableJourney(journey, runner: runner) else {
-      throw NuxieError.eventRoutingFailed
+      throw EventRoutingError.eventRoutingFailed
     }
 
     let localRoute: ScreenLocalRouteDisposition
@@ -1727,14 +1729,14 @@ actor JourneyService: JourneyServiceProtocol {
       pendingAuthoredEvents: []
     )
     guard await persistScreenEventRecord(record, journey: journey) else {
-      throw NuxieError.eventRoutingFailed
+      throw EventRoutingError.eventRoutingFailed
     }
     guard await ownsExecutableJourney(journey, runner: runner) else {
-      throw NuxieError.eventRoutingFailed
+      throw EventRoutingError.eventRoutingFailed
     }
     let commit = await eventLog.commitPreparedTriggerEvent(prepared)
     guard await ownsExecutableJourney(journey, runner: runner) else {
-      throw NuxieError.eventRoutingFailed
+      throw EventRoutingError.eventRoutingFailed
     }
     pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
       journeyId: sourceJourneyId,
@@ -3986,7 +3988,8 @@ actor JourneyService: JourneyServiceProtocol {
         userProperties: nil,
         userPropertiesSetOnce: nil,
         persistToHistory: true,
-        distinctIdOverride: journey.distinctId
+        distinctIdOverride: journey.distinctId,
+        applyBeforeSend: false
       )
       guard inMemoryJourneysById[journey.id] === journey else { return }
       guard let ownership = response.journeyOwnership,
@@ -5008,7 +5011,8 @@ actor JourneyService: JourneyServiceProtocol {
         userProperties: nil,
         userPropertiesSetOnce: nil,
         persistToHistory: persistToHistory,
-        distinctIdOverride: stage.localEvent.distinctId
+        distinctIdOverride: stage.localEvent.distinctId,
+        applyBeforeSend: false
       )
       return (tracked.0, tracked.1)
     } catch {

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
 final class InternalServiceDependencyTests: XCTestCase {
@@ -42,7 +42,7 @@ final class InternalServiceDependencyTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let observer = TransactionObserver(
             api: mocks.nuxieApi,
@@ -139,9 +139,10 @@ final class InternalServiceDependencyTests: XCTestCase {
 
     func testCoreBindsTransactionServiceBeforeDeliveringPendingAuthorityAdmission() async throws {
         let configuration = NuxieConfiguration(apiKey: "eager-authority-admission")
-        configuration.customStoragePath = FileManager.default.temporaryDirectory
+        let customStoragePath = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: configuration.customStoragePath!) }
+        configuration.testingOverrides.customStoragePath = customStoragePath
+        defer { try? FileManager.default.removeItem(at: customStoragePath) }
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
         let source = RecoveryTransactionSourceProbe()

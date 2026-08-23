@@ -1,5 +1,5 @@
 import Foundation
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 /// Shared helper for SDK-backed integration tests that need isolated storage.
 struct SDKTestHarness {
@@ -22,10 +22,19 @@ struct SDKTestHarness {
         try FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
 
         var config = NuxieConfiguration(apiKey: "test-key-\(testId)")
-        config.customStoragePath = storageURL
+        config.testingOverrides.customStoragePath = storageURL
         config.environment = environment
-        config.trackApplicationLifecycleEvents = trackLifecycleEvents
         configure?(&config)
+        if !trackLifecycleEvents {
+            let configuredBeforeSend = config.beforeSend
+            config.beforeSend = { event in
+                guard !Self.isApplicationLifecycleEvent(event.name) else { return nil }
+                if let configuredBeforeSend {
+                    return configuredBeforeSend(event)
+                }
+                return event
+            }
+        }
 
         let mockApi = MockNuxieApi()
         var overrides = NuxieCoreOverrides()
@@ -56,5 +65,15 @@ struct SDKTestHarness {
             }
         }
         try? FileManager.default.removeItem(at: storageURL)
+    }
+
+    private static func isApplicationLifecycleEvent(_ name: String) -> Bool {
+        switch name {
+        case SystemEventNames.appInstalled, SystemEventNames.appUpdated,
+             SystemEventNames.appOpened, SystemEventNames.appBackgrounded:
+            return true
+        default:
+            return false
+        }
     }
 }

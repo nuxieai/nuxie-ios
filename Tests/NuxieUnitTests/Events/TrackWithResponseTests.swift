@@ -2,7 +2,7 @@ import Foundation
 import Nimble
 import Quick
 
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
 #endif
@@ -36,7 +36,7 @@ final class TrackWithResponseTests: AsyncSpec {
         beforeEach {
 
             testConfig = NuxieConfiguration(apiKey: "test-api-key")
-            testConfig.flushAt = 5
+            testConfig.testingOverrides.flushAt = 5
 
             // Create mock services
             mockEventStore = MockEventStore()
@@ -172,8 +172,8 @@ final class TrackWithResponseTests: AsyncSpec {
 
                 it("flushes a routed triggering event before sending its journey start") {
                     let batchConfig = NuxieConfiguration(apiKey: "test-api-key")
-                    batchConfig.flushAt = 100
-                    batchConfig.eventBatchSize = 2
+                    batchConfig.testingOverrides.flushAt = 100
+                    batchConfig.testingOverrides.eventBatchSize = 2
                     let batchedEventLog = EventLog(
                         identity: mockIdentityService,
                         sessions: mockSessionService,
@@ -214,8 +214,8 @@ final class TrackWithResponseTests: AsyncSpec {
 
                 it("flushes queued identify before a routed journey start") {
                     let batchConfig = NuxieConfiguration(apiKey: "test-api-key")
-                    batchConfig.flushAt = 100
-                    batchConfig.eventBatchSize = 10
+                    batchConfig.testingOverrides.flushAt = 100
+                    batchConfig.testingOverrides.eventBatchSize = 10
                     let routedEventLog = EventLog(
                         identity: mockIdentityService,
                         sessions: mockSessionService,
@@ -268,8 +268,8 @@ final class TrackWithResponseTests: AsyncSpec {
 
                 it("preserves buffered tracks from before configure before a routed journey start") {
                     let batchConfig = NuxieConfiguration(apiKey: "test-api-key")
-                    batchConfig.flushAt = 100
-                    batchConfig.eventBatchSize = 10
+                    batchConfig.testingOverrides.flushAt = 100
+                    batchConfig.testingOverrides.eventBatchSize = 10
                     let bufferedEventLog = EventLog(
                         identity: mockIdentityService,
                         sessions: mockSessionService,
@@ -408,7 +408,7 @@ final class TrackWithResponseTests: AsyncSpec {
                             ],
                             flushStrategy: .none
                         )
-                    }.to(throwError(NuxieError.eventRoutingFailed))
+                    }.to(throwError(EventRoutingError.eventRoutingFailed))
 
                     let firstSends = await mockNuxieApi.sentEvents
                     guard let source = mockEventStore.storedEvents.first,
@@ -535,7 +535,7 @@ final class TrackWithResponseTests: AsyncSpec {
                             properties: ["journey_id": journeyId, "epoch": epoch],
                             flushStrategy: .none
                         )
-                    }.to(throwError(NuxieError.eventRoutingFailed))
+                    }.to(throwError(EventRoutingError.eventRoutingFailed))
 
                     guard let source = mockEventStore.storedEvents.first else {
                         return fail("expected the persisted direct source")
@@ -577,7 +577,7 @@ final class TrackWithResponseTests: AsyncSpec {
                             properties: ["journey_id": journeyId, "epoch": epoch],
                             flushStrategy: .none
                         )
-                    }.to(throwError(NuxieError.eventRoutingFailed))
+                    }.to(throwError(EventRoutingError.eventRoutingFailed))
 
                     guard let source = mockEventStore.storedEvents.first else {
                         return fail("expected the persisted direct source")
@@ -623,6 +623,65 @@ final class TrackWithResponseTests: AsyncSpec {
                     expect(mockEventStore.pendingIds).toNot(contain(source.id))
                 }
 
+                it("preserves scoped identity when beforeSend reconstructs a trigger") {
+                    final class Flag: @unchecked Sendable {
+                        private let lock = NSLock()
+                        private var raised = false
+                        func raise() { lock.withLock { raised = true } }
+                        var value: Bool { lock.withLock { raised } }
+                    }
+                    let hookFired = Flag()
+                    testConfig.beforeSend = { event in
+                        hookFired.raise()
+                        return NuxieEvent(
+                            name: event.name,
+                            distinctId: "hijacked-user",
+                            properties: ["redacted": true]
+                        )
+                    }
+                    try await eventLog.configure(configuration: testConfig)
+                    await mockNuxieApi.setTrackEventResponse(EventResponse(status: "ok"))
+
+                    _ = try await eventLog.trackForTrigger(
+                        "public_trigger",
+                        properties: ["secret": "value"],
+                        applyBeforeSend: true
+                    )
+
+                    guard let sent = await mockNuxieApi.sentEvents.last else {
+                        return fail("expected the trigger to reach the API")
+                    }
+                    expect(hookFired.value).to(beTrue())
+                    expect(sent.name).to(equal("public_trigger"))
+                    expect(sent.distinctId).toNot(equal("hijacked-user"))
+                    expect(sent.properties["$distinct_id"] as? String).to(equal(sent.distinctId))
+                    expect(sent.properties["redacted"] as? Bool).to(beTrue())
+                    expect(sent.properties["secret"]).to(beNil())
+                }
+
+                it("resumes a drain barrier yielded after the capture stream closes") {
+                    await eventLog.close()
+                    // A late lifecycle trigger racing shutdown must fail fast,
+                    // never suspend on the closed log's drain barrier.
+                    let settled = await withTaskGroup(of: Bool.self) { group in
+                        group.addTask {
+                            _ = try? await eventLog.trackForTrigger(
+                                "$app_opened",
+                                properties: nil
+                            )
+                            return true
+                        }
+                        group.addTask {
+                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                            return false
+                        }
+                        let first = await group.next() ?? false
+                        group.cancelAll()
+                        return first
+                    }
+                    expect(settled).to(beTrue())
+                }
+
                 it("cancels pending ownership-fence retries before closing the store") {
                     let journeyId = "journey-fence-retry-close"
                     let epoch = 9
@@ -646,7 +705,7 @@ final class TrackWithResponseTests: AsyncSpec {
                             properties: ["journey_id": journeyId, "epoch": epoch],
                             flushStrategy: .none
                         )
-                    }.to(throwError(NuxieError.eventRoutingFailed))
+                    }.to(throwError(EventRoutingError.eventRoutingFailed))
 
                     let writesBeforeClose = mockEventStore.journeyOwnershipFenceRecordCallCount
                     await eventLog.close()
@@ -1110,6 +1169,27 @@ final class TrackWithResponseTests: AsyncSpec {
                     expect(captured).to(beNil())
                     expect(mockEventStore.storedEvents).to(beEmpty())
                 }
+            }
+
+            it("drops a trigger before persistence and delivery when requested") {
+                testConfig.beforeSend = { event in
+                    event.name == "$app_opened" ? nil : event
+                }
+                try await eventLog.configure(configuration: testConfig)
+
+                do {
+                    _ = try await eventLog.trackForTrigger(
+                        "$app_opened",
+                        properties: ["source": "app_lifecycle"],
+                        applyBeforeSend: true
+                    )
+                    fail("expected beforeSend to drop the trigger")
+                } catch {
+                    expect(error).to(beAKindOf(EventBeforeSendDropError.self))
+                }
+
+                expect(mockEventStore.storedEvents).to(beEmpty())
+                await expect { await mockNuxieApi.trackEventCallCount }.to(equal(0))
             }
 
             context("online") {

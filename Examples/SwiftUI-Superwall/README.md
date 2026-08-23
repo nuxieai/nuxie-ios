@@ -79,7 +79,6 @@ struct MoodLogApp: App {
 
     private func setupNuxieSDK() {
         let config = NuxieConfiguration(apiKey: "your_api_key")
-        config.apiEndpoint = URL(string: "http://localhost:3000")!
         config.environment = .development
         config.logLevel = .debug
 

@@ -309,10 +309,10 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
     ) -> NuxieCore {
         let configuration = NuxieConfiguration(apiKey: "release-restart-key")
         configuration.environment = .development
-        configuration.customStoragePath = storageURL
+        configuration.testingOverrides.customStoragePath = storageURL
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [StubURLProtocol.self]
-        configuration.urlSession = URLSession(configuration: sessionConfiguration)
+        configuration.testingOverrides.urlSession = URLSession(configuration: sessionConfiguration)
         var overrides = NuxieCoreOverrides()
         overrides.api = api
         overrides.dateProvider = MockDateProvider()

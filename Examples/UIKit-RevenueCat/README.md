@@ -57,7 +57,6 @@ Purchases.shared.delegate = EntitlementManager.shared
 
 // Then configure Nuxie SDK with RevenueCat bridge
 let config = NuxieConfiguration(apiKey: "your_nuxie_api_key")
-config.apiEndpoint = URL(string: "http://localhost:3000")!
 config.environment = .development
 config.logLevel = .debug
 

@@ -1,7 +1,7 @@
 import Foundation
 import Quick
 import Nimble
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
 #endif
@@ -33,11 +33,11 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 storagePath = NSTemporaryDirectory() + "nuxie-orchestration-\(UUID().uuidString)"
 
                 config = NuxieConfiguration(apiKey: "orchestration-test-key")
-                config.customStoragePath = URL(fileURLWithPath: storagePath)
-                config.flushAt = 100  // manual flush only
-                config.flushInterval = 3600
-                config.retryCount = 1
-                config.retryDelay = 0.01
+                config.testingOverrides.customStoragePath = URL(fileURLWithPath: storagePath)
+                config.testingOverrides.flushAt = 100  // manual flush only
+                config.testingOverrides.flushInterval = 3600
+                config.testingOverrides.retryCount = 1
+                config.testingOverrides.retryDelay = 0.01
                 identity = MockIdentityService()
                 sessions = SessionService()
                 dateProvider = SystemDateProvider()

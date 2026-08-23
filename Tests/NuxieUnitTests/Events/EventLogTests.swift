@@ -1,7 +1,7 @@
 import Foundation
 import Quick
 import Nimble
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
 #endif
@@ -20,7 +20,7 @@ final class EventLogTests: AsyncSpec {
 
             beforeEach {
                 testConfig = NuxieConfiguration(apiKey: "test-api-key")
-                testConfig.flushAt = 100  // manual flush only
+                testConfig.testingOverrides.flushAt = 100  // manual flush only
 
                 mockStore = MockEventStore()
                 mockApi = MockNuxieApi()

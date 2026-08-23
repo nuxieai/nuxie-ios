@@ -701,7 +701,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         func makeObserver(scope: PurchaseStorageScope) -> any TransactionObserverProtocol {
             TransactionObserver(
@@ -1038,13 +1038,11 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let first = PurchaseStorageScope(
             appIdentifier: "com.example.host-app",
             environment: firstConfiguration.environment,
-            apiEndpoint: firstConfiguration.apiEndpoint,
             testStoreEnabled: firstConfiguration.testStoreEnabled
         )
         let rotated = PurchaseStorageScope(
             appIdentifier: "com.example.host-app",
             environment: rotatedConfiguration.environment,
-            apiEndpoint: rotatedConfiguration.apiEndpoint,
             testStoreEnabled: rotatedConfiguration.testStoreEnabled
         )
 
@@ -1052,55 +1050,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(
             first.appAccountToken(distinctId: "customer"),
             rotated.appAccountToken(distinctId: "customer")
-        )
-    }
-
-    func testCustomBackendsHaveDistinctNormalizedPurchaseScopes() {
-        let first = PurchaseStorageScope(
-            appIdentifier: "com.example.host-app",
-            environment: .custom,
-            apiEndpoint: URL(string: "HTTPS://Commerce.Example.com:443/v1/")!,
-            testStoreEnabled: false
-        )
-        let equivalentFirst = PurchaseStorageScope(
-            appIdentifier: "com.example.host-app",
-            environment: .custom,
-            apiEndpoint: URL(string: "https://commerce.example.com/v1")!,
-            testStoreEnabled: false
-        )
-        let second = PurchaseStorageScope(
-            appIdentifier: "com.example.host-app",
-            environment: .custom,
-            apiEndpoint: URL(string: "https://commerce-two.example.com/v1")!,
-            testStoreEnabled: false
-        )
-        let rootWithoutSlash = PurchaseStorageScope(
-            appIdentifier: "com.example.host-app",
-            environment: .custom,
-            apiEndpoint: URL(string: "https://root.example.com")!,
-            testStoreEnabled: false
-        )
-        let rootWithSlash = PurchaseStorageScope(
-            appIdentifier: "com.example.host-app",
-            environment: .custom,
-            apiEndpoint: URL(string: "https://root.example.com/")!,
-            testStoreEnabled: false
-        )
-
-        XCTAssertEqual(first, equivalentFirst)
-        XCTAssertNotEqual(first, second)
-        XCTAssertEqual(rootWithoutSlash, rootWithSlash)
-        XCTAssertEqual(
-            first.appAccountToken(distinctId: "customer"),
-            equivalentFirst.appAccountToken(distinctId: "customer")
-        )
-        XCTAssertNotEqual(
-            first.appAccountToken(distinctId: "customer"),
-            second.appAccountToken(distinctId: "customer")
-        )
-        XCTAssertEqual(
-            rootWithoutSlash.appAccountToken(distinctId: "customer"),
-            rootWithSlash.appAccountToken(distinctId: "customer")
         )
     }
 
@@ -3524,7 +3473,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let service = TransactionService(
             productService: mocks.productService,
@@ -3593,7 +3542,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let observer = TransactionObserver(
             api: api,
@@ -3650,7 +3599,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let observer = TransactionObserver(
             api: api,
@@ -3697,7 +3646,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let observer = TransactionObserver(
             api: api,
@@ -3759,7 +3708,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 profile: mocks.profileService,
                 dateProvider: mocks.dateProvider,
                 featureInfo: FeatureInfo(),
-                cacheTTL: configuration.featureCacheTTL
+                cacheTTL: NuxieInternalConfiguration().featureCacheTTL
             ),
             identity: mocks.identityService,
             settings: NuxieRuntimeSettings(configuration: configuration),
@@ -3822,7 +3771,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 profile: mocks.profileService,
                 dateProvider: mocks.dateProvider,
                 featureInfo: FeatureInfo(),
-                cacheTTL: configuration.featureCacheTTL
+                cacheTTL: NuxieInternalConfiguration().featureCacheTTL
             ),
             identity: mocks.identityService,
             settings: NuxieRuntimeSettings(configuration: configuration),
@@ -3878,7 +3827,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let observer = TransactionObserver(
             api: api,

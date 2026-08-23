@@ -4,8 +4,8 @@ import Foundation
 /// $app_opened, $app_backgrounded).
 ///
 /// Replaces the former plugin system's sole plugin (AppLifecyclePlugin);
-/// invoked directly by NuxieLifecycleCoordinator. Disable via
-/// `NuxieConfiguration.trackApplicationLifecycleEvents`.
+/// invoked directly by NuxieLifecycleCoordinator. These events are always
+/// captured; customers can drop them with `NuxieConfiguration.beforeSend`.
 final class AppLifecycleTracker {
 
     private let userDefaults: UserDefaults

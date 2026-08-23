@@ -3,11 +3,10 @@ import Foundation
 /// Environment settings
 public enum Environment: String, Sendable {
     case production = "production"
-    case staging = "staging"
+    @_spi(Companion) case staging = "staging"
     case development = "development"
-    case custom = "custom"
 
-    var defaultEndpoint: URL? {
+    var defaultEndpoint: URL {
         switch self {
         case .production:
             return URL(string: "https://i.nuxie.ai")!
@@ -15,9 +14,6 @@ public enum Environment: String, Sendable {
             return URL(string: "https://staging-i.nuxie.ai")!
         case .development:
             return URL(string: "https://dev-i.nuxie.ai")!
-        case .custom:
-            // .custom has no default — the integrator must set apiEndpoint.
-            return nil
         }
     }
 }
@@ -32,6 +28,72 @@ public enum LogLevel: String, Sendable {
     case none = "none"
 }
 
+/// Test-only overrides for engine configuration that is intentionally absent
+/// from the customer setup interface. Production defaults remain internal.
+@_spi(Testing)
+public struct NuxieTestingOverrides: Sendable {
+    /// Overrides the selected environment's ingest endpoint.
+    public var apiEndpoint: URL?
+
+    /// Overrides the delivery retry limit (production default: 3).
+    public var retryCount: Int?
+
+    /// Overrides the base delivery retry delay in seconds (production default: 2).
+    public var retryDelay: TimeInterval?
+
+    /// Overrides the maximum number of events sent per batch (production default: 50).
+    public var eventBatchSize: Int?
+
+    /// Overrides the pending-event count that triggers a flush (production default: 20).
+    public var flushAt: Int?
+
+    /// Overrides the periodic flush interval in seconds (production default: 30).
+    public var flushInterval: TimeInterval?
+
+    /// Overrides the in-memory delivery queue capacity (production default: 1,000).
+    public var maxQueueSize: Int?
+
+    /// Overrides the root directory used by SDK persistence.
+    public var customStoragePath: URL?
+
+    /// Overrides the feature cache lifetime in seconds (production default: 300).
+    public var featureCacheTTL: TimeInterval?
+
+    /// Overrides the URL session used by SDK network clients.
+    public var urlSession: URLSession?
+
+    /// Creates an empty overlay that preserves every production default.
+    public init() {}
+}
+
+/// Engine-owned defaults and test overrides. Keeping this value internal
+/// prevents delivery/storage/cache tuning from leaking through the SDK facade.
+struct NuxieInternalConfiguration: Sendable {
+    let apiEndpointOverride: URL?
+    let retryCount: Int
+    let retryDelay: TimeInterval
+    let eventBatchSize: Int
+    let flushAt: Int
+    let flushInterval: TimeInterval
+    let maxQueueSize: Int
+    let customStoragePath: URL?
+    let featureCacheTTL: TimeInterval
+    let urlSession: URLSession?
+
+    init(testingOverrides: NuxieTestingOverrides = .init()) {
+        apiEndpointOverride = testingOverrides.apiEndpoint
+        retryCount = testingOverrides.retryCount ?? 3
+        retryDelay = testingOverrides.retryDelay ?? 2
+        eventBatchSize = testingOverrides.eventBatchSize ?? 50
+        flushAt = testingOverrides.flushAt ?? 20
+        flushInterval = testingOverrides.flushInterval ?? 30
+        maxQueueSize = testingOverrides.maxQueueSize ?? 1_000
+        customStoragePath = testingOverrides.customStoragePath
+        featureCacheTTL = testingOverrides.featureCacheTTL ?? 5 * 60
+        urlSession = testingOverrides.urlSession
+    }
+}
+
 /// Configuration object for initializing Nuxie SDK
 /// This builder is mutable only until `NuxieSDK.setup`. Setup snapshots every
 /// value. Later mutations do not reconfigure a running SDK; use the explicit
@@ -39,26 +101,13 @@ public enum LogLevel: String, Sendable {
 public class NuxieConfiguration {
     /// Required: API key for authentication
     public let apiKey: String
-    
-    /// API endpoint. Reads the environment's default unless explicitly set;
-    /// assignment order of `environment` and `apiEndpoint` does not matter.
-    /// `.custom` requires setting this explicitly (setup throws otherwise).
-    public var apiEndpoint: URL {
-        get {
-            explicitApiEndpoint
-                ?? environment.defaultEndpoint
-                ?? URL(string: "https://i.nuxie.ai")!
-        }
-        set { explicitApiEndpoint = newValue }
-    }
-
-    /// Whether apiEndpoint was explicitly provided (required for .custom)
-    var hasExplicitApiEndpoint: Bool { explicitApiEndpoint != nil }
-
-    private var explicitApiEndpoint: URL?
 
     /// Environment setting
     public var environment: Environment = .production
+
+    /// Internal engine overrides exposed only to SDK test harnesses.
+    @_spi(Testing)
+    public var testingOverrides = NuxieTestingOverrides()
 
     /// Enables the isolated iOS-only Nuxie Test Store for local commerce qualification.
     ///
@@ -76,48 +125,17 @@ public class NuxieConfiguration {
     /// be logged.
     public var redactSensitiveData: Bool = true
     
-    /// Number of failures over which the retry delay increases exponentially
-    /// before it caps. Zero and one both keep the base delay; delivery itself
-    /// continues retrying on later flush opportunities. Must be nonnegative
-    /// and, together with `retryDelay`, produce a finite schedulable backoff.
-    public var retryCount: Int = 3
-    /// Base retry delay in seconds. Must be finite and nonnegative.
-    public var retryDelay: TimeInterval = 2
-    
-    /// Event batching settings
-    /// Maximum events per batch. Must be in `1...Int32.max`.
-    public var eventBatchSize: Int = 50
-    /// Pending-event count that triggers automatic flush. Must be in `1...Int32.max`.
-    public var flushAt: Int = 20
-    /// Automatic flush interval in seconds. Must be finite, positive, and
-    /// representable by Swift concurrency's nanosecond sleep clock.
-    public var flushInterval: TimeInterval = 30
-    /// Maximum pending events staged in memory. Must be in `1...Int32.max`.
-    public var maxQueueSize: Int = 1000
-    
-    /// Storage settings
-    public var customStoragePath: URL?
-
-    /// Feature cache settings
-    /// TTL for real-time feature check results (default: 5 minutes). Must be
-    /// finite and greater than zero.
-    public var featureCacheTTL: TimeInterval = 5 * 60
-    
     /// Initial locale selected during `setup(with:)`.
     /// When nil, the SDK uses the device locale. After setup, call
     /// `NuxieSDK.setLocaleIdentifier(_:)` to change it and refresh the profile.
     public var localeIdentifier: String?
 
-    /// Automatically track $app_installed / $app_updated / $app_opened /
-    /// $app_backgrounded lifecycle events (default: true)
-    public var trackApplicationLifecycleEvents: Bool = true
-
-    /// Optional beforeSend hook for event transformation/filtering
-    /// Return nil to drop the event, or return a modified event
+    /// Optional hook for event transformation and filtering.
+    ///
+    /// Application lifecycle events are always captured. Return nil here to
+    /// drop any event, including `$app_installed`, `$app_updated`,
+    /// `$app_opened`, or `$app_backgrounded`.
     public var beforeSend: (@Sendable (NuxieEvent) -> NuxieEvent?)?
-    
-    /// Internal transport-injection seam used by the SDK's tests.
-    var urlSession: URLSession?
     
     /// How the SDK handles StoreKit transactions it observes.
     public enum PurchaseHandlingMode: Sendable {
@@ -157,7 +175,7 @@ enum NuxieConfigurationValidator {
     private static let maximumSchedulableSeconds =
         TimeInterval(UInt64.max) / nanosecondsPerSecond
 
-    static func validate(_ configuration: NuxieConfiguration) throws {
+    static func validate(_ configuration: NuxieInternalConfiguration) throws {
         try requireSupportedDeliveryCount(
             configuration.eventBatchSize,
             field: "eventBatchSize"
@@ -239,60 +257,22 @@ struct NuxieSetupConfiguration: Sendable {
     let logLevel: LogLevel
     let enableConsoleLogging: Bool
     let redactSensitiveData: Bool
-    let retryCount: Int
-    let retryDelay: TimeInterval
-    let eventBatchSize: Int
-    let flushAt: Int
-    let flushInterval: TimeInterval
-    let maxQueueSize: Int
-    let customStoragePath: URL?
-    let featureCacheTTL: TimeInterval
-    let trackApplicationLifecycleEvents: Bool
     let beforeSend: (@Sendable (NuxieEvent) -> NuxieEvent?)?
-    let urlSession: URLSession?
+    let internalConfiguration: NuxieInternalConfiguration
 
     init(_ configuration: NuxieConfiguration) {
+        let internalConfiguration = NuxieInternalConfiguration(
+            testingOverrides: configuration.testingOverrides
+        )
         apiKey = configuration.apiKey
-        apiEndpoint = configuration.apiEndpoint
         environment = configuration.environment
+        apiEndpoint = internalConfiguration.apiEndpointOverride
+            ?? configuration.environment.defaultEndpoint
         testStoreEnabled = configuration.testStoreEnabled
         logLevel = configuration.logLevel
         enableConsoleLogging = configuration.enableConsoleLogging
         redactSensitiveData = configuration.redactSensitiveData
-        retryCount = configuration.retryCount
-        retryDelay = configuration.retryDelay
-        eventBatchSize = configuration.eventBatchSize
-        flushAt = configuration.flushAt
-        flushInterval = configuration.flushInterval
-        maxQueueSize = configuration.maxQueueSize
-        customStoragePath = configuration.customStoragePath
-        featureCacheTTL = configuration.featureCacheTTL
-        trackApplicationLifecycleEvents = configuration.trackApplicationLifecycleEvents
         beforeSend = configuration.beforeSend
-        urlSession = configuration.urlSession
-    }
-
-    /// Compatibility copy for public protocols that still accept the mutable
-    /// pre-1.0 builder. This instance never escapes the composition root.
-    func eventLogConfiguration() -> NuxieConfiguration {
-        let configuration = NuxieConfiguration(apiKey: apiKey)
-        configuration.environment = environment
-        configuration.testStoreEnabled = testStoreEnabled
-        configuration.apiEndpoint = apiEndpoint
-        configuration.logLevel = logLevel
-        configuration.enableConsoleLogging = enableConsoleLogging
-        configuration.redactSensitiveData = redactSensitiveData
-        configuration.retryCount = retryCount
-        configuration.retryDelay = retryDelay
-        configuration.eventBatchSize = eventBatchSize
-        configuration.flushAt = flushAt
-        configuration.flushInterval = flushInterval
-        configuration.maxQueueSize = maxQueueSize
-        configuration.customStoragePath = customStoragePath
-        configuration.featureCacheTTL = featureCacheTTL
-        configuration.trackApplicationLifecycleEvents = trackApplicationLifecycleEvents
-        configuration.beforeSend = beforeSend
-        configuration.urlSession = urlSession
-        return configuration
+        self.internalConfiguration = internalConfiguration
     }
 }

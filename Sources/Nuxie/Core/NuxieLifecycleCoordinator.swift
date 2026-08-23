@@ -14,7 +14,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   }
 
   private var observers: [NSObjectProtocol] = []
-  private let lifecycleTracker: AppLifecycleTracker?
+  private let lifecycleTracker: AppLifecycleTracker
 
   /// Transitions are handled by a single FIFO worker so a fast
   /// background→foreground→background sequence can never interleave service
@@ -33,7 +33,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private let featureService: FeatureServiceProtocol
 
   init(
-    lifecycleTracker: AppLifecycleTracker? = nil,
+    lifecycleTracker: AppLifecycleTracker,
     sessions: SessionServiceProtocol,
     journeys: JourneyServiceProtocol,
     eventLog: EventQueueLifecycle,
@@ -58,7 +58,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
 
     // $app_installed / $app_updated / $app_opened — the event system queues
     // internally, so tracking before it finishes configuring is safe.
-    lifecycleTracker?.trackAppLaunchEvents()
+    lifecycleTracker.trackAppLaunchEvents()
 
     worker = Task { [weak self, transitions] in
       for await transition in transitions {
@@ -110,14 +110,14 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       await journeyService.onAppDidEnterBackground()
       await eventLog.onAppDidEnterBackground()
       // Emit $app_backgrounded after services have processed
-      lifecycleTracker?.trackAppBackgrounded()
+      lifecycleTracker.trackAppBackgrounded()
 
     case .willEnterForeground:
       // Re-arm timers BEFORE UI is active so we can catch up time-based work,
       // but do not present experiences until after didBecomeActive + debounce.
       await journeyService.onAppWillEnterForeground()
       // Emit $app_opened after journey service has processed
-      lifecycleTracker?.trackAppForegrounded()
+      lifecycleTracker.trackAppForegrounded()
 
     case .didBecomeActive:
       sessionService.onAppBecameActive()

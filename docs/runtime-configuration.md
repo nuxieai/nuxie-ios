@@ -8,20 +8,21 @@ running SDK.
 
 These values are fixed until `shutdown()` followed by a new `setup(with:)`:
 
-- API key, environment, API endpoint, and URL session
+- API key and environment (`.production` or `.development`)
 - logging and redaction policy
-- retry, batching, flushing, and queue limits
-- storage and package asset locations
-- feature cache TTL
-- automatic application lifecycle tracking
+- Test Store enablement
 - `beforeSend`
+
+Application lifecycle events are always captured. To exclude one, return
+`nil` for it from `beforeSend` before setup.
 
 ## Runtime controls
 
 The supported live settings have explicit propagation semantics:
 
-- `await NuxieSDK.shared.setLocaleIdentifier(...)` changes the locale, fetches
-  a new profile immediately, and synchronizes feature state.
+- `try await NuxieSDK.shared.setLocaleIdentifier(...)` changes the locale,
+  fetches a new profile immediately, and synchronizes feature state. It
+  completes with `Void`.
 - `try NuxieSDK.shared.setPurchaseDelegate(...)` changes the delegate used by
   subsequent purchase and restore calls.
 - `try NuxieSDK.shared.setPurchaseHandlingMode(...)` changes whether subsequent

@@ -91,6 +91,26 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 await expect { await mockFactory.nuxieApi.fetchProfileCallCount }.to(equal(initialFetchCount + 2))
             }
 
+            it("cancels a stale fetch without reporting a configuration error") {
+                mockFactory.identityService.setDistinctId("user-a")
+                await mockFactory.nuxieApi.setProfileDelay(0.1)
+
+                let fetch = Task {
+                    try await profileService.refetchProfile(distinctId: "user-a")
+                }
+                await expect { await mockFactory.nuxieApi.fetchProfileCallCount }
+                    .toEventually(equal(1), timeout: .seconds(1))
+                mockFactory.identityService.setDistinctId("user-b")
+
+                do {
+                    _ = try await fetch.value
+                    fail("expected the stale fetch to be cancelled")
+                } catch {
+                    expect(error).to(beAKindOf(ProfileRefreshCancellationError.self))
+                    expect(error).notTo(beAKindOf(NuxieError.self))
+                }
+            }
+
             it("uses its injected locale without SDK singleton setup") {
                 mockFactory.identityService.setDistinctId("locale-user")
 

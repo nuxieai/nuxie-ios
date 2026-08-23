@@ -44,7 +44,7 @@ behavior only through the supported facade and delegate seams.
 
 | Entry point | Semantics |
 | --- | --- |
-| `setup(with: NuxieConfiguration) throws` | Builds the composition root and starts the SDK. Must be called before anything else; throws on an empty API key or a `.custom` environment without an explicit `apiEndpoint`. Calling twice is a warning no-op. |
+| `setup(with: NuxieConfiguration) throws` | Builds the composition root and starts the SDK. Must be called before anything else; throws on invalid configuration, including an empty API key. Calling twice is a warning no-op. |
 | `shutdown() async` | Drains queued identity transitions, shuts down journeys, closes the event log (workers drain deterministically), and drops the object graph. Normally unnecessary. |
 | `delegate: NuxieDelegate?` | Feature-access change callbacks. |
 | `isSetup: Bool` | Whether `setup(with:)` has completed and the facade has a live composition root. |
@@ -60,9 +60,6 @@ matching experiences, and may present UI.
 | --- | --- |
 | `trigger(_:properties:userProperties:userPropertiesSetOnce:handler:)` | Fire-and-forget. The optional handler observes progressive `TriggerUpdate`s (gate decisions, journey lifecycle, entitlement outcomes) for this trigger only. |
 | `triggerAndWait(...) async -> TriggerResult` | Same, awaiting the terminal result. Wire encoding of `TriggerResult` is pinned by `fixtures/encodings/trigger-result.json`. |
-| `flushEvents() async -> Bool` | Force delivery of the pending queue. |
-| `getQueuedEventCount() async -> Int` | Pending delivery-queue size. |
-| `pauseEventQueue() async` / `resumeEventQueue() async` | Suspend/resume automatic delivery (manual flush still works — identity ordering relies on it). |
 
 Journey updates use experience vocabulary throughout:
 `JourneyRef` and `JourneyUpdate` expose `experienceId` and
@@ -91,7 +88,6 @@ v1 schema guidance.
 | `identify(_:userProperties:userPropertiesSetOnce:)` | Transition to a known user. Transitions are strictly FIFO and uncancellable; local event history migrates on anonymous→identified. Same-id identify is a no-op. |
 | `reset(keepAnonymousId: Bool = false)` | Log out. Rotates the anonymous id by default. |
 | `getDistinctId()` / `getAnonymousId()` / `isIdentified` | Current identity accessors. |
-| `getCurrentSessionId() -> String?` | Read-only session accessor (30-minute idle / 24-hour max rotation is automatic). |
 
 ## Experiences
 
@@ -109,7 +105,6 @@ view controller or present an experience by version ID.
 | Entry point | Semantics |
 | --- | --- |
 | `dismiss() async` | Callable from any task. Dismiss the presented experience; no-op if none is presented. It waits for that experience's in-flight purchase or restore without interrupting StoreKit, abandons its in-progress server-effect wait, then exits the journey as dismissed. `$journey_exited` carries `reason: "dismissed"` and `dismissed_by: "host"`; a pending `triggerAndWait` resolves to `TriggerResult.journeyCompleted` with `JourneyUpdate.exitReason == .dismissed`, never `.denied`. |
-| `refreshProfile() async throws` | Re-fetch internal cached config (experiences, segments, features). The SDK also refreshes automatically. |
 
 ## Features (entitlements)
 
@@ -133,28 +128,22 @@ back to an ordinary post-request feature-use event.
 
 ## Configuration
 
-`NuxieConfiguration` carries only functional options: `apiKey`,
-`environment`/`apiEndpoint`, delivery tuning (`flushAt`, `flushInterval`,
-`eventBatchSize`, `maxQueueSize`, `retryCount`, `retryDelay`),
-`trackApplicationLifecycleEvents`, `purchaseHandlingMode` (`.full` default /
-`.observer` — observer mode never finishes transactions the host app owns),
-`beforeSend` (drop/transform events pre-capture), logging and redaction
-controls, `featureCacheTTL`, `localeIdentifier`, `customStoragePath`, and
-`purchaseDelegate`. For development-only commerce qualification,
-`testStoreEnabled` requires a `pk_test_` key and `.development` environment;
-it uses Nuxie's isolated no-charge Test Store instead of StoreKit or a
-purchase delegate.
+`NuxieConfiguration` carries only customer-facing functional options: `apiKey`
+(supplied to `init(apiKey:)`), `environment` (`.production` or `.development`),
+`logLevel`, `enableConsoleLogging`, `redactSensitiveData`, `localeIdentifier`,
+`beforeSend`, `testStoreEnabled`, `purchaseDelegate`, and
+`purchaseHandlingMode` (`.full` default / `.observer` — observer mode never
+finishes transactions the host app owns). For development-only commerce
+qualification, `testStoreEnabled` requires a `pk_test_` key and `.development`
+environment; it uses Nuxie's isolated no-charge Test Store instead of StoreKit
+or a purchase delegate.
 
-Setup validates delivery tuning before publishing any SDK state. Batch,
-automatic-flush, and queue counts must be within `1...Int32.max`, and the
-automatic flush threshold cannot exceed queue capacity. `retryCount` controls
-how many failure attempts increase exponential backoff before its delay caps;
-it does not stop later delivery attempts and must be nonnegative. `retryDelay`
-must be finite and nonnegative. `flushInterval` and
-`featureCacheTTL` must be finite and greater than zero, and configured
-timer/backoff values must fit Swift concurrency's nanosecond scheduling range.
-Invalid values fail setup with `NuxieError.invalidConfiguration` naming the
-offending field.
+Application lifecycle events are always captured. `beforeSend` is the escape
+hatch for applications that need to transform or drop those events before
+they are persisted and delivered.
+
+`setLocaleIdentifier(_:) async throws` changes the runtime locale, refreshes
+the profile, and synchronizes feature state. It completes with `Void`.
 
 Console logging treats every interpolated value as sensitive by default. With
 `redactSensitiveData` enabled, identifiers, response bodies, paths,

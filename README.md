@@ -25,9 +25,9 @@ Learn more at https://nuxie.ai
 - Event tracking: send custom events with properties and user traits.
 - User identity: anonymous IDs, `identify`, and event linking on login.
 - Experiences: server‑driven journeys + screens that present in‑app UI, executed client‑side from cached config.
-- Session tracking: automatic idle/lifetime rotation with a read-only current-session accessor.
+- Session tracking: automatic idle/lifetime rotation.
 - Purchases: delegate‑based StoreKit integration for buy/restore.
-- Automatic lifecycle events: $app_installed, $app_updated, $app_opened, $app_backgrounded (can be disabled).
+- Automatic lifecycle events: $app_installed, $app_updated, $app_opened, and $app_backgrounded are always captured; `beforeSend` can drop them.
 - Privacy & controls: sensitive-value log redaction and a `beforeSend` transform/drop hook.
 - Offline-first, precisely: committed events are normally persisted locally before observers run and re-sent after relaunch (deduplicated server-side); a history-write failure advances the durable completeness fence so local evaluation fails closed instead of silently reasoning across a gap. Journey enrollment and gate decisions evaluate from cached config, so network failure degrades freshness, never function.
 - Resilient Experiences: authenticated profile snapshots remain offline-usable for 24 hours, verified release objects use a bounded 256 MiB disk LRU, speculative preparation respects Low Data Mode and app lifecycle, and StoreKit failures block only product-bound selected screens.
@@ -105,7 +105,7 @@ import Nuxie
 struct MyApp: App {
   init() {
     var config = NuxieConfiguration(apiKey: "NX_…")
-    config.environment = .production // .staging, .development, or .custom
+    config.environment = .production // or .development
     config.logLevel = .info
     // Optional: configure purchases
     // config.purchaseDelegate = MyPurchaseDelegate()
@@ -190,7 +190,8 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 - `NuxieSDK.shared.reset(keepAnonymousId:)`: clear identity (e.g., logout).
 - `NuxieSDK.shared.version`: current SDK version string.
 - `NuxieSDK.shared.getDistinctId()`: current distinct ID (identified or anonymous).
-- `NuxieSDK.shared.getCurrentSessionId()`: read the current automatically managed session ID.
+- `try await NuxieSDK.shared.setLocaleIdentifier(_:)`: change the locale and
+  refresh experience and feature state; the call completes with no return value.
 - `NuxieSDK.shared.shutdown()`: tear down services (usually not needed).
 
 ### Experiences
@@ -209,30 +210,24 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 
 Create with `NuxieConfiguration(apiKey:)` and optionally set:
 
-- `environment`: `.production` (default), `.staging`, `.development`, `.custom` (+ `apiEndpoint`).
+- `environment`: `.production` (default) or `.development`.
 - `testStoreEnabled`: the isolated, local-only commerce sheet (development +
   `pk_test_` key only).
-- Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`. Interpolated
-  identifiers, payloads, paths, and error details are replaced with
-  process-stable HMAC-SHA-256 summaries by default. Set
-  `redactSensitiveData = false` only for an explicitly consented diagnostic
-  session because raw values may enter logs.
-- Batching: `eventBatchSize`, `flushAt`, `flushInterval`, `maxQueueSize`,
-  `retryCount`, and `retryDelay`. Setup requires batch, threshold, and queue
-  counts within `1...Int32.max`; rejects a flush threshold above queue capacity;
-  non-finite intervals; negative retry values; and timer/backoff combinations
-  that cannot be scheduled safely.
-- Hooks: `beforeSend` to transform or drop events.
+- Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`.
+- Locale: `localeIdentifier` for the initial locale; use
+  `setLocaleIdentifier(_:)` for runtime changes.
+- Hooks: `beforeSend` to transform or drop events, including the lifecycle
+  events that the SDK always captures.
 - Experience releases use the authenticated delivery origins supplied by the
   profile; applications cannot override signed object locations.
-- Purchases: `purchaseDelegate` to handle StoreKit buy/restore in your app.
-- Lifecycle events: `trackApplicationLifecycleEvents` (default `true`).
+- Purchases: `purchaseDelegate` to handle StoreKit buy/restore in your app and
+  `purchaseHandlingMode` to define transaction ownership.
 
 Minimal example:
 
 ```swift
 var config = NuxieConfiguration(apiKey: "NX_…")
-config.environment = .staging
+config.environment = .production
 config.beforeSend = { event in
   // Example: drop noisy dev events
   event.name.hasPrefix("dev_") ? nil : event

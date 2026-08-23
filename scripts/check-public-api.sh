@@ -60,6 +60,8 @@ extract_platform() {
       -target "$target" \
       -sdk "$sdk_path" \
       -swift-only \
+      -ignore-spi-group Testing \
+      -ignore-spi-group Companion \
       -o "$compatibility"
   fi
 }

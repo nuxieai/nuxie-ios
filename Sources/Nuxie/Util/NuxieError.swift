@@ -5,7 +5,6 @@ import Foundation
 public enum NuxieError: LocalizedError, Sendable {
     case notConfigured
     case invalidConfiguration(String)
-    case eventRoutingFailed
 
     public var errorDescription: String? {
         switch self {
@@ -13,8 +12,24 @@ public enum NuxieError: LocalizedError, Sendable {
             return "Nuxie SDK is not configured"
         case .invalidConfiguration(let reason):
             return "Invalid configuration: \(reason)"
-        case .eventRoutingFailed:
-            return "Event routing failed"
         }
+    }
+}
+
+/// Engine-only failure used while persisting or routing a captured event.
+/// TriggerService translates it to the public TriggerError vocabulary.
+enum EventRoutingError: LocalizedError, Sendable {
+    case eventRoutingFailed
+
+    var errorDescription: String? {
+        "Event routing failed"
+    }
+}
+
+/// Internal terminal outcome for an event rejected by the host's beforeSend
+/// hook before it reaches persistence, delivery, or local trigger routing.
+struct EventBeforeSendDropError: LocalizedError, Sendable {
+    var errorDescription: String? {
+        "Event dropped by beforeSend"
     }
 }
