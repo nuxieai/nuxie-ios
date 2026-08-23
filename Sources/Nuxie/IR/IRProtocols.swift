@@ -10,32 +10,58 @@ protocol IRUserProps {
 
 /// Adapter protocol for event queries
 protocol IREventQueries {
+    /// The earliest lower bound this source can answer exactly. Production
+    /// device history is retention-bounded; fixtures may be complete.
+    func historyCoverage() async throws -> EventHistoryCoverage
+
     /// Check if event exists
-    func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Bool
+    func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async throws -> Bool
     
     /// Count events
-    func count(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Int
+    func count(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async throws -> Int
     
     /// Get first time event occurred
-    func firstTime(name: String, where predicate: IRPredicate?) async -> Date?
+    func firstTime(name: String, where predicate: IRPredicate?) async throws -> Date?
     
     /// Get last time event occurred
-    func lastTime(name: String, where predicate: IRPredicate?) async -> Date?
+    func lastTime(name: String, where predicate: IRPredicate?) async throws -> Date?
     
     /// Aggregate event property values
-    func aggregate(_ agg: Aggregate, name: String, prop: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Double?
+    func aggregate(_ agg: Aggregate, name: String, prop: String, since: Date?, until: Date?, where predicate: IRPredicate?) async throws -> Double?
     
     /// Check if events occurred in order
-    func inOrder(steps: [StepQuery], overallWithin: TimeInterval?, perStepWithin: TimeInterval?, since: Date?, until: Date?) async -> Bool
+    func inOrder(steps: [StepQuery], overallWithin: TimeInterval?, perStepWithin: TimeInterval?, since: Date?, until: Date?) async throws -> Bool
     
     /// Check if user was active in periods
-    func activePeriods(name: String, period: Period, total: Int, min: Int, where predicate: IRPredicate?) async -> Bool
+    func activePeriods(name: String, period: Period, total: Int, min: Int, where predicate: IRPredicate?) async throws -> Bool
     
     /// Check if user stopped performing event
-    func stopped(name: String, inactiveFor: TimeInterval, where predicate: IRPredicate?) async -> Bool
+    func stopped(name: String, inactiveFor: TimeInterval, where predicate: IRPredicate?) async throws -> Bool
     
     /// Check if user restarted performing event
-    func restarted(name: String, inactiveFor: TimeInterval, within: TimeInterval, where predicate: IRPredicate?) async -> Bool
+    func restarted(name: String, inactiveFor: TimeInterval, within: TimeInterval, where predicate: IRPredicate?) async throws -> Bool
+}
+
+enum EventHistoryQueryError: Error, Equatable, Sendable {
+    case truncated(limit: Int)
+}
+
+/// Completeness contract for the history visible to IR evaluation.
+enum EventHistoryCoverage: Equatable, Sendable {
+    case complete
+    case retainedWindow(startingAt: Date)
+
+    /// A query is exact only when its complete authored window is inside the
+    /// source's guaranteed coverage. An unbounded query needs complete history.
+    func contains(since: Date?) -> Bool {
+        switch self {
+        case .complete:
+            return true
+        case .retainedWindow(let startingAt):
+            guard let since else { return false }
+            return since >= startingAt
+        }
+    }
 }
 
 /// Adapter protocol for segment queries
@@ -100,6 +126,29 @@ enum Period: String, Sendable {
         case .year:
             return 365 * 86400  // Approximate
         }
+    }
+
+    /// Inclusive start of the calendar-bucket window used by ActivePeriods.
+    /// Centralizing this keeps query execution and completeness checks aligned.
+    func activePeriodsWindowStart(total: Int, now: Date) -> Date? {
+        guard total > 0 else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let component: Calendar.Component
+        switch self {
+        case .day: component = .day
+        case .week: component = .weekOfYear
+        case .month: component = .month
+        case .year: component = .year
+        }
+        guard let currentPeriodStart = calendar.dateInterval(
+            of: component, for: now
+        )?.start else { return nil }
+        return calendar.date(
+            byAdding: component,
+            value: -(total - 1),
+            to: currentPeriodStart
+        )
     }
 }
 

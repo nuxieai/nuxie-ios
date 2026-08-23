@@ -611,6 +611,7 @@ enum IRError: Error, LocalizedError, Sendable {
     case invalidNodeType(String)
     case invalidOperator(String)
     case typeMismatch(expected: String, got: String)
+    case incompleteEventHistory
     case evaluationError(String)
     
     public var errorDescription: String? {
@@ -623,6 +624,8 @@ enum IRError: Error, LocalizedError, Sendable {
             return "Invalid operator: \(op)"
         case .typeMismatch(let expected, let got):
             return "Type mismatch: expected \(expected), got \(got)"
+        case .incompleteEventHistory:
+            return "Exact evaluation requires complete event history"
         case .evaluationError(let message):
             return "Evaluation error: \(message)"
         }

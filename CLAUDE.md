@@ -131,6 +131,16 @@ compiles for macOS.
   registered before `configure` (the journey router) observe every committed
   event. Downstream consumers subscribe — they are never injected into the
   event pipeline.
+- **Device event history is retained-window-only.** `EventLog` must never claim
+  complete lifetime coverage. Unbounded IR event queries that require exact
+  history preserve unknown through the interpreter and fail closed at
+  `IRRuntime`, including under boolean negation and nested predicates. A
+  lower-bounded query is deterministic only when its entire window is inside
+  the durable monotonic horizon. Retention deletion and horizon advancement
+  are one transaction; failed history writes fence the gap, and corrupt event
+  properties, truncation, and storage errors are unknown.
+  The full contract and current v1 schema guidance are in
+  `docs/event-history-semantics.md`.
 - **$experience_shown is tracked by ExperiencePresentationService only**, on successful
   presentation. Never add a second tracking site.
 - **TransactionService owns global $purchase_failed**; ExperienceViewController's

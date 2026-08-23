@@ -600,6 +600,8 @@ final class ConformanceVectorTests: XCTestCase {
     private struct FixtureEvents: IREventQueries {
         let rows: [FixtureEventRow]
 
+        func historyCoverage() async -> EventHistoryCoverage { .complete }
+
         private func matching(
             name: String, since: Date?, until: Date?, predicate: IRPredicate?
         ) -> [FixtureEventRow] {

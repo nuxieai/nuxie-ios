@@ -16,6 +16,21 @@ enum IRValue: Equatable, Sendable {
     case duration(Double)   // seconds
     case list([IRValue])
     case null
+    /// Exact evaluation was impossible because local history is incomplete.
+    case unknown
+
+    /// Unknown can be nested inside authored lists, so consumers must inspect
+    /// recursively before coercing a value into ordinary comparison semantics.
+    var containsUnknown: Bool {
+        switch self {
+        case .unknown:
+            return true
+        case .list(let values):
+            return values.contains(where: \.containsUnknown)
+        default:
+            return false
+        }
+    }
     
     /// Check if value is truthy according to IR semantics
     public var isTruthy: Bool {
@@ -32,7 +47,7 @@ enum IRValue: Equatable, Sendable {
             return t != 0
         case .duration(let d):
             return d != 0
-        case .null:
+        case .null, .unknown:
             return false
         }
     }
@@ -52,7 +67,7 @@ enum IRValue: Equatable, Sendable {
             return d
         case .list(let xs):
             return xs.map { $0.toAny() }
-        case .null:
+        case .null, .unknown:
             return NSNull()
         }
     }

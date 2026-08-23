@@ -74,6 +74,16 @@ $app_opened, $journey_*, $experience_*, $purchase_*, $session_*). The full
 catalog — when each internal event fires, its properties, and delivery
 guarantees — is `docs/sdk-events.md`.
 
+The local event database is not a lifetime analytics store. Delivered history
+is retention-bounded, and authored lifetime conditions that require an exact
+answer fail closed when only that retained window is available. Lower-bounded
+conditions are deterministic only when their complete window is inside the
+reported durable, monotonic horizon. Retention deletion advances that horizon
+in the same transaction; failed history writes fence the gap, while corrupt
+property payloads, query saturation, or storage failure also fail closed. See
+`docs/event-history-semantics.md` for the query-by-query contract and current
+v1 schema guidance.
+
 ## Identity & sessions
 
 | Entry point | Semantics |

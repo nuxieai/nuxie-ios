@@ -337,10 +337,6 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
       .filter { event in
         if event.timestamp < anchor { return false }
         if let end = windowEnd, event.timestamp > end { return false }
-        if let requiredPropertyKey, let requiredPropertyValue {
-          return event.getPropertiesDict()[requiredPropertyKey] as? String
-            == requiredPropertyValue
-        }
         return true
       }
       .sorted {
@@ -349,13 +345,32 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
       }
 
     for storedEvent in matchingEvents {
+      let properties: [String: Any]?
+      if requiredPropertyKey != nil || filter != nil {
+        do {
+          properties = try storedEvent.getPropertiesDictForIR()
+        } catch {
+          LogWarning(
+            "GoalEvaluator ignored event with corrupt persisted properties: \(storedEvent.id)"
+          )
+          continue
+        }
+      } else {
+        properties = nil
+      }
+
+      if let requiredPropertyKey, let requiredPropertyValue,
+         properties?[requiredPropertyKey] as? String != requiredPropertyValue {
+        continue
+      }
+
       guard let filter else {
         return storedEvent
       }
       let nuxieEvent = NuxieEvent(
         name: storedEvent.name,
         distinctId: storedEvent.distinctId,
-        properties: storedEvent.getPropertiesDict(),
+        properties: properties ?? [:],
         timestamp: storedEvent.timestamp
       )
 

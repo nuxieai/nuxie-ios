@@ -257,6 +257,61 @@ final class GoalEvaluatorTests: AsyncSpec {
                 expect(result.at).to(equal(purchaseAt))
             }
 
+            it("does not satisfy is_not_set event goals from corrupt transient properties") {
+                let anchor = Date(timeIntervalSince1970: 10)
+                let corruptEvent = StoredEvent(
+                    id: "corrupt-purchase",
+                    name: "purchase",
+                    properties: Data("not-json".utf8),
+                    timestamp: anchor.addingTimeInterval(1),
+                    distinctId: "user_1",
+                    sessionId: nil
+                )
+                let goal = GoalConfig(
+                    kind: .event,
+                    eventName: "purchase",
+                    eventFilter: IREnvelope(
+                        ir_version: 1,
+                        engine_min: nil,
+                        compiled_at: nil,
+                        expr: .event(
+                            op: "is_not_set",
+                            key: "properties.plan",
+                            value: nil
+                        )
+                    ),
+                    window: 20
+                )
+                let experience = Experience(
+                    id: "corrupt-goal-campaign",
+                    versionId: "corrupt-goal-flow",
+                    name: "Corrupt goal",
+                    reentry: .everyTime,
+                    publishedAt: "2026-01-01T00:00:00Z",
+                    trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
+                    goal: goal,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil
+                )
+                var journey = JourneySnapshot(
+                    id: "corrupt-goal-journey",
+                    experience: experience,
+                    distinctId: "user_1",
+                    now: anchor
+                )
+                journey.conversionAnchorAt = anchor
+                journey.conversionWindow = 20
+
+                let result = await makeGoalEvaluator().isGoalMet(
+                    journey: journey,
+                    transientEvents: [corruptEvent]
+                )
+
+                expect(result.met).to(beFalse())
+                expect(result.sourceFactRef).to(beNil())
+            }
+
             it("does not load event history for non-event attribute goals") {
                 let now = Date(timeIntervalSince1970: 50)
                 dateProvider.setCurrentDate(now)

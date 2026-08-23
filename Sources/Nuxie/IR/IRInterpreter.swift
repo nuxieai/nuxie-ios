@@ -51,7 +51,7 @@ final class IRInterpreter {
         case .compare(let op, let left, let right):
             let leftValue = try await evalValue(left)
             let rightValue = try await evalValue(right)
-            return compareValues(op: op, left: leftValue, right: rightValue)
+            return try compareValues(op: op, left: leftValue, right: rightValue)
             
         case .user(let op, let key, let value):
             return try await evalUser(op: op, key: key, value: value)
@@ -85,29 +85,44 @@ final class IRInterpreter {
         case .eventsExists(let name, let since, let until, let within, let where_):
             guard let events = ctx.events else { return false }
             let (s, u) = try await window(since: since, until: until, within: within)
+            try await requireExactHistory(events: events, since: s)
             let predicate = try await exprToPredicate(where_)
-            return await events.exists(name: name, since: s, until: u, where: predicate)
+            return try await exactEventQuery(events: events, since: s) {
+                try await events.exists(name: name, since: s, until: u, where: predicate)
+            }
             
         case .eventsCount(let name, let since, let until, let within, let where_):
             guard let events = ctx.events else { return false }
             let (s, u) = try await window(since: since, until: until, within: within)
+            try await requireExactHistory(events: events, since: s)
             let predicate = try await exprToPredicate(where_)
-            return await events.count(name: name, since: s, until: u, where: predicate) > 0
+            return try await exactEventQuery(events: events, since: s) {
+                try await events.count(name: name, since: s, until: u, where: predicate)
+            } > 0
             
         case .eventsFirstTime(let name, let where_):
             guard let events = ctx.events else { return false }
+            try await requireExactHistory(events: events, since: nil)
             let predicate = try await exprToPredicate(where_)
-            return await events.firstTime(name: name, where: predicate) != nil
+            return try await exactEventQuery(events: events, since: nil) {
+                try await events.firstTime(name: name, where: predicate)
+            } != nil
             
         case .eventsLastTime(let name, let where_):
             guard let events = ctx.events else { return false }
+            try await requireExactHistory(events: events, since: nil)
             let predicate = try await exprToPredicate(where_)
-            return await events.lastTime(name: name, where: predicate) != nil
+            return try await exactEventQuery(events: events, since: nil) {
+                try await events.lastTime(name: name, where: predicate)
+            } != nil
             
         case .eventsLastAge(let name, let where_):
             guard let events = ctx.events else { return false }
+            try await requireExactHistory(events: events, since: nil)
             let predicate = try await exprToPredicate(where_)
-            guard let lastTime = await events.lastTime(name: name, where: predicate) else {
+            guard let lastTime = try await exactEventQuery(events: events, since: nil, {
+                try await events.lastTime(name: name, where: predicate)
+            }) else {
                 return false
             }
             return ctx.now.timeIntervalSince(lastTime) >= 0
@@ -115,16 +130,22 @@ final class IRInterpreter {
         case .eventsAggregate(let agg, let name, let prop, let since, let until, let within, let where_):
             guard let events = ctx.events else { return false }
             let (s, u) = try await window(since: since, until: until, within: within)
+            try await requireExactHistory(events: events, since: s)
             let predicate = try await exprToPredicate(where_)
             guard let aggType = Aggregate(rawValue: agg) else {
                 throw IRError.invalidOperator(agg)
             }
-            let value = await events.aggregate(aggType, name: name, prop: prop, since: s, until: u, where: predicate)
+            let value = try await exactEventQuery(events: events, since: s) {
+                try await events.aggregate(
+                    aggType, name: name, prop: prop, since: s, until: u, where: predicate
+                )
+            }
             return (value ?? 0) != 0
             
         case .eventsInOrder(let steps, let overallWithin, let perStepWithin, let since, let until):
             guard let events = ctx.events else { return false }
             let (s, u) = try await window(since: since, until: until, within: nil)
+            try await requireExactHistory(events: events, since: s)
             let overall = try await overallWithin.asyncMap { try await evalDuration($0) }
             let perStep = try await perStepWithin.asyncMap { try await evalDuration($0) }
             var stepQueries: [StepQuery] = []
@@ -132,32 +153,67 @@ final class IRInterpreter {
                 let predicate = try await exprToPredicate(step.where_)
                 stepQueries.append(StepQuery(name: step.name, predicate: predicate))
             }
-            return await events.inOrder(steps: stepQueries, overallWithin: overall, perStepWithin: perStep, since: s, until: u)
+            return try await exactEventQuery(events: events, since: s) {
+                try await events.inOrder(
+                    steps: stepQueries,
+                    overallWithin: overall,
+                    perStepWithin: perStep,
+                    since: s,
+                    until: u
+                )
+            }
             
         case .eventsActivePeriods(let name, let period, let totalPeriods, let minPeriods, let where_):
             guard let events = ctx.events else { return false }
-            let predicate = try await exprToPredicate(where_)
             guard let periodType = Period(rawValue: period) else {
                 throw IRError.invalidOperator(period)
             }
-            return await events.activePeriods(name: name, period: periodType, total: totalPeriods, min: minPeriods, where: predicate)
+            guard totalPeriods > 0, minPeriods > 0, minPeriods <= totalPeriods else {
+                return false
+            }
+            guard let windowStart = periodType.activePeriodsWindowStart(
+                total: totalPeriods,
+                now: ctx.now
+            ) else { return false }
+            try await requireExactHistory(events: events, since: windowStart)
+            let predicate = try await exprToPredicate(where_)
+            return try await exactEventQuery(events: events, since: windowStart) {
+                try await events.activePeriods(
+                    name: name,
+                    period: periodType,
+                    total: totalPeriods,
+                    min: minPeriods,
+                    where: predicate
+                )
+            }
             
         case .eventsStopped(let name, let inactiveFor, let where_):
             guard let events = ctx.events else { return false }
+            try await requireExactHistory(events: events, since: nil)
             let duration = try await evalDuration(inactiveFor)
             let predicate = try await exprToPredicate(where_)
-            return await events.stopped(name: name, inactiveFor: duration, where: predicate)
+            return try await exactEventQuery(events: events, since: nil) {
+                try await events.stopped(name: name, inactiveFor: duration, where: predicate)
+            }
             
         case .eventsRestarted(let name, let inactiveFor, let within, let where_):
             guard let events = ctx.events else { return false }
+            try await requireExactHistory(events: events, since: nil)
             let inactiveDuration = try await evalDuration(inactiveFor)
             let withinDuration = try await evalDuration(within)
             let predicate = try await exprToPredicate(where_)
-            return await events.restarted(name: name, inactiveFor: inactiveDuration, within: withinDuration, where: predicate)
+            return try await exactEventQuery(events: events, since: nil) {
+                try await events.restarted(
+                    name: name,
+                    inactiveFor: inactiveDuration,
+                    within: withinDuration,
+                    where: predicate
+                )
+            }
             
         // Values used in boolean position - treat as truthy
         case .timeNow, .timeAgo, .timeWindow, .journeyId, .responseField, .number, .string, .timestamp, .duration, .list:
-            let value = try await evalValue(expr)
+            let value = try await evalKnownValue(expr)
             return value.isTruthy
             
         case .pred(let op, let key, let value):
@@ -235,48 +291,101 @@ final class IRInterpreter {
             // Allow count to be evaluated as a number
             guard let events = ctx.events else { return .number(0) }
             let (s, u) = try await window(since: since, until: until, within: within)
+            guard await canEvaluateExactly(events: events, since: s) else { return .unknown }
             let predicate = try await exprToPredicate(where_)
-            let count = await events.count(name: name, since: s, until: u, where: predicate)
-            return .number(Double(count))
+            do {
+                let count = try await events.count(
+                    name: name, since: s, until: u, where: predicate
+                )
+                guard await canEvaluateExactly(events: events, since: s) else {
+                    return .unknown
+                }
+                return .number(Double(count))
+            } catch {
+                return .unknown
+            }
             
         case .eventsAggregate(let agg, let name, let prop, let since, let until, let within, let where_):
             // Allow aggregate to be evaluated as a number
             guard let events = ctx.events else { return .number(0) }
             let (s, u) = try await window(since: since, until: until, within: within)
+            guard await canEvaluateExactly(events: events, since: s) else { return .unknown }
             let predicate = try await exprToPredicate(where_)
             guard let aggType = Aggregate(rawValue: agg) else {
                 throw IRError.invalidOperator(agg)
             }
-            let value = await events.aggregate(aggType, name: name, prop: prop, since: s, until: u, where: predicate)
-            return .number(value ?? 0)
+            do {
+                let value = try await events.aggregate(
+                    aggType, name: name, prop: prop, since: s, until: u, where: predicate
+                )
+                guard await canEvaluateExactly(events: events, since: s) else {
+                    return .unknown
+                }
+                return .number(value ?? 0)
+            } catch {
+                return .unknown
+            }
             
         case .eventsFirstTime(let name, let where_):
             // Allow first time to be evaluated as timestamp
             guard let events = ctx.events else { return .null }
+            guard await canEvaluateExactly(events: events, since: nil) else { return .unknown }
             let predicate = try await exprToPredicate(where_)
-            if let firstTime = await events.firstTime(name: name, where: predicate) {
-                return .timestamp(firstTime.timeIntervalSince1970)
+            do {
+                if let firstTime = try await events.firstTime(name: name, where: predicate) {
+                    guard await canEvaluateExactly(events: events, since: nil) else {
+                        return .unknown
+                    }
+                    return .timestamp(firstTime.timeIntervalSince1970)
+                }
+                guard await canEvaluateExactly(events: events, since: nil) else {
+                    return .unknown
+                }
+                return .null
+            } catch {
+                return .unknown
             }
-            return .null
             
         case .eventsLastTime(let name, let where_):
             // Allow last time to be evaluated as timestamp
             guard let events = ctx.events else { return .null }
+            guard await canEvaluateExactly(events: events, since: nil) else { return .unknown }
             let predicate = try await exprToPredicate(where_)
-            if let lastTime = await events.lastTime(name: name, where: predicate) {
-                return .timestamp(lastTime.timeIntervalSince1970)
+            do {
+                if let lastTime = try await events.lastTime(name: name, where: predicate) {
+                    guard await canEvaluateExactly(events: events, since: nil) else {
+                        return .unknown
+                    }
+                    return .timestamp(lastTime.timeIntervalSince1970)
+                }
+                guard await canEvaluateExactly(events: events, since: nil) else {
+                    return .unknown
+                }
+                return .null
+            } catch {
+                return .unknown
             }
-            return .null
             
         case .eventsLastAge(let name, let where_):
             // Allow last age to be evaluated as duration
             guard let events = ctx.events else { return .null }
+            guard await canEvaluateExactly(events: events, since: nil) else { return .unknown }
             let predicate = try await exprToPredicate(where_)
-            if let lastTime = await events.lastTime(name: name, where: predicate) {
-                let age = ctx.now.timeIntervalSince(lastTime)
-                return .duration(age)
+            do {
+                if let lastTime = try await events.lastTime(name: name, where: predicate) {
+                    guard await canEvaluateExactly(events: events, since: nil) else {
+                        return .unknown
+                    }
+                    let age = ctx.now.timeIntervalSince(lastTime)
+                    return .duration(age)
+                }
+                guard await canEvaluateExactly(events: events, since: nil) else {
+                    return .unknown
+                }
+                return .null
+            } catch {
+                return .unknown
             }
-            return .null
             
         default:
             throw IRError.typeMismatch(expected: "value node", got: String(describing: expr))
@@ -310,55 +419,55 @@ final class IRInterpreter {
             
         case "eq", "equals":
             guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             return Comparer.compare(.eq, raw, compareValue.toAny())
             
         case "neq", "not_equals":
             guard let value = value else { return true }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             return Comparer.compare(.neq, raw, compareValue.toAny())
             
         case "gt":
             guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             return Comparer.compare(.gt, raw, compareValue.toAny())
             
         case "gte":
             guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             return Comparer.compare(.gte, raw, compareValue.toAny())
             
         case "lt":
             guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             return Comparer.compare(.lt, raw, compareValue.toAny())
             
         case "lte":
             guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             return Comparer.compare(.lte, raw, compareValue.toAny())
             
         case "icontains", "contains":
             guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             let needle = Coercion.asString(compareValue.toAny()) ?? ""
             return Comparer.icontains(raw, needle)
             
         case "regex":
             guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             let pattern = Coercion.asString(compareValue.toAny()) ?? ""
             return Comparer.regex(raw, pattern: pattern)
             
         case "in":
             guard let value = value else { return false }
-            let listValue = try await evalValue(value)
+            let listValue = try await evalKnownValue(value)
             guard case .list(let arr) = listValue else { return false }
             return Comparer.member(raw, arr.map { $0.toAny() })
             
         case "not_in":
             guard let value = value else { return true }
-            let listValue = try await evalValue(value)
+            let listValue = try await evalKnownValue(value)
             guard case .list(let arr) = listValue else { return true }
             return !Comparer.member(raw, arr.map { $0.toAny() })
             
@@ -367,7 +476,7 @@ final class IRInterpreter {
                   let value = value else {
                 return false
             }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             guard case .timestamp(let target) = compareValue else {
                 return false
             }
@@ -382,7 +491,7 @@ final class IRInterpreter {
                   let value = value else {
                 return false
             }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             guard case .timestamp(let target) = compareValue else {
                 return false
             }
@@ -393,7 +502,7 @@ final class IRInterpreter {
                   let value = value else {
                 return false
             }
-            let compareValue = try await evalValue(value)
+            let compareValue = try await evalKnownValue(value)
             guard case .timestamp(let target) = compareValue else {
                 return false
             }
@@ -417,7 +526,7 @@ final class IRInterpreter {
         case .pred(let op, let key, let value):
             let irValue: IRValue?
             if let value = value {
-                irValue = try await evalValue(value)
+                irValue = try await evalKnownValue(value)
             } else {
                 irValue = nil
             }
@@ -451,7 +560,7 @@ final class IRInterpreter {
     
     /// Evaluate duration expression
     private func evalDuration(_ expr: IRExpr) async throws -> TimeInterval {
-        let value = try await evalValue(expr)
+        let value = try await evalKnownValue(expr)
         switch value {
         case .duration(let d):
             return d
@@ -468,21 +577,21 @@ final class IRInterpreter {
         var untilDate: Date? = nil
         
         if let since = since {
-            let value = try await evalValue(since)
+            let value = try await evalKnownValue(since)
             if case .timestamp(let ts) = value {
                 sinceDate = Date(timeIntervalSince1970: ts)
             }
         }
         
         if let until = until {
-            let value = try await evalValue(until)
+            let value = try await evalKnownValue(until)
             if case .timestamp(let tu) = value {
                 untilDate = Date(timeIntervalSince1970: tu)
             }
         }
         
         if let within = within {
-            let value = try await evalValue(within)
+            let value = try await evalKnownValue(within)
             if case .duration(let w) = value {
                 let start = Date(timeIntervalSince1970: ctx.now.timeIntervalSince1970 - w)
                 // Intersect with since if both are specified
@@ -498,7 +607,10 @@ final class IRInterpreter {
     }
     
     /// Compare two values
-    private func compareValues(op: String, left: IRValue, right: IRValue) -> Bool {
+    private func compareValues(op: String, left: IRValue, right: IRValue) throws -> Bool {
+        guard !left.containsUnknown, !right.containsUnknown else {
+            throw IRError.incompleteEventHistory
+        }
         guard let compareOp = CompareOp(rawValue: op) else {
             // Try alternative formats
             if op == "in" {
@@ -509,6 +621,53 @@ final class IRInterpreter {
             return false
         }
         return Comparer.compare(compareOp, left.toAny(), right.toAny())
+    }
+
+    /// The complete authored window must fall inside the source's concrete
+    /// retained-history horizon. A lifetime query therefore requires a source
+    /// that explicitly guarantees complete history.
+    private func canEvaluateExactly(events: IREventQueries, since: Date?) async -> Bool {
+        do {
+            return try await events.historyCoverage().contains(since: since)
+        } catch {
+            return false
+        }
+    }
+
+    private func requireExactHistory(events: IREventQueries, since: Date?) async throws {
+        guard await canEvaluateExactly(events: events, since: since) else {
+            throw IRError.incompleteEventHistory
+        }
+    }
+
+    /// Query failures and explicit truncation are indistinguishable from
+    /// incomplete history to authored logic. Normalizing them here prevents a
+    /// nested `not` from turning an unavailable fact into authorization.
+    private func exactEventQuery<T>(
+        events: IREventQueries,
+        since: Date?,
+        _ query: () async throws -> T
+    ) async throws -> T {
+        do {
+            let result = try await query()
+            guard await canEvaluateExactly(events: events, since: since) else {
+                throw IRError.incompleteEventHistory
+            }
+            return result
+        } catch {
+            throw IRError.incompleteEventHistory
+        }
+    }
+
+    /// Keep unknown as an interpreter-level state until a value is consumed.
+    /// Consumption throws so every public runtime path fails closed, including
+    /// nested predicate/list values and boolean negation.
+    private func evalKnownValue(_ expr: IRExpr) async throws -> IRValue {
+        let value = try await evalValue(expr)
+        guard !value.containsUnknown else {
+            throw IRError.incompleteEventHistory
+        }
+        return value
     }
     
     /// Convert time value and interval to seconds
@@ -551,7 +710,7 @@ final class IRInterpreter {
 
         case "credits_eq", "credits_neq", "credits_gt", "credits_gte", "credits_lt", "credits_lte":
             guard let value = value else { return false }
-            let target = try await evalValue(value)
+            let target = try await evalKnownValue(value)
             guard case .number(let n) = target else { return false }
             guard let balance = await features.getBalance(id) else { return false }
             switch op {

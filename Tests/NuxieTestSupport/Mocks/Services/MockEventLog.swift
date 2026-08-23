@@ -73,6 +73,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     
     // Test helper: track last event times
     private var lastEventTimes: [String: Date] = [:]
+
+    /// Canned mock results represent the complete test fixture history.
+    public func historyCoverage() async -> EventHistoryCoverage { .complete }
     
     // Primary protocol method - matches EventLogProtocol
     public func track(
@@ -244,6 +247,24 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 distinctId: event.distinctId
             )
         }
+    }
+
+    public func queryEventsForIR(
+        _ distinctId: String,
+        name: String,
+        since: Date?,
+        until: Date?,
+        ascending: Bool,
+        limit: Int
+    ) async throws -> [StoredEvent] {
+        await getEventsForUser(
+            distinctId,
+            name: name,
+            since: since,
+            until: until,
+            ascending: ascending,
+            limit: limit
+        )
     }
 
     public func storePreparedEventInHistory(_ event: NuxieEvent) async {

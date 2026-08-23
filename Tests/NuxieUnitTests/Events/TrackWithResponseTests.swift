@@ -15,6 +15,14 @@ private final class BeforeSendCallCounter: @unchecked Sendable {
     var value: Int { lock.withLock { count } }
 }
 
+private final class CapturedEventTimestamp: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timestamp: Date?
+
+    func record(_ timestamp: Date) { lock.withLock { self.timestamp = timestamp } }
+    var value: Date? { lock.withLock { timestamp } }
+}
+
 final class TrackWithResponseTests: AsyncSpec {
 
     override class func spec() {
@@ -382,6 +390,46 @@ final class TrackWithResponseTests: AsyncSpec {
             }
 
             context("durable system capture") {
+                it("fences a failed capture at the event timestamp despite clock rollback") {
+                    await eventLog.close()
+                    let initialOpen = Date(timeIntervalSince1970: 1_000)
+                    let attemptedAt = Date(timeIntervalSince1970: 2_000)
+                    let rolledBack = Date(timeIntervalSince1970: 1_500)
+                    let dateProvider = MockDateProvider(initialDate: initialOpen)
+                    let capturedTimestamp = CapturedEventTimestamp()
+                    eventLog = EventLog(
+                        identity: mockIdentityService,
+                        sessions: mockSessionService,
+                        dateProvider: dateProvider,
+                        apiClient: mockNuxieApi,
+                        store: mockEventStore
+                    )
+                    testConfig.beforeSend = { event in
+                        capturedTimestamp.record(event.timestamp)
+                        dateProvider.setCurrentDate(rolledBack)
+                        return event
+                    }
+                    try await eventLog.configure(configuration: testConfig)
+                    dateProvider.setCurrentDate(attemptedAt)
+                    mockEventStore.shouldFailStore = true
+
+                    let failed = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: nil,
+                        eventId: "purchase-completed:clock-rollback",
+                        distinctId: "customer-a"
+                    )
+
+                    expect(failed).to(beNil())
+                    expect(capturedTimestamp.value) == attemptedAt
+                    guard case .retainedWindow(let coveredFrom) =
+                        try await eventLog.historyCoverage()
+                    else {
+                        return fail("Expected retained-window history coverage")
+                    }
+                    expect(coveredFrom).to(beGreaterThan(attemptedAt))
+                }
+
                 it("acknowledges only after the stable event is persisted") {
                     mockEventStore.shouldFailStore = true
 

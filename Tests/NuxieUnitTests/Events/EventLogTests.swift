@@ -250,6 +250,571 @@ final class EventLogTests: AsyncSpec {
                 }
             }
 
+            describe("event-history horizon") {
+                it("starts fresh coverage at first open and never moves it backward across restart or clock rollback") {
+                    let firstOpen = Date(timeIntervalSince1970: 1_786_550_400)
+                    let dateProvider = MockDateProvider(initialDate: firstOpen)
+                    let firstLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: dateProvider,
+                        apiClient: mockApi,
+                        store: mockStore
+                    )
+                    try await firstLog.configure(configuration: testConfig)
+                    let initialCoverage = try await firstLog.historyCoverage()
+                    expect(initialCoverage).to(equal(
+                        .retainedWindow(startingAt: firstOpen)
+                    ))
+                    await firstLog.close()
+
+                    dateProvider.advance(by: 86_400)
+                    let relaunchedLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: dateProvider,
+                        apiClient: mockApi,
+                        store: mockStore
+                    )
+                    try await relaunchedLog.configure(configuration: testConfig)
+                    let relaunchedCoverage = try await relaunchedLog.historyCoverage()
+                    expect(relaunchedCoverage).to(equal(
+                        .retainedWindow(startingAt: firstOpen)
+                    ))
+
+                    dateProvider.setCurrentDate(firstOpen.addingTimeInterval(-86_400))
+                    let rollbackCoverage = try await relaunchedLog.historyCoverage()
+                    expect(rollbackCoverage).to(equal(
+                        .retainedWindow(startingAt: firstOpen)
+                    ))
+                    await relaunchedLog.close()
+                }
+
+                it("persists a fail-closed fence when a history write fails and survives recovery and relaunch") {
+                    let firstOpen = Date(timeIntervalSince1970: 1_786_550_400)
+                    let failedEvent = NuxieEvent(
+                        id: "failed-history-event",
+                        name: "purchase",
+                        distinctId: mockIdentity.getDistinctId(),
+                        properties: ["plan": "pro"],
+                        timestamp: firstOpen.addingTimeInterval(60)
+                    )
+                    let firstLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(initialDate: firstOpen),
+                        apiClient: mockApi,
+                        store: mockStore
+                    )
+                    try await firstLog.configure(configuration: testConfig)
+                    mockStore.shouldFailStore = true
+                    await firstLog.storePreparedEventInHistory(failedEvent)
+                    mockStore.shouldFailStore = false
+
+                    guard case .retainedWindow(let fencedAt) = try await firstLog.historyCoverage() else {
+                        await firstLog.close()
+                        return fail("production history must remain retention-bounded")
+                    }
+                    expect(fencedAt).to(beGreaterThan(failedEvent.timestamp))
+                    await firstLog.close()
+
+                    let evaluationTime = failedEvent.timestamp.addingTimeInterval(60)
+                    let relaunchedLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(initialDate: evaluationTime),
+                        apiClient: mockApi,
+                        store: mockStore
+                    )
+                    try await relaunchedLog.configure(configuration: testConfig)
+                    let boundedCountIsZero = IRExpr.compare(
+                        op: "==",
+                        left: .eventsCount(
+                            name: "purchase",
+                            since: nil,
+                            until: nil,
+                            within: .duration(180),
+                            where_: .pred(op: "eq", key: "plan", value: .string("pro"))
+                        ),
+                        right: .number(0)
+                    )
+                    let result = await IRRuntime(
+                        dateProvider: MockDateProvider(initialDate: evaluationTime)
+                    ).eval(
+                        .init(
+                            ir_version: 1,
+                            engine_min: nil,
+                            compiled_at: nil,
+                            expr: .not(boundedCountIsZero)
+                        ),
+                        .init(
+                            now: evaluationTime,
+                            events: IREventQueriesAdapter(eventLog: relaunchedLog)
+                        )
+                    )
+
+                    expect(result).to(beFalse())
+                    await relaunchedLog.close()
+                }
+
+                it("treats corrupt persisted properties as unknown instead of satisfying is_not_set") {
+                    let now = Date(timeIntervalSince1970: 1_786_550_400)
+                    mockStore.historyCoverageStart = now.addingTimeInterval(-3_600)
+                    mockStore.storedEvents = [StoredEvent(
+                        id: "corrupt-properties",
+                        name: "purchase",
+                        properties: Data("not-json".utf8),
+                        timestamp: now.addingTimeInterval(-60),
+                        distinctId: mockIdentity.getDistinctId(),
+                        sessionId: nil
+                    )]
+                    let corruptLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(initialDate: now),
+                        apiClient: mockApi,
+                        store: mockStore
+                    )
+                    try await corruptLog.configure(configuration: testConfig)
+                    let value = try await IRInterpreter(ctx: .init(
+                        now: now,
+                        events: IREventQueriesAdapter(eventLog: corruptLog)
+                    )).evalValue(.eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(600),
+                        where_: .pred(op: "is_not_set", key: "plan", value: nil)
+                    ))
+
+                    expect(value).to(equal(.unknown))
+                    await corruptLog.close()
+                }
+
+                it("treats a lower bound before the retained age horizon as unknown") {
+                    let now = Date(timeIntervalSince1970: 1_786_550_400)
+                    let horizonLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(initialDate: now),
+                        apiClient: mockApi,
+                        store: mockStore
+                    )
+                    let userId = mockIdentity.getDistinctId()
+                    mockStore.storedEvents = [try StoredEvent(
+                        id: "recent-purchase",
+                        name: "purchase",
+                        properties: ["plan": "pro"],
+                        timestamp: now.addingTimeInterval(-60),
+                        distinctId: userId
+                    )]
+                    try await horizonLog.configure(configuration: testConfig)
+                    let interpreter = IRInterpreter(ctx: EvalContext(
+                        now: now,
+                        events: IREventQueriesAdapter(eventLog: horizonLog)
+                    ))
+
+                    let value = try await interpreter.evalValue(.eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(31 * 86_400),
+                        where_: .pred(op: "eq", key: "plan", value: .string("pro"))
+                    ))
+
+                    expect(value).to(equal(.unknown))
+                    await horizonLog.close()
+                }
+
+                it("advances the retained horizon past the count-retention boundary") {
+                    let now = Date(timeIntervalSince1970: 1_786_550_400)
+                    let cappedLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(initialDate: now),
+                        apiClient: mockApi,
+                        store: mockStore,
+                        maxEventsStored: 3,
+                        cleanupCheckInterval: 1
+                    )
+                    let userId = mockIdentity.getDistinctId()
+                    mockStore.historyCoverageStart = now.addingTimeInterval(-3_600)
+                    mockStore.storedEvents = try [10, 5, 1].map { minutesAgo in
+                        try StoredEvent(
+                            id: "purchase-\(minutesAgo)",
+                            name: "purchase",
+                            properties: ["plan": "pro"],
+                            timestamp: now.addingTimeInterval(TimeInterval(-minutesAgo * 60)),
+                            distinctId: userId
+                        )
+                    }
+                    try await cappedLog.configure(configuration: testConfig)
+                    await cappedLog.storePreparedEventInHistory(NuxieEvent(
+                        id: "purchase-now",
+                        name: "purchase",
+                        distinctId: userId,
+                        properties: ["plan": "pro"],
+                        timestamp: now
+                    ))
+                    let interpreter = IRInterpreter(ctx: EvalContext(
+                        now: now,
+                        events: IREventQueriesAdapter(eventLog: cappedLog)
+                    ))
+
+                    let crossingBoundary = try await interpreter.evalValue(.eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(11 * 60),
+                        where_: .pred(op: "eq", key: "plan", value: .string("pro"))
+                    ))
+                    let coveredWindow = try await interpreter.evalValue(.eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(9 * 60),
+                        where_: .pred(op: "eq", key: "plan", value: .string("pro"))
+                    ))
+
+                    expect(crossingBoundary).to(equal(.unknown))
+                    expect(coveredWindow).to(equal(.number(3)))
+                    await cappedLog.close()
+                }
+
+                it("treats a saturated bounded predicate query as unknown") {
+                    let now = Date(timeIntervalSince1970: 1_786_550_400)
+                    let saturatedLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(initialDate: now),
+                        apiClient: mockApi,
+                        store: mockStore,
+                        maxEventsStored: 20_000
+                    )
+                    let userId = mockIdentity.getDistinctId()
+                    mockStore.storedEvents = try (0...10_000).map { index in
+                        try StoredEvent(
+                            id: "bounded-\(index)",
+                            name: "purchase",
+                            properties: ["plan": "pro"],
+                            timestamp: now.addingTimeInterval(TimeInterval(-index)),
+                            distinctId: userId
+                        )
+                    }
+                    try await saturatedLog.configure(configuration: testConfig)
+                    let interpreter = IRInterpreter(ctx: EvalContext(
+                        now: now,
+                        events: IREventQueriesAdapter(eventLog: saturatedLog)
+                    ))
+
+                    let value = try await interpreter.evalValue(.eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(86_400),
+                        where_: .pred(op: "eq", key: "plan", value: .string("pro"))
+                    ))
+
+                    expect(value).to(equal(.unknown))
+                    await saturatedLog.close()
+                }
+
+                it("propagates an event-store predicate query failure as unknown") {
+                    let now = Date(timeIntervalSince1970: 1_786_550_400)
+                    let failureLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(initialDate: now),
+                        apiClient: mockApi,
+                        store: mockStore
+                    )
+                    let userId = mockIdentity.getDistinctId()
+                    mockStore.storedEvents = [try StoredEvent(
+                        id: "recent-purchase",
+                        name: "purchase",
+                        properties: ["plan": "pro"],
+                        timestamp: now.addingTimeInterval(-60),
+                        distinctId: userId
+                    )]
+                    try await failureLog.configure(configuration: testConfig)
+                    mockStore.shouldFailIRQuery = true
+                    let interpreter = IRInterpreter(ctx: EvalContext(
+                        now: now,
+                        events: IREventQueriesAdapter(eventLog: failureLog)
+                    ))
+
+                    let value = try await interpreter.evalValue(.eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(86_400),
+                        where_: .pred(op: "eq", key: "plan", value: .string("pro"))
+                    ))
+
+                    expect(value).to(equal(.unknown))
+                    await failureLog.close()
+                }
+
+                it("does not let negation or a nested predicate authorize after a query failure") {
+                    let now = Date(timeIntervalSince1970: 1_786_550_400)
+                    let failureLog = EventLog(
+                        identity: mockIdentity,
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(initialDate: now),
+                        apiClient: mockApi,
+                        store: mockStore
+                    )
+                    let userId = mockIdentity.getDistinctId()
+                    mockStore.storedEvents = [try StoredEvent(
+                        id: "recent-purchase",
+                        name: "purchase",
+                        properties: ["amount": 5],
+                        timestamp: now.addingTimeInterval(-60),
+                        distinctId: userId
+                    )]
+                    try await failureLog.configure(configuration: testConfig)
+                    mockStore.shouldFailIRQuery = true
+                    let queries = IREventQueriesAdapter(eventLog: failureLog)
+                    let runtime = IRRuntime(dateProvider: MockDateProvider(initialDate: now))
+                    let boundedCount = IRExpr.eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(86_400),
+                        where_: .pred(op: "eq", key: "amount", value: .number(5))
+                    )
+                    let nestedCount = IRExpr.eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(86_400),
+                        where_: .pred(
+                            op: "eq",
+                            key: "amount",
+                            value: .eventsAggregate(
+                                agg: "sum",
+                                name: "purchase",
+                                prop: "amount",
+                                since: nil,
+                                until: nil,
+                                within: .duration(86_400),
+                                where_: nil
+                            )
+                        )
+                    )
+
+                    for expression in [IRExpr.not(boundedCount), .not(nestedCount)] {
+                        let result = await runtime.eval(
+                            .init(
+                                ir_version: 1,
+                                engine_min: nil,
+                                compiled_at: nil,
+                                expr: expression
+                            ),
+                            .init(now: now, events: queries)
+                        )
+                        expect(result).to(beFalse())
+                    }
+                    await failureLog.close()
+                }
+
+                it("does not turn a truncated lifetime predicate count into a definitive comparison") {
+                    let userId = mockIdentity.getDistinctId()
+                    mockStore.storedEvents = try (0...10_000).map { index in
+                        try StoredEvent(
+                            id: "retained-\(index)",
+                            name: "purchase",
+                            properties: ["plan": "pro"],
+                            timestamp: Date(timeIntervalSince1970: TimeInterval(index)),
+                            distinctId: userId
+                        )
+                    }
+                    try await log.configure(configuration: testConfig)
+                    let interpreter = IRInterpreter(ctx: EvalContext(
+                        now: Date(timeIntervalSince1970: 20_000),
+                        events: IREventQueriesAdapter(eventLog: log)
+                    ))
+                    let lifetimeCountIsBelowExactTotal = IRExpr.compare(
+                        op: "<",
+                        left: .eventsCount(
+                            name: "purchase",
+                            since: nil,
+                            until: nil,
+                            within: nil,
+                            where_: .pred(op: "eq", key: "plan", value: .string("pro"))
+                        ),
+                        right: .number(10_001)
+                    )
+
+                    do {
+                        _ = try await interpreter.evalBool(lifetimeCountIsBelowExactTotal)
+                        fail("Expected retained-only lifetime history to be unknown")
+                    } catch IRError.incompleteEventHistory {
+                        // The interpreter preserves unknown; IRRuntime below
+                        // turns it into the authored fail-closed result.
+                    }
+
+                    let runtime = IRRuntime(dateProvider: MockDateProvider())
+                    let negated = IREnvelope(
+                        ir_version: 1,
+                        engine_min: nil,
+                        compiled_at: nil,
+                        expr: .not(lifetimeCountIsBelowExactTotal)
+                    )
+                    let runtimeResult = await runtime.eval(
+                        negated,
+                        .init(
+                            now: Date(timeIntervalSince1970: 20_000),
+                            events: IREventQueriesAdapter(eventLog: log)
+                        )
+                    )
+                    expect(runtimeResult).to(beFalse())
+                }
+
+                it("marks lifetime first-time and aggregate values unknown when data spans the age cutoff") {
+                    let now = Date(timeIntervalSince1970: 1_786_550_400)
+                    let userId = mockIdentity.getDistinctId()
+                    mockStore.storedEvents = [
+                        try StoredEvent(
+                            id: "older-than-retention",
+                            name: "purchase",
+                            properties: ["plan": "pro", "amount": 100],
+                            timestamp: now.addingTimeInterval(-31 * 86_400),
+                            distinctId: userId
+                        ),
+                        try StoredEvent(
+                            id: "inside-retention",
+                            name: "purchase",
+                            properties: ["plan": "pro", "amount": 5],
+                            timestamp: now.addingTimeInterval(-60),
+                            distinctId: userId
+                        )
+                    ]
+                    try await log.configure(configuration: testConfig)
+                    let queries = IREventQueriesAdapter(eventLog: log)
+                    let interpreter = IRInterpreter(ctx: EvalContext(now: now, events: queries))
+                    let predicate = IRExpr.pred(
+                        op: "eq", key: "plan", value: .string("pro")
+                    )
+
+                    let coverage = try await queries.historyCoverage()
+                    guard case .retainedWindow = coverage else {
+                        fail("Expected production history to report a retained horizon")
+                        return
+                    }
+                    await expect {
+                        try await interpreter.evalValue(
+                            .eventsFirstTime(name: "purchase", where_: predicate)
+                        )
+                    }.to(equal(.unknown))
+                    await expect {
+                        try await interpreter.evalValue(
+                            .eventsLastTime(name: "purchase", where_: predicate)
+                        )
+                    }.to(equal(.unknown))
+                    await expect {
+                        try await interpreter.evalValue(.eventsAggregate(
+                            agg: "sum",
+                            name: "purchase",
+                            prop: "amount",
+                            since: nil,
+                            until: nil,
+                            within: nil,
+                            where_: predicate
+                        ))
+                    }.to(equal(.unknown))
+
+                    await expect {
+                        try await interpreter.evalValue(.eventsAggregate(
+                            agg: "sum",
+                            name: "purchase",
+                            prop: "amount",
+                            since: nil,
+                            until: nil,
+                            within: .duration(30 * 86_400),
+                            where_: predicate
+                        ))
+                    }.to(equal(.number(5)))
+                }
+
+                it("keeps lower-bounded predicates deterministic over the retained window") {
+                    let now = Date(timeIntervalSince1970: 1_786_550_400)
+                    let userId = mockIdentity.getDistinctId()
+                    mockStore.storedEvents = [try StoredEvent(
+                        id: "recent-purchase",
+                        name: "purchase",
+                        properties: ["plan": "pro"],
+                        timestamp: now.addingTimeInterval(-60),
+                        distinctId: userId
+                    )]
+                    try await log.configure(configuration: testConfig)
+                    let interpreter = IRInterpreter(ctx: EvalContext(
+                        now: now,
+                        events: IREventQueriesAdapter(eventLog: log)
+                    ))
+                    let boundedCount = IRExpr.compare(
+                        op: "==",
+                        left: .eventsCount(
+                            name: "purchase",
+                            since: nil,
+                            until: nil,
+                            within: .duration(86_400),
+                            where_: .pred(op: "eq", key: "plan", value: .string("pro"))
+                        ),
+                        right: .number(1)
+                    )
+
+                    await expect { try await interpreter.evalBool(boundedCount) }.to(beTrue())
+                }
+
+                it("does not coerce unknown lifetime values inside a bounded predicate") {
+                    let now = Date(timeIntervalSince1970: 1_786_550_400)
+                    let userId = mockIdentity.getDistinctId()
+                    mockStore.storedEvents = [try StoredEvent(
+                        id: "recent-purchase",
+                        name: "purchase",
+                        properties: ["amount": 5],
+                        timestamp: now.addingTimeInterval(-60),
+                        distinctId: userId
+                    )]
+                    try await log.configure(configuration: testConfig)
+                    let runtime = IRRuntime(dateProvider: MockDateProvider())
+                    let predicateUsesLifetimeAggregate = IRExpr.eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(86_400),
+                        where_: .pred(
+                            op: "neq",
+                            key: "amount",
+                            value: .eventsAggregate(
+                                agg: "sum",
+                                name: "purchase",
+                                prop: "amount",
+                                since: nil,
+                                until: nil,
+                                within: nil,
+                                where_: nil
+                            )
+                        )
+                    )
+                    let result = await runtime.eval(
+                        .init(
+                            ir_version: 1,
+                            engine_min: nil,
+                            compiled_at: nil,
+                            expr: .not(predicateUsesLifetimeAggregate)
+                        ),
+                        .init(
+                            now: now,
+                            events: IREventQueriesAdapter(eventLog: log)
+                        )
+                    )
+
+                    expect(result).to(beFalse())
+                }
+            }
+
             describe("mock prepared-trigger isolation") {
                 it("cancels delayed response signals when the mock resets") {
                     let mock = MockEventLog()
