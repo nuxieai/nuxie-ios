@@ -3,7 +3,8 @@ import Foundation
 // NuxieLifecycleCoordinator.swift
 // @unchecked Sendable: all service references are immutable Sendable values;
 // `observers`/`worker` are mutated only by start()/stop(), which the SDK
-// lifecycle invokes serially (setup/shutdown), never concurrently.
+// lifecycle invokes serially (setup/shutdown), never concurrently. stop()
+// closes notification intake synchronously before its first suspension.
 final class NuxieLifecycleCoordinator: @unchecked Sendable {
   /// App lifecycle transitions, in notification order.
   private enum LifecycleTransition {
@@ -131,15 +132,24 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     }
   }
 
-  func stop() {
-    observers.forEach(NotificationCenter.default.removeObserver)
-    observers.removeAll()
-    transitionContinuation.finish()
-    worker?.cancel()
+  func stop() async {
+    stopIntake()
+    let activeWorker = worker
+    activeWorker?.cancel()
+    await activeWorker?.value
     worker = nil
   }
 
+  private func stopIntake() {
+    observers.forEach(NotificationCenter.default.removeObserver)
+    observers.removeAll()
+    transitionContinuation.finish()
+  }
+
   deinit {
-    stop()
+    // Normal SDK teardown uses async stop() and joins the worker. This is only
+    // a best-effort backstop for a graph discarded before publication.
+    stopIntake()
+    worker?.cancel()
   }
 }
