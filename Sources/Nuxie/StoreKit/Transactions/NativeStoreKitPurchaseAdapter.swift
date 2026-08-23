@@ -75,6 +75,10 @@ struct NativeStoreKitPurchaseAdapter: NativeStoreKitPurchasing {
             @unknown default:
                 return .failed(StoreKitError.unknown(underlying: nil))
             }
+        } catch StoreKit.StoreKitError.userCancelled {
+            // StoreKitTest and some system checkout paths surface cancellation
+            // as a thrown StoreKitError rather than `.userCancelled`.
+            return .cancelled
         } catch Product.PurchaseError.productUnavailable {
             return .productTermsChanged
         } catch let error where invalidatesIntroEligibilityOverride(error) {

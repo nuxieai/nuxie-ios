@@ -42,6 +42,9 @@ make build-macos
 # Run unit tests
 make test-unit
 
+# Run native StoreKit launch qualification (Xcode 26.6+)
+make test-storekit
+
 # Run integration tests (slower)
 make test-integration
 
@@ -99,6 +102,7 @@ build step; runtime source and XCFramework production live in `nuxie-runtime`.
 - Use Quick and Nimble for behavior-driven tests
 - Follow the existing test structure and naming conventions
 - Run tests before submitting PR: `make test-unit` (and `make test-integration`/`make test-e2e` when applicable)
+- Run `make test-storekit` for native purchase, restore, or transaction-ownership changes; see [Native StoreKit qualification](docs/storekit-test-qualification.md)
 - Validate macOS builds before submitting PR: `make build-macos`
 
 ### Code Coverage

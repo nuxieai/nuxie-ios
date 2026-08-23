@@ -1,9 +1,10 @@
-.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-public-api check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
 XCODEPROJ := NuxieSDK.xcodeproj
 SCHEME_UNIT := NuxieSDKUnitTests
+SCHEME_STOREKIT := NuxieSDKStoreKitTests
 SCHEME_MACOS_UNIT := NuxieSDKMacUnitTests
 SCHEME_INTEGRATION := NuxieSDKIntegrationTests
 SCHEME_E2E := NuxieSDKE2ETests
@@ -33,6 +34,7 @@ TEST_SIMULATOR_OS ?= $(if $(DEFAULT_SIMULATOR_OS),$(DEFAULT_SIMULATOR_OS),26.3)
 TEST_SIMULATOR_NAME ?= $(if $(DEFAULT_SIMULATOR_NAME),$(DEFAULT_SIMULATOR_NAME),iPhone 17 Pro)
 TEST_DESTINATION ?= platform=iOS Simulator,name=$(TEST_SIMULATOR_NAME),OS=$(TEST_SIMULATOR_OS)
 XCODEBUILD_TEST_FLAGS ?=
+STOREKIT_REQUIRE_AVAILABLE ?= 1
 NUXIE_RUNTIME_XCFRAMEWORK ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
@@ -48,6 +50,7 @@ help:
 	@echo "  test             - Run the full unit + native-runtime + integration + macOS gate"
 	@echo "  test-ios         - Alias for the full test gate"
 	@echo "  test-unit        - Run unit tests"
+	@echo "  test-storekit    - Run real StoreKitTest native-commerce qualification (Xcode 26.6+)"
 	@echo "  test-native-runtime - Test the Swift-owned runtime and product harness"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
 	@echo "  test-macos-unit  - Run unit tests on macOS"
@@ -88,6 +91,11 @@ help:
 # Check if XcodeGen is installed
 check-xcodegen:
 	@which xcodegen > /dev/null || (echo "XcodeGen not found. Run 'make install-deps' to install." && exit 1)
+
+check-storekit-test-toolchain:
+	@version=$$(xcodebuild -version | awk '/^Xcode / { print $$2 }'); \
+	VERSION="$$version" python3 -c 'import os, sys; p = [int(x) for x in os.environ["VERSION"].split(".")[:2]]; p += [0] * (2 - len(p)); sys.exit(0 if tuple(p) >= (26, 6) else 1)' \
+		|| (echo "StoreKit qualification requires Xcode 26.6 or newer (found $$version)." >&2; exit 1)
 
 # Install dependencies
 install-deps:
@@ -237,6 +245,14 @@ test-xcode: test-product-neutrality check-staged-runtime-xcframework generate
 
 test-unit: SCHEME = $(SCHEME_UNIT)
 test-unit: test-xcode
+
+# This gate must not turn an unavailable StoreKitTest daemon into a green run.
+# Set STOREKIT_REQUIRE_AVAILABLE=0 only to compile the suite and inspect its
+# explicit XCTest skips while diagnosing an Xcode/simulator-runtime mismatch.
+test-storekit: check-storekit-test-toolchain
+	@$(MAKE) --no-print-directory test-xcode \
+		SCHEME="$(SCHEME_STOREKIT)" \
+		XCODEBUILD_TEST_FLAGS="$(XCODEBUILD_TEST_FLAGS) NUXIE_STOREKIT_REQUIRE_AVAILABLE=$(STOREKIT_REQUIRE_AVAILABLE)"
 
 test-native-runtime: check-staged-runtime-xcframework
 	@$(MAKE) test-xcode SCHEME=NuxieSDKUnitTests XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieNativeRuntimeTests -only-testing:NuxieSDKUnitTests/ExperienceInteractiveScreenTests -only-testing:NuxieSDKUnitTests/ExperienceRuntimePresentationLoopTests'
