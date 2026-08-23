@@ -180,10 +180,11 @@ actor ExperienceLoader {
         let catalog = try await releaseStore.authenticateProfile(profile)
         for rejection in catalog.rejections {
             LogError(
-                "Experience release rejected independently: "
-                    + "\(rejection.locator.experienceId)/"
-                    + "\(rejection.locator.experienceVersionId) "
-                    + rejection.contractCode
+                """
+                Experience release rejected independently: \
+                \(rejection.locator.experienceId)/\(rejection.locator.experienceVersionId) \
+                \(rejection.contractCode)
+                """
             )
         }
         var installed: [ExperienceVersionKey: AuthenticatedExperienceReleaseDefinition] = [:]

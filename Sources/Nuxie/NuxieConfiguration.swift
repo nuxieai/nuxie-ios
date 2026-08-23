@@ -70,6 +70,10 @@ public class NuxieConfiguration {
     /// Logging settings
     public var logLevel: LogLevel = .warning
     public var enableConsoleLogging: Bool = true
+    /// Replaces interpolated identifiers, payloads, paths, and error details
+    /// with process-stable HMAC-SHA-256 summaries in console logs. Disable only
+    /// for an explicitly consented diagnostic session because raw values may
+    /// be logged.
     public var redactSensitiveData: Bool = true
     
     /// Number of failures over which the retry delay increases exponentially

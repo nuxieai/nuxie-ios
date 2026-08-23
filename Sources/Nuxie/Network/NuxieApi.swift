@@ -297,7 +297,9 @@ actor NuxieApi: NuxieApiProtocol {
         guard 200...299 ~= response.statusCode else {
             // Log the raw response for debugging
             if let responseString = String(data: data, encoding: .utf8) {
-                LogError("HTTP \(response.statusCode) response body: \(responseString)")
+                LogError(
+                    "HTTP \(response.statusCode, privacy: .publicValue) response body: \(responseString)"
+                )
             }
 
             let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data)

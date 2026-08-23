@@ -210,7 +210,11 @@ Create with `NuxieConfiguration(apiKey:)` and optionally set:
 - `environment`: `.production` (default), `.staging`, `.development`, `.custom` (+ `apiEndpoint`).
 - `testStoreEnabled`: the isolated, local-only commerce sheet (development +
   `pk_test_` key only).
-- Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`.
+- Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`. Interpolated
+  identifiers, payloads, paths, and error details are replaced with
+  process-stable HMAC-SHA-256 summaries by default. Set
+  `redactSensitiveData = false` only for an explicitly consented diagnostic
+  session because raw values may enter logs.
 - Batching: `eventBatchSize`, `flushAt`, `flushInterval`, `maxQueueSize`,
   `retryCount`, and `retryDelay`. Setup requires batch, threshold, and queue
   counts within `1...Int32.max`; rejects a flush threshold above queue capacity;

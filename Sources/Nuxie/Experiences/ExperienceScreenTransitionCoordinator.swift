@@ -363,8 +363,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             }
         } catch {
             LogWarning(
-                "ExperienceScreenTransitionCoordinator: failed to apply value "
-                    + "to screen \(screenId ?? "<all>"): \(error)"
+                """
+                ExperienceScreenTransitionCoordinator: failed to apply value \
+                to screen \(screenId ?? "<all>"): \(error)
+                """
             )
         }
         return didApply
@@ -391,8 +393,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             }
         } catch {
             LogWarning(
-                "ExperienceScreenTransitionCoordinator: failed to apply list operation "
-                    + "to screen \(screenId ?? "<all>"): \(error)"
+                """
+                ExperienceScreenTransitionCoordinator: failed to apply list operation \
+                to screen \(screenId ?? "<all>"): \(error)
+                """
             )
         }
         return didApply
@@ -411,8 +415,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             }
         } catch {
             LogWarning(
-                "ExperienceScreenTransitionCoordinator: failed to fire trigger "
-                    + "on screen \(screenId ?? "<all>"): \(error)"
+                """
+                ExperienceScreenTransitionCoordinator: failed to fire trigger \
+                on screen \(screenId ?? "<all>"): \(error)
+                """
             )
         }
         return didFire
@@ -827,8 +833,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     )
                 } catch {
                     LogWarning(
-                        "ExperienceScreenTransitionCoordinator: failed to navigate "
-                            + "to screen \(screenId) after modal dismiss: \(error)"
+                        """
+                        ExperienceScreenTransitionCoordinator: failed to navigate \
+                        to screen \(screenId) after modal dismiss: \(error)
+                        """
                     )
                     completion(false, screenId)
                 }
