@@ -16,7 +16,6 @@ final class PublicFacadeCompileTests: XCTestCase {
         _ = TriggerUpdate.self
         _ = FeatureAccess.self
         _ = FeatureUsageResult.self
-        _ = ExperienceViewController.self
     }
 
     private func applicationUsageExample(_ sdk: NuxieSDK) async throws {
@@ -24,6 +23,6 @@ final class PublicFacadeCompileTests: XCTestCase {
         let _: FeatureAccess = try await sdk.hasFeature("premium")
         let _: FeatureUsageResult = try await sdk.useFeatureAndWait("credits")
         try await sdk.refreshProfile()
-        let _: ExperienceViewController = try await sdk.experienceViewController(for: "onboarding")
+        await sdk.dismiss()
     }
 }

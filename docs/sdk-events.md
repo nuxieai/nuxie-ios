@@ -12,7 +12,7 @@ should not emit them directly.
 | `$journey_transition` | `journey_id`, `epoch`, optional `from_node`, `to_node`, `region`, `plane` | Device |
 | `$journey_milestone` | `journey_id`, `epoch`, `milestone_id` | Device |
 | `$journey_converted` | `journey_id`, `epoch`, `at`, `source_fact_ref` | Device evaluator or server down-fact |
-| `$journey_exited` | `journey_id`, `epoch`, `reason`, `at` | Device |
+| `$journey_exited` | `journey_id`, `epoch`, `reason`, `at`, optional `dismissed_by` (`host` when `NuxieSDK.dismiss()` initiated the exit) | Device |
 | `$journey_effect_requested` | `journey_id`, `epoch`, `node_id`, deterministic `invocation_id`, `effect`, bounded `payload` | Device durable queue |
 | `$journey_effect_completed` | `journey_id`, `node_id`, `invocation_id`, `status`, optional `result` or `error` | Server down-fact |
 | `$journey_claimed` | `journey_id`, offered `epoch`, stable `claimant` | Device decision lane |
@@ -109,7 +109,9 @@ timer path means “no answer”; a terminal server failure is still a completio
 Supersede turns a visible run into local-only ghost play-out. The UI can finish
 naturally, but the SDK emits no exit, goal, milestone, authored send-event,
 experiment exposure, customer update, or effect request; it records no
-completion and consumes no re-entry frequency.
+completion and consumes no re-entry frequency. An explicit `NuxieSDK.dismiss()`
+is the exception: it ends the still-presented local run as host-dismissed,
+durably emits `$journey_exited`, and records that dismissal completion.
 
 For compatibility with already-published device effect nodes, a request is
 queued before the journey pauses, so airplane mode and app restarts preserve

@@ -195,28 +195,15 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 
 ### Experiences
 
-- `NuxieSDK.shared.experienceViewController(for:)`: asynchronously returns a
-  view controller for a specific experience version, authenticating its signed
-  release descriptor and acquiring its content-addressed RIV and assets on demand.
-- `NuxieSDK.shared.showExperience(_:)`: presents an experience by version ID in
-  a dedicated overlay window.
+- The experience engine owns presentation. Trigger matching and journey execution
+  decide when an experience is shown; applications do not construct or present
+  experience view controllers directly.
+- `await NuxieSDK.shared.dismiss()`: dismisses the presented experience. It is a
+  no-op when none is presented, waits for that experience's in-flight purchase or
+  restore without interrupting StoreKit, and abandons its in-progress server-effect
+  wait before dismissing. The journey exits as dismissed, and a pending
+  `triggerAndWait` resolves as a completed journey with that exit reason.
 - On macOS, `target: "in_app"` link actions open in the default browser (no in-app Safari view).
-
-Example (UIKit):
-
-```swift
-@MainActor
-func debugExperience() async {
-  do {
-    let vc = try await NuxieSDK.shared.experienceViewController(
-      for: "your_experience_version_id"
-    )
-    present(vc, animated: true)
-  } catch {
-    print("Failed to load experience: \(error)")
-  }
-}
-```
 
 ## Configuration Highlights
 

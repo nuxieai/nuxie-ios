@@ -419,6 +419,60 @@ final class ConformanceVectorTests: XCTestCase {
         }
     }
 
+    func testJourneyDismissalVectors() throws {
+        let url = Self.fixturesRoot.appendingPathComponent(
+            "journeys/dismissal/host.json"
+        )
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                as? [String: Any]
+        )
+        XCTAssertEqual(fixture["version"] as? Int, 1)
+        XCTAssertEqual(fixture["suite"] as? String, "journeys/dismissal")
+        let journeyId = try XCTUnwrap(fixture["journeyId"] as? String)
+        let epoch = try XCTUnwrap(fixture["epoch"] as? Int)
+        let now = try XCTUnwrap(
+            ISO8601DateFormatter().date(
+                from: try XCTUnwrap(fixture["now"] as? String)
+            )
+        )
+        let vectors = try XCTUnwrap(
+            fixture["vectors"] as? [[String: Any]]
+        )
+
+        for vector in vectors {
+            let name = try XCTUnwrap(vector["name"] as? String)
+            let reason = try XCTUnwrap(
+                JourneyExitReason(
+                    rawValue: try XCTUnwrap(vector["reason"] as? String)
+                )
+            )
+            let dismissedBy = (vector["dismissedBy"] as? String)
+                .flatMap(JourneyDismissalSource.init(rawValue:))
+            let expected = try XCTUnwrap(
+                vector["expected"] as? [String: Any]
+            )
+            var journey = JourneySnapshot(
+                id: journeyId,
+                experience: Self.makeFixtureExperience(),
+                distinctId: "dismissal-fixture-user",
+                now: now
+            )
+            journey.epoch = epoch
+
+            XCTAssertEqual(
+                JourneyEvents.journeyExitedProperties(
+                    journey: journey,
+                    reason: reason,
+                    at: now,
+                    dismissedBy: dismissedBy
+                ) as NSDictionary,
+                expected as NSDictionary,
+                name
+            )
+        }
+    }
+
     func testJourneyTakeoverVectors() throws {
         let url = Self.fixturesRoot.appendingPathComponent(
             "journeys/takeover/claimable.json"

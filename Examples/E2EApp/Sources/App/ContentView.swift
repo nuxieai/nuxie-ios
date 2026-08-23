@@ -1,5 +1,5 @@
 import SwiftUI
-import Nuxie
+@_spi(Testing) import Nuxie
 
 private enum SetupState: Equatable {
   case idle
@@ -116,7 +116,7 @@ struct ContentView: View {
 
     Task {
       do {
-        try await NuxieSDK.shared.showExperience(configuration.flowId)
+        try await NuxieSDK.shared.presentExperienceVersionForTesting(configuration.flowId)
       } catch {
         await MainActor.run {
           errorMessage = error.localizedDescription

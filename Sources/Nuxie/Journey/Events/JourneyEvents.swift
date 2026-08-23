@@ -1,5 +1,9 @@
 import Foundation
 
+enum JourneyDismissalSource: String, Sendable {
+    case host
+}
+
 /// Canonical Experiences event contracts.
 ///
 /// These facts use snake_case properties and travel through the decision
@@ -143,14 +147,19 @@ final class JourneyEvents: Sendable {
     static func journeyExitedProperties(
         journey: JourneySnapshot,
         reason: JourneyExitReason,
-        at: Date
+        at: Date,
+        dismissedBy: JourneyDismissalSource? = nil
     ) -> [String: Any] {
-        [
+        var properties: [String: Any] = [
             "journey_id": journey.id,
             "epoch": journey.epoch,
-            "reason": reason.executionReason,
+            "reason": dismissedBy == .host ? "dismissed" : reason.executionReason,
             "at": iso8601(at),
         ]
+        if let dismissedBy {
+            properties["dismissed_by"] = dismissedBy.rawValue
+        }
+        return properties
     }
 
     /// Builds the canonical epoch-fenced claim payload.

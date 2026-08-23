@@ -102,10 +102,13 @@ client-side from cached config after the synchronous `$journey_enrolled` fact
 is accepted. If that decision request fails, the SDK does not create a local
 run whose server ledger is missing.
 
+The experience engine owns presentation. Trigger matching and journey execution
+decide when an experience is shown; applications do not obtain an experience
+view controller or present an experience by version ID.
+
 | Entry point | Semantics |
 | --- | --- |
-| `showExperience(_:colorSchemeMode:) async throws` | Present an experience by id, optionally overriding its color scheme. |
-| `experienceViewController(for:colorSchemeMode:) async throws` | Embedding: returns the presentable view controller without presenting. |
+| `dismiss() async` | Callable from any task. Dismiss the presented experience; no-op if none is presented. It waits for that experience's in-flight purchase or restore without interrupting StoreKit, abandons its in-progress server-effect wait, then exits the journey as dismissed. `$journey_exited` carries `reason: "dismissed"` and `dismissed_by: "host"`; a pending `triggerAndWait` resolves to `TriggerResult.journeyCompleted` with `JourneyUpdate.exitReason == .dismissed`, never `.denied`. |
 | `refreshProfile() async throws` | Re-fetch internal cached config (experiences, segments, features). The SDK also refreshes automatically. |
 
 ## Features (entitlements)

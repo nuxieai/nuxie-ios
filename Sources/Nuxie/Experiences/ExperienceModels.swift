@@ -258,19 +258,17 @@ struct Experience: Codable, Sendable {
 
 // MARK: - Close Reason
 
-public enum CloseReason: Equatable, Sendable {
+enum CloseReason: Equatable, Sendable {
     case userDismissed
     case goalMet
-    case purchaseCompleted
-    case timeout
+    case hostDismissed
     case error(Error)
     
-    public static func == (lhs: CloseReason, rhs: CloseReason) -> Bool {
+    static func == (lhs: CloseReason, rhs: CloseReason) -> Bool {
         switch (lhs, rhs) {
         case (.userDismissed, .userDismissed),
              (.goalMet, .goalMet),
-             (.purchaseCompleted, .purchaseCompleted),
-             (.timeout, .timeout):
+             (.hostDismissed, .hostDismissed):
             return true
         case let (.error(e1), .error(e2)):
             return (e1 as NSError) == (e2 as NSError)

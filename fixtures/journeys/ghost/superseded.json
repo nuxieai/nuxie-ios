@@ -12,6 +12,12 @@
     "isGhost": true,
     "emitsExit": false,
     "recordsCompletion": false,
-    "requestsEffects": false
+    "requestsEffects": false,
+    "hostDismissal": {
+      "emitsExit": true,
+      "recordsCompletion": true,
+      "reason": "dismissed",
+      "dismissedBy": "host"
+    }
   }
 }

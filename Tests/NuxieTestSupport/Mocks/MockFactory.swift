@@ -63,8 +63,8 @@ public final class MockFactory: @unchecked Sendable {
     public var eventLog: MockEventLog { Self.markUsed(); return _eventLog }
     public var eventStore: MockEventStore { Self.markUsed(); return _eventStore }
     public var nuxieApi: MockNuxieApi { Self.markUsed(); return _nuxieApi }
-    public var experienceService: MockExperienceService { Self.markUsed(); return _experienceService }
-    public var experiencePresentationService: MockExperiencePresentationService { Self.markUsed(); return _experiencePresentationService }
+    var experienceService: MockExperienceService { Self.markUsed(); return _experienceService }
+    var experiencePresentationService: MockExperiencePresentationService { Self.markUsed(); return _experiencePresentationService }
     public var triggerBroker: TriggerBroker { Self.markUsed(); return _triggerBroker }
     public var dateProvider: MockDateProvider { Self.markUsed(); return _dateProvider }
     public var sleepProvider: MockSleepProvider { Self.markUsed(); return _sleepProvider }

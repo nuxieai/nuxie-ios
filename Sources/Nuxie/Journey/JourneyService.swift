@@ -193,6 +193,7 @@ actor JourneyService: JourneyServiceProtocol {
   private var presentationTraceStates: [String: JourneyPresentationTraceState] = [:]
   private let timerScheduler: JourneyTimerScheduler
   private var completingJourneyIds: Set<String> = []
+  private var journeyCompletionWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
   private var claimingJourneyIds: Set<String> = []
   private var admissionsInProgress: Set<AdmissionKey> = []
   private var restoredPresentationRetriesInProgress: Set<String> = []
@@ -432,8 +433,6 @@ actor JourneyService: JourneyServiceProtocol {
     for journey in oldJourneys {
       await cancelJourney(journey)
     }
-
-    inMemoryJourneysById = inMemoryJourneysById.filter { $0.value.distinctId != oldDistinctId }
 
     let persisted = journeyStore.loadActiveJourneys()
       .filter { $0.distinctId == newDistinctId && $0.status.isLive }
@@ -1080,8 +1079,16 @@ actor JourneyService: JourneyServiceProtocol {
     revealingScreenId: String?,
     method: String
   ) async -> Bool {
-    guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId] else { return false }
+    guard let journey = inMemoryJourneysById[journeyId] else { return false }
+
+    if method == ExperienceScreenDismissalMethod.host {
+      // Host intent was reserved before screen teardown began. Keep this
+      // callback lifecycle-only so the reservation spans through the final
+      // runtime host-dismiss callback, which owns terminalization.
+      return true
+    }
+
+    guard let runner = experienceRunners[journeyId] else { return false }
 
     let outcome = await runner.handleScreenDismissed(
       screenId,
@@ -1873,13 +1880,23 @@ actor JourneyService: JourneyServiceProtocol {
     )
   }
 
+  func reserveHostDismissal(journeyId: String) async {
+    guard let journey = inMemoryJourneysById[journeyId] else { return }
+    _ = await journey.reserveHostDismissal()
+  }
+
   func handleRuntimeDismiss(
     journeyId: String,
     reason: CloseReason,
     controller: ExperienceViewController
   ) async {
-    guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId] else { return }
+    guard let journey = inMemoryJourneysById[journeyId] else { return }
+    let runner = experienceRunners[journeyId]
+
+    if reason != .hostDismissed,
+       await journey.hasHostDismissalReservation() {
+      return
+    }
 
     if reason == .userDismissed,
        let traceState = presentationTraceStates[journeyId],
@@ -1894,24 +1911,20 @@ actor JourneyService: JourneyServiceProtocol {
       )
     }
 
-    var userInfo: [String: Any] = [
-      "journeyId": journey.id,
-      "experienceId": journey.experienceId
-    ]
+    if reason == .hostDismissed {
+      await completeJourney(
+        journey,
+        reason: .dismissed,
+        dismissedBy: .host
+      )
+      return
+    }
+
+    await postDismissNotification(for: journey, reason: reason)
+
+    guard let runner else { return }
+
     var state = await journey.snapshot()
-    if let screenId = state.executionState.currentScreenId {
-      userInfo["screenId"] = screenId
-    }
-    let mapped = JourneyDismissalMapping.notificationReason(for: reason)
-    userInfo["reason"] = mapped.reason
-    if let errorDescription = mapped.errorDescription {
-      userInfo["error"] = errorDescription
-    }
-    NotificationCenter.default.post(
-      name: .nuxieDismiss,
-      object: nil,
-      userInfo: userInfo
-    )
 
     // A failed response operation deliberately keeps the draft and the live
     // journey available for an explicit retry. Do not turn that recovery path
@@ -1942,6 +1955,30 @@ actor JourneyService: JourneyServiceProtocol {
     if (await journey.snapshot()).status.isLive {
       await completeJourney(journey, reason: dismissalExitReason(for: reason))
     }
+  }
+
+  private func postDismissNotification(
+    for journey: Journey,
+    reason: CloseReason
+  ) async {
+    var userInfo: [String: Any] = [
+      "journeyId": journey.id,
+      "experienceId": journey.experienceId
+    ]
+    let state = await journey.snapshot()
+    if let screenId = state.executionState.currentScreenId {
+      userInfo["screenId"] = screenId
+    }
+    let mapped = JourneyDismissalMapping.notificationReason(for: reason)
+    userInfo["reason"] = mapped.reason
+    if let errorDescription = mapped.errorDescription {
+      userInfo["error"] = errorDescription
+    }
+    NotificationCenter.default.post(
+      name: .nuxieDismiss,
+      object: nil,
+      userInfo: userInfo
+    )
   }
 
   func handleScopedPermissionEvent(
@@ -2743,7 +2780,7 @@ actor JourneyService: JourneyServiceProtocol {
             experienceVersionId,
             from: journey,
             runtimeDelegate: delegate,
-            colorSchemeMode: .light,
+            colorSchemeMode: .system,
             commit: commit
           )
         } else {
@@ -2751,7 +2788,7 @@ actor JourneyService: JourneyServiceProtocol {
             experienceVersionId,
             from: journey,
             runtimeDelegate: delegate,
-            colorSchemeMode: .light
+            colorSchemeMode: .system
           )
         }
       } catch {
@@ -2788,7 +2825,7 @@ actor JourneyService: JourneyServiceProtocol {
           experienceVersionId,
           from: journey,
           runtimeDelegate: delegate,
-          colorSchemeMode: .light,
+          colorSchemeMode: .system,
           commit: commit
         )
       } else {
@@ -2796,7 +2833,7 @@ actor JourneyService: JourneyServiceProtocol {
           experienceVersionId,
           from: journey,
           runtimeDelegate: delegate,
-          colorSchemeMode: .light
+          colorSchemeMode: .system
         )
       }
     } catch {
@@ -3387,15 +3424,36 @@ actor JourneyService: JourneyServiceProtocol {
     }
   }
 
+  @discardableResult
   private func discardLocalJourney(
     _ journey: Journey,
     terminalStatus: JourneyStatus
-  ) async {
-    let now = dateProvider.now()
-    await journey.update { state in
-      state.status = terminalStatus
-      state.updatedAt = now
+  ) async -> Bool {
+    var committed = false
+    for _ in 0..<3 {
+      guard inMemoryJourneysById[journey.id] === journey else { return false }
+      let versioned = await journey.versionedSnapshot()
+      guard versioned.snapshot.status.isLive else { return false }
+      var terminal = versioned.snapshot
+      terminal.status = terminalStatus
+      terminal.updatedAt = dateProvider.now()
+      if await journey.replaceForTerminalTransition(
+        terminal,
+        ifRevisionEquals: versioned.revision,
+        authority: .ordinary
+      ) {
+        committed = true
+        break
+      }
+      if await journey.hasHostDismissalReservation() {
+        return false
+      }
     }
+    guard committed else {
+      LogError("JourneyService: local discard conflicted repeatedly for \(journey.id)")
+      return false
+    }
+
     timerScheduler.cancelTasks(journeyId: journey.id)
     experienceRunners.removeValue(forKey: journey.id)
     removeScreenControlRuntime(journeyId: journey.id)
@@ -3404,6 +3462,7 @@ actor JourneyService: JourneyServiceProtocol {
     }
     inMemoryJourneysById.removeValue(forKey: journey.id)
     journeyStore.deleteJourney(id: journey.id)
+    return true
   }
 
   private func scheduleResume(journeyId: String, at date: Date) {
@@ -3517,21 +3576,49 @@ actor JourneyService: JourneyServiceProtocol {
     )
   }
 
-  private func completeJourney(_ journey: Journey, reason: JourneyExitReason) async {
-    guard completingJourneyIds.insert(journey.id).inserted else { return }
-    defer { completingJourneyIds.remove(journey.id) }
+  private func completeJourney(
+    _ journey: Journey,
+    reason: JourneyExitReason,
+    dismissedBy: JourneyDismissalSource? = nil
+  ) async {
+    guard completingJourneyIds.insert(journey.id).inserted else {
+      if dismissedBy == .host {
+        await waitForJourneyCompletionAttempt(journeyId: journey.id)
+        await completeJourney(journey, reason: reason, dismissedBy: dismissedBy)
+      }
+      return
+    }
+    defer { finishJourneyCompletionAttempt(journeyId: journey.id) }
+
+    let terminalAuthority: JourneyTerminalTransitionAuthority = dismissedBy == .host
+      ? .host
+      : .ordinary
+    if terminalAuthority == .ordinary,
+       await journey.hasHostDismissalReservation() {
+      return
+    }
     var state = await journey.snapshot()
     guard state.status.isLive,
           inMemoryJourneysById[journey.id] === journey else {
+      if dismissedBy == .host {
+        await journey.releaseHostDismissalReservation()
+      }
       return
     }
 
-    if state.isGhost {
+    if state.isGhost, terminalAuthority != .host {
       await discardLocalJourney(journey, terminalStatus: .superseded)
       return
     }
 
-    guard let terminalState = await commitTerminalTransition(journey, reason: reason) else {
+    guard let terminalState = await commitTerminalTransition(
+      journey,
+      reason: reason,
+      authority: terminalAuthority
+    ) else {
+      if dismissedBy == .host {
+        await journey.releaseHostDismissalReservation()
+      }
       return
     }
     state = terminalState
@@ -3546,6 +3633,25 @@ actor JourneyService: JourneyServiceProtocol {
       false
     }
 
+    if dismissedBy == .host {
+      let exitedProperties = JourneyEvents.journeyExitedProperties(
+        journey: state,
+        reason: reason,
+        at: state.completedAt ?? dateProvider.now(),
+        dismissedBy: dismissedBy
+      )
+      let capture = await eventLog.captureSystemEvent(
+        JourneyEvents.journeyExited,
+        properties: exitedProperties,
+        eventId: "journey-exited:\(journey.id):\(state.epoch)",
+        distinctId: journey.distinctId
+      )
+      if capture == nil {
+        LogWarning("JourneyService: Failed to durably capture host journey exit")
+      }
+      await postDismissNotification(for: journey, reason: .hostDismissed)
+    }
+
     // The local terminal transition is already durable. Network abandonment
     // is deliberately attempted only after that commit, so a crash or retry
     // can never leave an active run with a locally abandoned response.
@@ -3553,19 +3659,24 @@ actor JourneyService: JourneyServiceProtocol {
       await runner.abandonResponseDraftsIfNeeded(force: committedResponseAbandonment)
     }
 
-    do {
-      _ = try await eventLog.trackWithResponse(
-        JourneyEvents.journeyExited,
-        properties: JourneyEvents.journeyExitedProperties(
-          journey: state,
-          reason: reason,
-          at: state.completedAt ?? dateProvider.now()
-        )
+    if dismissedBy != .host {
+      let exitedProperties = JourneyEvents.journeyExitedProperties(
+        journey: state,
+        reason: reason,
+        at: state.completedAt ?? dateProvider.now(),
+        dismissedBy: dismissedBy
       )
-    } catch {
-      LogWarning("JourneyService: Failed to deliver journey exit: \(error)")
+      do {
+        _ = try await eventLog.trackWithResponse(
+          JourneyEvents.journeyExited,
+          properties: exitedProperties
+        )
+      } catch {
+        LogWarning("JourneyService: Failed to deliver journey exit: \(error)")
+      }
     }
 
+    let triggerCompletion: (eventId: String, update: TriggerUpdate)?
     if let originEventId = state.getContext("_origin_event_id") as? String {
       let update = JourneyUpdate(
         journeyId: journey.id,
@@ -3574,7 +3685,17 @@ actor JourneyService: JourneyServiceProtocol {
         exitReason: reason,
         goalMet: state.convertedAt != nil
       )
-      Task { await triggerBroker.emit(eventId: originEventId, update: .journey(update)) }
+      triggerCompletion = (originEventId, .journey(update))
+    } else {
+      triggerCompletion = nil
+    }
+    if let triggerCompletion, dismissedBy != .host {
+      Task {
+        await triggerBroker.emit(
+          eventId: triggerCompletion.eventId,
+          update: triggerCompletion.update
+        )
+      }
     }
 
     timerScheduler.cancelTasks(journeyId: journey.id)
@@ -3604,6 +3725,30 @@ actor JourneyService: JourneyServiceProtocol {
         LogError("Failed to record journey completion for reentry accounting: \(error)")
       }
     }
+
+    if let triggerCompletion, dismissedBy == .host {
+      await triggerBroker.emit(
+        eventId: triggerCompletion.eventId,
+        update: triggerCompletion.update
+      )
+    }
+
+    if dismissedBy == .host {
+      await journey.releaseHostDismissalReservation()
+    }
+  }
+
+  private func waitForJourneyCompletionAttempt(journeyId: String) async {
+    guard completingJourneyIds.contains(journeyId) else { return }
+    await withCheckedContinuation { continuation in
+      journeyCompletionWaiters[journeyId, default: []].append(continuation)
+    }
+  }
+
+  private func finishJourneyCompletionAttempt(journeyId: String) {
+    completingJourneyIds.remove(journeyId)
+    let waiters = journeyCompletionWaiters.removeValue(forKey: journeyId) ?? []
+    waiters.forEach { $0.resume() }
   }
 
   /// Atomically commits terminal journey state and response abandonment in one
@@ -3612,9 +3757,14 @@ actor JourneyService: JourneyServiceProtocol {
   /// version twice.
   private func commitTerminalTransition(
     _ journey: Journey,
-    reason: JourneyExitReason
+    reason: JourneyExitReason,
+    authority: JourneyTerminalTransitionAuthority
   ) async -> JourneySnapshot? {
     for _ in 0..<3 {
+      if authority == .ordinary,
+         await journey.hasHostDismissalReservation() {
+        return nil
+      }
       let versioned = await journey.versionedSnapshot()
       let state = versioned.snapshot
       guard state.status.isLive,
@@ -3656,10 +3806,15 @@ actor JourneyService: JourneyServiceProtocol {
         )
       }
 
-      guard await journey.replace(
+      guard await journey.replaceForTerminalTransition(
         terminal,
-        ifRevisionEquals: versioned.revision
+        ifRevisionEquals: versioned.revision,
+        authority: authority
       ) else {
+        if authority == .ordinary,
+           await journey.hasHostDismissalReservation() {
+          return nil
+        }
         continue
       }
 

@@ -6,7 +6,8 @@ import UIKit
 import AppKit
 #endif
 
-public enum ExperienceColorSchemeMode: String, CaseIterable, Codable, Sendable {
+enum ExperienceColorSchemeMode: String, CaseIterable, Codable, Sendable {
+    case system
     case light
     case dark
 }
@@ -15,6 +16,8 @@ public enum ExperienceColorSchemeMode: String, CaseIterable, Codable, Sendable {
 extension ExperienceColorSchemeMode {
     var userInterfaceStyle: UIUserInterfaceStyle {
         switch self {
+        case .system:
+            return .unspecified
         case .light:
             return .light
         case .dark:
@@ -28,6 +31,8 @@ extension ExperienceColorSchemeMode {
 extension ExperienceColorSchemeMode {
     var appearance: NSAppearance? {
         switch self {
+        case .system:
+            return nil
         case .light:
             return NSAppearance(named: .aqua)
         case .dark:

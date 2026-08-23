@@ -222,6 +222,32 @@ final class JourneyEventContractTests: QuickSpec {
                     "at": Self.iso8601(at),
                 ] as NSDictionary))
             }
+
+            it("attributes a host-dismissed journey exit") {
+                let at = Date(timeIntervalSince1970: 1_700_000_100)
+                var journey = JourneySnapshot(
+                    id: "journey-host-dismissed",
+                    experience: Self.makeExperience(),
+                    distinctId: "user-1",
+                    now: at
+                )
+                journey.epoch = 3
+
+                let exited = JourneyEvents.journeyExitedProperties(
+                    journey: journey,
+                    reason: .dismissed,
+                    at: at,
+                    dismissedBy: .host
+                )
+
+                expect(exited as NSDictionary).to(equal([
+                    "journey_id": "journey-host-dismissed",
+                    "epoch": 3,
+                    "reason": "dismissed",
+                    "at": Self.iso8601(at),
+                    "dismissed_by": "host",
+                ] as NSDictionary))
+            }
         }
     }
 
