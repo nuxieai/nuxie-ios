@@ -1212,6 +1212,34 @@ final class EventLogDeliveryTests: AsyncSpec {
                     await expect { await log.getQueuedEventCount() }.to(equal(2))
                     await expect { await mockApi.sendBatchCallCount }.to(equal(1))
                 }
+
+                it("caps repeated no-progress partial backoff at the configured retry ceiling") {
+                    await log.close()
+                    log = try await makeLog(maxRetries: 2, baseRetryDelay: 10)
+                    await log.enqueueForDelivery(
+                        TestEventBuilder(name: "no_progress")
+                            .withDistinctId("user123")
+                            .build()
+                    )
+                    await mockApi.setBatchResponse(BatchResponse(
+                        status: "partial",
+                        processed: 0,
+                        failed: 1,
+                        total: 1,
+                        errors: nil
+                    ))
+
+                    for _ in 0..<8 {
+                        _ = await log.performFlush(forceSend: true)
+                    }
+
+                    let state = await log.retryBackoffState()
+                    expect(state.attempts).to(equal(8))
+                    expect(state.remainingDelay).toNot(beNil())
+                    expect(state.remainingDelay!).to(beGreaterThan(19))
+                    expect(state.remainingDelay!).to(beLessThanOrEqualTo(20))
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                }
             }
 
             // MARK: - Offline Durability Tests

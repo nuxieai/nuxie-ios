@@ -100,6 +100,8 @@ public final class NuxieSDK: @unchecked Sendable {
         "environment == .custom requires setting configuration.apiEndpoint")
     }
 
+    try NuxieConfigurationValidator.validate(configuration)
+
     let setupConfiguration = NuxieSetupConfiguration(configuration)
     let eventLogConfiguration = setupConfiguration.eventLogConfiguration()
     let runtimeSettings = NuxieRuntimeSettings(

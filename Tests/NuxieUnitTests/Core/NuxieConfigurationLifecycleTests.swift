@@ -47,6 +47,169 @@ private actor StartupLifecycleProbe {
 }
 
 final class NuxieConfigurationLifecycleTests: XCTestCase {
+    func testSetupRejectsInvalidDeliveryCounts() async {
+        await assertSetupRejects(
+            { $0.eventBatchSize = 0 },
+            reason: "eventBatchSize must be between 1 and \(Int32.max)"
+        )
+        await assertSetupRejects(
+            { $0.flushAt = 0 },
+            reason: "flushAt must be between 1 and \(Int32.max)"
+        )
+        await assertSetupRejects(
+            { $0.maxQueueSize = -1 },
+            reason: "maxQueueSize must be between 1 and \(Int32.max)"
+        )
+        await assertSetupRejects(
+            {
+                $0.flushAt = 11
+                $0.maxQueueSize = 10
+            },
+            reason: "flushAt must not exceed maxQueueSize"
+        )
+
+        let unsupportedCount = Int(Int32.max) + 1
+        await assertSetupRejects(
+            { $0.eventBatchSize = unsupportedCount },
+            reason: "eventBatchSize must be between 1 and \(Int32.max)"
+        )
+        await assertSetupRejects(
+            {
+                $0.flushAt = unsupportedCount
+                $0.maxQueueSize = unsupportedCount
+            },
+            reason: "flushAt must be between 1 and \(Int32.max)"
+        )
+        await assertSetupRejects(
+            { $0.maxQueueSize = unsupportedCount },
+            reason: "maxQueueSize must be between 1 and \(Int32.max)"
+        )
+        await assertSetupRejects(
+            { $0.maxQueueSize = Int.max },
+            reason: "maxQueueSize must be between 1 and \(Int32.max)"
+        )
+    }
+
+    func testValidatorAcceptsMaximumSupportedDeliveryCounts() throws {
+        let configuration = NuxieConfiguration(apiKey: "configuration-key")
+        let maximumCount = Int(Int32.max)
+        configuration.eventBatchSize = maximumCount
+        configuration.flushAt = maximumCount
+        configuration.maxQueueSize = maximumCount
+
+        XCTAssertNoThrow(try NuxieConfigurationValidator.validate(configuration))
+    }
+
+    func testValidatorRejectsDeliveryCountAboveSupportedMaximum() throws {
+        let configuration = NuxieConfiguration(apiKey: "configuration-key")
+        configuration.eventBatchSize = Int(Int32.max) + 1
+
+        XCTAssertThrowsError(try NuxieConfigurationValidator.validate(configuration))
+    }
+
+    func testPendingDeliveryQueryLimitIncludesDirectDeliveriesWithoutOverflow() {
+        let maximumSupported = Int(Int32.max)
+        XCTAssertEqual(
+            EventLog.pendingDeliveryQueryLimit(
+                queueCapacity: maximumSupported,
+                activeDirectDeliveryCount: 1
+            ),
+            maximumSupported + 1
+        )
+        XCTAssertEqual(
+            EventLog.pendingDeliveryQueryLimit(
+                queueCapacity: Int.max,
+                activeDirectDeliveryCount: 1
+            ),
+            Int.max
+        )
+    }
+
+    func testSetupRejectsInvalidRetryConfiguration() async {
+        await assertSetupRejects(
+            { $0.retryCount = -1 },
+            reason: "retryCount must be nonnegative"
+        )
+        await assertSetupRejects(
+            { $0.retryDelay = .nan },
+            reason: "retryDelay must be finite and nonnegative"
+        )
+        await assertSetupRejects(
+            { $0.retryDelay = -.infinity },
+            reason: "retryDelay must be finite and nonnegative"
+        )
+        await assertSetupRejects(
+            {
+                $0.retryCount = 1_025
+                $0.retryDelay = 1
+            },
+            reason: "retryCount and retryDelay produce an unschedulable backoff"
+        )
+    }
+
+    func testSetupRejectsInvalidTimerAndCacheIntervals() async {
+        await assertSetupRejects(
+            { $0.flushInterval = 0 },
+            reason: "flushInterval must be finite and greater than zero"
+        )
+        await assertSetupRejects(
+            { $0.flushInterval = -1 },
+            reason: "flushInterval must be finite and greater than zero"
+        )
+        await assertSetupRejects(
+            { $0.flushInterval = .nan },
+            reason: "flushInterval must be finite and greater than zero"
+        )
+        await assertSetupRejects(
+            { $0.flushInterval = .infinity },
+            reason: "flushInterval must be finite and greater than zero"
+        )
+        await assertSetupRejects(
+            { $0.flushInterval = TimeInterval(UInt64.max) / 1_000_000_000 },
+            reason: "flushInterval is too large to schedule safely"
+        )
+        await assertSetupRejects(
+            { $0.flushInterval = .leastNonzeroMagnitude },
+            reason: "flushInterval is too small to schedule safely"
+        )
+        await assertSetupRejects(
+            { $0.featureCacheTTL = 0 },
+            reason: "featureCacheTTL must be finite and greater than zero"
+        )
+        await assertSetupRejects(
+            { $0.featureCacheTTL = -1 },
+            reason: "featureCacheTTL must be finite and greater than zero"
+        )
+        await assertSetupRejects(
+            { $0.featureCacheTTL = .nan },
+            reason: "featureCacheTTL must be finite and greater than zero"
+        )
+        await assertSetupRejects(
+            { $0.featureCacheTTL = .infinity },
+            reason: "featureCacheTTL must be finite and greater than zero"
+        )
+    }
+
+    func testValidatorAcceptsOneNanosecondFlushIntervalBoundary() throws {
+        let configuration = NuxieConfiguration(apiKey: "configuration-key")
+        configuration.flushInterval = 1 / 1_000_000_000
+
+        XCTAssertNoThrow(try NuxieConfigurationValidator.validate(configuration))
+    }
+
+    func testSetupAcceptsZeroRetryDelayAndExistingDefaults() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+
+        let configuration = NuxieConfiguration(apiKey: "configuration-key")
+        configuration.retryDelay = 0
+        configuration.trackApplicationLifecycleEvents = false
+
+        try sdk.setup(with: configuration)
+        XCTAssertTrue(sdk.isSetup)
+        await sdk.shutdown()
+    }
+
     func testShutdownStopsObserverBeforeAwaitingCancelledProfilePrefetch() async {
         let probe = StartupLifecycleProbe(failRefetchAfterRelease: true)
         let profilePrefetch = Task {
@@ -223,5 +386,25 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         _ = try await sdk.setLocaleIdentifier("fr_FR")
         let localeAfterRuntimeControl = await mocks.nuxieApi.lastProfileLocale
         XCTAssertEqual(localeAfterRuntimeControl, "fr_FR")
+    }
+
+    private func assertSetupRejects(
+        _ configure: (NuxieConfiguration) -> Void,
+        reason expectedReason: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+        let configuration = NuxieConfiguration(apiKey: "configuration-key")
+        configure(configuration)
+
+        XCTAssertThrowsError(try sdk.setup(with: configuration), file: file, line: line) { error in
+            guard case .invalidConfiguration(let reason) = error as? NuxieError else {
+                return XCTFail("expected invalid configuration", file: file, line: line)
+            }
+            XCTAssertEqual(reason, expectedReason, file: file, line: line)
+        }
+        XCTAssertFalse(sdk.isSetup, file: file, line: line)
     }
 }
