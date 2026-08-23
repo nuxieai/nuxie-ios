@@ -76,6 +76,26 @@ class ExtractPublicAPITests(unittest.TestCase):
         self.assertNotIn("implicit", customer_usrs | spi_usrs)
         self.assertNotIn("implicit-spi", customer_usrs | spi_usrs)
 
+    def test_customer_digest_drops_unmarked_duplicates_of_spi_usrs(self):
+        unmarked = declaration("shared", "SharedUnmarked")
+        digest = {
+            "ABIRoot": {
+                "children": [
+                    unmarked,
+                    {
+                        "spi_group_names": ["Testing"],
+                        "children": [declaration("shared", "SharedSPI")],
+                    },
+                ],
+            }
+        }
+
+        _, spi = extract_public_api.inventories(digest)
+        spi_usrs = frozenset(line.split("\t", 1)[0] for line in spi)
+        filtered = extract_public_api.customer_digest(digest, spi_usrs)
+
+        self.assertEqual(filtered, {"ABIRoot": {"children": []}})
+
     def test_customer_digest_removes_the_entire_spi_subtree(self):
         customer = declaration("customer", "Customer")
         implicit = declaration("implicit", "Implicit", implicit=True)
