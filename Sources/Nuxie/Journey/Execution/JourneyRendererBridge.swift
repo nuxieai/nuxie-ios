@@ -274,6 +274,24 @@ final class JourneyRendererBridge:
     }
   }
 
+  @MainActor
+  func experienceViewControllerWillRequestHostDismiss(
+    _ controller: ExperienceViewController
+  ) async {
+    await journeyService?.reserveHostDismissal(journeyId: journeyId)
+  }
+
+  @MainActor
+  func experienceViewControllerDidRequestHostDismiss(
+    _ controller: ExperienceViewController
+  ) async {
+    await journeyService?.handleRuntimeDismiss(
+      journeyId: journeyId,
+      reason: .hostDismissed,
+      controller: controller
+    )
+  }
+
   func experienceViewController(
     _ controller: ExperienceViewController,
     didResolveNotificationPermissionEvent eventName: String,
@@ -406,10 +424,8 @@ enum JourneyDismissalMapping {
       return ("user_dismissed", nil)
     case .goalMet:
       return ("goal_met", nil)
-    case .purchaseCompleted:
-      return ("purchase_completed", nil)
-    case .timeout:
-      return ("timeout", nil)
+    case .hostDismissed:
+      return ("host_dismissed", nil)
     case .error(let error):
       return ("error", error.localizedDescription)
     }
@@ -425,10 +441,10 @@ enum JourneyDismissalMapping {
       return .dismissed
     case .goalMet:
       return .goalMet
+    case .hostDismissed:
+      return .dismissed
     case .error:
       return .error
-    case .purchaseCompleted, .timeout:
-      return .completed
     }
   }
 }

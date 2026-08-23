@@ -20,6 +20,8 @@ These language-neutral vectors pin the cross-plane experience-execution contract
   and transferred terminality.
 - `journeys/parking`: background and wait-pause `$journey_parked`
   checkpoints, device-plane tagging, pending deadlines, and epoch stamping.
+- `journeys/dismissal`: exact `$journey_exited` host-attribution properties,
+  while preserving the existing ordinary-dismissal reason vocabulary.
 - `journeys/takeover`: claimable mailbox decoding, stale-checkpoint resume
   metadata, relaunch-equivalent restoration, immediate past-due scheduling,
   and original-device epoch rejection.
@@ -28,7 +30,8 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `journeys/handler-host-dispatch`: declaration-strict screen-host routing for
   `$screen_shown`/`$screen_dismissed`, with the global Journey-host lifecycle
   fallback pinned separately from undeclared handler-only hosts.
-- `journeys/ghost`: supersede/ghost accounting suppression.
+- `journeys/ghost`: supersede/ghost accounting suppression and the explicit
+  host-dismissal exception for a still-presented ghost play-out.
 - `journeys/time-window`: identical Swift/server calendar decisions.
 - `journeys/experiment-resolution`: identical Swift/server assignment,
   fallback, freezing, and invalid-assignment decisions.

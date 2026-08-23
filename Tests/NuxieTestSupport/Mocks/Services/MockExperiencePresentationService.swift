@@ -4,7 +4,7 @@ import Foundation
 /// Mock implementation of ExperiencePresentationService for testing
 // @unchecked Sendable: all mutable state is serialized through `lock`.
 // Non-final because integration tests subclass it to observe call ordering.
-public class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, @unchecked Sendable {
+class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, @unchecked Sendable {
 
     private let lock = NSLock()
 
@@ -22,6 +22,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
     private var _presentExperienceCallCount = 0
     private var _dismissCurrentExperienceCallCount = 0
     private var _currentRuntimeDelegate: ExperienceRuntimeDelegate?
+    private var _currentExperienceViewController: ExperienceViewController?
     private var _initialScreenIDs: [String?] = []
 
     public init() {}
@@ -50,12 +51,12 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
         set { lock.withLock { _isPresentingExperience = newValue } }
     }
 
-    public var mockViewControllers: [String: ExperienceViewController] {
+    var mockViewControllers: [String: ExperienceViewController] {
         get { lock.withLock { _mockViewControllers } }
         set { lock.withLock { _mockViewControllers = newValue } }
     }
 
-    public var defaultMockViewController: ExperienceViewController? {
+    var defaultMockViewController: ExperienceViewController? {
         get { lock.withLock { _defaultMockViewController } }
         set { lock.withLock { _defaultMockViewController = newValue } }
     }
@@ -114,18 +115,18 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
 
     @discardableResult
     @MainActor
-    public func presentExperience(_ experienceVersionId: String, from journey: Journey?, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController {
+    func presentExperience(_ experienceVersionId: String, from journey: Journey?, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController {
         try await presentExperience(
             experienceVersionId,
             from: journey,
             runtimeDelegate: runtimeDelegate,
-            colorSchemeMode: .light
+            colorSchemeMode: .system
         )
     }
 
     @discardableResult
     @MainActor
-    public func presentExperience(
+    func presentExperience(
         _ experienceVersionId: String,
         from journey: Journey?,
         runtimeDelegate: ExperienceRuntimeDelegate?,
@@ -165,12 +166,13 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
             ?? MockExperienceViewController(mockExperienceVersionId: experienceVersionId)
         controller.runtimeDelegate = runtimeDelegate
         controller.colorSchemeMode = colorSchemeMode
+        lock.withLock { _currentExperienceViewController = controller }
         return controller
     }
 
     @discardableResult
     @MainActor
-    public func presentExperience(
+    func presentExperience(
         _ experienceVersionId: String,
         from journey: Journey?,
         runtimeDelegate: ExperienceRuntimeDelegate?,
@@ -188,7 +190,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
 
     @discardableResult
     @MainActor
-    public func presentExperience(
+    func presentExperience(
         _ experienceVersionId: String,
         from journey: Journey?,
         runtimeDelegate: ExperienceRuntimeDelegate?,
@@ -216,11 +218,12 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
 
             _isPresentingExperience = false
             _currentRuntimeDelegate = nil
+            _currentExperienceViewController = nil
         }
     }
 
     @MainActor
-    public func dismissCurrentExperience(reason: CloseReason) async {
+    func dismissCurrentExperience(reason: CloseReason) async {
         let (lastPresentation, eventLog): ((experienceVersionId: String, journey: Journey?)?, EventLogProtocol?) = lock.withLock {
             _dismissCurrentExperienceCallCount += 1
 
@@ -230,37 +233,17 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
             }
             _isPresentingExperience = false
             _currentRuntimeDelegate = nil
+            _currentExperienceViewController = nil
             return (last, _eventLog)
         }
 
         if let lastPresentation, let journey = lastPresentation.journey, let eventLog {
             let state = await journey.snapshot()
             switch reason {
-            case .userDismissed, .goalMet:
+            case .userDismissed, .goalMet, .hostDismissed:
                 eventLog.track(
                     JourneyEvents.experienceDismissed,
                     properties: JourneyEvents.experienceDismissedProperties(
-                        experienceVersion: lastPresentation.experienceVersionId,
-                        journey: state
-                    ),
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil
-                )
-            case .purchaseCompleted:
-                eventLog.track(
-                    JourneyEvents.experiencePurchased,
-                    properties: JourneyEvents.experiencePurchasedProperties(
-                        experienceVersion: lastPresentation.experienceVersionId,
-                        journey: state,
-                        productId: nil
-                    ),
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil
-                )
-            case .timeout:
-                eventLog.track(
-                    JourneyEvents.experienceTimedOut,
-                    properties: JourneyEvents.experienceTimedOutProperties(
                         experienceVersion: lastPresentation.experienceVersionId,
                         journey: state
                     ),
@@ -280,6 +263,21 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
                 )
             }
         }
+    }
+
+    @MainActor
+    public func dismissCurrentExperienceFromHost() async {
+        let (controller, delegate) = lock.withLock {
+            (_currentExperienceViewController, _currentRuntimeDelegate)
+        }
+        if let controller {
+            controller.beginHostDismissal()
+            await delegate?.experienceViewControllerWillRequestHostDismiss(controller)
+            await controller.waitForInFlightCommerceBeforeHostDismissal()
+            await controller.prepareForDismissal(reason: .hostDismissed)
+            await delegate?.experienceViewControllerDidRequestHostDismiss(controller)
+        }
+        await dismissCurrentExperience(reason: .hostDismissed)
     }
 
     @MainActor
@@ -310,6 +308,8 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
                 _dismissedExperiences.append(lastPresentation.experienceVersionId)
             }
             _isPresentingExperience = false
+            _currentRuntimeDelegate = nil
+            _currentExperienceViewController = nil
             _dismissCurrentExperienceCallCount += 1
         }
     }
@@ -375,6 +375,8 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
             _dismissCurrentExperienceCallCount = 0
             _mockViewControllers = [:]
             _defaultMockViewController = nil
+            _currentRuntimeDelegate = nil
+            _currentExperienceViewController = nil
         }
     }
 }

@@ -343,8 +343,7 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
             [
                 ExperienceScreenHiddenContext.teardown(reason: .userDismissed).method,
                 ExperienceScreenHiddenContext.teardown(reason: .goalMet).method,
-                ExperienceScreenHiddenContext.teardown(reason: .purchaseCompleted).method,
-                ExperienceScreenHiddenContext.teardown(reason: .timeout).method,
+                ExperienceScreenHiddenContext.teardown(reason: .hostDismissed).method,
                 ExperienceScreenHiddenContext.teardown(
                     reason: .error(NSError(domain: "test", code: 1))
                 ).method,
@@ -354,8 +353,7 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
             [
                 "user",
                 "goal_met",
-                "purchase_completed",
-                "timeout",
+                "host",
                 "error",
                 "experience",
                 "error",

@@ -139,6 +139,14 @@ protocol ExperienceRuntimeDelegate: AnyObject {
     )
 
     func experienceViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason)
+
+    func experienceViewControllerWillRequestHostDismiss(
+        _ controller: ExperienceViewController
+    ) async
+
+    func experienceViewControllerDidRequestHostDismiss(
+        _ controller: ExperienceViewController
+    ) async
 }
 
 protocol NotificationPermissionEventReceiver: AnyObject {
@@ -236,10 +244,23 @@ extension ExperienceRuntimeDelegate {
         didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput,
         screenId: String
     ) {}
+
+    func experienceViewControllerDidRequestHostDismiss(
+        _ controller: ExperienceViewController
+    ) async {
+        experienceViewControllerDidRequestDismiss(
+            controller,
+            reason: .hostDismissed
+        )
+    }
+
+    func experienceViewControllerWillRequestHostDismiss(
+        _ controller: ExperienceViewController
+    ) async {}
 }
 
 /// ExperienceViewController - displays native experience content with loading and error states.
-public class ExperienceViewController: NuxiePlatformViewController {
+class ExperienceViewController: NuxiePlatformViewController {
     private enum NativeRuntimeCommand {
         case viewModelSnapshot(ExperienceViewModelSnapshot, screenId: String?)
         case viewModelValue(path: VmPathRef, value: Any, screenId: String?, instanceId: String?)
@@ -336,9 +357,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
     var trackingPermissionEventReceiver: TrackingPermissionEventReceiver?
 
     /// Closure called when the experience is closed
-    public var onClose: ((CloseReason) -> Void)?
+    var onClose: ((CloseReason) -> Void)?
 
-    public var colorSchemeMode: ExperienceColorSchemeMode = .light {
+    var colorSchemeMode: ExperienceColorSchemeMode = .system {
         didSet {
             guard oldValue != colorSchemeMode else { return }
             guard isViewLoaded else { return }
@@ -413,6 +434,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private(set) var experienceContentIsHidden = true
     private let recoveryAffordanceDelay: TimeInterval
     private var recoveryAffordanceTask: Task<Void, Never>?
+    private var inFlightCommerceOperationCount = 0
+    private var commerceOperationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var hostDismissalRequested = false
 
     // MARK: - Computed Properties
 
@@ -594,6 +618,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         contentIsRevealed = false
         didNotifyPresentationReveal = false
         revealGate = ExperienceRevealGate()
+        hostDismissalRequested = false
         cancelRecoveryAffordances()
         #if canImport(UIKit)
         if isViewLoaded { platformResetShellChrome() }
@@ -851,14 +876,17 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func emitSystemEvent(_ name: String, properties: [String: Any]) {
+        guard !hostDismissalRequested else { return }
         systemEventSink.emit(name, properties: properties.isEmpty ? nil : properties)
     }
 
     func performDismiss(reason: CloseReason = .userDismissed) {
+        guard !hostDismissalRequested else { return }
         let generation = closeGeneration
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, !self.hostDismissalRequested else { return }
             await self.prepareForDismissal(reason: reason)
+            guard !self.hostDismissalRequested else { return }
             self.runtimeDelegate?.experienceViewControllerDidRequestDismiss(self, reason: reason)
 
             #if canImport(UIKit)
@@ -879,7 +907,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     /// removed an interactively dismissible sheet or drawer.
     @MainActor
     func performInteractiveDismissal(reason: CloseReason = .userDismissed) {
-        guard !didInvokeClose else { return }
+        guard !didInvokeClose, !hostDismissalRequested else { return }
         let generation = closeGeneration
         let dismissalDelegate = runtimeDelegate
         let close = onClose
@@ -887,7 +915,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.prepareForDismissal(reason: reason)
-            guard self.closeGeneration == generation else { return }
+            guard self.closeGeneration == generation,
+                  !self.hostDismissalRequested else { return }
             dismissalDelegate?.experienceViewControllerDidRequestDismiss(
                 self,
                 reason: reason
@@ -1537,7 +1566,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
 private extension ExperienceViewController {
     func invokeOnCloseOnce(_ reason: CloseReason, generation: UInt64) {
-        guard closeGeneration == generation, !didInvokeClose else { return }
+        guard closeGeneration == generation,
+              !didInvokeClose,
+              !hostDismissalRequested else { return }
         didInvokeClose = true
         onClose?(reason)
     }
@@ -1951,11 +1982,43 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
 // MARK: - Native Host Action Helpers
 
 extension ExperienceViewController {
+    func beginHostDismissal() {
+        hostDismissalRequested = true
+    }
+
+    func waitForInFlightCommerceBeforeHostDismissal() async {
+        beginHostDismissal()
+        guard inFlightCommerceOperationCount > 0 else { return }
+        await withCheckedContinuation { continuation in
+            commerceOperationWaiters.append(continuation)
+        }
+    }
+
+    private func beginCommerceOperation(
+        _ operation: @escaping @MainActor () async -> Void
+    ) {
+        guard !hostDismissalRequested else { return }
+        inFlightCommerceOperationCount += 1
+        Task { @MainActor [weak self] in
+            defer { self?.finishCommerceOperation() }
+            await operation()
+        }
+    }
+
+    private func finishCommerceOperation() {
+        guard inFlightCommerceOperationCount > 0 else { return }
+        inFlightCommerceOperationCount -= 1
+        guard inFlightCommerceOperationCount == 0 else { return }
+        let waiters = commerceOperationWaiters
+        commerceOperationWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
     fileprivate func handleNativePurchase(placementId: String) {
         LogDebug("ExperienceViewController: Native purchase for placement: \(placementId)")
         let transactionService = self.transactionService
 
-        Task { @MainActor in
+        beginCommerceOperation {
             guard let storeProduct = self.products.first(where: {
                 $0.placementId == placementId
             }),
@@ -1997,6 +2060,7 @@ extension ExperienceViewController {
                     ]
                 )
             } catch StoreKitError.productTermsChanged {
+                guard !self.hostDismissalRequested else { return }
                 #if canImport(UIKit)
                 let screenId = self.screenTransitionCoordinator?.activeScreenId
                     ?? self.experience.journey.screens.first?.id
@@ -2052,7 +2116,7 @@ extension ExperienceViewController {
     fileprivate func handleNativeRestore() {
         LogDebug("ExperienceViewController: Native restore purchases")
         let transactionService = self.transactionService
-        Task { @MainActor in
+        beginCommerceOperation {
             do {
                 try await transactionService.restore()
             } catch StoreKitError.restoreFailed(_) {

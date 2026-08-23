@@ -36,7 +36,7 @@ public final class NuxieSDK: @unchecked Sendable {
 
   // MARK: - Private Properties
 
-  private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation? {
+private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation? {
     guard let operation = sdkLifecycle.beginOperation() else {
       LogWarning("SDK not configured. Call setup() first.")
       return nil
@@ -804,43 +804,29 @@ public final class NuxieSDK: @unchecked Sendable {
 
   // MARK: - Experience Presentation
 
-  /// Get a view controller for embedding an experience's screens yourself.
-  /// - Parameter experienceVersionId: A version delivered by the current profile.
+  /// Dismiss the currently presented Nuxie experience, if any.
   @MainActor
-  public func experienceViewController(
-    for experienceVersionId: String,
-    colorSchemeMode: ExperienceColorSchemeMode = .light
-  ) async throws -> ExperienceViewController {
-    guard let operation = runningOperation() else {
-      throw NuxieError.notConfigured
-    }
+  public func dismiss() async {
+    guard let operation = runningOperation() else { return }
     defer { operation.finish() }
-
-    let experienceService = operation.graph.core.experiences
-    return try await experienceService.viewController(
-      for: experienceVersionId,
-      colorSchemeMode: colorSchemeMode
-    )
+    await operation.graph.core.experiencePresentation
+      .dismissCurrentExperienceFromHost()
   }
 
-  /// Present a profile-delivered experience version in a dedicated window.
-  /// - Parameter experienceVersionId: A version delivered by the current profile.
+  /// Present a profile-delivered experience version for the E2E harness.
+  /// - Parameter versionId: The profile-delivered experience version to present.
+  @_spi(Testing)
   @MainActor
-  public func showExperience(
-    _ experienceVersionId: String,
-    colorSchemeMode: ExperienceColorSchemeMode = .light
-  ) async throws {
+  public func presentExperienceVersionForTesting(_ versionId: String) async throws {
     guard let operation = runningOperation() else {
       throw NuxieError.notConfigured
     }
     defer { operation.finish() }
-
-    let experiencePresentationService = operation.graph.core.experiencePresentation
-    try await experiencePresentationService.presentExperience(
-      experienceVersionId,
+    _ = try await operation.graph.core.experiencePresentation.presentExperience(
+      versionId,
       from: nil,
       runtimeDelegate: nil,
-      colorSchemeMode: colorSchemeMode
+      colorSchemeMode: .system
     )
   }
 

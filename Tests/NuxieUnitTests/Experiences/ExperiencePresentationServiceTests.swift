@@ -12,9 +12,14 @@ private final class ExperiencePresentationLifecycleRecorder {
     private(set) var cleanupCompleted = false
     private(set) var shellTraceTokens: [ExperiencePresentationTraceToken?] = []
     private(set) var completedTraceTokens: [ExperiencePresentationTraceToken?] = []
+    private(set) var hostDismissalStarted = false
+    private(set) var hostDismissalFinished = false
+    private(set) var ordinaryDismissalReasons: [CloseReason] = []
     var activePresentationTraceToken: ExperiencePresentationTraceToken?
     var presentationTraceContext: ExperiencePresentationTraceContext?
     var isShellPresented: () -> Bool = { false }
+    var hostDismissalWillHandler: (@MainActor () async -> Void)?
+    var hostDismissalHandler: (@MainActor () async -> Void)?
 }
 
 extension ExperiencePresentationLifecycleRecorder:
@@ -32,7 +37,23 @@ extension ExperiencePresentationLifecycleRecorder: ExperienceRuntimeDelegate {
     func experienceViewControllerDidRequestDismiss(
         _ controller: ExperienceViewController,
         reason: CloseReason
-    ) {}
+    ) {
+        ordinaryDismissalReasons.append(reason)
+    }
+
+    func experienceViewControllerDidRequestHostDismiss(
+        _ controller: ExperienceViewController
+    ) async {
+        hostDismissalStarted = true
+        await hostDismissalHandler?()
+        hostDismissalFinished = true
+    }
+
+    func experienceViewControllerWillRequestHostDismiss(
+        _ controller: ExperienceViewController
+    ) async {
+        await hostDismissalWillHandler?()
+    }
 }
 
 extension ExperiencePresentationLifecycleRecorder: ExperiencePresentationScopedTraceDelegate {
@@ -793,6 +814,473 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
         }
         
         describe("dismissCurrentExperience") {
+            it("waits for an owned in-flight window presentation before host cleanup") { @MainActor in
+                let flowId = "host-dismiss-during-window-presentation"
+                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                mockWindowProvider.onWindowLifecycleEvent = { event in
+                    if event == "window-present" {
+                        mockWindowProvider.createdWindows.first?.presentDelay = 0.05
+                    }
+                }
+
+                let presentation = Task { @MainActor in
+                    PollingBox(try await service.presentExperience(
+                        flowId,
+                        from: nil,
+                        runtimeDelegate: recorder
+                    ))
+                }
+                await polling(expect {
+                    mockWindowProvider.createdWindows.first?.presentCalled == true
+                }).value.toEventually(beTrue(), timeout: .seconds(1))
+
+                await service.dismissCurrentExperienceFromHost()
+
+                do {
+                    _ = try await presentation.value.value
+                    fail("the in-flight presentation should observe host cancellation")
+                } catch is CancellationError {
+                    // Expected.
+                } catch {
+                    fail("expected CancellationError, received \(error)")
+                }
+                let window = mockWindowProvider.createdWindows.first
+                expect(recorder.hostDismissalFinished).to(beTrue())
+                expect(window?.dismissCalled).to(beTrue())
+                expect(window?.destroyCalled).to(beTrue())
+                expect(window?.presentedViewController).to(beNil())
+                expect(service.isExperiencePresented).to(beFalse())
+            }
+
+            it("does not cancel controller acquisition when host dismissal finds no current presentation") { @MainActor in
+                let flowId = "host-dismiss-during-controller-acquisition"
+                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                let acquisitionGate = ExperiencePresentationTestGate()
+                let suspendedExperiences = SuspendedViewControllerExperienceService(
+                    base: mockExperienceService,
+                    gate: acquisitionGate
+                )
+                service = ExperiencePresentationService(
+                    windowProvider: mockWindowProvider,
+                    experiences: suspendedExperiences,
+                    eventLog: mockEventLog,
+                    triggerBroker: TriggerBroker(),
+                    dateProvider: MockDateProvider()
+                )
+
+                let presentation = Task { @MainActor in
+                    PollingBox(try await service.presentExperience(
+                        flowId,
+                        from: nil,
+                        runtimeDelegate: nil
+                    ))
+                }
+                await acquisitionGate.waitUntilSuspended()
+                expect(service.isExperiencePresented).to(beFalse())
+
+                await service.dismissCurrentExperienceFromHost()
+                acquisitionGate.resume()
+
+                do {
+                    let presentedController = try await presentation.value.value
+                    expect(presentedController).to(beIdenticalTo(mockVC))
+                } catch {
+                    fail("Host dismissal without a current presentation cancelled acquisition: \(error)")
+                }
+                expect(service.isExperiencePresented).to(beTrue())
+                expect(mockWindowProvider.createdWindows).to(haveCount(1))
+                expect(mockWindowProvider.createdWindows.first?.presentCalled).to(beTrue())
+            }
+
+            it("does not wait for an unrelated stale controller acquisition") { @MainActor in
+                let staleFlowId = "stale-controller-acquisition"
+                let currentFlowId = "current-during-stale-acquisition"
+                mockExperienceService.mockViewControllers[staleFlowId] =
+                    MockExperienceViewController(mockExperienceVersionId: staleFlowId)
+                let currentController = MockExperienceViewController(
+                    mockExperienceVersionId: currentFlowId
+                )
+                mockExperienceService.mockViewControllers[currentFlowId] = currentController
+                let acquisitionGate = ExperiencePresentationTestGate()
+                let suspendedExperiences = SuspendedViewControllerExperienceService(
+                    base: mockExperienceService,
+                    gate: acquisitionGate,
+                    suspendedVersionID: staleFlowId
+                )
+                service = ExperiencePresentationService(
+                    windowProvider: mockWindowProvider,
+                    experiences: suspendedExperiences,
+                    eventLog: mockEventLog,
+                    triggerBroker: TriggerBroker(),
+                    dateProvider: MockDateProvider()
+                )
+
+                let stalePresentation = Task { @MainActor in
+                    PollingBox(try await service.presentExperience(
+                        staleFlowId,
+                        from: nil,
+                        runtimeDelegate: nil
+                    ))
+                }
+                await acquisitionGate.waitUntilSuspended()
+
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                _ = try! await service.presentExperience(
+                    currentFlowId,
+                    from: nil,
+                    runtimeDelegate: recorder
+                )
+                let hostDismissal = Task { @MainActor in
+                    await service.dismissCurrentExperienceFromHost()
+                }
+
+                for _ in 0..<100 where !recorder.hostDismissalFinished {
+                    try? await Task.sleep(nanoseconds: 1_000_000)
+                }
+                let finishedBeforeStaleAcquisition = recorder.hostDismissalFinished
+
+                acquisitionGate.resume()
+                do {
+                    _ = try await stalePresentation.value.value
+                    fail("the superseded acquisition should be cancelled")
+                } catch is CancellationError {
+                    // Expected.
+                } catch {
+                    fail("expected CancellationError, received \(error)")
+                }
+                await hostDismissal.value
+
+                expect(finishedBeforeStaleAcquisition).to(beTrue())
+                expect(mockWindowProvider.createdWindows.first?.dismissCalled).to(beTrue())
+                expect(service.isExperiencePresented).to(beFalse())
+            }
+
+            it("treats host dismissal as a no-op when no experience is presented") { @MainActor in
+                expect(service.isExperiencePresented).to(beFalse())
+
+                await service.dismissCurrentExperienceFromHost()
+
+                expect(service.isExperiencePresented).to(beFalse())
+                expect(mockWindowProvider.createdWindows).to(beEmpty())
+            }
+
+            it("waits for an in-flight purchase before host dismissal") { @MainActor in
+                let testStore = SuspendedExperienceTestStore()
+                let transactionService = TransactionService(
+                    productService: ProductService(),
+                    transactionObserver: MockTransactionObserver(),
+                    pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+                    dateProvider: MockDateProvider(),
+                    settings: NuxieRuntimeSettings(
+                        configuration: NuxieConfiguration(apiKey: "host-dismiss-commerce")
+                    ),
+                    eventSink: DiscardingSystemEventSink(),
+                    testStore: testStore
+                )
+                var product = StoreProduct(
+                    productId: "product-1",
+                    placementId: "placement-1",
+                    name: "Test product",
+                    price: "$1.00",
+                    period: nil
+                )
+                product.isTestStoreProduct = true
+                let flowId = "host-dismiss-purchase"
+                let mockVC = MockExperienceViewController(
+                    mockExperienceVersionId: flowId,
+                    products: [product],
+                    transactionService: transactionService
+                )
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                let hostReservationEntered = ExperiencePresentationTestSignal()
+                let hostReservationGate = ExperiencePresentationTestSignal()
+                recorder.hostDismissalWillHandler = {
+                    hostReservationEntered.signal()
+                    await hostReservationGate.wait()
+                }
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                try! await service.presentExperience(
+                    flowId,
+                    from: nil,
+                    runtimeDelegate: recorder
+                )
+
+                mockVC.performPurchase(placementId: product.placementId)
+                await testStore.waitUntilPurchaseStarts()
+                let dismissal = Task { @MainActor in
+                    await service.dismissCurrentExperienceFromHost()
+                }
+                await hostReservationEntered.wait()
+
+                expect(service.isExperiencePresented).to(beTrue())
+                expect(mockWindowProvider.createdWindows.first?.dismissCalled).to(beFalse())
+
+                mockVC.performDismiss(reason: .userDismissed)
+                await Task.yield()
+                expect(recorder.ordinaryDismissalReasons).to(beEmpty())
+
+                hostReservationGate.signal()
+                await testStore.resolvePurchase(.cancelled)
+                await dismissal.value
+
+                expect(service.isExperiencePresented).to(beFalse())
+                expect(mockWindowProvider.createdWindows.first?.dismissCalled).to(beTrue())
+                expect(recorder.hostDismissalFinished).to(beTrue())
+                expect(recorder.ordinaryDismissalReasons).to(beEmpty())
+            }
+
+            it("waits for an in-flight restore before host dismissal") { @MainActor in
+                let testStore = SuspendedExperienceTestStore()
+                let transactionService = TransactionService(
+                    productService: ProductService(),
+                    transactionObserver: MockTransactionObserver(),
+                    pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+                    dateProvider: MockDateProvider(),
+                    settings: NuxieRuntimeSettings(
+                        configuration: NuxieConfiguration(apiKey: "host-dismiss-restore")
+                    ),
+                    eventSink: DiscardingSystemEventSink(),
+                    testStore: testStore
+                )
+                let flowId = "host-dismiss-restore"
+                let mockVC = MockExperienceViewController(
+                    mockExperienceVersionId: flowId,
+                    transactionService: transactionService
+                )
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                try! await service.presentExperience(
+                    flowId,
+                    from: nil,
+                    runtimeDelegate: recorder
+                )
+
+                mockVC.performRestore()
+                await testStore.waitUntilRestoreStarts()
+                let dismissal = Task { @MainActor in
+                    await service.dismissCurrentExperienceFromHost()
+                }
+                await Task.yield()
+
+                expect(service.isExperiencePresented).to(beTrue())
+                expect(mockWindowProvider.createdWindows.first?.dismissCalled).to(beFalse())
+
+                await testStore.resolveRestore()
+                await dismissal.value
+
+                expect(service.isExperiencePresented).to(beFalse())
+                expect(mockWindowProvider.createdWindows.first?.dismissCalled).to(beTrue())
+                expect(recorder.hostDismissalFinished).to(beTrue())
+            }
+
+            it("serializes replacement behind commerce-gated host dismissal") { @MainActor in
+                let testStore = SuspendedExperienceTestStore()
+                let transactionService = TransactionService(
+                    productService: ProductService(),
+                    transactionObserver: MockTransactionObserver(),
+                    pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+                    dateProvider: MockDateProvider(),
+                    settings: NuxieRuntimeSettings(
+                        configuration: NuxieConfiguration(apiKey: "host-dismiss-replacement")
+                    ),
+                    eventSink: DiscardingSystemEventSink(),
+                    testStore: testStore
+                )
+                var product = StoreProduct(
+                    productId: "product-1",
+                    placementId: "placement-1",
+                    name: "Test product",
+                    price: "$1.00",
+                    period: nil
+                )
+                product.isTestStoreProduct = true
+                let currentFlowId = "commerce-current"
+                let currentVC = MockExperienceViewController(
+                    mockExperienceVersionId: currentFlowId,
+                    products: [product],
+                    transactionService: transactionService
+                )
+                let replacementFlowId = "commerce-replacement"
+                let replacementVC = MockExperienceViewController(
+                    mockExperienceVersionId: replacementFlowId
+                )
+                mockExperienceService.mockViewControllers[currentFlowId] = currentVC
+                mockExperienceService.mockViewControllers[replacementFlowId] = replacementVC
+
+                var lifecycle: [String] = []
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                let terminalizationGate = ExperiencePresentationTestSignal()
+                recorder.hostDismissalHandler = {
+                    lifecycle.append("host-terminalization-started")
+                    await terminalizationGate.wait()
+                    lifecycle.append("host-terminalized")
+                }
+                var replacementSawHostTerminalization = false
+                replacementVC.prepareForPresentationHandler = {
+                    replacementSawHostTerminalization = recorder.hostDismissalFinished
+                    lifecycle.append("replacement-prepare")
+                }
+                try! await service.presentExperience(
+                    currentFlowId,
+                    from: nil,
+                    runtimeDelegate: recorder
+                )
+                let currentWindow = mockWindowProvider.createdWindows[0]
+
+                currentVC.performPurchase(placementId: product.placementId)
+                await testStore.waitUntilPurchaseStarts()
+                let dismissal = Task { @MainActor in
+                    await service.dismissCurrentExperienceFromHost()
+                }
+                await Task.yield()
+
+                let replacementStarted = ExperiencePresentationTestSignal()
+                let replacement = Task { @MainActor in
+                    replacementStarted.signal()
+                    return PollingBox(try await service.presentExperience(
+                        replacementFlowId,
+                        from: nil,
+                        runtimeDelegate: nil
+                    ))
+                }
+                await replacementStarted.wait()
+                await Task.yield()
+                let staleDismissal = Task { @MainActor in
+                    await service.dismissCurrentExperience(reason: .userDismissed)
+                }
+                await Task.yield()
+
+                expect(service.currentExperienceViewController).to(beIdenticalTo(currentVC))
+                expect(currentWindow.dismissCalled).to(beFalse())
+                expect(currentWindow.destroyCalled).to(beFalse())
+                expect(currentVC.shutdownRuntimeCallCount).to(equal(0))
+                expect(replacementVC.prepareForPresentationCallCount).to(equal(0))
+                expect(mockWindowProvider.createdWindows).to(haveCount(1))
+
+                await testStore.resolvePurchase(.cancelled)
+                await polling(expect { recorder.hostDismissalStarted }).value
+                    .toEventually(beTrue(), timeout: .seconds(1))
+
+                expect(recorder.hostDismissalFinished).to(beFalse())
+                expect(service.currentExperienceViewController).to(beIdenticalTo(currentVC))
+                expect(currentWindow.dismissCalled).to(beFalse())
+                expect(currentWindow.destroyCalled).to(beFalse())
+                expect(currentVC.shutdownRuntimeCallCount).to(equal(0))
+                expect(replacementVC.prepareForPresentationCallCount).to(equal(0))
+                expect(mockWindowProvider.createdWindows).to(haveCount(1))
+
+                terminalizationGate.signal()
+                await dismissal.value
+                let presentedReplacement = try! await replacement.value.value
+                await staleDismissal.value
+
+                expect(lifecycle).to(equal([
+                    "host-terminalization-started",
+                    "host-terminalized",
+                    "replacement-prepare",
+                ]))
+                expect(recorder.hostDismissalFinished).to(beTrue())
+                expect(replacementSawHostTerminalization).to(beTrue())
+                expect(currentWindow.dismissCalled).to(beTrue())
+                expect(currentWindow.destroyCalled).to(beTrue())
+                expect(currentVC.shutdownRuntimeCallCount).to(equal(1))
+                expect(presentedReplacement).to(beIdenticalTo(replacementVC))
+                expect(service.currentExperienceViewController).to(beIdenticalTo(replacementVC))
+                expect(mockWindowProvider.createdWindows).to(haveCount(2))
+                expect(mockWindowProvider.createdWindows[1].presentedViewController)
+                    .to(beIdenticalTo(replacementVC))
+            }
+
+            it("lets host dismissal own cleanup that a replacement already started") { @MainActor in
+                let testStore = SuspendedExperienceTestStore()
+                let transactionService = TransactionService(
+                    productService: ProductService(),
+                    transactionObserver: MockTransactionObserver(),
+                    pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+                    dateProvider: MockDateProvider(),
+                    settings: NuxieRuntimeSettings(
+                        configuration: NuxieConfiguration(apiKey: "host-dismiss-started-cleanup")
+                    ),
+                    eventSink: DiscardingSystemEventSink(),
+                    testStore: testStore
+                )
+                var product = StoreProduct(
+                    productId: "product-1",
+                    placementId: "placement-1",
+                    name: "Test product",
+                    price: "$1.00",
+                    period: nil
+                )
+                product.isTestStoreProduct = true
+
+                let currentFlowId = "started-cleanup-current"
+                let currentVC = MockExperienceViewController(
+                    mockExperienceVersionId: currentFlowId,
+                    products: [product],
+                    transactionService: transactionService
+                )
+                let cleanupGate = ExperiencePresentationTestGate()
+                currentVC.prepareForDismissalHandler = {
+                    await cleanupGate.wait()
+                }
+                let replacementFlowId = "started-cleanup-replacement"
+                let replacementVC = MockExperienceViewController(
+                    mockExperienceVersionId: replacementFlowId
+                )
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                mockExperienceService.mockViewControllers[currentFlowId] = currentVC
+                mockExperienceService.mockViewControllers[replacementFlowId] = replacementVC
+
+                try! await service.presentExperience(
+                    currentFlowId,
+                    from: nil,
+                    runtimeDelegate: recorder
+                )
+                let currentWindow = mockWindowProvider.createdWindows[0]
+                currentVC.performPurchase(placementId: product.placementId)
+                await testStore.waitUntilPurchaseStarts()
+
+                let replacement = Task { @MainActor in
+                    PollingBox(try await service.presentExperience(
+                        replacementFlowId,
+                        from: nil,
+                        runtimeDelegate: nil
+                    ))
+                }
+                await cleanupGate.waitUntilSuspended()
+
+                let hostDismissal = Task { @MainActor in
+                    await service.dismissCurrentExperienceFromHost()
+                }
+                await Task.yield()
+                cleanupGate.resume()
+
+                do {
+                    _ = try await replacement.value.value
+                    fail("replacement should be cancelled once host dismissal owns the presentation")
+                } catch is CancellationError {
+                    // Expected.
+                } catch {
+                    fail("expected CancellationError, received \(error)")
+                }
+
+                expect(service.currentExperienceViewController).to(beIdenticalTo(currentVC))
+                expect(currentWindow.dismissCalled).to(beFalse())
+                expect(currentWindow.destroyCalled).to(beFalse())
+                expect(replacementVC.prepareForPresentationCallCount).to(equal(0))
+
+                await testStore.resolvePurchase(.cancelled)
+                await hostDismissal.value
+
+                expect(recorder.hostDismissalFinished).to(beTrue())
+                expect(service.isExperiencePresented).to(beFalse())
+                expect(currentWindow.dismissCalled).to(beTrue())
+                expect(currentWindow.destroyCalled).to(beTrue())
+            }
+
             it("should dismiss presented flow") { @MainActor in
                 // Present a flow first
                 let flowId = "test-dismiss"
@@ -960,7 +1448,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 let window = mockWindowProvider.createdWindows.first
                 
                 // Simulate dismissal
-                mockVC.onClose?(.purchaseCompleted)
+                mockVC.onClose?(.userDismissed)
                 
                 // Wait for cleanup
                 await polling(expect(service.isExperiencePresented)).value
@@ -1044,5 +1532,180 @@ private final class ExperiencePresentationTestGate {
         let continuation = continuation
         self.continuation = nil
         continuation?.resume()
+    }
+}
+
+@MainActor
+private final class ExperiencePresentationTestSignal {
+    private var wasSignaled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func signal() {
+        guard !wasSignaled else { return }
+        wasSignaled = true
+        let waiters = waiters
+        self.waiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        guard !wasSignaled else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+}
+
+private final class SuspendedViewControllerExperienceService:
+    ExperienceServiceProtocol,
+    @unchecked Sendable {
+    private let base: MockExperienceService
+    private let gate: ExperiencePresentationTestGate
+    private let suspendedVersionID: String?
+
+    init(
+        base: MockExperienceService,
+        gate: ExperiencePresentationTestGate,
+        suspendedVersionID: String? = nil
+    ) {
+        self.base = base
+        self.gate = gate
+        self.suspendedVersionID = suspendedVersionID
+    }
+
+    func fetchExperience(id: String) async throws -> Experience {
+        try await base.fetchExperience(id: id)
+    }
+
+    func fetchExperience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience {
+        try await base.fetchExperience(
+            experienceId: experienceId,
+            versionId: versionId
+        )
+    }
+
+    @MainActor
+    func viewController(for versionId: String) async throws -> ExperienceViewController {
+        try await base.viewController(for: versionId)
+    }
+
+    @MainActor
+    func viewController(
+        for versionId: String,
+        colorSchemeMode: ExperienceColorSchemeMode
+    ) async throws -> ExperienceViewController {
+        try await base.viewController(
+            for: versionId,
+            colorSchemeMode: colorSchemeMode
+        )
+    }
+
+    @MainActor
+    func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?
+    ) async throws -> ExperienceViewController {
+        try await base.viewController(
+            for: versionId,
+            runtimeDelegate: runtimeDelegate
+        )
+    }
+
+    @MainActor
+    func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode
+    ) async throws -> ExperienceViewController {
+        try await base.viewController(
+            for: versionId,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode
+        )
+    }
+
+    @MainActor
+    func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        presentationTraceContext: ExperiencePresentationTraceContext?,
+        initialScreenID: String?
+    ) async throws -> ExperienceViewController {
+        if suspendedVersionID == nil || suspendedVersionID == versionId {
+            await gate.wait()
+        }
+        return try await base.viewController(
+            for: versionId,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            presentationTraceContext: presentationTraceContext,
+            initialScreenID: initialScreenID
+        )
+    }
+
+    func clearCache() async {
+        await base.clearCache()
+    }
+}
+
+private actor SuspendedExperienceTestStore: NuxieTestStorePurchasing {
+    private var purchaseContinuation:
+        CheckedContinuation<NuxieTestStorePurchaseResponse, Never>?
+    private var purchaseStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var restoreContinuation:
+        CheckedContinuation<NuxieTestStoreRestoreResponse, Never>?
+    private var restoreStartWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func purchase(
+        product _: StoreProduct,
+        distinctId _: String
+    ) async -> NuxieTestStorePurchaseResponse {
+        await withCheckedContinuation { continuation in
+            purchaseContinuation = continuation
+            let waiters = purchaseStartWaiters
+            purchaseStartWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    func restorePurchases(distinctId _: String) async -> NuxieTestStoreRestoreResponse {
+        await withCheckedContinuation { continuation in
+            restoreContinuation = continuation
+            let waiters = restoreStartWaiters
+            restoreStartWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    func waitUntilPurchaseStarts() async {
+        guard purchaseContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            purchaseStartWaiters.append(continuation)
+        }
+    }
+
+    func resolvePurchase(_ result: NativePurchaseResult) {
+        let continuation = purchaseContinuation
+        purchaseContinuation = nil
+        continuation?.resume(returning: NuxieTestStorePurchaseResponse(result: result))
+    }
+
+    func waitUntilRestoreStarts() async {
+        guard restoreContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            restoreStartWaiters.append(continuation)
+        }
+    }
+
+    func resolveRestore() {
+        let continuation = restoreContinuation
+        restoreContinuation = nil
+        continuation?.resume(
+            returning: NuxieTestStoreRestoreResponse(result: .noPurchases)
+        )
     }
 }

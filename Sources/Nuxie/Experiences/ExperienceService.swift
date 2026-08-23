@@ -369,13 +369,13 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
 
     @MainActor
     func viewController(for versionId: String) async throws -> ExperienceViewController {
-        try await viewController(for: versionId, colorSchemeMode: .light)
+        try await viewController(for: versionId, colorSchemeMode: .system)
     }
 
     @MainActor
     func viewController(
         for versionId: String,
-        colorSchemeMode: ExperienceColorSchemeMode = .light
+        colorSchemeMode: ExperienceColorSchemeMode = .system
     ) async throws -> ExperienceViewController {
         try await viewController(
             for: versionId,
@@ -394,7 +394,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         try await viewController(
             for: versionId,
             runtimeDelegate: runtimeDelegate,
-            colorSchemeMode: .light
+            colorSchemeMode: .system
         )
     }
 
@@ -402,7 +402,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     func viewController(
         for versionId: String,
         runtimeDelegate: ExperienceRuntimeDelegate?,
-        colorSchemeMode: ExperienceColorSchemeMode = .light
+        colorSchemeMode: ExperienceColorSchemeMode = .system
     ) async throws -> ExperienceViewController {
         try await viewController(
             for: versionId,

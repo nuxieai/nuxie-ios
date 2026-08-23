@@ -1178,6 +1178,31 @@ final class Journey: Sendable {
         await stateOwner.replace(snapshot, ifRevisionEquals: revision)
     }
 
+    func reserveHostDismissal() async -> Bool {
+        await stateOwner.reserveHostDismissal()
+    }
+
+    func hasHostDismissalReservation() async -> Bool {
+        await stateOwner.hasHostDismissalReservation
+    }
+
+    @discardableResult
+    func replaceForTerminalTransition(
+        _ snapshot: JourneySnapshot,
+        ifRevisionEquals revision: UInt64,
+        authority: JourneyTerminalTransitionAuthority
+    ) async -> Bool {
+        await stateOwner.replaceForTerminalTransition(
+            snapshot,
+            ifRevisionEquals: revision,
+            authority: authority
+        )
+    }
+
+    func releaseHostDismissalReservation() async {
+        await stateOwner.releaseHostDismissalReservation()
+    }
+
     @discardableResult
     func update<T: Sendable>(
         _ body: @Sendable (inout JourneySnapshot) -> T
@@ -1232,9 +1257,15 @@ struct JourneyVersionedSnapshot: Sendable {
     let revision: UInt64
 }
 
+enum JourneyTerminalTransitionAuthority: Equatable, Sendable {
+    case ordinary
+    case host
+}
+
 private actor JourneyStateOwner {
     private var value: JourneySnapshot
     private var revision: UInt64 = 0
+    private var hostDismissalReserved = false
 
     init(_ value: JourneySnapshot) {
         self.value = value
@@ -1256,6 +1287,34 @@ private actor JourneyStateOwner {
         value = snapshot
         revision &+= 1
         return true
+    }
+
+    var hasHostDismissalReservation: Bool {
+        hostDismissalReserved
+    }
+
+    func reserveHostDismissal() -> Bool {
+        guard value.status.isLive else { return false }
+        hostDismissalReserved = true
+        return true
+    }
+
+    func replaceForTerminalTransition(
+        _ snapshot: JourneySnapshot,
+        ifRevisionEquals expectedRevision: UInt64,
+        authority: JourneyTerminalTransitionAuthority
+    ) -> Bool {
+        guard revision == expectedRevision else { return false }
+        if hostDismissalReserved, authority != .host {
+            return false
+        }
+        value = snapshot
+        revision &+= 1
+        return true
+    }
+
+    func releaseHostDismissalReservation() {
+        hostDismissalReserved = false
     }
 
     func update<T: Sendable>(

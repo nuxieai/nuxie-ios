@@ -1,13 +1,3 @@
-c:@M@Nuxie@objc(cs)ExperienceViewController	TypeDecl	ExperienceViewController
-c:@M@Nuxie@objc(cs)ExperienceViewController(im)preferredInterfaceOrientationForPresentation	Accessor	Get()
-c:@M@Nuxie@objc(cs)ExperienceViewController(im)supportedInterfaceOrientations	Accessor	Get()
-c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewDidLayoutSubviews	Function	viewDidLayoutSubviews()
-c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewDidLoad	Function	viewDidLoad()
-c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewSafeAreaInsetsDidChange	Function	viewSafeAreaInsetsDidChange()
-c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewWillAppear:	Function	viewWillAppear(_:)
-c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewWillDisappear:	Function	viewWillDisappear(_:)
-c:@M@Nuxie@objc(cs)ExperienceViewController(py)preferredInterfaceOrientationForPresentation	Var	preferredInterfaceOrientationForPresentation
-c:@M@Nuxie@objc(cs)ExperienceViewController(py)supportedInterfaceOrientations	Var	supportedInterfaceOrientations
 s:5Nuxie0A13ConfigurationC	TypeDecl	NuxieConfiguration
 s:5Nuxie0A13ConfigurationC10beforeSendAA0A5EventVSgAFYbcSgvp	Var	beforeSend
 s:5Nuxie0A13ConfigurationC10retryCountSivp	Var	retryCount
@@ -38,7 +28,6 @@ s:5Nuxie0A13ConfigurationC8logLevelAA03LogD0Ovp	Var	logLevel
 s:5Nuxie0A16PurchaseDelegateP	TypeDecl	NuxiePurchaseDelegate
 s:5Nuxie0A16PurchaseDelegateP16restorePurchasesAA13RestoreResultOyYaF	Function	restorePurchases()
 s:5Nuxie0A16PurchaseDelegateP8purchase7productAA0B6ResultOAA12StoreProductV_tYaF	Function	purchase(product:)
-s:5Nuxie0A22PlatformViewControllera	TypeAlias	NuxiePlatformViewController
 s:5Nuxie0A3SDKC	TypeDecl	NuxieSDK
 s:5Nuxie0A3SDKC10hasFeature_15requiredBalance8entityId6policyAA0D6AccessVSS_SdSSSgAC0D11CheckPolicyOtYaKF	Function	hasFeature(_:requiredBalance:entityId:policy:)
 s:5Nuxie0A3SDKC10useFeature_6amount8entityId8metadataySS_SdSSSgSDySSypGSgtF	Function	useFeature(_:amount:entityId:metadata:)
@@ -48,7 +37,6 @@ s:5Nuxie0A3SDKC12isIdentifiedSbvp	Var	isIdentified
 s:5Nuxie0A3SDKC13getDistinctIdSSyF	Function	getDistinctId()
 s:5Nuxie0A3SDKC14getAnonymousIdSSyF	Function	getAnonymousId()
 s:5Nuxie0A3SDKC14refreshProfileyyYaKF	Function	refreshProfile()
-s:5Nuxie0A3SDKC14showExperience_15colorSchemeModeySS_AA0d5ColorfG0OtYaKF	Function	showExperience(_:colorSchemeMode:)
 s:5Nuxie0A3SDKC14triggerAndWait_10properties14userProperties0gH7SetOnce8progressAA13TriggerResultOSS_SDySSypGSgA2LyAA0L6UpdateOYbcSgtYaF	Function	triggerAndWait(_:properties:userProperties:userPropertiesSetOnce:progress:)
 s:5Nuxie0A3SDKC15pauseEventQueueyyYaF	Function	pauseEventQueue()
 s:5Nuxie0A3SDKC16resumeEventQueueyyYaF	Function	resumeEventQueue()
@@ -61,10 +49,10 @@ s:5Nuxie0A3SDKC19getQueuedEventCountSiyYaF	Function	getQueuedEventCount()
 s:5Nuxie0A3SDKC19setLocaleIdentifieryySSSgYaKF	Function	setLocaleIdentifier(_:)
 s:5Nuxie0A3SDKC19setPurchaseDelegateyyAA0adE0_pSgKF	Function	setPurchaseDelegate(_:)
 s:5Nuxie0A3SDKC23setPurchaseHandlingModeyyAA0A13ConfigurationC0deF0OKF	Function	setPurchaseHandlingMode(_:)
-s:5Nuxie0A3SDKC24experienceViewController3for15colorSchemeModeAA010ExperiencedE0CSS_AA0j5ColorhI0OtYaKF	Function	experienceViewController(for:colorSchemeMode:)
 s:5Nuxie0A3SDKC5reset15keepAnonymousIdySb_tF	Function	reset(keepAnonymousId:)
 s:5Nuxie0A3SDKC5setup4withyAA0A13ConfigurationC_tKF	Function	setup(with:)
 s:5Nuxie0A3SDKC6sharedACvpZ	Var	shared
+s:5Nuxie0A3SDKC7dismissyyYaF	Function	dismiss()
 s:5Nuxie0A3SDKC7isSetupSbvg	Accessor	Get()
 s:5Nuxie0A3SDKC7isSetupSbvp	Var	isSetup
 s:5Nuxie0A3SDKC7trigger_10properties14userProperties0eF7SetOnce7handlerySS_SDySSypGSgA2JyAA13TriggerUpdateOYbcSgtF	Function	trigger(_:properties:userProperties:userPropertiesSetOnce:handler:)
@@ -100,13 +88,6 @@ s:5Nuxie10JourneyRefV12experienceIdSSvp	Var	experienceId
 s:5Nuxie10JourneyRefV17experienceVersionSSSgvp	Var	experienceVersion
 s:5Nuxie10JourneyRefV9journeyId010experienceE00F7VersionACSS_S2SSgtcfc	Constructor	init(journeyId:experienceId:experienceVersion:)
 s:5Nuxie10JourneyRefV9journeyIdSSvp	Var	journeyId
-s:5Nuxie11CloseReasonO	TypeDecl	CloseReason
-s:5Nuxie11CloseReasonO13userDismissedyA2CmF	Var	userDismissed
-s:5Nuxie11CloseReasonO17purchaseCompletedyA2CmF	Var	purchaseCompleted
-s:5Nuxie11CloseReasonO2eeoiySbAC_ACtFZ	Function	==(_:_:)
-s:5Nuxie11CloseReasonO5erroryACs5Error_pcACmF	Var	error
-s:5Nuxie11CloseReasonO7goalMetyA2CmF	Var	goalMet
-s:5Nuxie11CloseReasonO7timeoutyA2CmF	Var	timeout
 s:5Nuxie11EnvironmentO	TypeDecl	Environment
 s:5Nuxie11EnvironmentO10productionyA2CmF	Var	production
 s:5Nuxie11EnvironmentO11developmentyA2CmF	Var	development
@@ -286,11 +267,6 @@ s:5Nuxie18SubscriptionPeriodV4UnitO5monthyA2EmF	Var	month
 s:5Nuxie18SubscriptionPeriodV4unitAC4UnitOvp	Var	unit
 s:5Nuxie18SubscriptionPeriodV5value4unitACSi_AC4UnitOtcfc	Constructor	init(value:unit:)
 s:5Nuxie18SubscriptionPeriodV5valueSivp	Var	value
-s:5Nuxie24ExperienceViewControllerC15colorSchemeModeAA0b5ColorfG0Ovp	Var	colorSchemeMode
-s:5Nuxie24ExperienceViewControllerC7onCloseyAA0F6ReasonOcSgvp	Var	onClose
-s:5Nuxie25ExperienceColorSchemeModeO	TypeDecl	ExperienceColorSchemeMode
-s:5Nuxie25ExperienceColorSchemeModeO4darkyA2CmF	Var	dark
-s:5Nuxie25ExperienceColorSchemeModeO5lightyA2CmF	Var	light
 s:5Nuxie8LogLevelO	TypeDecl	LogLevel
 s:5Nuxie8LogLevelO1loiySbAC_ACtFZ	Function	<(_:_:)
 s:5Nuxie8LogLevelO4infoyA2CmF	Var	info

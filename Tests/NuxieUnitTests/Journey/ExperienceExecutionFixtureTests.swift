@@ -408,6 +408,14 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 expect(expected["emitsExit"] as? Bool).to(beFalse())
                 expect(expected["recordsCompletion"] as? Bool).to(beFalse())
                 expect(expected["requestsEffects"] as? Bool).to(beFalse())
+                let hostDismissal = try Self.required(
+                    expected["hostDismissal"] as? [String: Any],
+                    "hostDismissal"
+                )
+                expect(hostDismissal["emitsExit"] as? Bool).to(beTrue())
+                expect(hostDismissal["recordsCompletion"] as? Bool).to(beTrue())
+                expect(hostDismissal["reason"] as? String).to(equal("dismissed"))
+                expect(hostDismissal["dismissedBy"] as? String).to(equal("host"))
             }
 
             it("matches the cross-plane time-window vectors") {

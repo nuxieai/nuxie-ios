@@ -76,9 +76,6 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
 
     // Experiences
     requireSendable(StoreProduct.self)
-    requireSendable(ExperienceColorSchemeMode.self)
-    requireSendable(CloseReason.self)
-
     // Journeys
     requireSendable(Journey.self)
     requireSendable(JourneyStatus.self)
@@ -152,9 +149,8 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     sdk.useFeature("metered", amount: 1)
     _ = try await sdk.useFeatureAndWait("metered")
 
-    // Experiences from UI code.
-    _ = try await sdk.experienceViewController(for: "exp", colorSchemeMode: .dark)
-    try await sdk.showExperience("exp")
+    // Engine-owned experience presentation can be dismissed from UI code.
+    await sdk.dismiss()
 
     // Event queue controls.
     _ = await sdk.flushEvents()
@@ -175,6 +171,7 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
 
     Task.detached {
       _ = result
+      await NuxieSDK.shared.dismiss()
       _ = await NuxieSDK.shared.flushEvents()
     }
   }

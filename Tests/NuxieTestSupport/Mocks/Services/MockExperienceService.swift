@@ -3,7 +3,7 @@ import Foundation
 
 /// Mock implementation of ExperienceService for testing
 // @unchecked Sendable: all mutable state is serialized through `lock` (via withLock).
-public final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
+final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private var _prefetchedExperiences: [ExperienceReference] = []
     private var _removedExperienceVersionIds: [String] = []
@@ -95,12 +95,12 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         set { withLock { _defaultMockExperience = newValue } }
     }
 
-    public var mockViewControllers: [String: ExperienceViewController] {
+    var mockViewControllers: [String: ExperienceViewController] {
         get { withLock { _mockViewControllers } }
         set { withLock { _mockViewControllers = newValue } }
     }
 
-    public var defaultMockViewController: ExperienceViewController? {
+    var defaultMockViewController: ExperienceViewController? {
         get { withLock { _defaultMockViewController } }
         set { withLock { _defaultMockViewController = newValue } }
     }
@@ -271,7 +271,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     }
     
     @MainActor
-    public func viewController(for versionId: String) async throws -> ExperienceViewController {
+    func viewController(for versionId: String) async throws -> ExperienceViewController {
         let (shouldFail, failure, mockVC, defaultVC): (Bool, Error?, ExperienceViewController?, ExperienceViewController?) =
             withLock {
                 _displayAttempts.append((versionId: versionId, timestamp: Date()))
@@ -298,7 +298,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     }
 
     @MainActor
-    public func viewController(
+    func viewController(
         for versionId: String,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
@@ -308,7 +308,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     }
 
     @MainActor
-    public func viewController(
+    func viewController(
         for versionId: String,
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode,
@@ -326,14 +326,14 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     }
 
     @MainActor
-    public func viewController(for versionId: String, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController {
+    func viewController(for versionId: String, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController {
         let controller = try await viewController(for: versionId)
         controller.runtimeDelegate = runtimeDelegate
         return controller
     }
 
     @MainActor
-    public func viewController(
+    func viewController(
         for versionId: String,
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode

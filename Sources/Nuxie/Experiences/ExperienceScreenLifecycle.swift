@@ -20,16 +20,16 @@ struct ExperienceScreenHiddenContext: Equatable, Sendable {
 }
 
 enum ExperienceScreenDismissalMethod {
+    static let host = "host"
+
     static func value(for reason: CloseReason) -> String {
         switch reason {
         case .userDismissed:
             return "user"
         case .goalMet:
             return "goal_met"
-        case .purchaseCompleted:
-            return "purchase_completed"
-        case .timeout:
-            return "timeout"
+        case .hostDismissed:
+            return host
         case .error:
             return "error"
         }
