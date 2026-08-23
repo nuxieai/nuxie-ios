@@ -172,7 +172,21 @@ final class InternalServiceDependencyTests: XCTestCase {
         )
 
         let core = NuxieCore(configuration: configuration, overrides: overrides)
-        for _ in 0..<100 where await finishes.count() == 0 {
+        // Finishing the unfinished item happens before the recovery pump scans
+        // current entitlements. Waiting only for `finish` races the very next
+        // actor hop and made this assertion intermittently observe zero on CI.
+        for _ in 0..<100 {
+            let reads = await source.readCounts()
+            let finishCount = await finishes.count()
+            let syncedCount = sink.names.filter {
+                $0 == SystemEventNames.purchaseSynced
+            }.count
+            if reads.unfinished == 1,
+               reads.currentEntitlements == 1,
+               finishCount == 1,
+               syncedCount == 1 {
+                break
+            }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
 

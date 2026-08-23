@@ -46,7 +46,548 @@ private actor StartupLifecycleProbe {
     }
 }
 
+private actor SuspendingTransactionObserver: TransactionObserverProtocol {
+    private var usageStarted = false
+    private var listeningStopped = false
+    private var usageStartedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var usageReleaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var listeningStoppedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func startListening() {}
+    func stopListening() async {
+        listeningStopped = true
+        let waiters = listeningStoppedWaiters
+        listeningStoppedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func syncTransaction(
+        transactionJws: String,
+        transactionId: String,
+        productId: String?,
+        originalTransactionId: String?
+    ) async -> Bool {
+        false
+    }
+
+    func syncCurrentEntitlements(distinctId: String) async {}
+
+    func purchaseCompletionEventId(transactionId: String) async -> String {
+        "purchase-completed:lifecycle:\(transactionId)"
+    }
+
+    func useFeatureWithPendingPurchase(
+        distinctId: String,
+        featureId: String,
+        amount: Double,
+        entityId: String?,
+        metadata: [String: AnyCodable]?
+    ) async throws -> FeatureUsageResult? {
+        usageStarted = true
+        let waiters = usageStartedWaiters
+        usageStartedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { usageReleaseWaiters.append($0) }
+        return nil
+    }
+
+    func waitUntilUsageStarts() async {
+        guard !usageStarted else { return }
+        await withCheckedContinuation { usageStartedWaiters.append($0) }
+    }
+
+    func releaseUsage() {
+        let waiters = usageReleaseWaiters
+        usageReleaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilListeningStops() async {
+        guard !listeningStopped else { return }
+        await withCheckedContinuation { listeningStoppedWaiters.append($0) }
+    }
+}
+
+private actor ShutdownCompletionProbe {
+    private var completed = false
+
+    func recordCompletion() {
+        completed = true
+    }
+
+    func isComplete() -> Bool {
+        completed
+    }
+}
+
+private final class LifecycleCancellationSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isSignalled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func signal() {
+        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            guard !isSignalled else { return [] }
+            isSignalled = true
+            let waiters = self.waiters
+            self.waiters.removeAll()
+            return waiters
+        }
+        waiters.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let alreadySignalled = lock.withLock { () -> Bool in
+                guard !isSignalled else { return true }
+                waiters.append(continuation)
+                return false
+            }
+            if alreadySignalled {
+                continuation.resume()
+            }
+        }
+    }
+}
+
+private actor LifecycleTransitionGate {
+    nonisolated let cancellation = LifecycleCancellationSignal()
+    private var started = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func suspendUntilReleased() async {
+        started = true
+        let waiters = startedWaiters
+        startedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        } onCancel: {
+            cancellation.signal()
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func release() {
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
+private func waitForShutdownCompletion(
+    _ probe: ShutdownCompletionProbe,
+    attempts: Int = 200
+) async -> Bool {
+    for _ in 0..<attempts {
+        if await probe.isComplete() { return true }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    return await probe.isComplete()
+}
+
+private actor FacadeTaskStartBarrier {
+    private var arrived = false
+    private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        arrived = true
+        let waiters = arrivalWaiters
+        arrivalWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitUntilArrived() async {
+        guard !arrived else { return }
+        await withCheckedContinuation { arrivalWaiters.append($0) }
+    }
+
+    func release() {
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
+private actor SuspendingFacadeTrigger: TriggerServiceProtocol {
+    private let updateBeforeSuspending: TriggerUpdate?
+    private var triggerStarted = false
+    private var observedCancellation = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(updateBeforeSuspending: TriggerUpdate? = nil) {
+        self.updateBeforeSuspending = updateBeforeSuspending
+    }
+
+    func trigger(
+        _ event: String,
+        properties: sending [String: Any]?,
+        userProperties: sending [String: Any]?,
+        userPropertiesSetOnce: sending [String: Any]?,
+        handler: @escaping @Sendable (TriggerUpdate) -> Void
+    ) async {
+        triggerStarted = true
+        let waiters = startedWaiters
+        startedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if let updateBeforeSuspending {
+            handler(updateBeforeSuspending)
+        }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+        observedCancellation = Task.isCancelled
+    }
+
+    func waitUntilStarted() async {
+        guard !triggerStarted else { return }
+        await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func release() {
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func wasCancelled() -> Bool {
+        observedCancellation
+    }
+}
+
+private actor PendingJourneyFacadeTrigger: TriggerServiceProtocol {
+    private let reference = JourneyRef(
+        journeyId: "pending-user-input-journey",
+        experienceId: "pending-user-input-experience",
+        experienceVersion: "1"
+    )
+    private var handler: (@Sendable (TriggerUpdate) -> Void)?
+    private var started = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func trigger(
+        _ event: String,
+        properties: sending [String: Any]?,
+        userProperties: sending [String: Any]?,
+        userPropertiesSetOnce: sending [String: Any]?,
+        handler: @escaping @Sendable (TriggerUpdate) -> Void
+    ) async {
+        self.handler = handler
+        started = true
+        let waiters = startedWaiters
+        startedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        handler(.decision(.journeyStarted(reference)))
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func finishJourney() {
+        handler?(.journey(JourneyUpdate(
+            journeyId: reference.journeyId,
+            experienceId: reference.experienceId,
+            experienceVersion: reference.experienceVersion,
+            exitReason: .completed,
+            goalMet: false
+        )))
+    }
+}
+
 final class NuxieConfigurationLifecycleTests: XCTestCase {
+    func testShutdownCompletesForTheDefaultTestGraph() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        try sdk.setup(
+            with: NuxieConfiguration(apiKey: "shutdown-lifecycle-key"),
+            overrides: mocks.unitTestOverrides()
+        )
+
+        await sdk.shutdown()
+
+        XCTAssertFalse(sdk.isSetup)
+        XCTAssertNil(sdk.core)
+    }
+
+    func testShutdownWaitsForSuspendedPublicOperationBeforeReplacementSetup() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        let firstAPI = MockNuxieApi()
+        let firstObserver = SuspendingTransactionObserver()
+        var firstOverrides = mocks.unitTestOverrides()
+        firstOverrides.api = firstAPI
+        firstOverrides.transactionObserver = firstObserver
+
+        try sdk.setup(
+            with: NuxieConfiguration(apiKey: "first-lifecycle-key"),
+            overrides: firstOverrides
+        )
+
+        let usage = Task {
+            try await sdk.useFeatureAndWait("generation-bound-feature")
+        }
+        await firstObserver.waitUntilUsageStarts()
+
+        let shutdownCompletion = ShutdownCompletionProbe()
+        let shutdown = Task {
+            await sdk.shutdown()
+            await shutdownCompletion.recordCompletion()
+        }
+        await firstObserver.waitUntilListeningStops()
+
+        XCTAssertFalse(sdk.isSetup)
+        XCTAssertNil(sdk.core)
+        let shutdownFinishedWhileUsageWasSuspended = await shutdownCompletion.isComplete()
+        XCTAssertFalse(shutdownFinishedWhileUsageWasSuspended)
+
+        await firstObserver.releaseUsage()
+        let result = try await usage.value
+        await shutdown.value
+
+        XCTAssertTrue(result.success)
+        let firstAPICalls = await firstAPI.trackEventCallCount
+        XCTAssertEqual(firstAPICalls, 1)
+
+        let secondAPI = MockNuxieApi()
+        var secondOverrides = mocks.unitTestOverrides()
+        secondOverrides.api = secondAPI
+        secondOverrides.transactionObserver = MockTransactionObserver()
+        try sdk.setup(
+            with: NuxieConfiguration(apiKey: "second-lifecycle-key"),
+            overrides: secondOverrides
+        )
+        let replacementCore = try XCTUnwrap(sdk.core)
+        XCTAssertTrue(sdk.core === replacementCore)
+        let secondAPICalls = await secondAPI.trackEventCallCount
+        XCTAssertEqual(secondAPICalls, 0)
+
+        await sdk.shutdown()
+    }
+
+    func testShutdownCancelsAndWaitsForSuspendedFacadeTrigger() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        let trigger = SuspendingFacadeTrigger()
+        let observer = SuspendingTransactionObserver()
+        var overrides = mocks.unitTestOverrides()
+        overrides.triggers = trigger
+        overrides.transactionObserver = observer
+        let configuration = NuxieConfiguration(apiKey: "trigger-lifecycle-key")
+        configuration.trackApplicationLifecycleEvents = false
+        try sdk.setup(
+            with: configuration,
+            overrides: overrides
+        )
+
+        sdk.trigger("delayed-before-shutdown")
+        await trigger.waitUntilStarted()
+
+        let completion = ShutdownCompletionProbe()
+        let shutdown = Task {
+            await sdk.shutdown()
+            await completion.recordCompletion()
+        }
+        await observer.waitUntilListeningStops()
+
+        let completedWhileTriggerWasSuspended = await completion.isComplete()
+        XCTAssertFalse(completedWhileTriggerWasSuspended)
+
+        await trigger.release()
+        await shutdown.value
+
+        let triggerWasCancelled = await trigger.wasCancelled()
+        let shutdownCompleted = await completion.isComplete()
+        XCTAssertTrue(triggerWasCancelled)
+        XCTAssertTrue(shutdownCompleted)
+    }
+
+    func testCancelBeforeStartTriggerAndWaitSettlesBeforeShutdownCompletes() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        let startBarrier = FacadeTaskStartBarrier()
+        let trigger = SuspendingFacadeTrigger(
+            updateBeforeSuspending: .decision(.allowedImmediate)
+        )
+        let observer = SuspendingTransactionObserver()
+        var overrides = mocks.unitTestOverrides()
+        overrides.triggers = trigger
+        overrides.transactionObserver = observer
+        let configuration = NuxieConfiguration(apiKey: "trigger-and-wait-lifecycle-key")
+        configuration.trackApplicationLifecycleEvents = false
+        try sdk.setup(
+            with: configuration,
+            overrides: overrides,
+            facadeTaskStartBarrier: { await startBarrier.wait() }
+        )
+
+        let result = Task {
+            await sdk.triggerAndWait("cancelled-before-worker-start")
+        }
+        await startBarrier.waitUntilArrived()
+
+        let completion = ShutdownCompletionProbe()
+        let shutdown = Task {
+            await sdk.shutdown()
+            await completion.recordCompletion()
+        }
+        await observer.waitUntilListeningStops()
+
+        let completedWhileWorkerWasSuspended = await completion.isComplete()
+        XCTAssertFalse(completedWhileWorkerWasSuspended)
+
+        await startBarrier.release()
+        await trigger.waitUntilStarted()
+        let triggerResult = await result.value
+        XCTAssertEqual(triggerResult, .allowed(source: nil))
+
+        let completedAfterEarlyResult = await completion.isComplete()
+        XCTAssertFalse(completedAfterEarlyResult)
+
+        await trigger.release()
+        await shutdown.value
+
+        let triggerWasCancelled = await trigger.wasCancelled()
+        let shutdownCompleted = await completion.isComplete()
+        XCTAssertTrue(triggerWasCancelled)
+        XCTAssertTrue(shutdownCompleted)
+    }
+
+    func testShutdownSettlesTriggerAndWaitWhileJourneyAwaitsUserInput() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        let trigger = PendingJourneyFacadeTrigger()
+        let observer = SuspendingTransactionObserver()
+        var overrides = mocks.unitTestOverrides()
+        overrides.triggers = trigger
+        overrides.transactionObserver = observer
+        let configuration = NuxieConfiguration(apiKey: "pending-journey-lifecycle-key")
+        configuration.trackApplicationLifecycleEvents = false
+        try sdk.setup(
+            with: configuration,
+            overrides: overrides
+        )
+
+        let resultTask = Task {
+            await sdk.triggerAndWait("journey-awaiting-user-input")
+        }
+        await trigger.waitUntilStarted()
+
+        let completion = ShutdownCompletionProbe()
+        let shutdown = Task {
+            await sdk.shutdown()
+            await completion.recordCompletion()
+        }
+        await observer.waitUntilListeningStops()
+
+        let shutdownSettledPendingJourney = await waitForShutdownCompletion(completion)
+        if !shutdownSettledPendingJourney {
+            // Let the broken implementation unwind after proving it cannot
+            // settle the pending caller on shutdown.
+            await trigger.finishJourney()
+        }
+        let result = await resultTask.value
+        await shutdown.value
+
+        XCTAssertTrue(
+            shutdownSettledPendingJourney,
+            "shutdown must settle a trigger waiting on active-journey user input"
+        )
+        XCTAssertEqual(
+            result,
+            .error(TriggerError(
+                code: "sdk_shutdown",
+                message: "SDK shutdown began before the journey completed"
+            ))
+        )
+    }
+
+    func testShutdownStopsLifecycleIntakeAndJoinsActiveTransitionBeforeTeardown() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        let gate = LifecycleTransitionGate()
+        let experiences = MockExperienceService()
+        experiences.onAppBecameActiveHandler = {
+            await gate.suspendUntilReleased()
+        }
+        let journeys = MockJourneyService()
+        var overrides = mocks.unitTestOverrides()
+        overrides.experiences = experiences
+        overrides.journeys = journeys
+        try sdk.setup(
+            with: NuxieConfiguration(apiKey: "notification-lifecycle-key"),
+            overrides: overrides
+        )
+
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: NuxieSystemNotifications.appDidBecomeActive,
+                object: nil
+            )
+        }
+        await gate.waitUntilStarted()
+
+        let completion = ShutdownCompletionProbe()
+        let shutdown = Task {
+            await sdk.shutdown()
+            await completion.recordCompletion()
+        }
+        await gate.cancellation.wait()
+
+        let completedBeforeTransitionJoined = await completion.isComplete()
+        let teardownCallsBeforeTransitionJoined = await journeys.shutdownCallCount
+
+        // Intake must already be closed while shutdown joins the in-flight
+        // transition; this notification must not enter the old graph.
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: NuxieSystemNotifications.appDidBecomeActive,
+                object: nil
+            )
+        }
+
+        await gate.release()
+        await shutdown.value
+
+        XCTAssertFalse(
+            completedBeforeTransitionJoined,
+            "shutdown must join the active lifecycle worker"
+        )
+        XCTAssertEqual(
+            teardownCallsBeforeTransitionJoined,
+            0,
+            "graph teardown must not begin before lifecycle transition intake stops and its worker joins"
+        )
+        XCTAssertEqual(experiences.foregroundPreparationResumeCallCount, 1)
+        let finalTeardownCalls = await journeys.shutdownCallCount
+        XCTAssertEqual(finalTeardownCalls, 1)
+    }
+
     func testShutdownStopsObserverBeforeAwaitingCancelledProfilePrefetch() async {
         let probe = StartupLifecycleProbe(failRefetchAfterRelease: true)
         let profilePrefetch = Task {

@@ -1,9 +1,9 @@
 import Foundation
 
 /// Main entry point for the Nuxie SDK
-// @unchecked Sendable: the singleton facade's mutable state (configuration,
-// composition root, setup tasks) is written only by setup()/shutdown(), which
-// the SDK contract requires to be called serially; all other members read it.
+// @unchecked Sendable: the singleton facade's graph state is isolated by
+// SerializedSDKLifecycle. Delegate access retains its existing weak-reference
+// semantics and SDK services provide their own concurrency isolation.
 public final class NuxieSDK: @unchecked Sendable {
 
   /// Shared singleton instance
@@ -13,52 +13,43 @@ public final class NuxieSDK: @unchecked Sendable {
   private init() {
   }
 
-  /// Configuration builder supplied to setup (nil if not configured).
+  private let sdkLifecycle = SerializedSDKLifecycle<NuxieSDKRun>()
+
+  /// Configuration builder supplied to the current run (nil if unavailable).
   /// Its values are snapshotted during setup; mutating it later does not
   /// reconfigure the SDK. Use the explicit runtime controls below.
-  private(set) var configuration: NuxieConfiguration?
+  var configuration: NuxieConfiguration? {
+    sdkLifecycle.snapshot()?.graph.configuration
+  }
 
   /// Delegate for receiving SDK callbacks
   public weak var delegate: NuxieDelegate?
 
   /// Whether the SDK has been configured
   public var isSetup: Bool {
-    if configuration == nil {
+    let isRunning = sdkLifecycle.isRunning
+    if !isRunning {
       LogWarning("SDK not configured. Call setup() first.")
     }
-    return configuration != nil
+    return isRunning
   }
 
   // MARK: - Private Properties
 
-
-  /// Composition root built by setup() (Phase 4c). Facade methods read
-  /// services from here.
-  private(set) var core: NuxieCore?
-
-  private var coreEventLog: EventLogProtocol { core!.eventLog }
-  private var coreIdentity: IdentityServiceProtocol { core!.identity }
-  private var coreSessions: SessionServiceProtocol { core!.sessions }
-  private var coreProfile: ProfileServiceProtocol { core!.profile }
-  private var coreJourneys: JourneyServiceProtocol { core!.journeys }
-  private var coreFeatures: FeatureServiceProtocol { core!.features }
-  private var coreExperiences: ExperienceServiceProtocol { core!.experiences }
-  private var coreTriggers: TriggerServiceProtocol { core!.triggers }
-  private var coreApi: NuxieApiProtocol { core!.api }
-  private var coreTransactionObserver: TransactionObserverProtocol {
-    core!.transactionObserver
-  }
-  private var coreUserTransitions: UserTransitionCoordinator {
-    core!.userTransitions
+  private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation? {
+    guard let operation = sdkLifecycle.beginOperation() else {
+      LogWarning("SDK not configured. Call setup() first.")
+      return nil
+    }
+    return operation
   }
 
-  private var lifecycleCoordinator: NuxieLifecycleCoordinator?
-
-  private var eventSystemSetupTask: Task<Void, Never>?
-  private var journeyInitializeTask: Task<Void, Never>?
-  private var featureInfoDelegateTask: Task<Void, Never>?
-  private var profilePrefetchTask: Task<Void, Never>?
-  private var transactionObserverTask: Task<Void, Never>?
+  /// Composition root built by setup. Internal test hosts may inspect the
+  /// currently running graph, but production operations hold a lifecycle
+  /// lease for their whole call.
+  var core: NuxieCore? {
+    sdkLifecycle.snapshot()?.graph.core
+  }
 
   // MARK: - Setup
 
@@ -70,7 +61,11 @@ public final class NuxieSDK: @unchecked Sendable {
   }
 
   /// Internal seam: tests inject mock services through `overrides`.
-  internal func setup(with configuration: NuxieConfiguration, overrides: NuxieCoreOverrides) throws {
+  internal func setup(
+    with configuration: NuxieConfiguration,
+    overrides: NuxieCoreOverrides,
+    facadeTaskStartBarrier: (@Sendable () async -> Void)? = nil
+  ) throws {
     // Validate configuration
     guard !configuration.apiKey.isEmpty else {
       throw NuxieError.invalidConfiguration("API key cannot be empty")
@@ -101,114 +96,128 @@ public final class NuxieSDK: @unchecked Sendable {
     }
 
     let setupConfiguration = NuxieSetupConfiguration(configuration)
-    let eventLogConfiguration = setupConfiguration.eventLogConfiguration()
     let runtimeSettings = NuxieRuntimeSettings(
       localeIdentifier: configuration.localeIdentifier,
       purchaseDelegate: configuration.purchaseDelegate,
       purchaseHandlingMode: configuration.purchaseHandlingMode
     )
 
-    // Prevent reconfiguration
-    guard self.configuration == nil else {
-      LogWarning("SDK already configured. Skipping setup.")
-      return
-    }
+    let installed = sdkLifecycle.install {
+      // Configure logger only for the graph that wins installation.
+      NuxieLogger.shared.configure(
+        logLevel: setupConfiguration.logLevel,
+        enableConsoleLogging: setupConfiguration.enableConsoleLogging,
+        redactSensitiveData: setupConfiguration.redactSensitiveData
+      )
 
-    // Store configuration before any service creation
-    self.configuration = configuration
+      // Build the composition root: the whole object graph, in explicit
+      // dependency order. The facade's stable FeatureInfo instance rides in
+      // unless a test injected its own.
+      var overrides = overrides
+      if overrides.featureInfo == nil { overrides.featureInfo = featureInfoInstance }
+      let core = NuxieCore(
+        configuration: setupConfiguration,
+        runtimeSettings: runtimeSettings,
+        overrides: overrides
+      )
 
-    // Configure logger
-    NuxieLogger.shared.configure(
-      logLevel: setupConfiguration.logLevel,
-      enableConsoleLogging: setupConfiguration.enableConsoleLogging,
-      redactSensitiveData: setupConfiguration.redactSensitiveData
-    )
+      // Start the lifecycle coordinator over the built graph. It owns
+      // automatic lifecycle events ($app_installed etc.) when enabled — the
+      // former plugin system's only real job.
+      let lifecycleTracker = setupConfiguration.trackApplicationLifecycleEvents
+        ? AppLifecycleTracker(eventSink: core.systemEvents)
+        : nil
+      let lifecycleCoordinator = NuxieLifecycleCoordinator(
+        lifecycleTracker: lifecycleTracker,
+        sessions: core.sessions,
+        journeys: core.journeys,
+        eventLog: core.eventLog,
+        profile: core.profile,
+        experiences: core.experiences,
+        experiencePresentation: core.experiencePresentation,
+        features: core.features
+      )
+      lifecycleCoordinator.start()
 
-    // Build the composition root: the whole object graph, in explicit
-    // dependency order. The facade's stable FeatureInfo instance rides in
-    // unless a test injected its own.
-    var overrides = overrides
-    if overrides.featureInfo == nil { overrides.featureInfo = featureInfoInstance }
-    let core = NuxieCore(
-      configuration: setupConfiguration,
-      runtimeSettings: runtimeSettings,
-      overrides: overrides
-    )
-    self.core = core
+      // Initialize event system. The journey router subscribes to committed
+      // events BEFORE the log opens — capture commands buffer until configure
+      // finishes, so the subscriber observes every committed event.
+      LogDebug("Setting up event system...")
+      let eventLog = core.eventLog
+      let journeyService = core.journeys
 
-    // Start the lifecycle coordinator over the built graph. It owns
-    // automatic lifecycle events ($app_installed etc.) when enabled — the
-    // former plugin system's only real job.
-    let lifecycleTracker = setupConfiguration.trackApplicationLifecycleEvents
-      ? AppLifecycleTracker(eventSink: core.systemEvents)
-      : nil
-    lifecycleCoordinator = NuxieLifecycleCoordinator(
-      lifecycleTracker: lifecycleTracker,
-      sessions: core.sessions,
-      journeys: core.journeys,
-      eventLog: core.eventLog,
-      profile: core.profile,
-      experiences: core.experiences,
-      experiencePresentation: core.experiencePresentation,
-      features: core.features
-    )
-    lifecycleCoordinator?.start()
-
-    // Initialize event system. The journey router subscribes to committed
-    // events BEFORE the log opens — capture commands buffer until configure
-    // finishes, so the subscriber observes every committed event.
-    LogDebug("Setting up event system...")
-    let eventLog = core.eventLog
-    let journeyService = core.journeys
-
-    eventSystemSetupTask = Task {
-      guard !Task.isCancelled else { return }
-      await eventLog.subscribeCommitted { [weak journeyService] event in
-        await journeyService?.handleEvent(event)
-      }
-      do {
-        try await eventLog.configure(configuration: eventLogConfiguration)
-        LogDebug("Event system setup complete")
-      } catch {
-        LogError("Event system setup failed: \(error)")
-      }
-    }
-
-    journeyInitializeTask = Task {
-      guard !Task.isCancelled else { return }
-      await journeyService.initialize()
-    }
-
-    let isTestEnvironment = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-
-    if !isTestEnvironment {
-      // Wire up FeatureInfo delegate callback
-      featureInfoDelegateTask = Task { @MainActor in
+      let eventSystemSetupTask = Task {
         guard !Task.isCancelled else { return }
-        let featureInfo = core.featureInfo
-        featureInfo.onFeatureChange = { [weak self] featureId, oldValue, newValue in
-          self?.delegate?.featureAccessDidChange(featureId, from: oldValue, to: newValue)
+        await eventLog.subscribeCommitted { [weak journeyService] event in
+          await journeyService?.handleEvent(event)
+        }
+        do {
+          try await eventLog.configure(
+            configuration: setupConfiguration.eventLogConfiguration()
+          )
+          LogDebug("Event system setup complete")
+        } catch {
+          LogError("Event system setup failed: \(error)")
         }
       }
 
-      // Fetch initial profile data and sync feature info
-      profilePrefetchTask = Task {
-        await Self.runProfilePrefetch(
-          refetch: { _ = try await core.profile.refetchProfile() },
-          recoverProfileDependentState: {
-            await Self.recoverAfterProfilePrefetch(
-              journeys: journeyService
-            )
-          },
-          syncFeatures: { await core.features.syncFeatureInfo() }
-        )
+      let journeyInitializeTask = Task {
+        guard !Task.isCancelled else { return }
+        await journeyService.initialize()
       }
 
-      // Start transaction observer to sync StoreKit 2 purchases with backend
-      transactionObserverTask = Task {
-        guard !Task.isCancelled else { return }
-        await core.transactionObserver.startListening()
+      let isTestEnvironment =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+      var featureInfoDelegateTask: Task<Void, Never>?
+      var profilePrefetchTask: Task<Void, Never>?
+      var transactionObserverTask: Task<Void, Never>?
+
+      if !isTestEnvironment {
+        // Wire up FeatureInfo delegate callback
+        featureInfoDelegateTask = Task { @MainActor in
+          guard !Task.isCancelled else { return }
+          let featureInfo = core.featureInfo
+          featureInfo.onFeatureChange = { [weak self] featureId, oldValue, newValue in
+            self?.delegate?.featureAccessDidChange(featureId, from: oldValue, to: newValue)
+          }
+        }
+
+        // Fetch initial profile data and sync feature info
+        profilePrefetchTask = Task {
+          await Self.runProfilePrefetch(
+            refetch: { _ = try await core.profile.refetchProfile() },
+            recoverProfileDependentState: {
+              await Self.recoverAfterProfilePrefetch(
+                journeys: journeyService
+              )
+            },
+            syncFeatures: { await core.features.syncFeatureInfo() }
+          )
+        }
+
+        // Start transaction observer to sync StoreKit 2 purchases with backend
+        transactionObserverTask = Task {
+          guard !Task.isCancelled else { return }
+          await core.transactionObserver.startListening()
+        }
       }
+
+      return NuxieSDKRun(
+        configuration: configuration,
+        core: core,
+        lifecycleCoordinator: lifecycleCoordinator,
+        eventSystemSetupTask: eventSystemSetupTask,
+        journeyInitializeTask: journeyInitializeTask,
+        featureInfoDelegateTask: featureInfoDelegateTask,
+        profilePrefetchTask: profilePrefetchTask,
+        transactionObserverTask: transactionObserverTask,
+        facadeTaskStartBarrier: facadeTaskStartBarrier
+      )
+    }
+
+    guard installed else {
+      LogWarning("SDK already configured. Skipping setup.")
+      return
     }
 
     LogInfo("Setup completed with API key: \(NuxieLogger.shared.logAPIKey(setupConfiguration.apiKey))")
@@ -217,34 +226,35 @@ public final class NuxieSDK: @unchecked Sendable {
   /// Manually shut down the SDK and clean up resources
   /// This is typically not needed as the singleton will clean up automatically
   public func shutdown() async {
-    guard isSetup else { return }
+    await sdkLifecycle.shutdown(beforeDraining: { run in
+      let core = run.core
 
-    // Cancel startup callers first, then stop the observer before joining those
-    // callers. A profile-prefetch caller may already be awaiting purchase
-    // recovery, which only observer shutdown can cancel and settle.
-    let startupTasks = snapshotAndCancelStartupTasks()
-    await Self.stopPurchasesAndAwaitStartupTasks(
-      startupTasks,
-      stopPurchases: { await self.coreTransactionObserver.stopListening() }
-    )
+      // Close NotificationCenter intake before any service teardown and join
+      // the one FIFO lifecycle worker so it cannot fan out into a closed graph.
+      await run.lifecycleCoordinator.stop()
 
-    // Run queued identity transitions to completion before tearing down the
-    // services they fan out to (the coordinator chain is deliberately
-    // uncancellable — dropping transitions was the bug it exists to fix).
-    await coreUserTransitions.drain()
+      let facadeTasks = run.stopAcceptingFacadeTasksAndCancel()
 
-    await coreJourneys.shutdown()
-    await coreEventLog.close()
-    await coreProfile.cleanupExpired()
+      // Cancel startup callers first, then stop the observer before joining
+      // those callers. A profile-prefetch caller may already be awaiting
+      // purchase recovery, which only observer shutdown can cancel and settle.
+      await Self.stopPurchasesAndAwaitStartupTasks(
+        run.startupTasks + facadeTasks,
+        stopPurchases: { await core.transactionObserver.stopListening() }
+      )
+    }) { run in
+      let core = run.core
+      // Run queued identity transitions to completion before tearing down the
+      // services they fan out to (the coordinator chain is deliberately
+      // uncancellable — dropping transitions was the bug it exists to fix).
+      await core.userTransitions.drain()
 
-    // Drop the composition root (rebuilt on next setup)
-    core = nil
-    configuration = nil
+      await core.journeys.shutdown()
+      await core.eventLog.close()
+      await core.profile.cleanupExpired()
 
-    lifecycleCoordinator?.stop()
-    lifecycleCoordinator = nil
-
-    LogInfo("SDK shutdown completed")
+      LogInfo("SDK shutdown completed")
+    }
   }
 
   // MARK: - Startup tasks
@@ -290,30 +300,15 @@ public final class NuxieSDK: @unchecked Sendable {
     for task in tasks { await task.value }
   }
 
-  private func snapshotAndCancelStartupTasks() -> [Task<Void, Never>] {
-    let tasks = [
-      eventSystemSetupTask,
-      journeyInitializeTask,
-      featureInfoDelegateTask,
-      profilePrefetchTask,
-      transactionObserverTask,
-    ].compactMap { $0 }
-    tasks.forEach { $0.cancel() }
-
-    eventSystemSetupTask = nil
-    journeyInitializeTask = nil
-    featureInfoDelegateTask = nil
-    profilePrefetchTask = nil
-    transactionObserverTask = nil
-    return tasks
-  }
-
   /// Waits for the SDK-owned event and journey startup tasks. Internal test
   /// hosts use this instead of invoking service initialization a second time,
   /// which would create competing restored Journey objects for one durable ID.
   func waitForStartupTasks() async {
-    await eventSystemSetupTask?.value
-    await journeyInitializeTask?.value
+    guard let operation = runningOperation() else { return }
+    defer { operation.finish() }
+    let run = operation.graph
+    await run.eventSystemSetupTask.value
+    await run.journeyInitializeTask.value
   }
 
   // MARK: - Trigger (Event) API
@@ -328,15 +323,21 @@ public final class NuxieSDK: @unchecked Sendable {
     userPropertiesSetOnce: [String: Any]? = nil,
     handler: (@Sendable (TriggerUpdate) -> Void)? = nil
   ) {
-    guard isSetup else { return }
+    guard let operation = runningOperation() else { return }
+    let run = operation.graph
+    let core = run.core
 
-    let presentationAttempt = beginPresentationAttemptIfEnabled(triggerEvent: event)
-    let triggerService = coreTriggers
+    let presentationAttempt = beginPresentationAttemptIfEnabled(
+      triggerEvent: event,
+      core: core
+    )
+    let triggerService = core.triggers
     // Boxed: property payloads are write-once snapshots handed to the SDK.
     let propertiesBox = UncheckedSendable(properties)
     let userPropertiesBox = UncheckedSendable(userProperties)
     let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
-    Task { @MainActor in
+    let launched = run.launchFacadeTask { @MainActor [operation] in
+      defer { operation.finish() }
       if let presentationAttempt,
          let tracedTriggerService = triggerService as? any PresentationAttemptTriggerServiceProtocol {
         await tracedTriggerService.trigger(
@@ -359,6 +360,9 @@ public final class NuxieSDK: @unchecked Sendable {
         }
       }
     }
+    if !launched {
+      operation.finish()
+    }
   }
 
   /// Trigger an event and await its terminal outcome — the register pattern:
@@ -369,6 +373,8 @@ public final class NuxieSDK: @unchecked Sendable {
   /// default: break
   /// }
   /// ```
+  /// An active journey that is still awaiting a terminal update when SDK
+  /// shutdown begins resolves as an error whose code is `sdk_shutdown`.
   public func triggerAndWait(
     _ event: String,
     properties: [String: Any]? = nil,
@@ -376,17 +382,25 @@ public final class NuxieSDK: @unchecked Sendable {
     userPropertiesSetOnce: [String: Any]? = nil,
     progress: (@Sendable (TriggerUpdate) -> Void)? = nil
   ) async -> TriggerResult {
-    guard isSetup else { return .error(TriggerError(code: "not_configured", message: "SDK not configured")) }
+    guard let operation = runningOperation() else {
+      return .error(TriggerError(code: "not_configured", message: "SDK not configured"))
+    }
+    defer { operation.finish() }
+    let run = operation.graph
+    let core = run.core
 
-    let presentationAttempt = beginPresentationAttemptIfEnabled(triggerEvent: event)
-    let triggerService = coreTriggers
+    let presentationAttempt = beginPresentationAttemptIfEnabled(
+      triggerEvent: event,
+      core: core
+    )
+    let triggerService = core.triggers
     // Boxed: property payloads are write-once snapshots handed to the SDK.
     let propertiesBox = UncheckedSendable(properties)
     let userPropertiesBox = UncheckedSendable(userProperties)
     let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
     return await withCheckedContinuation { (continuation: CheckedContinuation<TriggerResult, Never>) in
       let state = TriggerCompletionState()
-      Task { @MainActor in
+      let launched = run.launchFacadeTask { @MainActor in
         let handleUpdate: @Sendable (TriggerUpdate) -> Void = { update in
           progress?(update)
           if let result = NuxieSDK.terminalResult(for: update), state.claim() {
@@ -415,18 +429,35 @@ public final class NuxieSDK: @unchecked Sendable {
           )
         }
         // If the update sequence ended without a terminal update and no
-        // journey is pending, resolve as tracked-with-no-match.
-        if !state.isWaitingForJourneyCompletion, state.claim() {
+        // journey is pending, resolve as tracked-with-no-match. A journey's
+        // terminal update may arrive after TriggerService returns, so keep
+        // this SDK-owned worker registered until that update or shutdown.
+        if state.isWaitingForJourneyCompletion {
+          await state.waitForCompletion {
+            if state.claim() {
+              continuation.resume(returning: .error(TriggerError(
+                code: "sdk_shutdown",
+                message: "SDK shutdown began before the journey completed"
+              )))
+            }
+          }
+        } else if state.claim() {
           continuation.resume(returning: .noMatch)
         }
+      }
+      if !launched {
+        continuation.resume(returning: .error(TriggerError(
+          code: "not_configured",
+          message: "SDK shutdown began before trigger work started"
+        )))
       }
     }
   }
 
   private func beginPresentationAttemptIfEnabled(
-    triggerEvent: String
+    triggerEvent: String,
+    core: NuxieCore
   ) -> ExperiencePresentationAttempt? {
-    let core = core!
     guard core.presentationTrace.isEnabled else { return nil }
     let startedAt = core.dateProvider.now()
     let timestamp = ExperiencePresentationTimestamp.now(wallClock: startedAt)
@@ -484,15 +515,20 @@ public final class NuxieSDK: @unchecked Sendable {
     private let lock = NSLock()
     private var completed = false
     private var waitingForJourney = false
+    private var completionWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Returns true exactly once — the caller that wins resumes the
     /// continuation.
     func claim() -> Bool {
-      lock.lock()
-      defer { lock.unlock() }
-      guard !completed else { return false }
-      completed = true
-      return true
+      let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>]? in
+        guard !completed else { return nil }
+        completed = true
+        let waiters = completionWaiters
+        completionWaiters.removeAll()
+        return waiters
+      }
+      waiters?.forEach { $0.resume() }
+      return waiters != nil
     }
 
     func expectJourneyCompletion() {
@@ -505,6 +541,28 @@ public final class NuxieSDK: @unchecked Sendable {
       lock.lock()
       defer { lock.unlock() }
       return waitingForJourney
+    }
+
+    /// Keeps the facade worker owned until the journey callback reaches a
+    /// terminal result. Cancelling that worker is SDK shutdown's signal to
+    /// settle the public continuation and release its lifecycle operation.
+    func waitForCompletion(
+      onCancel: @escaping @Sendable () -> Void
+    ) async {
+      await withTaskCancellationHandler {
+        await withCheckedContinuation { continuation in
+          let alreadyCompleted = lock.withLock { () -> Bool in
+            guard !completed else { return true }
+            completionWaiters.append(continuation)
+            return false
+          }
+          if alreadyCompleted {
+            continuation.resume()
+          }
+        }
+      } onCancel: {
+        onCancel()
+      }
     }
   }
 
@@ -520,10 +578,12 @@ public final class NuxieSDK: @unchecked Sendable {
     userProperties: [String: Any]? = nil,
     userPropertiesSetOnce: [String: Any]? = nil
   ) {
-    guard isSetup else { return }
+    guard let operation = runningOperation() else { return }
+    let run = operation.graph
+    let core = run.core
     
-    let identityService = coreIdentity
-    let eventLog = coreEventLog
+    let identityService = core.identity
+    let eventLog = core.eventLog
     
     let oldDistinctId = identityService.getDistinctId()
     let wasIdentified = identityService.isIdentified
@@ -539,7 +599,7 @@ public final class NuxieSDK: @unchecked Sendable {
     // (anonymous-event migration included). A rapid second identify() or
     // reset() queues behind this one instead of cancelling it mid-fan-out.
     if hasDifferentDistinctId {
-      coreUserTransitions.enqueue(
+      core.userTransitions.enqueue(
         UserTransitionCoordinator.Transition(
           kind: .identify,
           from: oldDistinctId,
@@ -552,7 +612,7 @@ public final class NuxieSDK: @unchecked Sendable {
     // call identify() with the same id on every launch; rotating the session
     // each time fragments session analytics.
     if hasDifferentDistinctId {
-      coreSessions.startSession()
+      core.sessions.startSession()
     }
 
     // Track $identify only when the user changed or there are user properties
@@ -569,10 +629,16 @@ public final class NuxieSDK: @unchecked Sendable {
         userProperties: userProperties,
         userPropertiesSetOnce: userPropertiesSetOnce
       )
-      Task {
-        await coreUserTransitions.drain()
-        await coreTransactionObserver.retryStoredEvidence()
+      let launched = run.launchFacadeTask { [operation] in
+        defer { operation.finish() }
+        await run.core.userTransitions.drain()
+        await run.core.transactionObserver.retryStoredEvidence()
       }
+      if !launched {
+        operation.finish()
+      }
+    } else {
+      operation.finish()
     }
   }
 
@@ -582,9 +648,11 @@ public final class NuxieSDK: @unchecked Sendable {
   ///   pre-identify events never chain to the previous person, matching
   ///   PostHog/Amplitude semantics)
   public func reset(keepAnonymousId: Bool = false) {
-    guard isSetup else { return }
+    guard let operation = runningOperation() else { return }
+    let run = operation.graph
+    let core = run.core
     
-    let identityService = coreIdentity
+    let identityService = core.identity
     let previousDistinctId = identityService.getDistinctId()
 
     // Reset identity
@@ -592,20 +660,26 @@ public final class NuxieSDK: @unchecked Sendable {
 
     // Serialized, uncancellable transition (interleaves FIFO with identify).
     let newDistinctId = identityService.getDistinctId()
-    coreUserTransitions.enqueue(
+    core.userTransitions.enqueue(
       UserTransitionCoordinator.Transition(
         kind: .reset,
         from: previousDistinctId,
         to: newDistinctId,
         migrateEvents: false
       ))
-    Task {
-      await coreUserTransitions.drain()
-      await coreTransactionObserver.retryStoredEvidence()
-    }
 
-    // Start new session on reset
-    coreSessions.resetSession()
+    // Start new session on reset before transferring the operation lease to
+    // the asynchronous transition drain.
+    core.sessions.resetSession()
+
+    let launched = run.launchFacadeTask { [operation] in
+      defer { operation.finish() }
+      await run.core.userTransitions.drain()
+      await run.core.transactionObserver.retryStoredEvidence()
+    }
+    if !launched {
+      operation.finish()
+    }
   }
 
 
@@ -637,7 +711,7 @@ public final class NuxieSDK: @unchecked Sendable {
 
   @MainActor
   public var features: FeatureInfo {
-    core?.featureInfo ?? featureInfoInstance
+    sdkLifecycle.snapshot()?.graph.core.featureInfo ?? featureInfoInstance
   }
 
 
@@ -647,16 +721,20 @@ public final class NuxieSDK: @unchecked Sendable {
   /// - Parameter limit: Maximum events to return (default: 100)
   /// - Returns: Array of recent events or empty array if storage unavailable
   internal func getRecentEvents(limit: Int = 100) async -> [StoredEvent] {
-    let eventLog = coreEventLog
-    return await eventLog.getRecentEvents(limit: limit)
+    guard let operation = runningOperation() else { return [] }
+    defer { operation.finish() }
+    return await operation.graph.core.eventLog.getRecentEvents(limit: limit)
   }
 
   /// Get events for the current user
   /// - Parameter limit: Maximum events to return (default: 100)
   /// - Returns: Array of user events or empty array if storage unavailable
   internal func getCurrentUserEvents(limit: Int = 100) async -> [StoredEvent] {
-    let identityService = coreIdentity
-    let eventLog = coreEventLog
+    guard let operation = runningOperation() else { return [] }
+    defer { operation.finish() }
+    let run = operation.graph
+    let identityService = run.core.identity
+    let eventLog = run.core.eventLog
 
     let distinctId = identityService.getDistinctId()
     return await eventLog.getEventsForUser(distinctId, limit: limit)
@@ -665,13 +743,16 @@ public final class NuxieSDK: @unchecked Sendable {
   /// Get events from the current session
   /// - Returns: Array of session events or empty array if storage unavailable
   internal func getCurrentSessionEvents() async -> [StoredEvent] {
+    guard let operation = runningOperation() else { return [] }
+    defer { operation.finish() }
+    let run = operation.graph
+    let core = run.core
     // Get current session ID
-    guard let sessionId = coreSessions.getSessionId(at: Date(), readOnly: true) else {
+    guard let sessionId = core.sessions.getSessionId(at: Date(), readOnly: true) else {
       return []
     }
     
-    let eventLog = coreEventLog
-    return await eventLog.getEvents(for: sessionId)
+    return await core.eventLog.getEvents(for: sessionId)
   }
 
   // MARK: - Session Management
@@ -682,8 +763,9 @@ public final class NuxieSDK: @unchecked Sendable {
   /// Sessions are automatic (created on first event, rotated after 30 min
   /// idle / 24 h max). There is deliberately no manual session API.
   public func getCurrentSessionId() -> String? {
-    guard isSetup else { return nil }
-    return coreSessions.getSessionId(at: Date(), readOnly: true)
+    guard let operation = runningOperation() else { return nil }
+    defer { operation.finish() }
+    return operation.graph.core.sessions.getSessionId(at: Date(), readOnly: true)
   }
 
   // MARK: - Private Methods
@@ -693,25 +775,28 @@ public final class NuxieSDK: @unchecked Sendable {
   /// Get current distinct ID (always returns a value - anonymous ID if not identified)
   /// - Returns: Distinct ID if identified, anonymous ID otherwise
   public func getDistinctId() -> String {
-    guard isSetup else { return "" }
+    guard let operation = runningOperation() else { return "" }
+    defer { operation.finish() }
     // IdentityService's getDistinctId() already returns anonymous ID as fallback
-    let identityService = coreIdentity
+    let identityService = operation.graph.core.identity
     return identityService.getDistinctId()
   }
 
   /// Get anonymous ID
   /// - Returns: Anonymous ID (always available)
   public func getAnonymousId() -> String {
-    guard isSetup else { return "" }
-    let identityService = coreIdentity
+    guard let operation = runningOperation() else { return "" }
+    defer { operation.finish() }
+    let identityService = operation.graph.core.identity
     return identityService.getAnonymousId()
   }
 
   /// Check if user is currently identified
   /// - Returns: True if user has a distinct ID, false if anonymous
   public var isIdentified: Bool {
-    guard isSetup else { return false }
-    let identityService = coreIdentity
+    guard let operation = runningOperation() else { return false }
+    defer { operation.finish() }
+    let identityService = operation.graph.core.identity
     return identityService.isIdentified
   }
 
@@ -724,11 +809,12 @@ public final class NuxieSDK: @unchecked Sendable {
     for experienceVersionId: String,
     colorSchemeMode: ExperienceColorSchemeMode = .light
   ) async throws -> ExperienceViewController {
-    guard isSetup else {
+    guard let operation = runningOperation() else {
       throw NuxieError.notConfigured
     }
+    defer { operation.finish() }
 
-    let experienceService = coreExperiences
+    let experienceService = operation.graph.core.experiences
     return try await experienceService.viewController(
       for: experienceVersionId,
       colorSchemeMode: colorSchemeMode
@@ -742,11 +828,12 @@ public final class NuxieSDK: @unchecked Sendable {
     _ experienceVersionId: String,
     colorSchemeMode: ExperienceColorSchemeMode = .light
   ) async throws {
-    guard isSetup else {
+    guard let operation = runningOperation() else {
       throw NuxieError.notConfigured
     }
+    defer { operation.finish() }
 
-    let experiencePresentationService = core!.experiencePresentation
+    let experiencePresentationService = operation.graph.core.experiencePresentation
     try await experiencePresentationService.presentExperience(
       experienceVersionId,
       from: nil,
@@ -761,7 +848,9 @@ public final class NuxieSDK: @unchecked Sendable {
   /// refresh locale-specific content. Pass nil to follow the device locale.
   @discardableResult
   public func setLocaleIdentifier(_ localeIdentifier: String?) async throws -> ProfileResponse {
-    guard let core else { throw NuxieError.notConfigured }
+    guard let operation = runningOperation() else { throw NuxieError.notConfigured }
+    defer { operation.finish() }
+    let core = operation.graph.core
     core.runtimeSettings.setLocaleIdentifier(localeIdentifier)
     let profile = try await core.profile.refetchProfile()
     await core.features.syncFeatureInfo()
@@ -770,7 +859,9 @@ public final class NuxieSDK: @unchecked Sendable {
 
   /// Replace the purchase delegate used by future purchase and restore calls.
   public func setPurchaseDelegate(_ purchaseDelegate: NuxiePurchaseDelegate?) throws {
-    guard let core else { throw NuxieError.notConfigured }
+    guard let operation = runningOperation() else { throw NuxieError.notConfigured }
+    defer { operation.finish() }
+    let core = operation.graph.core
     core.runtimeSettings.setPurchaseDelegate(purchaseDelegate)
   }
 
@@ -778,7 +869,9 @@ public final class NuxieSDK: @unchecked Sendable {
   public func setPurchaseHandlingMode(
     _ purchaseHandlingMode: NuxieConfiguration.PurchaseHandlingMode
   ) throws {
-    guard let core else { throw NuxieError.notConfigured }
+    guard let operation = runningOperation() else { throw NuxieError.notConfigured }
+    defer { operation.finish() }
+    let core = operation.graph.core
     core.runtimeSettings.setPurchaseHandlingMode(purchaseHandlingMode)
   }
 
@@ -788,11 +881,12 @@ public final class NuxieSDK: @unchecked Sendable {
   /// - Throws: NuxieError if SDK not configured or network request fails
   @discardableResult
   public func refreshProfile() async throws -> ProfileResponse {
-    guard isSetup else {
+    guard let operation = runningOperation() else {
       throw NuxieError.notConfigured
     }
+    defer { operation.finish() }
 
-    let profileService = coreProfile
+    let profileService = operation.graph.core.profile
     return try await profileService.refetchProfile()
   }
 
@@ -802,30 +896,34 @@ public final class NuxieSDK: @unchecked Sendable {
   /// - Returns: True if flush was initiated
   @discardableResult
   public func flushEvents() async -> Bool {
-    guard isSetup else { return false }
-    let eventLog = coreEventLog
+    guard let operation = runningOperation() else { return false }
+    defer { operation.finish() }
+    let eventLog = operation.graph.core.eventLog
     return await eventLog.flushEvents()
   }
 
   /// Get current network queue size
   /// - Returns: Number of events queued for network delivery
   public func getQueuedEventCount() async -> Int {
-    guard isSetup else { return 0 }
-    let eventLog = coreEventLog
+    guard let operation = runningOperation() else { return 0 }
+    defer { operation.finish() }
+    let eventLog = operation.graph.core.eventLog
     return await eventLog.getQueuedEventCount()
   }
 
   /// Pause event queue (stops network delivery)
   public func pauseEventQueue() async {
-    guard isSetup else { return }
-    let eventLog = coreEventLog
+    guard let operation = runningOperation() else { return }
+    defer { operation.finish() }
+    let eventLog = operation.graph.core.eventLog
     await eventLog.pauseEventQueue()
   }
 
   /// Resume event queue (enables network delivery)
   public func resumeEventQueue() async {
-    guard isSetup else { return }
-    let eventLog = coreEventLog
+    guard let operation = runningOperation() else { return }
+    defer { operation.finish() }
+    let eventLog = operation.graph.core.eventLog
     await eventLog.resumeEventQueue()
   }
 
@@ -848,11 +946,12 @@ public final class NuxieSDK: @unchecked Sendable {
     entityId: String? = nil,
     policy: FeatureCheckPolicy = .cacheFirst
   ) async throws -> FeatureAccess {
-    guard isSetup else {
+    guard let operation = runningOperation() else {
       throw NuxieError.notConfigured
     }
+    defer { operation.finish() }
 
-    let featureService = coreFeatures
+    let featureService = operation.graph.core.features
     switch policy {
     case .cacheFirst:
       return try await featureService.checkWithCache(
@@ -904,24 +1003,30 @@ public final class NuxieSDK: @unchecked Sendable {
     entityId: String? = nil,
     metadata: [String: Any]? = nil
   ) {
-    guard isSetup else {
+    guard let operation = runningOperation() else {
       LogWarning("useFeature called before SDK setup")
       return
     }
+    let run = operation.graph
 
     // Boxed: metadata is a write-once snapshot handed to the SDK.
     let metadataBox = UncheckedSendable(metadata)
-    Task {
+    let launched = run.launchFacadeTask { [operation] in
+      defer { operation.finish() }
       do {
-        _ = try await useFeatureAndWait(
+        _ = try await self.useFeatureAndWait(
           featureId,
           amount: amount,
           entityId: entityId,
-          metadata: metadataBox.value
+          metadata: metadataBox.value,
+          run: run
         )
       } catch {
         LogWarning("useFeature failed: \(error)")
       }
+    }
+    if !launched {
+      operation.finish()
     }
   }
 
@@ -961,11 +1066,32 @@ public final class NuxieSDK: @unchecked Sendable {
     setUsage: Bool = false,
     metadata: [String: Any]? = nil
   ) async throws -> FeatureUsageResult {
-    guard isSetup else {
+    guard let operation = runningOperation() else {
       throw NuxieError.notConfigured
     }
+    defer { operation.finish() }
 
-    let identityService = coreIdentity
+    return try await useFeatureAndWait(
+      featureId,
+      amount: amount,
+      entityId: entityId,
+      setUsage: setUsage,
+      metadata: metadata,
+      run: operation.graph
+    )
+  }
+
+  private func useFeatureAndWait(
+    _ featureId: String,
+    amount: Double,
+    entityId: String?,
+    setUsage: Bool = false,
+    metadata: [String: Any]?,
+    run: NuxieSDKRun
+  ) async throws -> FeatureUsageResult {
+    let core = run.core
+
+    let identityService = core.identity
     let distinctId = identityService.getDistinctId()
 
     // Build properties for $feature_used event
@@ -982,7 +1108,7 @@ public final class NuxieSDK: @unchecked Sendable {
     }
 
     if !setUsage,
-       let purchaseBackedResult = try await coreTransactionObserver
+       let purchaseBackedResult = try await core.transactionObserver
         .useFeatureWithPendingPurchase(
           distinctId: distinctId,
           featureId: featureId,
@@ -998,7 +1124,7 @@ public final class NuxieSDK: @unchecked Sendable {
     }
 
     // Send directly to /i/event endpoint for immediate confirmation
-    let api = coreApi
+    let api = core.api
     // Boxed to hand the write-once payload across the API boundary.
     let propertiesBox = UncheckedSendable(properties)
     let response = try await api.trackEvent(
@@ -1016,7 +1142,7 @@ public final class NuxieSDK: @unchecked Sendable {
     // Update local balance from server response
     if let usage = response.usage, let remaining = usage.remaining {
       await MainActor.run {
-        features.setBalance(featureId, balance: remaining)
+        core.featureInfo.setBalance(featureId, balance: remaining)
       }
     }
 
