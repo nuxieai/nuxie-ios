@@ -197,13 +197,12 @@ import UIKit
             configuration.environment = environment
             // The fixture path never reaches a real API; a loopback endpoint
             // keeps the event pipeline constructible without network effects.
-            configuration.apiEndpoint = URL(string: "http://127.0.0.1")!
-            configuration.customStoragePath = cacheRootURL
+            let loopbackEndpoint = URL(string: "http://127.0.0.1")!
             let api = NuxieApi(
                 apiKey: configuration.apiKey,
-                baseURL: configuration.apiEndpoint,
+                baseURL: loopbackEndpoint,
                 useGzipCompression: false,
-                urlSession: configuration.urlSession
+                urlSession: nil
             )
             let identity = IdentityService(customStoragePath: cacheRootURL)
             let eventLog = EventLog(
@@ -226,7 +225,7 @@ import UIKit
                 behavior: definition.behavior,
                 journey: definition.journey,
                 assetBaseURL: URL(string: definition.delivery.assetBaseUrl)
-                    ?? configuration.apiEndpoint,
+                    ?? loopbackEndpoint,
                 authenticatedReleaseID: definition.releaseID
             )
             return ExperienceViewController(

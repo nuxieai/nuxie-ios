@@ -191,7 +191,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         return routed
     }
     
-    public func configure(configuration: NuxieConfiguration?) async throws {
+    public func configure(configuration: NuxieSetupConfiguration?) async throws {
         // Mock implementation - no-op
     }
 
@@ -590,7 +590,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         userProperties: sending [String: Any]?,
         userPropertiesSetOnce: sending [String: Any]?,
         persistToHistory: Bool,
-        distinctIdOverride: String?
+        distinctIdOverride: String?,
+        applyBeforeSend _: Bool
     ) async throws -> (NuxieEvent, EventResponse) {
         // Boxed so the write-once payloads can be recorded and re-sent.
         let propertiesBox = UncheckedSendable(properties)

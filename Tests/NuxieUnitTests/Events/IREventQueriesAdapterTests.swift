@@ -1,7 +1,7 @@
 import Foundation
 import Nimble
 import Quick
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
 #endif
@@ -424,7 +424,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     store: store
                 )
                 let configuration = NuxieConfiguration(apiKey: "test-api-key")
-                configuration.customStoragePath = databaseURL
+                configuration.testingOverrides.customStoragePath = databaseURL
                 try await log.configure(configuration: configuration)
                 defer {
                     try? FileManager.default.removeItem(at: databaseURL)
@@ -465,7 +465,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     store: store
                 )
                 let configuration = NuxieConfiguration(apiKey: "test-api-key")
-                configuration.customStoragePath = databaseURL
+                configuration.testingOverrides.customStoragePath = databaseURL
                 try await log.configure(configuration: configuration)
                 defer { try? FileManager.default.removeItem(at: databaseURL) }
 

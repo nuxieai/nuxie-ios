@@ -195,7 +195,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         var product = StoreProduct(
             productId: "catalog-product",
@@ -254,7 +254,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL,
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL,
             localPurchaseAccessStore: accessStore
         )
         let relaunchedObserver = TransactionObserver(
@@ -292,7 +292,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let grant = StoredLocalEntitlementGrant(
             featureId: "expired-feature",
@@ -371,7 +371,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL,
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL,
             localPurchaseAccessStore: accessStore
         )
         let accessBeforeObserverStartup = await relaunchedFeatures.getCached(
@@ -427,7 +427,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let observer = TransactionObserver(
             api: SuccessfulPurchaseSyncAPI(),
@@ -467,7 +467,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let evidence = StoredTransactionEvidence(
             transactionJws: "signed-jws",
@@ -511,7 +511,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         await features.updateFromPurchase([
             PurchaseFeature(
@@ -579,7 +579,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         let observer = TransactionObserver(
             api: mocks.nuxieApi,

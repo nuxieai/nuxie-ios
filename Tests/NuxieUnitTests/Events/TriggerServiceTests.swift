@@ -83,8 +83,6 @@ final class TriggerServiceTests: AsyncSpec {
         var presentationTrace: InMemoryExperiencePresentationTrace!
 
         beforeEach {
-            let testConfig = NuxieConfiguration(apiKey: "test-api-key")
-
             mockEventLog = MockEventLog()
             mockJourneyService = MockJourneyService()
             mockFlowPresentationService = MockExperiencePresentationService()
@@ -98,7 +96,7 @@ final class TriggerServiceTests: AsyncSpec {
                 profile: MockProfileService(),
                 dateProvider: mockDateProvider,
                 featureInfo: featureInfo,
-                cacheTTL: testConfig.featureCacheTTL
+                cacheTTL: NuxieInternalConfiguration().featureCacheTTL
             )
             triggerBroker = TriggerBroker()
             presentationTrace = InMemoryExperiencePresentationTrace()
@@ -176,6 +174,37 @@ final class TriggerServiceTests: AsyncSpec {
                 }
 
                 expect(updates.values).to(contain(.decision(.noMatch)))
+            }
+
+            it("converts an internal routing failure to TriggerError") {
+                mockEventLog.trackWithResponseError = EventRoutingError.eventRoutingFailed
+                let updates = TriggerUpdateRecorder()
+
+                await triggerService.trigger("test_event") { update in
+                    updates.append(update)
+                }
+
+                let failure = updates.values.compactMap { update -> TriggerError? in
+                    guard case .error(let error) = update else { return nil }
+                    return error
+                }.first
+                expect(failure?.code).to(equal("trigger_failed"))
+                expect(failure?.message).to(equal("Event routing failed"))
+            }
+
+            it("treats a beforeSend drop as a terminal no-match") {
+                mockEventLog.trackWithResponseError = EventBeforeSendDropError()
+                let updates = TriggerUpdateRecorder()
+
+                await triggerService.trigger("$app_opened") { update in
+                    updates.append(update)
+                }
+
+                expect(updates.values).to(contain(.decision(.noMatch)))
+                expect(updates.values.contains { update in
+                    if case .error = update { return true }
+                    return false
+                }).to(beFalse())
             }
 
             it("emits journeyStarted when a journey starts") {

@@ -133,12 +133,11 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     case .error(let error): _ = error.code
     }
 
-    // Identity + sessions.
+    // Identity.
     sdk.identify("user-1", userProperties: ["plan": "pro"])
     _ = sdk.getDistinctId()
     _ = sdk.getAnonymousId()
     _ = sdk.isIdentified
-    _ = sdk.getCurrentSessionId()
     sdk.reset(keepAnonymousId: true)
 
     // Features: observable snapshot is MainActor-bound; checks are async.
@@ -152,13 +151,7 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     // Engine-owned experience presentation can be dismissed from UI code.
     await sdk.dismiss()
 
-    // Event queue controls.
-    _ = await sdk.flushEvents()
-    _ = await sdk.getQueuedEventCount()
-    await sdk.pauseEventQueue()
-    await sdk.resumeEventQueue()
-
-    _ = try await sdk.refreshProfile()
+    try await sdk.setLocaleIdentifier(nil)
     _ = sdk.version
     await sdk.shutdown()
   }
@@ -167,12 +160,10 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
   /// detached task captures below must be Sendable.
   private func _compileOnlyCrossIsolationUsage() async {
     let result = await NuxieSDK.shared.triggerAndWait("compile_check")
-    _ = try? await NuxieSDK.shared.refreshProfile()
 
     Task.detached {
       _ = result
       await NuxieSDK.shared.dismiss()
-      _ = await NuxieSDK.shared.flushEvents()
     }
   }
 

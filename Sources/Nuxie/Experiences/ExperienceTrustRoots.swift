@@ -6,13 +6,10 @@ struct ExperiencePackageAuthorizationKey: Equatable, Sendable {
 }
 
 enum ExperienceTrustRootError: LocalizedError, Equatable {
-    case unprovisioned(Environment)
     case malformed(Environment)
 
     var errorDescription: String? {
         switch self {
-        case .unprovisioned(let environment):
-            "No Nuxie package trust roots are provisioned for \(environment.rawValue)"
         case .malformed(let environment):
             "Nuxie package trust roots are malformed for \(environment.rawValue)"
         }
@@ -48,9 +45,6 @@ enum ExperienceTrustRoots {
             return [
                 try key(id: nuxieSharedKeyId, base64: nuxieSharedPublicKeyBase64, environment: environment)
             ]
-        case .custom:
-            // No provisioned trust roots for custom endpoints. Intentionally fatal.
-            throw ExperienceTrustRootError.unprovisioned(environment)
         }
     }
 

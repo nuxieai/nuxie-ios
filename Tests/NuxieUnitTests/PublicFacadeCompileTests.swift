@@ -22,7 +22,7 @@ final class PublicFacadeCompileTests: XCTestCase {
         let _: TriggerResult = await sdk.triggerAndWait("checkout_started")
         let _: FeatureAccess = try await sdk.hasFeature("premium")
         let _: FeatureUsageResult = try await sdk.useFeatureAndWait("credits")
-        try await sdk.refreshProfile()
+        try await sdk.setLocaleIdentifier(nil)
         await sdk.dismiss()
     }
 }

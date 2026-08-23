@@ -90,14 +90,10 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 #endif
     }
 
-    guard configuration.environment != .custom || configuration.hasExplicitApiEndpoint else {
-      throw NuxieError.invalidConfiguration(
-        "environment == .custom requires setting configuration.apiEndpoint")
-    }
-
-    try NuxieConfigurationValidator.validate(configuration)
-
     let setupConfiguration = NuxieSetupConfiguration(configuration)
+    try NuxieConfigurationValidator.validate(
+      setupConfiguration.internalConfiguration
+    )
     let runtimeSettings = NuxieRuntimeSettings(
       localeIdentifier: configuration.localeIdentifier,
       purchaseDelegate: configuration.purchaseDelegate,
@@ -123,12 +119,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         overrides: overrides
       )
 
-      // Start the lifecycle coordinator over the built graph. It owns
-      // automatic lifecycle events ($app_installed etc.) when enabled — the
-      // former plugin system's only real job.
-      let lifecycleTracker = setupConfiguration.trackApplicationLifecycleEvents
-        ? AppLifecycleTracker(eventSink: core.systemEvents)
-        : nil
+      // Start the lifecycle coordinator over the built graph. It always owns
+      // automatic lifecycle events; customers can filter them with beforeSend.
+      let lifecycleTracker = AppLifecycleTracker(eventSink: core.systemEvents)
       let lifecycleCoordinator = NuxieLifecycleCoordinator(
         lifecycleTracker: lifecycleTracker,
         sessions: core.sessions,
@@ -154,9 +147,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
           await journeyService?.handleEvent(event)
         }
         do {
-          try await eventLog.configure(
-            configuration: setupConfiguration.eventLogConfiguration()
-          )
+          try await eventLog.configure(configuration: setupConfiguration)
           LogDebug("Event system setup complete")
         } catch {
           LogError("Event system setup failed: \(error)")
@@ -757,19 +748,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     return await core.eventLog.getEvents(for: sessionId)
   }
 
-  // MARK: - Session Management
-  
-  /// Get the current session ID
-  /// - Returns: Current session ID or nil if no session exists
-  ///
-  /// Sessions are automatic (created on first event, rotated after 30 min
-  /// idle / 24 h max). There is deliberately no manual session API.
-  public func getCurrentSessionId() -> String? {
-    guard let operation = runningOperation() else { return nil }
-    defer { operation.finish() }
-    return operation.graph.core.sessions.getSessionId(at: Date(), readOnly: true)
-  }
-
   // MARK: - Private Methods
 
 
@@ -861,25 +839,12 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     core.runtimeSettings.setPurchaseHandlingMode(purchaseHandlingMode)
   }
 
-  /// Refresh the user profile from the server
-  /// Uses the locale selected during setup or by `setLocaleIdentifier`.
-  /// - Throws: NuxieError if SDK not configured or network request fails
-  public func refreshProfile() async throws {
-    guard let operation = runningOperation() else {
-      throw NuxieError.notConfigured
-    }
-    defer { operation.finish() }
-
-    let profileService = operation.graph.core.profile
-    _ = try await profileService.refetchProfile()
-  }
-
-  // MARK: - Event System Public API
+  // MARK: - Internal Event Queue Controls
 
   /// Manually flush the network queue
   /// - Returns: True if flush was initiated
   @discardableResult
-  public func flushEvents() async -> Bool {
+  internal func flushEvents() async -> Bool {
     guard let operation = runningOperation() else { return false }
     defer { operation.finish() }
     let eventLog = operation.graph.core.eventLog
@@ -888,7 +853,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
   /// Get current network queue size
   /// - Returns: Number of events queued for network delivery
-  public func getQueuedEventCount() async -> Int {
+  internal func getQueuedEventCount() async -> Int {
     guard let operation = runningOperation() else { return 0 }
     defer { operation.finish() }
     let eventLog = operation.graph.core.eventLog
@@ -896,7 +861,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   }
 
   /// Pause event queue (stops network delivery)
-  public func pauseEventQueue() async {
+  internal func pauseEventQueue() async {
     guard let operation = runningOperation() else { return }
     defer { operation.finish() }
     let eventLog = operation.graph.core.eventLog
@@ -904,7 +869,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   }
 
   /// Resume event queue (enables network delivery)
-  public func resumeEventQueue() async {
+  internal func resumeEventQueue() async {
     guard let operation = runningOperation() else { return }
     defer { operation.finish() }
     let eventLog = operation.graph.core.eventLog

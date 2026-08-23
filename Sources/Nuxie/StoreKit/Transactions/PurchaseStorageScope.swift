@@ -18,15 +18,11 @@ struct PurchaseStorageScope: Codable, Equatable, Hashable, Sendable {
     init(
         appIdentifier: String,
         environment: Environment,
-        apiEndpoint: URL,
         testStoreEnabled: Bool
     ) {
         let digest = SHA256.hash(data: Data(appIdentifier.utf8))
         appIdentifierHash = digest.map { String(format: "%02x", $0) }.joined()
-        self.environment = Self.environmentNamespace(
-            environment: environment,
-            apiEndpoint: apiEndpoint
-        )
+        self.environment = environment.rawValue
         storeEnvironment = testStoreEnabled ? .testStore : .appStore
     }
 
@@ -45,38 +41,6 @@ struct PurchaseStorageScope: Codable, Equatable, Hashable, Sendable {
         environment: "test",
         storeEnvironment: .appStore
     )
-
-    /// Named environments already identify a single Nuxie backend. Custom
-    /// environments need the configured backend identity in the namespace so
-    /// two independent deployments cannot share evidence or account tokens.
-    private static func environmentNamespace(
-        environment: Environment,
-        apiEndpoint: URL
-    ) -> String {
-        guard environment == .custom else { return environment.rawValue }
-
-        var components = URLComponents(
-            url: apiEndpoint,
-            resolvingAgainstBaseURL: false
-        )
-        let normalizedScheme = components?.scheme?.lowercased()
-        let normalizedHost = components?.host?.lowercased()
-        components?.scheme = normalizedScheme
-        components?.host = normalizedHost
-        components?.fragment = nil
-        if (components?.scheme == "https" && components?.port == 443)
-            || (components?.scheme == "http" && components?.port == 80) {
-            components?.port = nil
-        }
-        if var path = components?.percentEncodedPath {
-            while path.hasSuffix("/") { path.removeLast() }
-            components?.percentEncodedPath = path
-        }
-        let normalizedEndpoint = components?.string ?? apiEndpoint.absoluteString
-        let digest = SHA256.hash(data: Data(normalizedEndpoint.utf8))
-        let endpointHash = digest.map { String(format: "%02x", $0) }.joined()
-        return "custom-\(endpointHash)"
-    }
 
     var storageComponents: [String] {
         [appIdentifierHash, environment, storeEnvironment.rawValue]

@@ -281,6 +281,10 @@ actor TriggerService: TriggerServiceProtocol {
       } else {
         await broker.emit(eventId: eventId, update: .decision(.noMatch))
       }
+    } catch is EventBeforeSendDropError {
+      await MainActor.run {
+        handler(.decision(.noMatch))
+      }
     } catch {
       let triggerError = TriggerError(code: "trigger_failed", message: error.localizedDescription)
       await MainActor.run {

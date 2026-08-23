@@ -85,6 +85,7 @@ final class NuxieCore: @unchecked Sendable {
     self.configuration = configuration
     self.runtimeSettings = runtimeSettings
 
+    let internalConfiguration = configuration.internalConfiguration
     let dateProvider = overrides.dateProvider ?? SystemDateProvider()
     let sleepProvider = overrides.sleepProvider ?? SystemSleepProvider()
     let presentationTrace = overrides.presentationTrace
@@ -93,10 +94,10 @@ final class NuxieCore: @unchecked Sendable {
       apiKey: configuration.apiKey,
       baseURL: configuration.apiEndpoint,
       useGzipCompression: false,
-      urlSession: configuration.urlSession
+      urlSession: internalConfiguration.urlSession
     )
     let identity = overrides.identity
-      ?? IdentityService(customStoragePath: configuration.customStoragePath)
+      ?? IdentityService(customStoragePath: internalConfiguration.customStoragePath)
     let sessions = overrides.sessions ?? SessionService()
     let eventLog = overrides.eventLog ?? EventLog(
       identity: identity,
@@ -134,7 +135,7 @@ final class NuxieCore: @unchecked Sendable {
       authorizationKeys = []
     }
     let releasePaths = ExperienceReleaseStoragePaths.resolve(
-      customStoragePath: configuration.customStoragePath,
+      customStoragePath: internalConfiguration.customStoragePath,
       cachesDirectory: FileManager.default.urls(
         for: .cachesDirectory,
         in: .userDomainMask
@@ -160,7 +161,7 @@ final class NuxieCore: @unchecked Sendable {
     }
     let releaseStore = ExperienceReleaseAcquisitionStore(
       cacheDirectory: releasePaths.objects,
-      urlSession: configuration.urlSession ?? .shared,
+      urlSession: internalConfiguration.urlSession ?? .shared,
       authorizationKeys: authorizationKeys,
       supportedRuntime: ExperienceReleaseRuntime.current,
       admission: ExperienceReleaseAdmission(store: highWaterStore)
@@ -185,17 +186,16 @@ final class NuxieCore: @unchecked Sendable {
       dateProvider: dateProvider,
       sleepProvider: sleepProvider,
       localeProvider: localeProvider,
-      customStoragePath: configuration.customStoragePath
+      customStoragePath: internalConfiguration.customStoragePath
     )
     let featureInfo = overrides.featureInfo ?? FeatureInfo()
     let purchaseStorageScope = PurchaseStorageScope(
       appIdentifier: Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app",
       environment: configuration.environment,
-      apiEndpoint: configuration.apiEndpoint,
       testStoreEnabled: configuration.testStoreEnabled
     )
     let localPurchaseAccessStore = LocalPurchaseAccessStore(
-      customStoragePath: configuration.customStoragePath,
+      customStoragePath: internalConfiguration.customStoragePath,
       scope: purchaseStorageScope
     )
     let features = overrides.features ?? FeatureService(
@@ -204,7 +204,7 @@ final class NuxieCore: @unchecked Sendable {
       profile: profile,
       dateProvider: dateProvider,
       featureInfo: featureInfo,
-      cacheTTL: configuration.featureCacheTTL,
+      cacheTTL: internalConfiguration.featureCacheTTL,
       localPurchaseAccessStore: localPurchaseAccessStore
     )
 
@@ -230,7 +230,7 @@ final class NuxieCore: @unchecked Sendable {
       irRuntime: irRuntime
     )
     let journeyStore = overrides.journeyStore ?? JourneyStore(
-      customStoragePath: configuration.customStoragePath,
+      customStoragePath: internalConfiguration.customStoragePath,
       dateProvider: dateProvider
     )
     let journeys = overrides.journeys ?? JourneyService(
@@ -272,7 +272,7 @@ final class NuxieCore: @unchecked Sendable {
       eventSink: systemEvents,
       transactionServiceProvider: { builtTransactionService.get() },
       evidenceStore: TransactionEvidenceStore(
-        customStoragePath: configuration.customStoragePath,
+        customStoragePath: internalConfiguration.customStoragePath,
         scope: purchaseStorageScope
       ),
       localAccessStore: localPurchaseAccessStore,
@@ -281,12 +281,12 @@ final class NuxieCore: @unchecked Sendable {
       recoverySources: overrides.transactionRecoverySources
     )
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
-      customStoragePath: configuration.customStoragePath,
+      customStoragePath: internalConfiguration.customStoragePath,
       scope: purchaseStorageScope
     )
     let accountOwnershipStore = overrides.purchaseAccountOwnershipStore
       ?? PurchaseAccountOwnershipStore(
-        customStoragePath: configuration.customStoragePath,
+        customStoragePath: internalConfiguration.customStoragePath,
         scope: purchaseStorageScope
       )
     let testStore: (any NuxieTestStorePurchasing)? = configuration.testStoreEnabled

@@ -174,7 +174,8 @@ final class HostDismissalTests: AsyncSpec {
                     userProperties: nil,
                     userPropertiesSetOnce: nil,
                     persistToHistory: false,
-                    distinctIdOverride: harness.distinctId
+                    distinctIdOverride: harness.distinctId,
+                    applyBeforeSend: false
                 )
 
                 let handedOffState = await handedOff.snapshot()
@@ -223,7 +224,8 @@ final class HostDismissalTests: AsyncSpec {
                     userProperties: nil,
                     userPropertiesSetOnce: nil,
                     persistToHistory: false,
-                    distinctIdOverride: harness.distinctId
+                    distinctIdOverride: harness.distinctId,
+                    applyBeforeSend: false
                 )
 
                 let rejectedState = await epochRejected.snapshot()
@@ -1324,9 +1326,7 @@ final class HostDismissalTests: AsyncSpec {
                     profile: harness.mocks.profileService,
                     dateProvider: harness.mocks.dateProvider,
                     featureInfo: featureInfo,
-                    cacheTTL: NuxieConfiguration(
-                        apiKey: "host-dismiss-trigger"
-                    ).featureCacheTTL
+                    cacheTTL: NuxieInternalConfiguration().featureCacheTTL
                 )
                 let triggerService = TriggerService(
                     eventLog: harness.mocks.eventLog,
@@ -1360,8 +1360,16 @@ final class HostDismissalTests: AsyncSpec {
                     withIntermediateDirectories: true
                 )
                 let configuration = NuxieConfiguration(apiKey: "host-dismiss-trigger")
-                configuration.customStoragePath = storageURL
-                configuration.trackApplicationLifecycleEvents = false
+                configuration.testingOverrides.customStoragePath = storageURL
+                configuration.beforeSend = { event in
+                    switch event.name {
+                    case SystemEventNames.appInstalled, SystemEventNames.appUpdated,
+                         SystemEventNames.appOpened, SystemEventNames.appBackgrounded:
+                        return nil
+                    default:
+                        return event
+                    }
+                }
                 try NuxieSDK.shared.setup(with: configuration, overrides: overrides)
 
                 let progress = TriggerUpdateRecorder()

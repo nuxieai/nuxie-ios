@@ -35,7 +35,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let config = NuxieConfiguration(apiKey: "pk_live_odfbiUwK7nhlzWBLk8vPwQly6hBLokibNl4eUzGrd097HjaXqIpB2ZbcMw3BeRJn1wIkmeGAxRsOa12jPnEL7WwPfEI5")
 
         #if DEBUG
-        config.apiEndpoint = URL(string: "http://localhost:3000")!
         config.environment = .development
         config.logLevel = .debug
         config.enableConsoleLogging = true
@@ -44,8 +43,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         config.logLevel = .warning
         config.enableConsoleLogging = false
         #endif
-
-        config.eventBatchSize = 25
 
         /// Superwall owns StoreKit finishing; Nuxie consumes outcomes.
         config.purchaseHandlingMode = .observer

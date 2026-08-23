@@ -1,7 +1,7 @@
 import Foundation
 import Quick
 import Nimble
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
 #endif
@@ -237,11 +237,11 @@ final class EventLogDeliveryTests: AsyncSpec {
                 baseRetryDelay: TimeInterval = 5
             ) async throws -> EventLog {
                 let config = NuxieConfiguration(apiKey: "test-api-key")
-                config.flushAt = flushAt
-                config.maxQueueSize = maxQueueSize
-                config.eventBatchSize = maxBatchSize
-                config.retryCount = maxRetries
-                config.retryDelay = baseRetryDelay
+                config.testingOverrides.flushAt = flushAt
+                config.testingOverrides.maxQueueSize = maxQueueSize
+                config.testingOverrides.eventBatchSize = maxBatchSize
+                config.testingOverrides.retryCount = maxRetries
+                config.testingOverrides.retryDelay = baseRetryDelay
                 let newLog = EventLog(
                     identity: MockIdentityService(),
                     sessions: MockSessionService(),

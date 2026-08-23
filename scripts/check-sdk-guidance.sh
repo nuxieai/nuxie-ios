@@ -10,8 +10,42 @@ grep -Fq 'public func reset(keepAnonymousId: Bool = false)' Sources/Nuxie/NuxieS
   || fail 'NuxieSDK.reset default changed'
 grep -Fq 'keepAnonymousId = false by default' README.md \
   || fail 'README reset default is stale'
-grep -Fq 'NuxieSDK.shared.getCurrentSessionId()' README.md \
-  || fail 'README is missing the public session accessor'
+
+public_guidance=(
+  README.md
+  docs/sdk-api-surface.md
+  docs/runtime-configuration.md
+  Examples/UIKit/README.md
+  Examples/SwiftUI/README.md
+  Examples/UIKit-RevenueCat/README.md
+  Examples/SwiftUI-RevenueCat/README.md
+  Examples/UIKit-Superwall/README.md
+  Examples/SwiftUI-Superwall/README.md
+)
+
+for removed_public_surface in \
+  getCurrentSessionId \
+  refreshProfile \
+  flushEvents \
+  getQueuedEventCount \
+  pauseEventQueue \
+  resumeEventQueue \
+  retryCount \
+  retryDelay \
+  eventBatchSize \
+  flushAt \
+  flushInterval \
+  maxQueueSize \
+  customStoragePath \
+  featureCacheTTL \
+  trackApplicationLifecycleEvents \
+  apiEndpoint \
+  '.custom' \
+  '.staging'; do
+  if grep -Fq "$removed_public_surface" "${public_guidance[@]}"; then
+    fail "customer guidance mentions removed public surface: $removed_public_surface"
+  fi
+done
 
 for removed_api in startNewSession endSession resetSession 'setSessionId('; do
   if grep -Fq "$removed_api" README.md; then

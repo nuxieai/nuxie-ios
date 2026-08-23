@@ -1,5 +1,5 @@
 import XCTest
-@_spi(Testing) @testable import Nuxie
+@_spi(Testing) @_spi(Companion) @testable import Nuxie
 @testable import NuxieTestSupport
 
 private actor StartupLifecycleProbe {
@@ -279,6 +279,12 @@ private actor PendingJourneyFacadeTrigger: TriggerServiceProtocol {
         userPropertiesSetOnce: sending [String: Any]?,
         handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {
+        // Lifecycle capture is always on (UNIV-2590); automatic $-events
+        // must not stand in for the test's pending journey trigger.
+        guard !event.hasPrefix("$") else {
+            handler(.decision(.noMatch))
+            return
+        }
         self.handler = handler
         started = true
         let waiters = startedWaiters
@@ -306,43 +312,43 @@ private actor PendingJourneyFacadeTrigger: TriggerServiceProtocol {
 final class NuxieConfigurationLifecycleTests: XCTestCase {
     func testSetupRejectsInvalidDeliveryCounts() async {
         await assertSetupRejects(
-            { $0.eventBatchSize = 0 },
+            { $0.testingOverrides.eventBatchSize = 0 },
             reason: "eventBatchSize must be between 1 and \(Int32.max)"
         )
         await assertSetupRejects(
-            { $0.flushAt = 0 },
+            { $0.testingOverrides.flushAt = 0 },
             reason: "flushAt must be between 1 and \(Int32.max)"
         )
         await assertSetupRejects(
-            { $0.maxQueueSize = -1 },
+            { $0.testingOverrides.maxQueueSize = -1 },
             reason: "maxQueueSize must be between 1 and \(Int32.max)"
         )
         await assertSetupRejects(
             {
-                $0.flushAt = 11
-                $0.maxQueueSize = 10
+                $0.testingOverrides.flushAt = 11
+                $0.testingOverrides.maxQueueSize = 10
             },
             reason: "flushAt must not exceed maxQueueSize"
         )
 
         let unsupportedCount = Int(Int32.max) + 1
         await assertSetupRejects(
-            { $0.eventBatchSize = unsupportedCount },
+            { $0.testingOverrides.eventBatchSize = unsupportedCount },
             reason: "eventBatchSize must be between 1 and \(Int32.max)"
         )
         await assertSetupRejects(
             {
-                $0.flushAt = unsupportedCount
-                $0.maxQueueSize = unsupportedCount
+                $0.testingOverrides.flushAt = unsupportedCount
+                $0.testingOverrides.maxQueueSize = unsupportedCount
             },
             reason: "flushAt must be between 1 and \(Int32.max)"
         )
         await assertSetupRejects(
-            { $0.maxQueueSize = unsupportedCount },
+            { $0.testingOverrides.maxQueueSize = unsupportedCount },
             reason: "maxQueueSize must be between 1 and \(Int32.max)"
         )
         await assertSetupRejects(
-            { $0.maxQueueSize = Int.max },
+            { $0.testingOverrides.maxQueueSize = Int.max },
             reason: "maxQueueSize must be between 1 and \(Int32.max)"
         )
     }
@@ -350,18 +356,22 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
     func testValidatorAcceptsMaximumSupportedDeliveryCounts() throws {
         let configuration = NuxieConfiguration(apiKey: "configuration-key")
         let maximumCount = Int(Int32.max)
-        configuration.eventBatchSize = maximumCount
-        configuration.flushAt = maximumCount
-        configuration.maxQueueSize = maximumCount
+        configuration.testingOverrides.eventBatchSize = maximumCount
+        configuration.testingOverrides.flushAt = maximumCount
+        configuration.testingOverrides.maxQueueSize = maximumCount
 
-        XCTAssertNoThrow(try NuxieConfigurationValidator.validate(configuration))
+        XCTAssertNoThrow(try NuxieConfigurationValidator.validate(
+            NuxieInternalConfiguration(testingOverrides: configuration.testingOverrides)
+        ))
     }
 
     func testValidatorRejectsDeliveryCountAboveSupportedMaximum() throws {
         let configuration = NuxieConfiguration(apiKey: "configuration-key")
-        configuration.eventBatchSize = Int(Int32.max) + 1
+        configuration.testingOverrides.eventBatchSize = Int(Int32.max) + 1
 
-        XCTAssertThrowsError(try NuxieConfigurationValidator.validate(configuration))
+        XCTAssertThrowsError(try NuxieConfigurationValidator.validate(
+            NuxieInternalConfiguration(testingOverrides: configuration.testingOverrides)
+        ))
     }
 
     func testPendingDeliveryQueryLimitIncludesDirectDeliveriesWithoutOverflow() {
@@ -384,21 +394,21 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
 
     func testSetupRejectsInvalidRetryConfiguration() async {
         await assertSetupRejects(
-            { $0.retryCount = -1 },
+            { $0.testingOverrides.retryCount = -1 },
             reason: "retryCount must be nonnegative"
         )
         await assertSetupRejects(
-            { $0.retryDelay = .nan },
+            { $0.testingOverrides.retryDelay = .nan },
             reason: "retryDelay must be finite and nonnegative"
         )
         await assertSetupRejects(
-            { $0.retryDelay = -.infinity },
+            { $0.testingOverrides.retryDelay = -.infinity },
             reason: "retryDelay must be finite and nonnegative"
         )
         await assertSetupRejects(
             {
-                $0.retryCount = 1_025
-                $0.retryDelay = 1
+                $0.testingOverrides.retryCount = 1_025
+                $0.testingOverrides.retryDelay = 1
             },
             reason: "retryCount and retryDelay produce an unschedulable backoff"
         )
@@ -406,52 +416,54 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
 
     func testSetupRejectsInvalidTimerAndCacheIntervals() async {
         await assertSetupRejects(
-            { $0.flushInterval = 0 },
+            { $0.testingOverrides.flushInterval = 0 },
             reason: "flushInterval must be finite and greater than zero"
         )
         await assertSetupRejects(
-            { $0.flushInterval = -1 },
+            { $0.testingOverrides.flushInterval = -1 },
             reason: "flushInterval must be finite and greater than zero"
         )
         await assertSetupRejects(
-            { $0.flushInterval = .nan },
+            { $0.testingOverrides.flushInterval = .nan },
             reason: "flushInterval must be finite and greater than zero"
         )
         await assertSetupRejects(
-            { $0.flushInterval = .infinity },
+            { $0.testingOverrides.flushInterval = .infinity },
             reason: "flushInterval must be finite and greater than zero"
         )
         await assertSetupRejects(
-            { $0.flushInterval = TimeInterval(UInt64.max) / 1_000_000_000 },
+            { $0.testingOverrides.flushInterval = TimeInterval(UInt64.max) / 1_000_000_000 },
             reason: "flushInterval is too large to schedule safely"
         )
         await assertSetupRejects(
-            { $0.flushInterval = .leastNonzeroMagnitude },
+            { $0.testingOverrides.flushInterval = .leastNonzeroMagnitude },
             reason: "flushInterval is too small to schedule safely"
         )
         await assertSetupRejects(
-            { $0.featureCacheTTL = 0 },
+            { $0.testingOverrides.featureCacheTTL = 0 },
             reason: "featureCacheTTL must be finite and greater than zero"
         )
         await assertSetupRejects(
-            { $0.featureCacheTTL = -1 },
+            { $0.testingOverrides.featureCacheTTL = -1 },
             reason: "featureCacheTTL must be finite and greater than zero"
         )
         await assertSetupRejects(
-            { $0.featureCacheTTL = .nan },
+            { $0.testingOverrides.featureCacheTTL = .nan },
             reason: "featureCacheTTL must be finite and greater than zero"
         )
         await assertSetupRejects(
-            { $0.featureCacheTTL = .infinity },
+            { $0.testingOverrides.featureCacheTTL = .infinity },
             reason: "featureCacheTTL must be finite and greater than zero"
         )
     }
 
     func testValidatorAcceptsOneNanosecondFlushIntervalBoundary() throws {
         let configuration = NuxieConfiguration(apiKey: "configuration-key")
-        configuration.flushInterval = 1 / 1_000_000_000
+        configuration.testingOverrides.flushInterval = 1 / 1_000_000_000
 
-        XCTAssertNoThrow(try NuxieConfigurationValidator.validate(configuration))
+        XCTAssertNoThrow(try NuxieConfigurationValidator.validate(
+            NuxieInternalConfiguration(testingOverrides: configuration.testingOverrides)
+        ))
     }
 
     func testSetupAcceptsZeroRetryDelayAndExistingDefaults() async throws {
@@ -459,8 +471,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         await sdk.shutdown()
 
         let configuration = NuxieConfiguration(apiKey: "configuration-key")
-        configuration.retryDelay = 0
-        configuration.trackApplicationLifecycleEvents = false
+        configuration.testingOverrides.retryDelay = 0
 
         try sdk.setup(with: configuration)
         XCTAssertTrue(sdk.isSetup)
@@ -553,7 +564,9 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         overrides.triggers = trigger
         overrides.transactionObserver = observer
         let configuration = NuxieConfiguration(apiKey: "trigger-lifecycle-key")
-        configuration.trackApplicationLifecycleEvents = false
+        configuration.beforeSend = { event in
+            event.name.hasPrefix("$app_") ? nil : event
+        }
         try sdk.setup(
             with: configuration,
             overrides: overrides
@@ -596,7 +609,9 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         overrides.triggers = trigger
         overrides.transactionObserver = observer
         let configuration = NuxieConfiguration(apiKey: "trigger-and-wait-lifecycle-key")
-        configuration.trackApplicationLifecycleEvents = false
+        configuration.beforeSend = { event in
+            event.name.hasPrefix("$app_") ? nil : event
+        }
         try sdk.setup(
             with: configuration,
             overrides: overrides,
@@ -647,7 +662,9 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         overrides.triggers = trigger
         overrides.transactionObserver = observer
         let configuration = NuxieConfiguration(apiKey: "pending-journey-lifecycle-key")
-        configuration.trackApplicationLifecycleEvents = false
+        configuration.beforeSend = { event in
+            event.name.hasPrefix("$app_") ? nil : event
+        }
         try sdk.setup(
             with: configuration,
             overrides: overrides
@@ -821,22 +838,22 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
     func testSetupSnapshotDoesNotFollowBuilderMutation() {
         let configuration = NuxieConfiguration(apiKey: "snapshot-key")
         configuration.environment = .staging
-        configuration.flushAt = 7
-        configuration.featureCacheTTL = 42
+        configuration.testingOverrides.flushAt = 7
+        configuration.testingOverrides.featureCacheTTL = 42
         configuration.localeIdentifier = "en_US"
         configuration.purchaseHandlingMode = .observer
         let settings = NuxieRuntimeSettings(configuration: configuration)
         let snapshot = NuxieSetupConfiguration(configuration)
 
         configuration.environment = .development
-        configuration.flushAt = 99
-        configuration.featureCacheTTL = 999
+        configuration.testingOverrides.flushAt = 99
+        configuration.testingOverrides.featureCacheTTL = 999
         configuration.localeIdentifier = "es_ES"
         configuration.purchaseHandlingMode = .full
 
         XCTAssertEqual(snapshot.environment, .staging)
-        XCTAssertEqual(snapshot.flushAt, 7)
-        XCTAssertEqual(snapshot.featureCacheTTL, 42)
+        XCTAssertEqual(snapshot.internalConfiguration.flushAt, 7)
+        XCTAssertEqual(snapshot.internalConfiguration.featureCacheTTL, 42)
         XCTAssertEqual(settings.localeIdentifier(), "en_US")
         XCTAssertFalse(snapshot.testStoreEnabled)
         if case .observer = settings.purchaseHandlingMode() {} else {
@@ -920,11 +937,11 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         defer { Task { await sdk.shutdown() } }
 
         configuration.localeIdentifier = "es_ES"
-        _ = try await sdk.refreshProfile()
+        _ = try await sdk.core!.profile.refetchProfile()
         let localeAfterBuilderMutation = await mocks.nuxieApi.lastProfileLocale
         XCTAssertEqual(localeAfterBuilderMutation, "en_US")
 
-        _ = try await sdk.setLocaleIdentifier("fr_FR")
+        try await sdk.setLocaleIdentifier("fr_FR")
         let localeAfterRuntimeControl = await mocks.nuxieApi.lastProfileLocale
         XCTAssertEqual(localeAfterRuntimeControl, "fr_FR")
     }

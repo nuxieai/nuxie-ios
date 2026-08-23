@@ -92,7 +92,7 @@ struct ContentView: View {
     }
 
     let sdkConfiguration = NuxieConfiguration(apiKey: configuration.apiKey)
-    sdkConfiguration.apiEndpoint = configuration.ingestUrl
+    sdkConfiguration.testingOverrides.apiEndpoint = configuration.ingestUrl
     sdkConfiguration.logLevel = .debug
 
     do {

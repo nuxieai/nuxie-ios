@@ -1,5 +1,13 @@
 import Foundation
 
+/// Internal control-flow error used when an identity transition makes an
+/// in-flight profile response obsolete. This is not a configuration failure.
+struct ProfileRefreshCancellationError: LocalizedError, Sendable {
+    var errorDescription: String? {
+        "Stale profile fetch discarded because the active user changed"
+    }
+}
+
 /// Protocol defining the ProfileService interface
 protocol ProfileServiceProtocol: AnyObject, Sendable {
     /// Get cached profile if available and valid
@@ -383,7 +391,7 @@ internal actor ProfileService: ProfileServiceProtocol {
             // fresh fetch for the new user.
             guard identityService.getDistinctId() == distinctId else {
                 LogWarning("Discarding stale profile fetch for \(NuxieLogger.shared.logDistinctID(distinctId)) — user changed mid-flight")
-                throw NuxieError.invalidConfiguration("stale profile fetch discarded")
+                throw ProfileRefreshCancellationError()
             }
             switch result {
             case .modified(let fresh, let nextValidator):
@@ -436,6 +444,8 @@ internal actor ProfileService: ProfileServiceProtocol {
                 LogInfo("Cached profile revalidated (locale: \(locale))")
                 return refreshed.response
             }
+        } catch let error as ProfileRefreshCancellationError {
+            throw error
         } catch {
             LogError("Network fetch failed: \(error)")
             throw error

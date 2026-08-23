@@ -92,26 +92,21 @@ struct MoodLogApp: App {
         /// Get your API key from https://nuxie.ai dashboard
         let config = NuxieConfiguration(apiKey: "your_api_key_here")
 
-        /// **Step 2: Configure API endpoint (optional)**
-        /// For development, you can point to localhost
-        /// In production, this will automatically use Nuxie's production endpoint
-        config.apiEndpoint = URL(string: "http://localhost:3000")!
-
-        /// **Step 3: Set environment (optional)**
+        /// **Step 2: Set environment (optional)**
         /// Use .development for testing, .production for release builds
         config.environment = .development
 
-        /// **Step 4: Set log level (optional)**
+        /// **Step 3: Set log level (optional)**
         /// .debug shows detailed SDK logs, helpful during development
         config.logLevel = .debug
 
-        /// **Step 5: Configure Purchase Delegate**
+        /// **Step 4: Configure Purchase Delegate**
         /// RevenueCat owns StoreKit finishing; Nuxie consumes outcomes.
         config.purchaseHandlingMode = .observer
         /// The adapter launches the exact StoreProduct retained by Nuxie.
         config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 
-        /// **Step 6: Initialize SDK**
+        /// **Step 5: Initialize SDK**
         /// This must be called before using any other Nuxie SDK methods
         do {
             try NuxieSDK.shared.setup(with: config)

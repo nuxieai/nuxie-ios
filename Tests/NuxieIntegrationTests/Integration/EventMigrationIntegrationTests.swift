@@ -36,9 +36,17 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                 
                 // Create configuration with migration enabled (default)
                 config = NuxieConfiguration(apiKey: "test-key-\(testId)")
-                config.customStoragePath = URL(fileURLWithPath: dbPath)
+                config.testingOverrides.customStoragePath = URL(fileURLWithPath: dbPath)
                 config.environment = .development
-                config.trackApplicationLifecycleEvents = false // no lifecycle noise in these tests
+                config.beforeSend = { event in
+                    switch event.name {
+                    case SystemEventNames.appInstalled, SystemEventNames.appUpdated,
+                         SystemEventNames.appOpened, SystemEventNames.appBackgrounded:
+                        return nil
+                    default:
+                        return event
+                    }
+                }
                 
                 // Setup SDK
                 print("DEBUG: About to call NuxieSDK.shared.setup()")

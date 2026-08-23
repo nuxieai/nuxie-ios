@@ -128,7 +128,6 @@ public final class MockFactory: @unchecked Sendable {
         featureInfo suppliedFeatureInfo: FeatureInfo? = nil
     ) -> JourneyService {
         Self.markUsed()
-        let config = NuxieConfiguration(apiKey: "test-api-key")
         let featureInfo = suppliedFeatureInfo ?? FeatureInfo()
         let irRuntime = IRRuntime(dateProvider: dateProvider)
         let features: FeatureServiceProtocol = suppliedFeatures ?? FeatureService(
@@ -137,7 +136,7 @@ public final class MockFactory: @unchecked Sendable {
             profile: profileService,
             dateProvider: dateProvider,
             featureInfo: featureInfo,
-            cacheTTL: config.featureCacheTTL
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
         irRuntime.wire(
             identity: identityService,
