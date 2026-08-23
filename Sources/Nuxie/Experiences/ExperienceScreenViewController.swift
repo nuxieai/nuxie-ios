@@ -859,8 +859,10 @@ final class ExperienceScreenViewController: UIViewController {
         guard !didLogUnavailableLifecycleWrite else { return }
         didLogUnavailableLifecycleWrite = true
         LogWarning(
-            "ExperienceScreenViewController: lifecycle state is unavailable "
-                + "for \(screenId); skipping host writes: \(reason)"
+            """
+            ExperienceScreenViewController: lifecycle state is unavailable \
+            for \(screenId); skipping host writes: \(reason)
+            """
         )
     }
 

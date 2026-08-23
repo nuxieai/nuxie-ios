@@ -723,7 +723,7 @@ actor JourneyService: JourneyServiceProtocol {
     let warning =
       "JourneyService: discarding epoch-rejected journey \(journeyId); " +
       "device=\(state.epoch), authoritative=\(authoritativeEpoch)"
-    LogWarning(warning)
+    LogWarning(.sensitive(warning))
     await discardLocalJourney(journey, terminalStatus: .superseded)
   }
 
@@ -743,7 +743,7 @@ actor JourneyService: JourneyServiceProtocol {
         let error =
           "JourneyService: refusing mailbox claim \(entry.journeyId) " +
           "with unsupported state version \(entry.stateVersion)"
-        LogError(error)
+        LogError(.sensitive(error))
         continue
       }
       guard inMemoryJourneysById[entry.journeyId] == nil,
@@ -1290,8 +1290,10 @@ actor JourneyService: JourneyServiceProtocol {
       guard await persistPendingScreenBatch(batch, for: journey) else {
         let rolledBack = await runtime.dispatcher.rollbackUnpublishedBatch(batch)
         LogWarning(
-          "JourneyService: failed to persist screen action batch \(batch.invocationId); "
-            + "dispatcher rollback=\(rolledBack)"
+          """
+          JourneyService: failed to persist screen action batch \(batch.invocationId); \
+          dispatcher rollback=\(rolledBack)
+          """
         )
         return
       }

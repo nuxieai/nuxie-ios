@@ -143,6 +143,14 @@ timer/backoff values must fit Swift concurrency's nanosecond scheduling range.
 Invalid values fail setup with `NuxieError.invalidConfiguration` naming the
 offending field.
 
+Console logging treats every interpolated value as sensitive by default. With
+`redactSensitiveData` enabled, identifiers, response bodies, paths,
+caller-supplied values, and error descriptions are replaced by stable
+HMAC-SHA-256 summaries for the life of the process. Error types and explicitly
+annotated structure such as HTTP status codes remain visible. Setting
+`redactSensitiveData` to `false` is an explicit diagnostic opt-in that can emit
+those raw values.
+
 ## Delivery guarantees (what "offline-first" means precisely)
 
 - Every tracked event is persisted to SQLite marked pending **before** the
