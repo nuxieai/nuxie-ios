@@ -1,5 +1,5 @@
 import Foundation
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 public actor MockTransactionObserver: TransactionObserverProtocol {
     public private(set) var startListeningCalled = false
@@ -56,7 +56,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
         syncCurrentEntitlementsDistinctIds.append(distinctId)
     }
 
-    public func useFeatureWithPendingPurchase(
+    @_spi(Testing) public func useFeatureWithPendingPurchase(
         distinctId: String,
         featureId: String,
         amount: Double,

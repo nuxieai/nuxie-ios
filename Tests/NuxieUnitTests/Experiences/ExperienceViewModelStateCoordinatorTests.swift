@@ -1,7 +1,7 @@
 import Foundation
 import Quick
 import Nimble
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
     override class func spec() {

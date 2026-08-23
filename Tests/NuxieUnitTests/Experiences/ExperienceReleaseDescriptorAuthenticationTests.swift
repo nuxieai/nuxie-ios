@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(

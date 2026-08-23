@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 /// Runs the language-neutral conformance vectors in `fixtures/` (repo root).
 ///

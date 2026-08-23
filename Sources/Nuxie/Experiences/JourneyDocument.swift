@@ -225,9 +225,9 @@ public struct JourneyViewModelValue: Codable, Sendable {
     public let instanceId: String?
     public let instanceName: String?
     public let path: String
-    public let value: AnyCodable
+    @_spi(Testing) public let value: AnyCodable
 
-    public init(
+    @_spi(Testing) public init(
         viewModelName: String,
         instanceId: String? = nil,
         instanceName: String? = nil,
@@ -335,7 +335,7 @@ public enum ViewModelPropertyType: String, Codable, Sendable {
 public final class ViewModelProperty: Codable, Sendable {
     public let type: ViewModelPropertyType
     public let propertyId: Int?
-    public let defaultValue: AnyCodable?
+    @_spi(Testing) public let defaultValue: AnyCodable?
     public let allowUnset: Bool?
     public let required: Bool?
     public let enumValues: [String]?
@@ -344,7 +344,7 @@ public final class ViewModelProperty: Codable, Sendable {
     public let viewModelId: String?
     public let validation: ViewModelValidation?
 
-    public init(
+    @_spi(Testing) public init(
         type: ViewModelPropertyType,
         propertyId: Int? = nil,
         defaultValue: AnyCodable? = nil,
@@ -381,5 +381,5 @@ public struct ViewModelInstance: Codable, Sendable {
     public let viewModelId: String
     public let instanceId: String
     public let name: String?
-    public let values: [String: AnyCodable]
+    @_spi(Testing) public let values: [String: AnyCodable]
 }

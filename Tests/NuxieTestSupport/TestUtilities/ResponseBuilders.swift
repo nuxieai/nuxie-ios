@@ -1,5 +1,5 @@
 import Foundation
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 /// Helper methods for creating common API responses in tests
 struct ResponseBuilders {

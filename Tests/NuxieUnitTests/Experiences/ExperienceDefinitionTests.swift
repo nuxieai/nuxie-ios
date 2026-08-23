@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 final class ExperienceDefinitionTests: XCTestCase {
     private func goldenDescriptorObject() throws -> [String: Any] {

@@ -2,7 +2,7 @@ import Foundation
 import Nimble
 import Quick
 
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 final class ResponseModelContractTests: QuickSpec {
     override class func spec() {

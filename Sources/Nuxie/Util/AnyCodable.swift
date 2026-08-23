@@ -1,7 +1,7 @@
 import Foundation
 
 /// A type-erased Codable value for flexible JSON handling
-public struct AnyCodable: Codable {
+@_spi(Testing) public struct AnyCodable: Codable {
     public let value: Any
     
     public init(_ value: Any) {

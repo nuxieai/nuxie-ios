@@ -1,5 +1,5 @@
 import Foundation
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 /// Mock implementation of NuxieApi for testing
 public actor MockNuxieApi: NuxieApiProtocol {

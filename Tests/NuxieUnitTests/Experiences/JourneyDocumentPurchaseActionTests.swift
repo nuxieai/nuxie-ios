@@ -1,5 +1,5 @@
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 final class JourneyDocumentPurchaseActionTests: XCTestCase {
     func testDecodesPurchaseActionWithPlacementValueRef() throws {
