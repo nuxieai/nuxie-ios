@@ -70,24 +70,19 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(PurchaseFeature.self)
 
     // Profile / network models
-    requireSendable(ProfileResponse.self)
-    requireSendable(Experience.self)
     requireSendable(Segment.self)
     requireSendable(Feature.self)
     requireSendable(ExperimentAssignment.self)
 
     // Experiences
-    requireSendable(Experience.self)
     requireSendable(StoreProduct.self)
     requireSendable(ExperienceColorSchemeMode.self)
     requireSendable(CloseReason.self)
-    requireSendable(JourneyDocument.self)
 
     // Journeys
     requireSendable(Journey.self)
     requireSendable(JourneyStatus.self)
     requireSendable(JourneyExitReason.self)
-    requireSendable(JourneyAction.self)
     requireSendable(ResumeReason.self)
 
     // StoreKit
@@ -106,7 +101,6 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     // IR value model (crosses the EventLog actor boundary)
     requireSendable(IRValue.self)
     requireSendable(IRPredicate.self)
-    requireSendable(IREnvelope.self)
     requireSendable(CompareOp.self)
     requireSendable(Aggregate.self)
     requireSendable(Period.self)
@@ -177,11 +171,10 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
   /// detached task captures below must be Sendable.
   private func _compileOnlyCrossIsolationUsage() async {
     let result = await NuxieSDK.shared.triggerAndWait("compile_check")
-    let response: ProfileResponse? = try? await NuxieSDK.shared.refreshProfile()
+    _ = try? await NuxieSDK.shared.refreshProfile()
 
     Task.detached {
       _ = result
-      _ = response
       _ = await NuxieSDK.shared.flushEvents()
     }
   }

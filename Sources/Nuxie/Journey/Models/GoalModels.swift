@@ -3,9 +3,9 @@ import Foundation
 // MARK: - Goal Configuration
 
 /// Configuration for experience goals
-public struct GoalConfig: Codable, Sendable {
+struct GoalConfig: Codable, Sendable {
     /// Types of goals supported
-    public enum Kind: String, Codable, Sendable {
+    enum Kind: String, Codable, Sendable {
         case event = "event"
         case milestone = "milestone"
         case segmentEnter = "segment_enter"
@@ -14,32 +14,32 @@ public struct GoalConfig: Codable, Sendable {
     }
     
     /// The type of goal
-    public let kind: Kind
+    let kind: Kind
     
     /// Event name (required for event goals)
-    public let eventName: String?
+    let eventName: String?
     
     /// Optional IR filter for event properties
-    public let eventFilter: IREnvelope?
+    let eventFilter: IREnvelope?
 
     /// Milestone ID (required for milestone goals)
-    public let milestoneId: String?
+    let milestoneId: String?
     
     /// Segment ID (required for segment goals)
-    public let segmentId: String?
+    let segmentId: String?
     
     /// IR expression for attribute goals
-    public let attributeExpr: IREnvelope?
+    let attributeExpr: IREnvelope?
     
     /// Conversion window in seconds.
     /// - For `.event` goals: counts if the qualifying event's timestamp is within [anchor, anchor + window],
     ///   even if evaluation happens later (e.g., offline sync).
     /// - For `.segmentEnter`, `.segmentLeave`, `.attribute` goals: the condition must be met when evaluated
     ///   and before [anchor + window].
-    public let window: TimeInterval?
+    let window: TimeInterval?
     
     /// Initialize a goal configuration
-    public init(
+    init(
         kind: Kind,
         eventName: String? = nil,
         eventFilter: IREnvelope? = nil,
@@ -61,9 +61,9 @@ public struct GoalConfig: Codable, Sendable {
 // MARK: - Exit Policy
 
 /// Policy for when a journey should exit
-public struct ExitPolicy: Codable, Sendable {
+struct ExitPolicy: Codable, Sendable {
     /// Exit modes
-    public enum Mode: String, Codable, Sendable {
+    enum Mode: String, Codable, Sendable {
         /// Exit when goal is achieved
         case onGoal = "on_goal"
         
@@ -78,10 +78,10 @@ public struct ExitPolicy: Codable, Sendable {
     }
     
     /// The exit mode
-    public let mode: Mode
+    let mode: Mode
     
     /// Initialize an exit policy
-    public init(mode: Mode) {
+    init(mode: Mode) {
         self.mode = mode
     }
 }

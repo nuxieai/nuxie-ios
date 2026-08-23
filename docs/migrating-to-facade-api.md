@@ -12,11 +12,11 @@ method signatures. The following implementation seams are no longer exported:
 - gzip helpers and other implementation utilities
 
 If application code used one of these types for testing, replace it with a
-test double around the application's own Nuxie-facing abstraction. If it used
-`ProfileResponse`, only the delivered experience fields and
-`experience(id:versionId:)` lookup remain supported; server-owned segments,
-facts, mailbox entries, experiment assignments, and feature wire values are
-consumed by the SDK internally.
+test double around the application's own Nuxie-facing abstraction.
+`refreshProfile()` now refreshes SDK state without returning the internal
+profile response; release descriptors, segments, facts, mailbox entries,
+experiment assignments, and feature wire values are consumed by the SDK
+internally.
 
 The supported facade and its semantics are enumerated in
 `docs/sdk-api-surface.md`. The exact exported declaration sets are pinned for

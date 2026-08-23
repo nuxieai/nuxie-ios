@@ -18,7 +18,7 @@ struct BatchError: Codable, Sendable {
 
 // MARK: - Profile Response
 
-public struct ProfileResponse: Codable, Sendable {
+struct ProfileResponse: Codable, Sendable {
     /// Signed release control plane and sole experience-delivery authority.
     let releases: ExperienceReleaseProfile?
     /// Segment definitions available for local evaluation.
@@ -216,18 +216,18 @@ struct ExperimentAssignment: Codable, Sendable {
 
 // MARK: - Trigger Models
 
-public struct EventTriggerConfig: Codable, Sendable {
-    public let eventName: String
-    public let condition: IREnvelope? // Optional IR condition for event properties
+struct EventTriggerConfig: Codable, Sendable {
+    let eventName: String
+    let condition: IREnvelope? // Optional IR condition for event properties
 
-    public init(eventName: String, condition: IREnvelope?) {
+    init(eventName: String, condition: IREnvelope?) {
         self.eventName = eventName
         self.condition = condition
     }
 }
 
 /// Enrollment trigger embedded in an experience profile entry.
-public enum ExperienceTrigger: Codable, Sendable {
+enum ExperienceTrigger: Codable, Sendable {
     case event(EventTriggerConfig)
     
     private enum CodingKeys: String, CodingKey, Sendable {
@@ -239,7 +239,7 @@ public enum ExperienceTrigger: Codable, Sendable {
         case event
     }
     
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(TriggerType.self, forKey: .type)
         
@@ -250,7 +250,7 @@ public enum ExperienceTrigger: Codable, Sendable {
         }
     }
     
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         
         switch self {
@@ -263,12 +263,12 @@ public enum ExperienceTrigger: Codable, Sendable {
 
 // MARK: - Reentry Policy
 
-public struct Window: Codable, Sendable {
-    public let amount: Int
-    public let unit: WindowUnit
+struct Window: Codable, Sendable {
+    let amount: Int
+    let unit: WindowUnit
 }
 
-public enum WindowUnit: String, Codable, Sendable {
+enum WindowUnit: String, Codable, Sendable {
     /// A duration measured in seconds.
     case second
     case minute
@@ -278,7 +278,7 @@ public enum WindowUnit: String, Codable, Sendable {
 }
 
 /// Policy controlling whether an experience may enroll a user again.
-public enum ExperienceReentry: Codable, Sendable {
+enum ExperienceReentry: Codable, Sendable {
     case oneTime
     case everyTime
     case oncePerWindow(Window)
@@ -294,7 +294,7 @@ public enum ExperienceReentry: Codable, Sendable {
         case oncePerWindow = "once_per_window"
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(ReentryType.self, forKey: .type)
 
@@ -309,7 +309,7 @@ public enum ExperienceReentry: Codable, Sendable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .oneTime:

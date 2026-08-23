@@ -16,7 +16,6 @@ final class PublicFacadeCompileTests: XCTestCase {
         _ = TriggerUpdate.self
         _ = FeatureAccess.self
         _ = FeatureUsageResult.self
-        _ = ProfileResponse.self
         _ = ExperienceViewController.self
     }
 
@@ -24,7 +23,7 @@ final class PublicFacadeCompileTests: XCTestCase {
         let _: TriggerResult = await sdk.triggerAndWait("checkout_started")
         let _: FeatureAccess = try await sdk.hasFeature("premium")
         let _: FeatureUsageResult = try await sdk.useFeatureAndWait("credits")
-        let _: ProfileResponse = try await sdk.refreshProfile()
+        try await sdk.refreshProfile()
         let _: ExperienceViewController = try await sdk.experienceViewController(for: "onboarding")
     }
 }

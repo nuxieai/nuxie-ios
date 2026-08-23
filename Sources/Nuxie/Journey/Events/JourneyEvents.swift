@@ -9,54 +9,54 @@ final class JourneyEvents: Sendable {
 
     // MARK: - Journey facts
 
-    public static let journeyEnrolled = "$journey_enrolled"
-    public static let journeyTransition = "$journey_transition"
-    public static let journeyMilestone = "$journey_milestone"
-    public static let journeyConverted = "$journey_converted"
-    public static let journeyExited = "$journey_exited"
-    public static let journeyEffectRequested = "$journey_effect_requested"
-    public static let journeyEffectCompleted = "$journey_effect_completed"
+    static let journeyEnrolled = "$journey_enrolled"
+    static let journeyTransition = "$journey_transition"
+    static let journeyMilestone = "$journey_milestone"
+    static let journeyConverted = "$journey_converted"
+    static let journeyExited = "$journey_exited"
+    static let journeyEffectRequested = "$journey_effect_requested"
+    static let journeyEffectCompleted = "$journey_effect_completed"
     /// Device claim request for a server-owned mailbox offer.
-    public static let journeyClaimed = "$journey_claimed"
+    static let journeyClaimed = "$journey_claimed"
     /// Ownership transfer carrying a versioned state envelope.
-    public static let journeyHandoff = "$journey_handoff"
+    static let journeyHandoff = "$journey_handoff"
     /// Durable checkpoint emitted while this device retains ownership.
-    public static let journeyParked = "$journey_parked"
+    static let journeyParked = "$journey_parked"
     /// Authoritative cancellation of a losing journey owner.
-    public static let journeySuperseded = "$journey_superseded"
+    static let journeySuperseded = "$journey_superseded"
 
     /// Successful experience presentation.
-    public static let experienceShown = "$experience_shown"
+    static let experienceShown = "$experience_shown"
     /// User-driven experience dismissal.
-    public static let experienceDismissed = "$experience_dismissed"
+    static let experienceDismissed = "$experience_dismissed"
     /// Purchase completed from an experience.
-    public static let experiencePurchased = "$experience_purchased"
+    static let experiencePurchased = "$experience_purchased"
     /// Experience presentation exceeded its time limit.
-    public static let experienceTimedOut = "$experience_timed_out"
+    static let experienceTimedOut = "$experience_timed_out"
     /// Experience execution failed.
-    public static let experienceErrored = "$experience_errored"
+    static let experienceErrored = "$experience_errored"
     /// Published experience artifact loaded successfully.
-    public static let experienceArtifactLoadSucceeded = "$experience_artifact_load_succeeded"
+    static let experienceArtifactLoadSucceeded = "$experience_artifact_load_succeeded"
     /// Published experience artifact failed to load.
-    public static let experienceArtifactLoadFailed = "$experience_artifact_load_failed"
+    static let experienceArtifactLoadFailed = "$experience_artifact_load_failed"
 
-    public static let customerUpdated = "$customer_updated"
-    public static let eventSent = "$event_sent"
-    public static let delegateCalled = "$delegate_called"
+    static let customerUpdated = "$customer_updated"
+    static let eventSent = "$event_sent"
+    static let delegateCalled = "$delegate_called"
 
     /// Real exposure from a server experiment assignment. Properties are
     /// pinned by `fixtures/journeys/golden-journeys.json`.
-    public static let experimentExposure = "$experiment_exposure"
+    static let experimentExposure = "$experiment_exposure"
     /// No server assignment existed; the first variant ran as a tagged
     /// fallback (`assignment_source: "no_assignment"`).
-    public static let experimentExposureFallback = "$experiment_exposure_fallback"
+    static let experimentExposureFallback = "$experiment_exposure_fallback"
     /// A server assignment named an unknown variant; no variant actions
     /// ran (`reason: "variant_not_found"`).
-    public static let experimentExposureError = "$experiment_exposure_error"
+    static let experimentExposureError = "$experiment_exposure_error"
 
     // MARK: - Properties Builders
 
-    public static func journeyEnrolledProperties(
+    static func journeyEnrolledProperties(
         journey: JourneySnapshot,
         experience: Experience,
         triggerRef: String
@@ -97,7 +97,7 @@ final class JourneyEvents: Sendable {
         ]
     }
 
-    public static func journeyTransitionProperties(
+    static func journeyTransitionProperties(
         journey: JourneySnapshot,
         fromNode: String?,
         toNode: String,
@@ -116,7 +116,7 @@ final class JourneyEvents: Sendable {
         return properties
     }
 
-    public static func journeyMilestoneProperties(
+    static func journeyMilestoneProperties(
         journey: JourneySnapshot,
         milestoneId: String
     ) -> [String: Any] {
@@ -127,7 +127,7 @@ final class JourneyEvents: Sendable {
         ]
     }
 
-    public static func journeyConvertedProperties(
+    static func journeyConvertedProperties(
         journey: JourneySnapshot,
         at: Date,
         sourceFactRef: String
@@ -140,7 +140,7 @@ final class JourneyEvents: Sendable {
         ]
     }
 
-    public static func journeyExitedProperties(
+    static func journeyExitedProperties(
         journey: JourneySnapshot,
         reason: JourneyExitReason,
         at: Date
@@ -154,7 +154,7 @@ final class JourneyEvents: Sendable {
     }
 
     /// Builds the canonical epoch-fenced claim payload.
-    public static func journeyClaimedProperties(
+    static func journeyClaimedProperties(
         journeyId: String,
         epoch: Int,
         claimant: String
@@ -167,7 +167,7 @@ final class JourneyEvents: Sendable {
     }
 
     /// Builds the canonical device-to-server handoff payload.
-    public static func journeyHandoffProperties(
+    static func journeyHandoffProperties(
         journey: JourneySnapshot,
         envelope: JourneyStateEnvelope
     ) -> [String: Any] {
@@ -181,7 +181,7 @@ final class JourneyEvents: Sendable {
 
     /// Builds the local-first checkpoint payload used by background and wait
     /// parking. A missing deadline is omitted rather than encoded as null.
-    public static func journeyParkedProperties(
+    static func journeyParkedProperties(
         journey: JourneySnapshot,
         reason: JourneyParkingReason,
         pendingDeadlineAt: Date? = nil
@@ -220,7 +220,7 @@ final class JourneyEvents: Sendable {
     ///   - experienceVersion: Exact published version that was presented.
     ///   - journey: Journey that owns the presentation.
     /// - Returns: Canonical event properties.
-    public static func experienceShownProperties(
+    static func experienceShownProperties(
         experienceVersion: String,
         journey: JourneySnapshot
     ) -> [String: Any] {
@@ -237,7 +237,7 @@ final class JourneyEvents: Sendable {
     ///   - experienceVersion: Exact published version that was dismissed.
     ///   - journey: Journey that owns the presentation.
     /// - Returns: Canonical event properties.
-    public static func experienceDismissedProperties(
+    static func experienceDismissedProperties(
         experienceVersion: String,
         journey: JourneySnapshot
     ) -> [String: Any] {
@@ -255,7 +255,7 @@ final class JourneyEvents: Sendable {
     ///   - journey: Journey that owns the presentation.
     ///   - productId: Purchased product identifier, when known.
     /// - Returns: Canonical event properties.
-    public static func experiencePurchasedProperties(
+    static func experiencePurchasedProperties(
         experienceVersion: String,
         journey: JourneySnapshot,
         productId: String?
@@ -277,7 +277,7 @@ final class JourneyEvents: Sendable {
     ///   - experienceVersion: Exact published version that timed out.
     ///   - journey: Journey that owns the presentation.
     /// - Returns: Canonical event properties.
-    public static func experienceTimedOutProperties(
+    static func experienceTimedOutProperties(
         experienceVersion: String,
         journey: JourneySnapshot
     ) -> [String: Any] {
@@ -295,7 +295,7 @@ final class JourneyEvents: Sendable {
     ///   - journey: Journey that owns the presentation.
     ///   - errorMessage: Diagnostic message, when available.
     /// - Returns: Canonical event properties.
-    public static func experienceErroredProperties(
+    static func experienceErroredProperties(
         experienceVersion: String,
         journey: JourneySnapshot,
         errorMessage: String?
@@ -319,7 +319,7 @@ final class JourneyEvents: Sendable {
     ///   - artifactSource: Cache or network source used for the load.
     ///   - artifactContentHash: Verified artifact content hash.
     /// - Returns: Canonical event properties.
-    public static func experienceArtifactLoadSucceededProperties(
+    static func experienceArtifactLoadSucceededProperties(
         experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
@@ -342,7 +342,7 @@ final class JourneyEvents: Sendable {
     ///   - artifactContentHash: Expected artifact content hash.
     ///   - errorMessage: Diagnostic message, when available.
     /// - Returns: Canonical event properties.
-    public static func experienceArtifactLoadFailedProperties(
+    static func experienceArtifactLoadFailedProperties(
         experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
@@ -382,7 +382,7 @@ final class JourneyEvents: Sendable {
     ///   - screenId: Originating screen identifier, when available.
     ///   - attributesUpdated: Names of customer attributes that changed.
     /// - Returns: Canonical rider properties.
-    public static func customerUpdatedProperties(
+    static func customerUpdatedProperties(
         journey: JourneySnapshot,
         screenId: String?,
         attributesUpdated: [String]
@@ -406,7 +406,7 @@ final class JourneyEvents: Sendable {
     ///   - eventName: Name of the user event sent by the experience.
     ///   - eventProperties: Properties supplied with that user event.
     /// - Returns: Canonical rider properties.
-    public static func eventSentProperties(
+    static func eventSentProperties(
         journey: JourneySnapshot,
         screenId: String?,
         eventName: String,
@@ -432,7 +432,7 @@ final class JourneyEvents: Sendable {
     ///   - message: Authored delegate message.
     ///   - payload: Authored delegate payload, when supplied.
     /// - Returns: Canonical rider properties.
-    public static func delegateCalledProperties(
+    static func delegateCalledProperties(
         journey: JourneySnapshot,
         screenId: String?,
         message: String,
@@ -462,7 +462,7 @@ final class JourneyEvents: Sendable {
     ///   - isHoldout: Whether the selected assignment is a holdout.
     ///   - assignmentSource: Assignment source, when it is not implicit.
     /// - Returns: Canonical rider properties.
-    public static func experimentExposureProperties(
+    static func experimentExposureProperties(
         journey: JourneySnapshot,
         experimentKey: String,
         variantKey: String,

@@ -759,13 +759,11 @@ public final class NuxieSDK: @unchecked Sendable {
 
   /// Change the locale used for subsequent profile requests and immediately
   /// refresh locale-specific content. Pass nil to follow the device locale.
-  @discardableResult
-  public func setLocaleIdentifier(_ localeIdentifier: String?) async throws -> ProfileResponse {
+  public func setLocaleIdentifier(_ localeIdentifier: String?) async throws {
     guard let core else { throw NuxieError.notConfigured }
     core.runtimeSettings.setLocaleIdentifier(localeIdentifier)
-    let profile = try await core.profile.refetchProfile()
+    _ = try await core.profile.refetchProfile()
     await core.features.syncFeatureInfo()
-    return profile
   }
 
   /// Replace the purchase delegate used by future purchase and restore calls.
@@ -784,16 +782,14 @@ public final class NuxieSDK: @unchecked Sendable {
 
   /// Refresh the user profile from the server
   /// Uses the locale selected during setup or by `setLocaleIdentifier`.
-  /// - Returns: The refreshed profile response
   /// - Throws: NuxieError if SDK not configured or network request fails
-  @discardableResult
-  public func refreshProfile() async throws -> ProfileResponse {
+  public func refreshProfile() async throws {
     guard isSetup else {
       throw NuxieError.notConfigured
     }
 
     let profileService = coreProfile
-    return try await profileService.refetchProfile()
+    _ = try await profileService.refetchProfile()
   }
 
   // MARK: - Event System Public API

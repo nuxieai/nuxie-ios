@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Experience
 
 /// Hydrated domain model projected from an authenticated release descriptor.
-public struct Experience: Codable, Sendable {
+struct Experience: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, versionId, buildId, artifactContentHash, authenticatedReleaseID
         case behaviorPresentation
@@ -13,11 +13,11 @@ public struct Experience: Codable, Sendable {
     }
 
     /// Stable experience definition identifier.
-    public let id: String
+    let id: String
     /// Published version identifier used by journeys and version fetches.
-    public let versionId: String
+    let versionId: String
     /// Immutable release build identity authenticated by the native runtime.
-    public let buildId: String
+    let buildId: String
     /// Verified delivery content digest used by artifact telemetry.
     let artifactContentHash: String?
     let authenticatedReleaseID: AuthenticatedExperienceReleaseID?
@@ -27,37 +27,37 @@ public struct Experience: Codable, Sendable {
         behaviorPresentation.style
     }
     /// Base URL used to resolve content-addressed external assets.
-    public let assetBaseURL: URL
+    let assetBaseURL: URL
     /// Customer-authored display name.
-    public let name: String
+    let name: String
     /// Re-enrollment policy supplied by the server.
-    public let reentry: ExperienceReentry
+    let reentry: ExperienceReentry
     /// ISO-8601 publication timestamp.
-    public let publishedAt: String
+    let publishedAt: String
     /// Optional event enrollment trigger.
-    public let trigger: ExperienceTrigger?
+    let trigger: ExperienceTrigger?
     /// Optional conversion goal.
-    public let goal: GoalConfig?
+    let goal: GoalConfig?
     /// Optional early-exit policy.
-    public let exitPolicy: ExitPolicy?
+    let exitPolicy: ExitPolicy?
     /// Wire conversion-anchor token.
-    public let conversionAnchor: String?
+    let conversionAnchor: String?
     /// Optional maximum journey duration.
-    public let timeLimitSeconds: Int?
+    let timeLimitSeconds: Int?
     /// Optional server-defined experience category.
-    public let experienceType: String?
+    let experienceType: String?
     /// Authenticated execution content from the package journey member.
-    public let journey: JourneyDocument
+    let journey: JourneyDocument
     let definition: ExperienceDefinition?
     /// StoreKit products resolved only after descriptor authentication.
-    public var products: [StoreProduct]
+    var products: [StoreProduct]
     /// Server-owned Journey authority used only while resolving live commerce.
     var introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
 
     /// Descriptor-authenticated screen and action document.
-    public var screens: JourneyDocument { journey }
+    var screens: JourneyDocument { journey }
     /// Identifier retained by renderer-facing APIs for the published version.
-    public var screensId: String { versionId }
+    var screensId: String { versionId }
     init(
         behavior: ExperienceBehaviorDefinition,
         journey: JourneyDocument,
@@ -182,7 +182,7 @@ public struct Experience: Codable, Sendable {
     }
 
     /// Decodes the canonical persisted Experience projection.
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         versionId = try container.decode(String.self, forKey: .versionId)
@@ -232,7 +232,7 @@ public struct Experience: Codable, Sendable {
     }
 
     /// Encodes the authenticated experience projection for durable reuse.
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(versionId, forKey: .versionId)

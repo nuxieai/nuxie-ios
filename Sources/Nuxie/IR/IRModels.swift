@@ -3,19 +3,19 @@ import Foundation
 // MARK: - Envelope
 
 /// Top-level IR container with version and metadata
-public struct IREnvelope: Codable, Equatable, Sendable {
-    public let ir_version: Int
-    public let engine_min: String?
-    public let compiled_at: Double?
-    public let expr: IRExpr
+struct IREnvelope: Codable, Equatable, Sendable {
+    let ir_version: Int
+    let engine_min: String?
+    let compiled_at: Double?
+    let expr: IRExpr
 
     /// The IR engine version this SDK implements. The server stamps
     /// `engine_min` on envelopes that need newer engine behavior; those are
     /// skipped (fail-closed) with telemetry instead of misevaluated.
-    public static let engineVersion = 1
+    static let engineVersion = 1
 
     /// Whether this SDK's engine can evaluate the envelope.
-    public var isSupportedByThisEngine: Bool {
+    var isSupportedByThisEngine: Bool {
         guard let engineMin = engine_min,
               let required = Int(engineMin.split(separator: ".").first.map(String.init) ?? engineMin)
         else { return true }
@@ -33,7 +33,7 @@ public struct IREnvelope: Codable, Equatable, Sendable {
 // MARK: - Expression nodes (v1)
 
 /// IR expression node types
-public indirect enum IRExpr: Codable, Equatable, Sendable {
+indirect enum IRExpr: Codable, Equatable, Sendable {
     // Scalars / containers
     case bool(Bool)
     case number(Double)
@@ -94,9 +94,9 @@ public indirect enum IRExpr: Codable, Equatable, Sendable {
     case unknown(type: String)
     
     /// Step in a sequence query
-    public struct Step: Codable, Equatable, Sendable {
-        public let name: String
-        public let where_: IRExpr?
+    struct Step: Codable, Equatable, Sendable {
+        let name: String
+        let where_: IRExpr?
         
         enum CodingKeys: String, CodingKey, Sendable {
             case name
@@ -110,7 +110,7 @@ public indirect enum IRExpr: Codable, Equatable, Sendable {
         case type
     }
     
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         
@@ -323,7 +323,7 @@ public indirect enum IRExpr: Codable, Equatable, Sendable {
         }
     }
     
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var typeContainer = encoder.container(keyedBy: CodingKeys.self)
 
         switch self {
