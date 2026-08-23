@@ -345,7 +345,8 @@ final class TodayViewController: UIViewController {
         /// Nuxie's backend decide whether to show a flow based on experiences
         /// configured in the dashboard.
         ///
-        /// The handler receives TriggerUpdate events with decisions and entitlements
+        /// The handler receives TriggerUpdate events with decisions and
+        /// feature-access updates.
         NuxieSDK.shared.trigger("upgrade_tapped", properties: [
             "source": "today_screen",
             "current_streak": moodStore.calculateStreak(),
@@ -360,8 +361,8 @@ final class TodayViewController: UIViewController {
     /// Handles the result of a tracked event that may trigger a flow
     private func handleTriggerUpdate(_ update: TriggerUpdate) {
         switch update {
-        case .entitlement(let entitlement):
-            switch entitlement {
+        case .featureAccess(let featureAccess):
+            switch featureAccess {
             case .allowed:
                 showSuccessMessage("🎉 Welcome to Pro!")
                 updateProBadge()

@@ -4,7 +4,8 @@ import Foundation
 /// Progressive updates emitted by `trigger(...)`.
 public enum TriggerUpdate: Equatable, Sendable {
   case decision(TriggerDecision)
-  case entitlement(EntitlementUpdate)
+  /// Feature-access evaluation progressed or reached a terminal outcome.
+  case featureAccess(FeatureAccessUpdate)
   case journey(JourneyUpdate)
   case error(TriggerError)
 }
@@ -13,49 +14,52 @@ public enum TriggerUpdate: Equatable, Sendable {
 public enum TriggerDecision: Equatable, Sendable {
   case noMatch
   case suppressed(SuppressReason)
-  case journeyStarted(JourneyRef)
-  case journeyResumed(JourneyRef)
+  /// A journey started with the selected experience.
+  case journeyStarted(ExperienceRef)
   /// The matched experience was successfully presented.
-  case experienceShown(JourneyRef)
+  case experienceShown(ExperienceRef)
   case allowedImmediate
   case deniedImmediate
 }
 
-/// Entitlement-specific updates for gated experiences.
-public enum EntitlementUpdate: Equatable, Sendable {
+/// Feature-access updates for gated experiences.
+public enum FeatureAccessUpdate: Equatable, Sendable {
+  /// Feature access is still being evaluated.
   case pending
-  case allowed(source: GateSource)
+  /// Feature access is allowed.
+  case allowed
+  /// Feature access is denied.
   case denied
 }
 
-/// Stable identity for a journey and its selected experience version.
-public struct JourneyRef: Equatable, Sendable {
-  /// Stable journey identifier.
-  public let journeyId: String
+/// Stable identity for an experience selected by a trigger.
+public struct ExperienceRef: Equatable, Sendable {
   /// Stable experience definition identifier.
   public let experienceId: String
-  /// Exact published version selected for this journey, when available.
+  /// Exact published experience version, when available.
   public let experienceVersion: String?
+  /// Stable journey identifier, when the experience belongs to a journey.
+  public let journeyId: String?
 
-  /// Creates a reference to a journey and its selected experience.
+  /// Creates a reference to a selected experience.
   ///
   /// - Parameters:
-  ///   - journeyId: Stable journey identifier.
   ///   - experienceId: Stable experience definition identifier.
   ///   - experienceVersion: Exact published version, when available.
-  public init(journeyId: String, experienceId: String, experienceVersion: String?) {
-    self.journeyId = journeyId
+  ///   - journeyId: Stable journey identifier, when available.
+  public init(experienceId: String, experienceVersion: String?, journeyId: String?) {
     self.experienceId = experienceId
     self.experienceVersion = experienceVersion
+    self.journeyId = journeyId
   }
 }
 
+/// Reasons a matched journey was not started.
 public enum SuppressReason: Equatable, Sendable {
+  /// The journey is already active.
   case alreadyActive
+  /// The journey's reentry limit prevents another enrollment.
   case reentryLimited
-  case holdout
-  case noExperience
-  case unknown(String)
 }
 
 /// Terminal journey details emitted by the trigger API.
@@ -94,17 +98,30 @@ public struct JourneyUpdate: Equatable, Sendable {
   }
 }
 
-public enum GateSource: Equatable, Sendable {
-  case cache
-  case purchase
-  case restore
-}
-
+/// An error produced while processing a trigger.
 public struct TriggerError: Error, Equatable, Sendable {
-  public let code: String
+  /// Stable machine-readable trigger error codes.
+  public enum Code: String, Equatable, Sendable {
+    /// The SDK has not been configured.
+    case notConfigured = "not_configured"
+    /// Trigger processing failed.
+    case triggerFailed = "trigger_failed"
+    /// The trigger response did not identify an experience to present.
+    case experienceMissing = "experience_missing"
+    /// The trigger response did not identify a feature to evaluate.
+    case featureMissing = "feature_missing"
+    /// Feature access was not granted before the configured timeout.
+    case featureAccessTimeout = "feature_access_timeout"
+    /// The selected experience could not be presented.
+    case experiencePresentFailed = "experience_present_failed"
+  }
+
+  /// The stable machine-readable error code.
+  public let code: Code
+  /// A human-readable description of the failure.
   public let message: String
 
-  public init(code: String, message: String) {
+  init(code: Code, message: String) {
     self.code = code
     self.message = message
   }
@@ -116,25 +133,24 @@ public struct TriggerError: Error, Equatable, Sendable {
 public enum TriggerResult: Equatable, Sendable {
   /// No experience matched; the event was tracked.
   case noMatch
-  /// Access allowed (already entitled, or granted during the journey).
-  case allowed(source: GateSource?)
+  /// Feature access is allowed.
+  case allowed
   /// Access denied.
   case denied
-  /// A journey ran to completion without an entitlement decision.
+  /// A journey ran to completion without a feature-access decision.
   case journeyCompleted(JourneyUpdate)
   /// The trigger failed.
   case error(TriggerError)
 
   /// Canonical wire encoding (fixtures/encodings/trigger-result.json) —
   /// the serialized shape RN/Flutter/Unity wrappers bind to.
+  @_spi(Testing)
   public var wireValue: [String: String] {
     switch self {
     case .noMatch:
       return ["result": "no_match"]
-    case .allowed(let source):
-      var v = ["result": "allowed"]
-      if let source { v["source"] = String(describing: source) }
-      return v
+    case .allowed:
+      return ["result": "allowed"]
     case .denied:
       return ["result": "denied"]
     case .journeyCompleted(let update):
@@ -145,7 +161,7 @@ public enum TriggerResult: Equatable, Sendable {
         "goal_met": update.goalMet ? "true" : "false",
       ]
     case .error(let error):
-      return ["result": "error", "code": error.code]
+      return ["result": "error", "code": error.code.rawValue]
     }
   }
 }

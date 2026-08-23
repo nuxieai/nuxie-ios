@@ -223,8 +223,8 @@ struct HistoryView: View {
     /// Handles the result of a tracked event that may trigger a flow
     private func handleTriggerUpdate(_ update: TriggerUpdate, onAllowed: (() -> Void)? = nil) {
         switch update {
-        case .entitlement(let entitlement):
-            switch entitlement {
+        case .featureAccess(let featureAccess):
+            switch featureAccess {
             case .allowed:
                 onAllowed?()
             case .denied:

@@ -231,8 +231,6 @@ private actor SuspendingFacadeTrigger: TriggerServiceProtocol {
     func trigger(
         _ event: String,
         properties: sending [String: Any]?,
-        userProperties: sending [String: Any]?,
-        userPropertiesSetOnce: sending [String: Any]?,
         handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {
         triggerStarted = true
@@ -263,10 +261,10 @@ private actor SuspendingFacadeTrigger: TriggerServiceProtocol {
 }
 
 private actor PendingJourneyFacadeTrigger: TriggerServiceProtocol {
-    private let reference = JourneyRef(
-        journeyId: "pending-user-input-journey",
+    private let reference = ExperienceRef(
         experienceId: "pending-user-input-experience",
-        experienceVersion: "1"
+        experienceVersion: "1",
+        journeyId: "pending-user-input-journey"
     )
     private var handler: (@Sendable (TriggerUpdate) -> Void)?
     private var started = false
@@ -275,8 +273,6 @@ private actor PendingJourneyFacadeTrigger: TriggerServiceProtocol {
     func trigger(
         _ event: String,
         properties: sending [String: Any]?,
-        userProperties: sending [String: Any]?,
-        userPropertiesSetOnce: sending [String: Any]?,
         handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {
         // Lifecycle capture is always on (UNIV-2590); automatic $-events
@@ -300,7 +296,7 @@ private actor PendingJourneyFacadeTrigger: TriggerServiceProtocol {
 
     func finishJourney() {
         handler?(.journey(JourneyUpdate(
-            journeyId: reference.journeyId,
+            journeyId: reference.journeyId!,
             experienceId: reference.experienceId,
             experienceVersion: reference.experienceVersion,
             exitReason: .completed,
@@ -636,7 +632,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         await startBarrier.release()
         await trigger.waitUntilStarted()
         let triggerResult = await result.value
-        XCTAssertEqual(triggerResult, .allowed(source: nil))
+        XCTAssertEqual(triggerResult, .allowed)
 
         let completedAfterEarlyResult = await completion.isComplete()
         XCTAssertFalse(completedAfterEarlyResult)
@@ -698,7 +694,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         XCTAssertEqual(
             result,
             .error(TriggerError(
-                code: "sdk_shutdown",
+                code: .triggerFailed,
                 message: "SDK shutdown began before the journey completed"
             ))
         )

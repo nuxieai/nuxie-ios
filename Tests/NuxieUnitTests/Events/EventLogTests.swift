@@ -1124,8 +1124,6 @@ final class EventLogTests: AsyncSpec {
                         _ = try? await reentrantLog.trackForTrigger(
                             "$journey_claimed",
                             properties: nil,
-                            userProperties: nil,
-                            userPropertiesSetOnce: nil,
                             persistToHistory: true,
                             distinctIdOverride: "test-distinct-id"
                         )
@@ -1155,8 +1153,6 @@ final class EventLogTests: AsyncSpec {
                         _ = try? await orderedLog.trackForTrigger(
                             "$journey_claimed",
                             properties: nil,
-                            userProperties: nil,
-                            userPropertiesSetOnce: nil,
                             persistToHistory: true,
                             distinctIdOverride: "test-distinct-id"
                         )

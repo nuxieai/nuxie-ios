@@ -16,8 +16,6 @@ protocol TriggerServiceProtocol: AnyObject, Sendable {
   func trigger(
     _ event: String,
     properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?,
     handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async
 }
@@ -50,15 +48,11 @@ extension TriggerServiceProtocol {
   func trigger(
     _ event: String,
     properties: sending [String: Any]? = nil,
-    userProperties: sending [String: Any]? = nil,
-    userPropertiesSetOnce: sending [String: Any]? = nil,
     handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async {
     await trigger(
       event,
       properties: properties,
-      userProperties: userProperties,
-      userPropertiesSetOnce: userPropertiesSetOnce,
       handler: handler
     )
   }
@@ -68,8 +62,6 @@ protocol PresentationAttemptTriggerServiceProtocol: AnyObject, Sendable {
   func trigger(
     _ event: String,
     properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?,
     presentationAttempt: ExperiencePresentationAttempt,
     handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async
@@ -112,15 +104,11 @@ actor TriggerService: TriggerServiceProtocol {
   public func trigger(
     _ event: String,
     properties: sending [String: Any]? = nil,
-    userProperties: sending [String: Any]? = nil,
-    userPropertiesSetOnce: sending [String: Any]? = nil,
     handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async {
     await trigger(
       event,
       properties: properties,
-      userProperties: userProperties,
-      userPropertiesSetOnce: userPropertiesSetOnce,
       presentationAttempt: nil,
       handler: handler
     )
@@ -175,8 +163,6 @@ actor TriggerService: TriggerServiceProtocol {
   private func trigger(
     _ event: String,
     properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?,
     presentationAttempt: ExperiencePresentationAttempt?,
     handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async {
@@ -190,9 +176,7 @@ actor TriggerService: TriggerServiceProtocol {
     do {
       let (nuxieEvent, response) = try await eventLog.trackForTrigger(
         event,
-        properties: properties,
-        userProperties: userProperties,
-        userPropertiesSetOnce: userPropertiesSetOnce
+        properties: properties
       )
 
       let eventId = nuxieEvent.id
@@ -205,17 +189,18 @@ actor TriggerService: TriggerServiceProtocol {
       }
       let gatePlan = response.gatePlan()
       let mode = mode(for: gatePlan)
-      let terminalGateExperienceId: String? = {
+      let hasDirectExperienceGate: Bool = {
         guard let gatePlan,
               case .showFlow = gatePlan.decision,
-              let experienceVersionId = gatePlan.flowId else {
-          return nil
+              gatePlan.flowId != nil else {
+          return false
         }
-        return "experience:\(experienceVersionId)"
+        return true
       }()
 
       let broker = triggerBroker
-      let journeyStartFlag = JourneyStartFlag()
+      let journeyStartFlag = LockedFlag()
+      let journeyErrorFlag = LockedFlag()
       let shouldCompleteUpdate: @Sendable (TriggerUpdate) -> Bool = { update in
         switch update {
         case .error:
@@ -225,14 +210,14 @@ actor TriggerService: TriggerServiceProtocol {
           case .allowedImmediate, .deniedImmediate, .noMatch:
             return true
           case .suppressed:
-            return gatePlan == nil && !journeyStartFlag.get()
+            return gatePlan == nil && !journeyStartFlag.get() && !journeyErrorFlag.get()
           case .experienceShown(let ref):
-            return ref.experienceId == terminalGateExperienceId
+            return hasDirectExperienceGate && ref.journeyId == nil
           default:
             return false
           }
-        case .entitlement(let entitlement):
-          switch entitlement {
+        case .featureAccess(let featureAccess):
+          switch featureAccess {
           case .allowed, .denied:
             return true
           case .pending:
@@ -258,11 +243,20 @@ actor TriggerService: TriggerServiceProtocol {
         if case .started = result { return true }
         return false
       }
+      let journeyStartFailed = journeyResults.contains { result in
+        if case .error = result { return true }
+        return false
+      }
       journeyStartFlag.set(hasStartedJourney)
+      journeyErrorFlag.set(journeyStartFailed)
       let emittedJourneyDecision = await emitJourneyDecisions(
         results: journeyResults,
         eventId: eventId
       )
+
+      if journeyStartFailed {
+        return
+      }
 
       if gatePlan == nil && emittedJourneyDecision {
         return
@@ -286,7 +280,7 @@ actor TriggerService: TriggerServiceProtocol {
         handler(.decision(.noMatch))
       }
     } catch {
-      let triggerError = TriggerError(code: "trigger_failed", message: error.localizedDescription)
+      let triggerError = TriggerError(code: .triggerFailed, message: error.localizedDescription)
       await MainActor.run {
         handler(.error(triggerError))
       }
@@ -323,16 +317,19 @@ actor TriggerService: TriggerServiceProtocol {
     for result in results {
       switch result {
       case .started(let journey):
-        let ref = JourneyRef(
-          journeyId: journey.id,
+        let ref = ExperienceRef(
           experienceId: journey.experienceId,
-          experienceVersion: journey.experienceVersion
+          experienceVersion: journey.experienceVersion,
+          journeyId: journey.id
         )
         await triggerBroker.emit(eventId: eventId, update: .decision(.journeyStarted(ref)))
         emitted = true
       case .suppressed(let reason):
         await triggerBroker.emit(eventId: eventId, update: .decision(.suppressed(reason)))
         emitted = true
+      case .error(let error):
+        await triggerBroker.emit(eventId: eventId, update: .error(error))
+        return true
       }
     }
 
@@ -372,7 +369,10 @@ actor TriggerService: TriggerServiceProtocol {
     guard let experienceVersionId = plan.flowId else {
       await triggerBroker.emit(
         eventId: eventId,
-        update: .error(TriggerError(code: "flow_missing", message: "Missing flowId for show_flow decision"))
+        update: .error(TriggerError(
+          code: .experienceMissing,
+          message: "Missing experience version for show_flow decision"
+        ))
       )
       return
     }
@@ -391,7 +391,10 @@ actor TriggerService: TriggerServiceProtocol {
     guard let featureId = plan.featureId else {
       await triggerBroker.emit(
         eventId: eventId,
-        update: .error(TriggerError(code: "feature_missing", message: "Missing featureId for require_feature decision"))
+        update: .error(TriggerError(
+          code: .featureMissing,
+          message: "Missing featureId for require_feature decision"
+        ))
       )
       return
     }
@@ -399,9 +402,9 @@ actor TriggerService: TriggerServiceProtocol {
     if plan.policy == .cacheOnly {
       let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
       if GatePlanEvaluation.hasAccess(cached, requiredBalance: plan.requiredBalance) {
-        await triggerBroker.emit(eventId: eventId, update: .entitlement(.allowed(source: .cache)))
+        await triggerBroker.emit(eventId: eventId, update: .featureAccess(.allowed))
       } else {
-        await triggerBroker.emit(eventId: eventId, update: .entitlement(.denied))
+        await triggerBroker.emit(eventId: eventId, update: .featureAccess(.denied))
       }
       return
     }
@@ -414,14 +417,14 @@ actor TriggerService: TriggerServiceProtocol {
         forceRefresh: false
       )
       if GatePlanEvaluation.hasAccess(access, requiredBalance: plan.requiredBalance) {
-        await triggerBroker.emit(eventId: eventId, update: .entitlement(.allowed(source: .cache)))
+        await triggerBroker.emit(eventId: eventId, update: .featureAccess(.allowed))
         return
       }
     } catch {
       LogWarning("TriggerService: feature check failed \(error)")
     }
 
-    await triggerBroker.emit(eventId: eventId, update: .entitlement(.pending))
+    await triggerBroker.emit(eventId: eventId, update: .featureAccess(.pending))
 
     if let experienceVersionId = plan.flowId {
       await presentExperience(
@@ -432,25 +435,28 @@ actor TriggerService: TriggerServiceProtocol {
     }
 
     let timeoutMs = plan.timeoutMs ?? 30_000
-    let allowed = await waitForEntitlement(
+    let allowed = await waitForFeatureAccess(
       featureId: featureId,
       requiredBalance: plan.requiredBalance,
       timeoutMs: timeoutMs
     )
 
     if allowed {
-      await triggerBroker.emit(eventId: eventId, update: .entitlement(.allowed(source: .purchase)))
+      await triggerBroker.emit(eventId: eventId, update: .featureAccess(.allowed))
     } else {
       await triggerBroker.emit(
         eventId: eventId,
-        update: .error(TriggerError(code: "entitlement_timeout", message: "Timed out waiting for entitlement"))
+        update: .error(TriggerError(
+          code: .featureAccessTimeout,
+          message: "Timed out waiting for feature access"
+        ))
       )
     }
   }
 
-  // MARK: - Entitlement Waiting
+  // MARK: - Feature Access Waiting
 
-  private func waitForEntitlement(
+  private func waitForFeatureAccess(
     featureId: String,
     requiredBalance: Double?,
     timeoutMs: Int
@@ -507,15 +513,16 @@ actor TriggerService: TriggerServiceProtocol {
       } else {
         runtimeDelegate = nil
       }
-      _ = try await experiencePresentationService.presentExperience(
+      let controller = try await experiencePresentationService.presentExperience(
         experienceVersionId,
         from: nil,
         runtimeDelegate: runtimeDelegate
       )
-      let ref = JourneyRef(
-        journeyId: UUID.v7().uuidString,
-        experienceId: "experience:\(experienceVersionId)",
-        experienceVersion: experienceVersionId
+      let experience = await MainActor.run { controller.experience }
+      let ref = ExperienceRef(
+        experienceId: experience.id,
+        experienceVersion: experience.versionId,
+        journeyId: nil
       )
       await triggerBroker.emit(eventId: eventId, update: .decision(.experienceShown(ref)))
     } catch {
@@ -531,7 +538,10 @@ actor TriggerService: TriggerServiceProtocol {
       }
       await triggerBroker.emit(
         eventId: eventId,
-        update: .error(TriggerError(code: "flow_present_failed", message: error.localizedDescription))
+        update: .error(TriggerError(
+          code: .experiencePresentFailed,
+          message: error.localizedDescription
+        ))
       )
     }
   }
@@ -542,26 +552,22 @@ extension TriggerService: PresentationAttemptTriggerServiceProtocol {
   func trigger(
     _ event: String,
     properties: sending [String: Any]?,
-    userProperties: sending [String: Any]?,
-    userPropertiesSetOnce: sending [String: Any]?,
     presentationAttempt: ExperiencePresentationAttempt,
     handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async {
     await trigger(
       event,
       properties: properties,
-      userProperties: userProperties,
-      userPropertiesSetOnce: userPropertiesSetOnce,
       presentationAttempt: Optional(presentationAttempt),
       handler: handler
     )
   }
 }
 
-/// Lock-guarded flag shared between triggering and the @Sendable
-/// completion predicate registered with the broker.
+/// Lock-guarded flag shared between trigger routing and the broker's
+/// `@Sendable` completion predicate.
 // @unchecked Sendable: `value` is only accessed under `lock`.
-private final class JourneyStartFlag: @unchecked Sendable {
+private final class LockedFlag: @unchecked Sendable {
   private let lock = NSLock()
   private var value = false
 

@@ -834,8 +834,6 @@ actor JourneyService: JourneyServiceProtocol {
             epoch: entry.epoch,
             claimant: identityService.getAnonymousId()
           ),
-          userProperties: nil,
-          userPropertiesSetOnce: nil,
           persistToHistory: true,
           distinctIdOverride: distinctId,
           applyBeforeSend: false
@@ -1295,9 +1293,7 @@ actor JourneyService: JourneyServiceProtocol {
           await ownsExecutableJourney(journey, runner: runner) else { return }
 
     let eventProperties = await eventLog.prepareTriggerProperties(
-      rendererEvent.properties,
-      userProperties: nil,
-      userPropertiesSetOnce: nil
+      rendererEvent.properties
     )
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let event = NuxieEvent(
@@ -1326,8 +1322,6 @@ actor JourneyService: JourneyServiceProtocol {
       let tracked = try await eventLog.trackForTrigger(
         rendererEvent.name,
         properties: rendererEvent.properties,
-        userProperties: nil,
-        userPropertiesSetOnce: nil,
         persistToHistory: true,
         distinctIdOverride: journey.distinctId,
         applyBeforeSend: false
@@ -1652,9 +1646,7 @@ actor JourneyService: JourneyServiceProtocol {
       )
     }
     let properties = await eventLog.prepareTriggerProperties(
-      acceptance.event.payload.mapValues(\.foundationValue),
-      userProperties: nil,
-      userPropertiesSetOnce: nil
+      acceptance.event.payload.mapValues(\.foundationValue)
     )
     guard await ownsExecutableJourney(journey, runner: runner) else {
       throw EventRoutingError.eventRoutingFailed
@@ -3985,8 +3977,6 @@ actor JourneyService: JourneyServiceProtocol {
           journey: state,
           envelope: state.stateEnvelope()
         ),
-        userProperties: nil,
-        userPropertiesSetOnce: nil,
         persistToHistory: true,
         distinctIdOverride: journey.distinctId,
         applyBeforeSend: false
@@ -4649,7 +4639,10 @@ actor JourneyService: JourneyServiceProtocol {
       ) {
         results.append(.started(journey))
       } else {
-        results.append(.suppressed(.unknown("start_failed")))
+        results.append(.error(TriggerError(
+          code: .triggerFailed,
+          message: "Failed to start journey for experience \(experience.id)"
+        )))
       }
     }
 
@@ -4977,11 +4970,7 @@ actor JourneyService: JourneyServiceProtocol {
     eventId: String? = nil,
     occurredAt: Date? = nil
   ) async -> ScopedEventStage {
-    let enriched = await eventLog.prepareTriggerProperties(
-      properties,
-      userProperties: nil,
-      userPropertiesSetOnce: nil
-    )
+    let enriched = await eventLog.prepareTriggerProperties(properties)
     let localEvent = NuxieEvent(
       id: eventId ?? UUID.v7().uuidString,
       name: name,
@@ -5008,8 +4997,6 @@ actor JourneyService: JourneyServiceProtocol {
       let tracked = try await eventLog.trackForTrigger(
         stage.localEvent.name,
         properties: properties,
-        userProperties: nil,
-        userPropertiesSetOnce: nil,
         persistToHistory: persistToHistory,
         distinctIdOverride: stage.localEvent.distinctId,
         applyBeforeSend: false

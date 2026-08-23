@@ -408,10 +408,10 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 userPropertiesSetOnce: nil
             )
             if let originEventId = await journey.getContext("_origin_event_id")?.value as? String {
-                let ref = JourneyRef(
-                    journeyId: journey.id,
+                let ref = ExperienceRef(
                     experienceId: journey.experienceId,
-                    experienceVersion: journey.experienceVersion
+                    experienceVersion: journey.experienceVersion,
+                    journeyId: journey.id
                 )
                 await triggerBroker.emit(eventId: originEventId, update: .decision(.experienceShown(ref)))
             }

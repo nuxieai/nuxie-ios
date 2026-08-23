@@ -477,9 +477,7 @@ final class EventLogDeliveryTests: AsyncSpec {
                     let directTask = Task {
                         try await log.trackForTrigger(
                             "direct_only",
-                            properties: nil,
-                            userProperties: nil,
-                            userPropertiesSetOnce: nil
+                            properties: nil
                         )
                     }
                     await expect { await mockApi.directEvents.count }
@@ -500,9 +498,7 @@ final class EventLogDeliveryTests: AsyncSpec {
                     let directTask = Task {
                         try await log.trackForTrigger(
                             "direct_in_flight",
-                            properties: nil,
-                            userProperties: nil,
-                            userPropertiesSetOnce: nil
+                            properties: nil
                         )
                     }
                     await expect { await mockApi.directEvents.count }

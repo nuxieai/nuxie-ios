@@ -587,16 +587,12 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     public func trackForTrigger(
         _ event: String,
         properties: sending [String: Any]?,
-        userProperties: sending [String: Any]?,
-        userPropertiesSetOnce: sending [String: Any]?,
         persistToHistory: Bool,
         distinctIdOverride: String?,
         applyBeforeSend _: Bool
     ) async throws -> (NuxieEvent, EventResponse) {
-        // Boxed so the write-once payloads can be recorded and re-sent.
+        // Boxed so the write-once payload can be recorded and re-sent.
         let propertiesBox = UncheckedSendable(properties)
-        let userPropertiesBox = UncheckedSendable(userProperties)
-        let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
         lock.withLock {
             _trackForTriggerCalls.append((
                 event: event,
@@ -621,11 +617,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             throw error
         }
 
-        let enrichedProperties = await prepareTriggerProperties(
-            propertiesBox.value,
-            userProperties: userPropertiesBox.value,
-            userPropertiesSetOnce: userPropertiesSetOnceBox.value
-        )
+        let enrichedProperties = await prepareTriggerProperties(propertiesBox.value)
 
         let nuxieEvent = TestEventBuilder(name: event)
             .withDistinctId(
@@ -670,11 +662,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             ))
         }
 
-        let enriched = await prepareTriggerProperties(
-            propertiesBox.value,
-            userProperties: nil,
-            userPropertiesSetOnce: nil
-        )
+        let enriched = await prepareTriggerProperties(propertiesBox.value)
         let original = NuxieEvent(
             id: eventId,
             name: event,
@@ -802,15 +790,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
 
     public func prepareTriggerProperties(
-        _ properties: sending [String: Any]?,
-        userProperties: sending [String: Any]?,
-        userPropertiesSetOnce: sending [String: Any]?
+        _ properties: sending [String: Any]?
     ) async -> sending [String: Any] {
         let handler = lock.withLock { _prepareTriggerPropertiesHandler }
         await handler?()
         var finalProperties = properties ?? [:]
-        if let userProperties { finalProperties["$set"] = userProperties }
-        if let userPropertiesSetOnce { finalProperties["$set_once"] = userPropertiesSetOnce }
 
         if finalProperties["$session_id"] == nil,
            let sessions,

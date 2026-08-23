@@ -295,8 +295,8 @@ struct TodayView: View {
     /// Handles the result of a tracked event that may trigger a flow
     private func handleTriggerUpdate(_ update: TriggerUpdate) {
         switch update {
-        case .entitlement(let entitlement):
-            switch entitlement {
+        case .featureAccess(let featureAccess):
+            switch featureAccess {
             case .allowed:
                 print("[MoodLog] Pro unlocked! 🎉")
             case .denied:

@@ -171,8 +171,6 @@ final class HostDismissalTests: AsyncSpec {
                 _ = try await harness.mocks.eventLog.trackForTrigger(
                     acceptedHandoffEvent,
                     properties: nil,
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil,
                     persistToHistory: false,
                     distinctIdOverride: harness.distinctId,
                     applyBeforeSend: false
@@ -221,8 +219,6 @@ final class HostDismissalTests: AsyncSpec {
                 _ = try await harness.mocks.eventLog.trackForTrigger(
                     epochRejectionEvent,
                     properties: nil,
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil,
                     persistToHistory: false,
                     distinctIdOverride: harness.distinctId,
                     applyBeforeSend: false
@@ -1761,7 +1757,7 @@ private extension TriggerUpdate {
 
     var isDenied: Bool {
         switch self {
-        case .decision(.deniedImmediate), .entitlement(.denied):
+        case .decision(.deniedImmediate), .featureAccess(.denied):
             return true
         default:
             return false

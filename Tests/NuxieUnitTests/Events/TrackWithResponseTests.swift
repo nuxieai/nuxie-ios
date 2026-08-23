@@ -1331,8 +1331,6 @@ final class TrackWithResponseTests: AsyncSpec {
                     let (event, response) = try await eventLog.trackForTrigger(
                         "scoped_event",
                         properties: nil,
-                        userProperties: nil,
-                        userPropertiesSetOnce: nil,
                         persistToHistory: false,
                         distinctIdOverride: nil
                     )
