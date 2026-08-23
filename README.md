@@ -29,8 +29,23 @@ Learn more at https://nuxie.ai
 - Purchases: delegate‑based StoreKit integration for buy/restore.
 - Automatic lifecycle events: $app_installed, $app_updated, $app_opened, $app_backgrounded (can be disabled).
 - Privacy & controls: sensitive-value log redaction and a `beforeSend` transform/drop hook.
-- Offline-first, precisely: every event is persisted locally before anything observes it and re-sent after relaunch (deduplicated server-side); journey enrollment and gate decisions evaluate from cached config, so network failure degrades freshness, never function.
+- Offline-first, precisely: committed events are normally persisted locally before observers run and re-sent after relaunch (deduplicated server-side); a history-write failure advances the durable completeness fence so local evaluation fails closed instead of silently reasoning across a gap. Journey enrollment and gate decisions evaluate from cached config, so network failure degrades freshness, never function.
 - Resilient Experiences: authenticated profile snapshots remain offline-usable for 24 hours, verified release objects use a bounded 256 MiB disk LRU, speculative preparation respects Low Data Mode and app lifecycle, and StoreKit failures block only product-bound selected screens.
+
+### Local event-history contract
+
+The on-device event log is a retained window, not a complete lifetime record.
+Delivered events are bounded by count and age, so unbounded journey conditions
+that need an exact count, first/last occurrence, aggregate, or sequence fail
+closed when evaluated from device history. Negating such a condition does not
+turn an unknown answer into a match. A condition with an authored lower bound
+(`since`, `within`, or an active-period window) is deterministic only when its
+whole window is inside the durable, monotonic horizon reported by local
+storage. Retention advances that horizon atomically with deletion; history-write
+gaps, corrupt property payloads, query truncation, and storage failure are
+unknown and fail closed.
+See [Event-history semantics](docs/event-history-semantics.md) for the precise
+contract and current v1 schema guidance.
 
 ## Requirements
 

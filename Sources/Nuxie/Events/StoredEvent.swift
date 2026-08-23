@@ -107,6 +107,13 @@ struct StoredEvent: Codable, Sendable {
         }
         return props.mapValues { $0.value }
     }
+
+    /// IR authorization must distinguish an authored empty object from a
+    /// corrupt payload. Treating decode failure as `[:]` makes predicates such
+    /// as `is_not_set` authorize on damaged history.
+    func getPropertiesDictForIR() throws -> [String: Any] {
+        try getProperties().mapValues { $0.value }
+    }
 }
 
 /// Error types for event storage operations

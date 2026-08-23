@@ -47,6 +47,13 @@ final class EventStoreSchemaTests: XCTestCase {
         )
         XCTAssertEqual(
             try scalarInt(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'event_history_metadata';",
+                in: database
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try scalarInt(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_events_%';",
                 in: database
             ),
@@ -168,6 +175,19 @@ final class EventStoreSchemaTests: XCTestCase {
         await assertSchemaFailure(store, targetVersion: 1, operation: "verify idx_events_delivery")
     }
 
+    func testRejectsVersionOneWithoutHistoryMetadata() async throws {
+        let database = try openDatabase()
+        try createCurrentSchema(in: database, includeHistoryMetadata: false)
+        sqlite3_close(database)
+
+        let store = SQLiteEventStore()
+        await assertSchemaFailure(
+            store,
+            targetVersion: 1,
+            operation: "verify event_history_metadata"
+        )
+    }
+
     func testRejectsVersionOneWhenAnIndexHasTheWrongDefinition() async throws {
         let database = try openDatabase()
         try createCurrentSchema(in: database, omittedIndex: "idx_events_delivery")
@@ -219,6 +239,7 @@ final class EventStoreSchemaTests: XCTestCase {
     private func createCurrentSchema(
         in database: OpaquePointer,
         userIDIsRequired: Bool = true,
+        includeHistoryMetadata: Bool = true,
         omittedIndex: String? = nil
     ) throws {
         try execute(
@@ -240,6 +261,18 @@ final class EventStoreSchemaTests: XCTestCase {
             """,
             on: database
         )
+
+        if includeHistoryMetadata {
+            try execute(
+                """
+                CREATE TABLE event_history_metadata (
+                  id INTEGER PRIMARY KEY CHECK (id = 1),
+                  coverage_start_ms INTEGER NOT NULL
+                );
+                """,
+                on: database
+            )
+        }
 
         let indexes: [(String, String)] = [
             ("idx_events_delivery", "events(delivery_state, timestamp)"),

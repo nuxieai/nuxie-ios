@@ -1,6 +1,7 @@
 import Foundation
 import Quick
 import Nimble
+import SQLite3
 @_spi(Testing) @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -23,6 +24,25 @@ final class EventStorageTests: AsyncSpec {
                 distinctId: distinctId
             )
             try await internalEventStore.insertHistory(event)
+        }
+
+        func executeSQLite(_ sql: String, at path: String) throws {
+            var database: OpaquePointer?
+            guard sqlite3_open(path, &database) == SQLITE_OK else {
+                defer { sqlite3_close(database) }
+                throw NSError(domain: "EventStorageTests", code: 1)
+            }
+            defer { sqlite3_close(database) }
+            var message: UnsafeMutablePointer<CChar>?
+            guard sqlite3_exec(database, sql, nil, nil, &message) == SQLITE_OK else {
+                let description = message.map { String(cString: $0) } ?? "SQLite command failed"
+                sqlite3_free(message)
+                throw NSError(
+                    domain: "EventStorageTests",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: description]
+                )
+            }
         }
         
         beforeEach {
@@ -222,15 +242,22 @@ final class EventStorageTests: AsyncSpec {
                     fail("Failed to get event count: \(error)")
                 }
                 
-                // Delete events older than 1 day
+                // Atomically prune events older than 1 day and advance the
+                // durable completeness boundary with the deletion.
                 let cutoffDate = Date(timeIntervalSinceNow: -60 * 60 * 24) // 1 day ago
-                guard let deletedCount = try? await internalEventStore.deleteEventsOlderThan(cutoffDate) else {
+                _ = try await internalEventStore.readOrInitializeHistoryCoverage(
+                    startingAt: .distantPast
+                )
+                guard let prune = try? await internalEventStore.pruneHistory(
+                    keeping: 10,
+                    olderThan: cutoffDate
+                ) else {
                     fail("Failed to delete old events")
                     return
                 }
                 
                 // Should have deleted the old event
-                expect(deletedCount) == 1
+                expect(prune.ageDeleted) == 1
                 do {
                     let count = try await internalEventStore.getEventCount()
                     expect(count) == 1
@@ -255,6 +282,44 @@ final class EventStorageTests: AsyncSpec {
                     limit: Int(Int32.max) + 1
                 )
                 expect(pending).to(beEmpty())
+            }
+
+            it("does not make pending history prunable until it is acknowledged") {
+                let pending = try StoredEvent(
+                    id: "old-pending",
+                    name: "pending",
+                    timestamp: Date(timeIntervalSince1970: 100),
+                    distinctId: "user"
+                )
+                let delivered = try StoredEvent(
+                    id: "newer-delivered",
+                    name: "delivered",
+                    timestamp: Date(timeIntervalSince1970: 200),
+                    distinctId: "user"
+                )
+                try await internalEventStore.insertPending(pending)
+                try await internalEventStore.insertHistory(delivered)
+                _ = try await internalEventStore.readOrInitializeHistoryCoverage(
+                    startingAt: Date(timeIntervalSince1970: 50)
+                )
+
+                let beforeDelivery = try await internalEventStore.pruneHistory(
+                    keeping: 10,
+                    olderThan: Date(timeIntervalSince1970: 150)
+                )
+                expect(beforeDelivery.ageDeleted).to(equal(0))
+                let pendingEventCount = try await internalEventStore.getEventCount()
+                expect(pendingEventCount).to(equal(2))
+
+                try await internalEventStore.markDelivered(ids: [pending.id])
+                let afterDelivery = try await internalEventStore.pruneHistory(
+                    keeping: 10,
+                    olderThan: Date(timeIntervalSince1970: 150)
+                )
+                expect(afterDelivery.ageDeleted).to(equal(1))
+                expect(afterDelivery.coverageStartingAt).to(equal(
+                    Date(timeIntervalSince1970: 150)
+                ))
             }
 
             it("persists a terminal stable drop across replay and store relaunch") {
@@ -369,6 +434,165 @@ final class EventStorageTests: AsyncSpec {
                 let remainingIds = try await internalEventStore.queryPendingDelivery(limit: 10).map(\.id)
                 expect(remainingCount) == 1
                 expect(remainingIds) == ["pending-b"]
+            }
+        }
+
+        describe("durable event-history coverage") {
+            it("initializes conservatively and persists the boundary across relaunch until reset") {
+                let firstOpen = Date(timeIntervalSince1970: 1_000)
+                let laterOpen = Date(timeIntervalSince1970: 2_000)
+                let initial = try await internalEventStore.readOrInitializeHistoryCoverage(
+                    startingAt: firstOpen
+                )
+                expect(initial).to(equal(firstOpen))
+
+                await internalEventStore.close()
+                let reopened = SQLiteEventStore()
+                try await reopened.initialize(path: URL(fileURLWithPath: tempDbPath))
+                let relaunched = try await reopened.readOrInitializeHistoryCoverage(
+                    startingAt: laterOpen
+                )
+                expect(relaunched).to(equal(firstOpen))
+
+                await reopened.reset()
+                try await reopened.initialize(path: URL(fileURLWithPath: tempDbPath))
+                let reset = try await reopened.readOrInitializeHistoryCoverage(
+                    startingAt: laterOpen
+                )
+                expect(reset).to(equal(laterOpen))
+                await reopened.close()
+            }
+
+            it("rejects a v1 database without coverage metadata without mutating its events") {
+                let existing = try StoredEvent(
+                    id: "existing-row",
+                    name: "existing",
+                    timestamp: Date(timeIntervalSince1970: 100),
+                    distinctId: "user"
+                )
+                try await internalEventStore.insertHistory(existing)
+                let databasePath = await internalEventStore.dbPath!
+                await internalEventStore.close()
+                try executeSQLite("DROP TABLE event_history_metadata;", at: databasePath)
+
+                let rejected = SQLiteEventStore()
+                await expect {
+                    try await rejected.initialize(path: URL(fileURLWithPath: tempDbPath))
+                }.to(throwError { error in
+                    guard case EventStorageError.invalidSchema = error else {
+                        return fail("Expected invalidSchema, got \(error)")
+                    }
+                })
+
+                var database: OpaquePointer?
+                expect(sqlite3_open(databasePath, &database)).to(equal(SQLITE_OK))
+                defer { sqlite3_close(database) }
+                var statement: OpaquePointer?
+                expect(sqlite3_prepare_v2(
+                    database,
+                    "SELECT COUNT(*) FROM events WHERE id = 'existing-row';",
+                    -1,
+                    &statement,
+                    nil
+                )).to(equal(SQLITE_OK))
+                defer { sqlite3_finalize(statement) }
+                expect(sqlite3_step(statement)).to(equal(SQLITE_ROW))
+                expect(sqlite3_column_int(statement, 0)).to(equal(1))
+            }
+
+            it("advances monotonically for count and age pruning, including a later pending ack") {
+                let initial = Date(timeIntervalSince1970: 100)
+                _ = try await internalEventStore.readOrInitializeHistoryCoverage(startingAt: initial)
+                for second in [101, 102, 103] {
+                    try await internalEventStore.insertHistory(try StoredEvent(
+                        id: "delivered-\(second)",
+                        name: "event",
+                        timestamp: Date(timeIntervalSince1970: TimeInterval(second)),
+                        distinctId: "user"
+                    ))
+                }
+                let oldPending = try StoredEvent(
+                    id: "old-pending",
+                    name: "event",
+                    timestamp: Date(timeIntervalSince1970: 90),
+                    distinctId: "user"
+                )
+                try await internalEventStore.insertPending(oldPending)
+
+                let countPrune = try await internalEventStore.pruneHistory(
+                    keeping: 3,
+                    olderThan: .distantPast
+                )
+                expect(countPrune.countDeleted).to(equal(1))
+                expect(countPrune.coverageStartingAt).to(equal(
+                    Date(timeIntervalSince1970: 101.001)
+                ))
+
+                try await internalEventStore.markDelivered(ids: [oldPending.id])
+                let acknowledgedPrune = try await internalEventStore.pruneHistory(
+                    keeping: 2,
+                    olderThan: .distantPast
+                )
+                expect(acknowledgedPrune.countDeleted).to(equal(1))
+                expect(acknowledgedPrune.coverageStartingAt).to(equal(
+                    countPrune.coverageStartingAt
+                ))
+
+                try await internalEventStore.insertHistory(try StoredEvent(
+                    id: "aged",
+                    name: "event",
+                    timestamp: Date(timeIntervalSince1970: 150),
+                    distinctId: "user"
+                ))
+                let agePrune = try await internalEventStore.pruneHistory(
+                    keeping: 10,
+                    olderThan: Date(timeIntervalSince1970: 200)
+                )
+                expect(agePrune.ageDeleted).to(beGreaterThan(0))
+                expect(agePrune.coverageStartingAt).to(equal(
+                    Date(timeIntervalSince1970: 200)
+                ))
+
+                let clockRollback = try await internalEventStore.pruneHistory(
+                    keeping: 10,
+                    olderThan: Date(timeIntervalSince1970: 120)
+                )
+                expect(clockRollback.coverageStartingAt).to(equal(
+                    agePrune.coverageStartingAt
+                ))
+            }
+
+            it("rolls event deletion back when the atomic coverage update fails") {
+                let initial = Date(timeIntervalSince1970: 10)
+                _ = try await internalEventStore.readOrInitializeHistoryCoverage(startingAt: initial)
+                try await internalEventStore.insertHistory(try StoredEvent(
+                    id: "must-survive",
+                    name: "event",
+                    timestamp: Date(timeIntervalSince1970: 50),
+                    distinctId: "user"
+                ))
+                let databasePath = await internalEventStore.dbPath!
+                try executeSQLite(
+                    """
+                    CREATE TRIGGER fail_history_coverage_update
+                    BEFORE UPDATE ON event_history_metadata
+                    BEGIN
+                      SELECT RAISE(ABORT, 'injected coverage failure');
+                    END;
+                    """,
+                    at: databasePath
+                )
+
+                await expect {
+                    try await internalEventStore.pruneHistory(
+                        keeping: 10,
+                        olderThan: Date(timeIntervalSince1970: 75)
+                    )
+                }.to(throwError())
+                let retainedEventCount = try await internalEventStore.getEventCount()
+                let retainedCoverage = try await internalEventStore.historyCoverageStartingAt()
+                expect(retainedEventCount).to(equal(1))
+                expect(retainedCoverage).to(equal(initial))
             }
         }
         

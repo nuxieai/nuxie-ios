@@ -2,6 +2,7 @@ import Foundation
 
 /// Adapter that bridges EventLogProtocol to IREventQueries
 struct IREventQueriesAdapter: IREventQueries {
+    private static let queryLimit = 10_000
     private let eventLog: EventQuerySource
     private let distinctId: String?
     private let additionalEvents: [StoredEvent]
@@ -34,22 +35,30 @@ struct IREventQueriesAdapter: IREventQueries {
         distinctId != nil || !additionalEvents.isEmpty
     }
 
+    func historyCoverage() async throws -> EventHistoryCoverage {
+        try await eventLog.historyCoverage()
+    }
+
     private func mergedEvents(
         names: Set<String>,
         since: Date?,
         until: Date?
-    ) async -> [StoredEvent] {
+    ) async throws -> [StoredEvent] {
         var persistedEvents: [StoredEvent] = []
         if let distinctId {
             for name in names.sorted() {
-                persistedEvents += await eventLog.getEventsForUser(
+                let events = try await eventLog.queryEventsForIR(
                     distinctId,
                     name: name,
                     since: since,
                     until: until,
                     ascending: true,
-                    limit: .max
+                    limit: Self.queryLimit + 1
                 )
+                guard events.count <= Self.queryLimit else {
+                    throw EventHistoryQueryError.truncated(limit: Self.queryLimit)
+                }
+                persistedEvents += events
             }
         }
 
@@ -65,9 +74,18 @@ struct IREventQueriesAdapter: IREventQueries {
         // Persisted rows win when a formerly transient fact crosses the
         // persistence boundary. Its stable id keeps the merged view singular.
         var seen = Set<String>()
-        return chronological((persistedEvents + scopedAdditionalEvents).filter {
+        let mergedEvents = (persistedEvents + scopedAdditionalEvents).filter {
             seen.insert($0.id).inserted
-        })
+        }
+        var countsByName: [String: Int] = [:]
+        for event in mergedEvents {
+            let count = (countsByName[event.name] ?? 0) + 1
+            guard count <= Self.queryLimit else {
+                throw EventHistoryQueryError.truncated(limit: Self.queryLimit)
+            }
+            countsByName[event.name] = count
+        }
+        return chronological(mergedEvents)
     }
 
     private func chronological(_ events: [StoredEvent]) -> [StoredEvent] {
@@ -82,72 +100,75 @@ struct IREventQueriesAdapter: IREventQueries {
         since: Date?,
         until: Date?,
         predicate: IRPredicate?
-    ) async -> [StoredEvent] {
-        let events = await mergedEvents(names: [name], since: since, until: until)
-        return events.filter { event in
+    ) async throws -> [StoredEvent] {
+        let events = try await mergedEvents(names: [name], since: since, until: until)
+        return try events.filter { event in
             guard let predicate else { return true }
-            return PredicateEval.eval(predicate, props: event.getPropertiesDict())
+            return PredicateEval.eval(
+                predicate,
+                props: try event.getPropertiesDictForIR()
+            )
         }
     }
     
-    public func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Bool {
+    public func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async throws -> Bool {
         if shouldUseMergedEvents() {
-            return !(await filteredEvents(
+            return !(try await filteredEvents(
                 name: name,
                 since: since,
                 until: until,
                 predicate: predicate
             )).isEmpty
         }
-        return await eventLog.exists(name: name, since: since, until: until, where: predicate)
+        return try await eventLog.exists(name: name, since: since, until: until, where: predicate)
     }
     
-    public func count(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Int {
+    public func count(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async throws -> Int {
         if shouldUseMergedEvents() {
-            return await filteredEvents(
+            return try await filteredEvents(
                 name: name,
                 since: since,
                 until: until,
                 predicate: predicate
             ).count
         }
-        return await eventLog.count(name: name, since: since, until: until, where: predicate)
+        return try await eventLog.count(name: name, since: since, until: until, where: predicate)
     }
     
-    public func firstTime(name: String, where predicate: IRPredicate?) async -> Date? {
+    public func firstTime(name: String, where predicate: IRPredicate?) async throws -> Date? {
         if shouldUseMergedEvents() {
-            return chronological(await filteredEvents(
+            return chronological(try await filteredEvents(
                 name: name,
                 since: nil,
                 until: nil,
                 predicate: predicate
             )).first?.timestamp
         }
-        return await eventLog.firstTime(name: name, where: predicate)
+        return try await eventLog.firstTime(name: name, where: predicate)
     }
     
-    public func lastTime(name: String, where predicate: IRPredicate?) async -> Date? {
+    public func lastTime(name: String, where predicate: IRPredicate?) async throws -> Date? {
         if shouldUseMergedEvents() {
-            return chronological(await filteredEvents(
+            return chronological(try await filteredEvents(
                 name: name,
                 since: nil,
                 until: nil,
                 predicate: predicate
             )).last?.timestamp
         }
-        return await eventLog.lastTime(name: name, where: predicate)
+        return try await eventLog.lastTime(name: name, where: predicate)
     }
     
-    public func aggregate(_ agg: Aggregate, name: String, prop: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Double? {
+    public func aggregate(_ agg: Aggregate, name: String, prop: String, since: Date?, until: Date?, where predicate: IRPredicate?) async throws -> Double? {
         if shouldUseMergedEvents() {
-            let values = await filteredEvents(
+            let values = try await filteredEvents(
                 name: name,
                 since: since,
                 until: until,
                 predicate: predicate
             )
             .compactMap { event in
-                Coercion.asNumber(event.getPropertiesDict()[prop])
+                Coercion.asNumber(try event.getPropertiesDictForIR()[prop])
             }
 
             guard !values.isEmpty else { return nil }
@@ -164,45 +185,34 @@ struct IREventQueriesAdapter: IREventQueries {
                 return Double(Set(values).count)
             }
         }
-        return await eventLog.aggregate(agg, name: name, prop: prop, since: since, until: until, where: predicate)
+        return try await eventLog.aggregate(agg, name: name, prop: prop, since: since, until: until, where: predicate)
     }
     
-    public func inOrder(steps: [StepQuery], overallWithin: TimeInterval?, perStepWithin: TimeInterval?, since: Date?, until: Date?) async -> Bool {
+    public func inOrder(steps: [StepQuery], overallWithin: TimeInterval?, perStepWithin: TimeInterval?, since: Date?, until: Date?) async throws -> Bool {
         if shouldUseMergedEvents() {
             let stepNames = Set(steps.map(\.name))
-            let events = await mergedEvents(names: stepNames, since: since, until: until)
-            return IREventSequenceMatcher.matches(
+            let events = try await mergedEvents(names: stepNames, since: since, until: until)
+            return try IREventSequenceMatcher.matches(
                 events: events,
                 steps: steps,
                 overallWithin: overallWithin,
                 perStepWithin: perStepWithin
             )
         }
-        return await eventLog.inOrder(steps: steps, overallWithin: overallWithin, perStepWithin: perStepWithin, since: since, until: until)
+        return try await eventLog.inOrder(steps: steps, overallWithin: overallWithin, perStepWithin: perStepWithin, since: since, until: until)
     }
     
-    public func activePeriods(name: String, period: Period, total: Int, min: Int, where predicate: IRPredicate?) async -> Bool {
+    public func activePeriods(name: String, period: Period, total: Int, min: Int, where predicate: IRPredicate?) async throws -> Bool {
         if shouldUseMergedEvents() {
             guard total > 0, min > 0, min <= total else { return false }
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             let now = self.now()
-            let component: Calendar.Component
-            switch period {
-            case .day: component = .day
-            case .week: component = .weekOfYear
-            case .month: component = .month
-            case .year: component = .year
-            }
-            guard let currentPeriodStart = calendar.dateInterval(of: component, for: now)?.start else {
-                return false
-            }
-            let windowStart = calendar.date(
-                byAdding: component,
-                value: -(total - 1),
-                to: currentPeriodStart
-            ) ?? currentPeriodStart
-            let events = await filteredEvents(
+            guard let windowStart = period.activePeriodsWindowStart(
+                total: total,
+                now: now
+            ) else { return false }
+            let events = try await filteredEvents(
                 name: name,
                 since: windowStart,
                 until: now,
@@ -223,12 +233,12 @@ struct IREventQueriesAdapter: IREventQueries {
             })
             return buckets.count >= min
         }
-        return await eventLog.activePeriods(name: name, period: period, total: total, min: min, where: predicate)
+        return try await eventLog.activePeriods(name: name, period: period, total: total, min: min, where: predicate)
     }
     
-    public func stopped(name: String, inactiveFor: TimeInterval, where predicate: IRPredicate?) async -> Bool {
+    public func stopped(name: String, inactiveFor: TimeInterval, where predicate: IRPredicate?) async throws -> Bool {
         if shouldUseMergedEvents() {
-            guard let last = chronological(await filteredEvents(
+            guard let last = chronological(try await filteredEvents(
                 name: name,
                 since: nil,
                 until: nil,
@@ -238,13 +248,13 @@ struct IREventQueriesAdapter: IREventQueries {
             }
             return self.now().timeIntervalSince(last.timestamp) >= inactiveFor
         }
-        return await eventLog.stopped(name: name, inactiveFor: inactiveFor, where: predicate)
+        return try await eventLog.stopped(name: name, inactiveFor: inactiveFor, where: predicate)
     }
     
-    public func restarted(name: String, inactiveFor: TimeInterval, within: TimeInterval, where predicate: IRPredicate?) async -> Bool {
+    public func restarted(name: String, inactiveFor: TimeInterval, within: TimeInterval, where predicate: IRPredicate?) async throws -> Bool {
         if shouldUseMergedEvents() {
             let now = self.now()
-            let events = chronological(await filteredEvents(
+            let events = chronological(try await filteredEvents(
                 name: name,
                 since: nil,
                 until: now,
@@ -262,7 +272,7 @@ struct IREventQueriesAdapter: IREventQueries {
             }
             return false
         }
-        return await eventLog.restarted(name: name, inactiveFor: inactiveFor, within: within, where: predicate)
+        return try await eventLog.restarted(name: name, inactiveFor: inactiveFor, within: within, where: predicate)
     }
 }
 
@@ -272,19 +282,23 @@ enum IREventSequenceMatcher {
         steps: [StepQuery],
         overallWithin: TimeInterval?,
         perStepWithin: TimeInterval?
-    ) -> Bool {
+    ) throws -> Bool {
         guard !steps.isEmpty else { return true }
 
-        func matches(_ event: StoredEvent, step: StepQuery) -> Bool {
-            event.name == step.name && (step.predicate.map {
-                PredicateEval.eval($0, props: event.getPropertiesDict())
-            } ?? true)
+        func matches(_ event: StoredEvent, step: StepQuery) throws -> Bool {
+            guard event.name == step.name else { return false }
+            guard let predicate = step.predicate else { return true }
+            return PredicateEval.eval(
+                predicate,
+                props: try event.getPropertiesDictForIR()
+            )
         }
 
         // Try every viable first fact. For a fixed start, choosing the
         // earliest next fact is optimal because both windows are upper
         // bounds; a later match can only leave less room for later steps.
-        for startIndex in events.indices where matches(events[startIndex], step: steps[0]) {
+        for startIndex in events.indices
+        where try matches(events[startIndex], step: steps[0]) {
             let firstTime = events[startIndex].timestamp
             var previousTime = firstTime
             var nextIndex = events.index(after: startIndex)
@@ -302,7 +316,7 @@ enum IREventSequenceMatcher {
                        event.timestamp.timeIntervalSince(firstTime) > overallWithin {
                         break
                     }
-                    if matches(event, step: step) {
+                    if try matches(event, step: step) {
                         matchIndex = nextIndex
                         break
                     }

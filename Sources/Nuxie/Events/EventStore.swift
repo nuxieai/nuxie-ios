@@ -10,6 +10,12 @@ enum StableEventCaptureOutcome: Sendable {
   case dropped
 }
 
+struct EventHistoryPruneResult: Equatable, Sendable {
+  let countDeleted: Int
+  let ageDeleted: Int
+  let coverageStartingAt: Date
+}
+
 /// Persistence surface the event log writes through. One implementation
 /// (SQLite) in production; mocks in tests.
 protocol EventStoreProtocol: Sendable {
@@ -52,6 +58,15 @@ protocol EventStoreProtocol: Sendable {
   ) async throws -> [StoredEvent]
   func querySessionEvents(_ sessionId: String) async throws -> [StoredEvent]
   func getEventCount() async throws -> Int
+  /// Atomically establish the conservative origin for a fresh current-schema
+  /// database on its first SDK open.
+  func readOrInitializeHistoryCoverage(startingAt: Date) async throws -> Date
+  func historyCoverageStartingAt() async throws -> Date
+  /// Monotonically fence history after a known persistence gap.
+  func advanceHistoryCoverage(to startingAt: Date) async throws -> Date
+  /// Delete retained rows and advance the durable coverage boundary in the
+  /// same transaction. Either both effects commit or neither does.
+  func pruneHistory(keeping: Int, olderThan: Date) async throws -> EventHistoryPruneResult
   func hasEvent(name: String, distinctId: String, since: Date?) async throws -> Bool
   func countEvents(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Int
   func getLastEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws
@@ -72,13 +87,6 @@ protocol EventStoreProtocol: Sendable {
   /// Mark events delivered (server ack or deliberate permanent drop).
   func markDelivered(ids: [String]) async throws
 
-  /// Delete delivered rows older than the date. Never reaps pending rows.
-  @discardableResult
-  func deleteEventsOlderThan(_ olderThan: Date) async throws -> Int
-
-  /// Delete the oldest delivered rows beyond the cap. Never reaps pending rows.
-  @discardableResult
-  func deleteOldestDeliveredEvents(keeping: Int) async throws -> Int
 }
 
 /// SQLite-based event storage implementation
@@ -133,6 +141,13 @@ actor SQLiteEventStore: EventStoreProtocol {
     );
     """
 
+  private let createHistoryMetadataSQL = """
+    CREATE TABLE IF NOT EXISTS event_history_metadata (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      coverage_start_ms INTEGER NOT NULL
+    );
+    """
+
   private let insertEventSQL = """
     INSERT INTO events (id, name, properties, timestamp, user_id, session_id, delivery_state)
     VALUES (?, ?, ?, ?, ?, ?, ?);
@@ -160,14 +175,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     FROM events
     WHERE id = ?
     LIMIT 1;
-    """
-
-  // Age-based retention must never reap rows still awaiting delivery — a
-  // long-offline device's pending events survive until acked (or deliberately
-  // dropped, which also marks them delivered).
-  private let deleteOldEventsSQL = """
-    DELETE FROM events
-    WHERE timestamp < ? AND delivery_state = 2;
     """
 
   private let countEventsSQL = "SELECT COUNT(*) FROM events;"
@@ -335,6 +342,11 @@ actor SQLiteEventStore: EventStoreProtocol {
         targetVersion: targetVersion,
         operation: "create stable_event_drops"
       )
+      try executeSchemaSQL(
+        createHistoryMetadataSQL,
+        targetVersion: targetVersion,
+        operation: "create event_history_metadata"
+      )
       for indexSQL in createIndexSQL {
         try executeSchemaSQL(
           indexSQL,
@@ -375,6 +387,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     let version = Self.currentSchemaVersion
     try verifyEventsTable(targetVersion: version)
     try verifyStableEventDropsTable(targetVersion: version)
+    try verifyHistoryMetadataTable(targetVersion: version)
     let requiredIndexes: [(name: String, columns: [(String, Bool)])] = [
       ("idx_events_delivery", [("delivery_state", false), ("timestamp", false)]),
       ("idx_events_timestamp", [("timestamp", false)]),
@@ -563,6 +576,41 @@ actor SQLiteEventStore: EventStoreProtocol {
         code: SQLITE_SCHEMA,
         message: "stable_event_drops must define event_id TEXT as its sole PRIMARY KEY "
           + "and created_at INTEGER NOT NULL"
+      )
+    }
+  }
+
+  private func verifyHistoryMetadataTable(targetVersion: Int32) throws {
+    guard try schemaObjectType(named: "event_history_metadata", targetVersion: targetVersion)
+      == "table"
+    else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify event_history_metadata",
+        code: SQLITE_SCHEMA,
+        message: "event_history_metadata is not a table"
+      )
+    }
+
+    let columns = try tableColumns(
+      named: "event_history_metadata",
+      targetVersion: targetVersion
+    )
+    guard columns.count == 2,
+          let id = columns["id"],
+          id.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
+          id.primaryKeyPosition == 1,
+          columns.values.filter(\.isPrimaryKey).count == 1,
+          let coverageStart = columns["coverage_start_ms"],
+          coverageStart.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
+          coverageStart.isNotNull
+    else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify event_history_metadata",
+        code: SQLITE_SCHEMA,
+        message: "event_history_metadata must define id INTEGER as its sole PRIMARY KEY "
+          + "and coverage_start_ms INTEGER NOT NULL"
       )
     }
   }
@@ -1117,39 +1165,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     return events
   }
 
-  /// Delete events older than the specified date
-  /// - Parameter olderThan: Delete events older than this date
-  /// - Returns: Number of events deleted
-  /// - Throws: EventStorageError if deletion fails
-  public func deleteEventsOlderThan(_ olderThan: Date) throws -> Int {
-    guard let db = db else {
-      throw EventStorageError.databaseNotInitialized
-    }
-
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-
-    // Prepare statement
-    if sqlite3_prepare_v2(db, deleteOldEventsSQL, -1, &statement, nil) != SQLITE_OK {
-      let errorMessage = String(cString: sqlite3_errmsg(db))
-      throw EventStorageError.deleteFailed(
-        NSError(domain: "SQLite", code: 6, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
-    }
-
-    // Bind timestamp (in milliseconds)
-    let timestampMs = Int64(olderThan.timeIntervalSince1970 * 1000)
-    sqlite3_bind_int64(statement, 1, timestampMs)
-
-    // Execute
-    if sqlite3_step(statement) != SQLITE_DONE {
-      let errorMessage = String(cString: sqlite3_errmsg(db))
-      throw EventStorageError.deleteFailed(
-        NSError(domain: "SQLite", code: 7, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
-    }
-
-    return Int(sqlite3_changes(db))
-  }
-
   /// Get total count of events in database
   /// - Returns: Number of events stored
   /// - Throws: EventStorageError if query fails
@@ -1169,11 +1184,245 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     // Execute
-    if sqlite3_step(statement) == SQLITE_ROW {
+    let result = sqlite3_step(statement)
+    if result == SQLITE_ROW {
       return Int(sqlite3_column_int(statement, 0))
     }
+    let errorMessage = String(cString: sqlite3_errmsg(db))
+    throw EventStorageError.queryFailed(
+      NSError(domain: "SQLite", code: 8, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+  }
 
-    return 0
+  // MARK: - Durable history coverage
+
+  public func readOrInitializeHistoryCoverage(startingAt: Date) throws -> Date {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    let startingMs = Self.coverageMilliseconds(for: startingAt)
+    let sql = "INSERT OR IGNORE INTO event_history_metadata (id, coverage_start_ms) VALUES (1, ?);"
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw coverageUpdateError(code: 28)
+    }
+    sqlite3_bind_int64(statement, 1, startingMs)
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw coverageUpdateError(code: 29)
+    }
+    return try historyCoverageStartingAt()
+  }
+
+  public func historyCoverageStartingAt() throws -> Date {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    let sql = "SELECT coverage_start_ms FROM event_history_metadata WHERE id = 1;"
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw coverageQueryError(code: 30)
+    }
+    guard sqlite3_step(statement) == SQLITE_ROW else {
+      throw coverageQueryError(code: 31)
+    }
+    return Self.coverageDate(from: sqlite3_column_int64(statement, 0))
+  }
+
+  public func advanceHistoryCoverage(to startingAt: Date) throws -> Date {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    let startingMs = Self.coverageMilliseconds(for: startingAt)
+    let sql = """
+      INSERT INTO event_history_metadata (id, coverage_start_ms)
+      VALUES (1, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        coverage_start_ms = MAX(coverage_start_ms, excluded.coverage_start_ms);
+      """
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw coverageUpdateError(code: 32)
+    }
+    sqlite3_bind_int64(statement, 1, startingMs)
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw coverageUpdateError(code: 33)
+    }
+    return try historyCoverageStartingAt()
+  }
+
+  public func pruneHistory(
+    keeping: Int,
+    olderThan: Date
+  ) throws -> EventHistoryPruneResult {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    guard keeping >= 0 else {
+      throw EventStorageError.deleteFailed(
+        NSError(domain: "SQLite", code: 34, userInfo: [NSLocalizedDescriptionKey: "Negative retention cap"]))
+    }
+    // Refuse to prune until an explicit conservative origin exists. Guessing a
+    // boundary after deletion would make a legacy gap look complete.
+    _ = try historyCoverageStartingAt()
+    try executeCoverageSQL("BEGIN IMMEDIATE TRANSACTION;", code: 35)
+
+    do {
+      let cutoffMs = Self.coverageMilliseconds(for: olderThan)
+      let ageDeleted = try deleteAgedDeliveredEvents(olderThanMs: cutoffMs)
+
+      let totalAfterAge = try scalarCount("SELECT COUNT(*) FROM events;", code: 36)
+      let requestedCountDeletes = max(0, totalAfterAge - keeping)
+      let countPrune = try deleteOldestDeliveredEventsForCoverage(
+        limit: requestedCountDeletes
+      )
+
+      var candidateMs: Int64?
+      if ageDeleted > 0 { candidateMs = cutoffMs }
+      if let countBoundaryMs = countPrune.boundaryMs {
+        candidateMs = max(candidateMs ?? Int64.min, countBoundaryMs)
+      }
+      if let candidateMs {
+        try updateCoverageWithinTransaction(to: candidateMs)
+      }
+      let coverage = try historyCoverageStartingAt()
+      try executeCoverageSQL("COMMIT;", code: 37)
+      return EventHistoryPruneResult(
+        countDeleted: countPrune.deleted,
+        ageDeleted: ageDeleted,
+        coverageStartingAt: coverage
+      )
+    } catch {
+      _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+      throw error
+    }
+  }
+
+  private func deleteAgedDeliveredEvents(olderThanMs: Int64) throws -> Int {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    let sql = "DELETE FROM events WHERE timestamp < ? AND delivery_state = ?;"
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw coverageDeleteError(code: 38)
+    }
+    sqlite3_bind_int64(statement, 1, olderThanMs)
+    sqlite3_bind_int(statement, 2, DeliveryState.delivered.rawValue)
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw coverageDeleteError(code: 39)
+    }
+    return Int(sqlite3_changes(db))
+  }
+
+  /// Returns the first excluded millisecond after the newest count-pruned row.
+  private func deleteOldestDeliveredEventsForCoverage(
+    limit: Int
+  ) throws -> (boundaryMs: Int64?, deleted: Int) {
+    guard limit > 0 else { return (nil, 0) }
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    let boundarySQL = """
+      SELECT MAX(timestamp) FROM (
+        SELECT timestamp FROM events
+        WHERE delivery_state = ?
+        ORDER BY timestamp ASC, id ASC
+        LIMIT ?
+      );
+      """
+    var boundaryStatement: OpaquePointer?
+    defer { sqlite3_finalize(boundaryStatement) }
+    guard sqlite3_prepare_v2(db, boundarySQL, -1, &boundaryStatement, nil) == SQLITE_OK else {
+      throw coverageQueryError(code: 40)
+    }
+    sqlite3_bind_int(boundaryStatement, 1, DeliveryState.delivered.rawValue)
+    sqlite3_bind_int64(boundaryStatement, 2, Int64(limit))
+    guard sqlite3_step(boundaryStatement) == SQLITE_ROW else {
+      throw coverageQueryError(code: 41)
+    }
+    guard sqlite3_column_type(boundaryStatement, 0) != SQLITE_NULL else { return (nil, 0) }
+    let newestDeletedMs = sqlite3_column_int64(boundaryStatement, 0)
+
+    let deleteSQL = """
+      DELETE FROM events WHERE id IN (
+        SELECT id FROM events
+        WHERE delivery_state = ?
+        ORDER BY timestamp ASC, id ASC
+        LIMIT ?
+      );
+      """
+    var deleteStatement: OpaquePointer?
+    defer { sqlite3_finalize(deleteStatement) }
+    guard sqlite3_prepare_v2(db, deleteSQL, -1, &deleteStatement, nil) == SQLITE_OK else {
+      throw coverageDeleteError(code: 42)
+    }
+    sqlite3_bind_int(deleteStatement, 1, DeliveryState.delivered.rawValue)
+    sqlite3_bind_int64(deleteStatement, 2, Int64(limit))
+    guard sqlite3_step(deleteStatement) == SQLITE_DONE else {
+      throw coverageDeleteError(code: 43)
+    }
+    let deleted = Int(sqlite3_changes(db))
+    guard deleted > 0 else { return (nil, 0) }
+    let boundary = newestDeletedMs == Int64.max ? Int64.max : newestDeletedMs + 1
+    return (boundary, deleted)
+  }
+
+  private func updateCoverageWithinTransaction(to startingMs: Int64) throws {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    let sql = """
+      UPDATE event_history_metadata
+      SET coverage_start_ms = MAX(coverage_start_ms, ?)
+      WHERE id = 1;
+      """
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw coverageUpdateError(code: 44)
+    }
+    sqlite3_bind_int64(statement, 1, startingMs)
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw coverageUpdateError(code: 45)
+    }
+  }
+
+  private func scalarCount(_ sql: String, code: Int) throws -> Int {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK,
+      sqlite3_step(statement) == SQLITE_ROW
+    else { throw coverageQueryError(code: code) }
+    return Int(sqlite3_column_int64(statement, 0))
+  }
+
+  private func executeCoverageSQL(_ sql: String, code: Int) throws {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+      throw coverageUpdateError(code: code)
+    }
+  }
+
+  private func coverageQueryError(code: Int) -> EventStorageError {
+    EventStorageError.queryFailed(sqliteError(code: code))
+  }
+
+  private func coverageUpdateError(code: Int) -> EventStorageError {
+    EventStorageError.updateFailed(sqliteError(code: code))
+  }
+
+  private func coverageDeleteError(code: Int) -> EventStorageError {
+    EventStorageError.deleteFailed(sqliteError(code: code))
+  }
+
+  private func sqliteError(code: Int) -> NSError {
+    let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "Database not initialized"
+    return NSError(
+      domain: "SQLite",
+      code: code,
+      userInfo: [NSLocalizedDescriptionKey: message]
+    )
+  }
+
+  private static func coverageMilliseconds(for date: Date) -> Int64 {
+    let raw = date.timeIntervalSince1970 * 1_000
+    if raw >= Double(Int64.max) { return Int64.max }
+    if raw <= Double(Int64.min) { return Int64.min }
+    return Int64(raw.rounded(.up))
+  }
+
+  private static func coverageDate(from milliseconds: Int64) -> Date {
+    Date(timeIntervalSince1970: Double(milliseconds) / 1_000)
   }
 
   // MARK: - Event Query Methods
@@ -1229,11 +1478,13 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     // Execute
-    if sqlite3_step(statement) == SQLITE_ROW {
+    let result = sqlite3_step(statement)
+    if result == SQLITE_ROW {
       return sqlite3_column_int(statement, 0) != 0
     }
-
-    return false
+    let errorMessage = String(cString: sqlite3_errmsg(db))
+    throw EventStorageError.queryFailed(
+      NSError(domain: "SQLite", code: 9, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
   }
 
   /// Count events of a specific type for a user
@@ -1287,11 +1538,13 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     // Execute
-    if sqlite3_step(statement) == SQLITE_ROW {
+    let result = sqlite3_step(statement)
+    if result == SQLITE_ROW {
       return Int(sqlite3_column_int(statement, 0))
     }
-
-    return 0
+    let errorMessage = String(cString: sqlite3_errmsg(db))
+    throw EventStorageError.queryFailed(
+      NSError(domain: "SQLite", code: 10, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
   }
 
   /// Get the timestamp of the most recent event of a specific type for a user
@@ -1345,7 +1598,8 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     // Execute
-    if sqlite3_step(statement) == SQLITE_ROW {
+    let result = sqlite3_step(statement)
+    if result == SQLITE_ROW {
       if sqlite3_column_type(statement, 0) == SQLITE_NULL {
         return nil
       }
@@ -1353,7 +1607,9 @@ actor SQLiteEventStore: EventStoreProtocol {
       return Date(timeIntervalSince1970: Double(timestampMs) / 1000.0)
     }
 
-    return nil
+    let errorMessage = String(cString: sqlite3_errmsg(db))
+    throw EventStorageError.queryFailed(
+      NSError(domain: "SQLite", code: 11, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
   }
 
   /// Query events for a specific user with efficient database filtering
@@ -1408,7 +1664,19 @@ actor SQLiteEventStore: EventStoreProtocol {
     sqlite3_bind_int64(statement, bindIndex, Int64(limit))
 
     var events: [StoredEvent] = []
-    while sqlite3_step(statement) == SQLITE_ROW {
+    while true {
+      let result = sqlite3_step(statement)
+      if result == SQLITE_DONE { break }
+      guard result == SQLITE_ROW else {
+        let errorMessage = String(cString: sqlite3_errmsg(db))
+        throw EventStorageError.queryFailed(
+          NSError(
+            domain: "SQLite",
+            code: 25,
+            userInfo: [NSLocalizedDescriptionKey: errorMessage]
+          )
+        )
+      }
       guard let idText = sqlite3_column_text(statement, 0),
             let propertiesBlob = sqlite3_column_blob(statement, 2)
       else { continue }
@@ -1459,10 +1727,16 @@ actor SQLiteEventStore: EventStoreProtocol {
       sqlite3_bind_int64(statement, bindIndex, Int64(until.timeIntervalSince1970 * 1000)); bindIndex += 1
     }
 
-    if sqlite3_step(statement) == SQLITE_ROW, sqlite3_column_type(statement, 0) != SQLITE_NULL {
-      return Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 0)) / 1000.0)
+    let result = sqlite3_step(statement)
+    if result == SQLITE_ROW {
+      guard sqlite3_column_type(statement, 0) != SQLITE_NULL else { return nil }
+      return Date(
+        timeIntervalSince1970: Double(sqlite3_column_int64(statement, 0)) / 1000.0
+      )
     }
-    return nil
+    let errorMessage = String(cString: sqlite3_errmsg(db))
+    throw EventStorageError.queryFailed(
+      NSError(domain: "SQLite", code: 26, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
   }
 
   public func queryEventsForUser(_ distinctId: String, limit: Int = 100) throws -> [StoredEvent] {
@@ -1657,44 +1931,6 @@ actor SQLiteEventStore: EventStoreProtocol {
       throw EventStorageError.updateFailed(
         NSError(domain: "SQLite", code: 22, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
     }
-  }
-
-  /// Enforce the retention cap by deleting the oldest DELIVERED events beyond
-  /// `keeping`. Pending-delivery rows are never deleted; they may exceed the
-  /// bounded in-memory delivery window until the server acknowledges them.
-  public func deleteOldestDeliveredEvents(keeping: Int) throws -> Int {
-    guard let db = db else {
-      throw EventStorageError.databaseNotInitialized
-    }
-
-    let sql = """
-      DELETE FROM events
-      WHERE delivery_state = \(DeliveryState.delivered.rawValue)
-        AND id IN (
-          SELECT id FROM events
-          ORDER BY timestamp ASC
-          LIMIT max(0, (SELECT COUNT(*) FROM events) - ?)
-        );
-      """
-
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-
-    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
-      let errorMessage = String(cString: sqlite3_errmsg(db))
-      throw EventStorageError.deleteFailed(
-        NSError(domain: "SQLite", code: 23, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
-    }
-
-    sqlite3_bind_int(statement, 1, Int32(keeping))
-
-    if sqlite3_step(statement) != SQLITE_DONE {
-      let errorMessage = String(cString: sqlite3_errmsg(db))
-      throw EventStorageError.deleteFailed(
-        NSError(domain: "SQLite", code: 24, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
-    }
-
-    return Int(sqlite3_changes(db))
   }
 
   /// Reassign events from one user to another (for anonymous → identified transitions)

@@ -84,18 +84,18 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     now: { now }
                 )
 
-                let exists = await queries.exists(
+                let exists = try await queries.exists(
                     name: "local_only", since: nil, until: nil, where: nil
                 )
-                let count = await queries.count(
+                let count = try await queries.count(
                     name: "activity", since: nil, until: nil, where: nil
                 )
-                let firstTime = await queries.firstTime(name: "activity", where: nil)
-                let lastTime = await queries.lastTime(name: "activity", where: nil)
-                let sum = await queries.aggregate(
+                let firstTime = try await queries.firstTime(name: "activity", where: nil)
+                let lastTime = try await queries.lastTime(name: "activity", where: nil)
+                let sum = try await queries.aggregate(
                     .sum, name: "activity", prop: "value", since: nil, until: nil, where: nil
                 )
-                let inOrder = await queries.inOrder(
+                let inOrder = try await queries.inOrder(
                     steps: [
                         StepQuery(name: "step_a", predicate: nil),
                         StepQuery(name: "step_b", predicate: nil),
@@ -105,13 +105,13 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     since: nil,
                     until: nil
                 )
-                let activePeriods = await queries.activePeriods(
+                let activePeriods = try await queries.activePeriods(
                     name: "activity", period: .day, total: 5, min: 2, where: nil
                 )
-                let stopped = await queries.stopped(
+                let stopped = try await queries.stopped(
                     name: "habit", inactiveFor: 100, where: nil
                 )
-                let restarted = await queries.restarted(
+                let restarted = try await queries.restarted(
                     name: "restart", inactiveFor: 500, within: 60, where: nil
                 )
 
@@ -149,7 +149,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     now: { now }
                 )
 
-                let forward = await queries.inOrder(
+                let forward = try await queries.inOrder(
                     steps: [
                         StepQuery(name: "first", predicate: nil),
                         StepQuery(name: "second", predicate: nil),
@@ -159,7 +159,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     since: nil,
                     until: nil
                 )
-                let reverse = await queries.inOrder(
+                let reverse = try await queries.inOrder(
                     steps: [
                         StepQuery(name: "second", predicate: nil),
                         StepQuery(name: "first", predicate: nil),
@@ -172,6 +172,48 @@ final class IREventQueriesAdapterTests: AsyncSpec {
 
                 expect(forward).to(beTrue())
                 expect(reverse).to(beFalse())
+            }
+
+            it("treats corrupt merged properties as unknown instead of satisfying is_not_set") {
+                let log = MockEventLog()
+                let corrupt = StoredEvent(
+                    id: "corrupt-transient",
+                    name: "purchase",
+                    properties: Data("not-json".utf8),
+                    timestamp: now.addingTimeInterval(-60),
+                    distinctId: userId,
+                    sessionId: nil
+                )
+                let queries = IREventQueriesAdapter(
+                    eventLog: log,
+                    distinctId: userId,
+                    additionalEvents: [corrupt],
+                    now: { now }
+                )
+                let boundedCountIsZero = IRExpr.compare(
+                    op: "==",
+                    left: .eventsCount(
+                        name: "purchase",
+                        since: nil,
+                        until: nil,
+                        within: .duration(600),
+                        where_: .pred(op: "is_not_set", key: "plan", value: nil)
+                    ),
+                    right: .number(0)
+                )
+                let result = await IRRuntime(
+                    dateProvider: MockDateProvider(initialDate: now)
+                ).eval(
+                    .init(
+                        ir_version: 1,
+                        engine_min: nil,
+                        compiled_at: nil,
+                        expr: .not(boundedCountIsZero)
+                    ),
+                    .init(now: now, events: queries)
+                )
+
+                expect(result).to(beFalse())
             }
 
             it("restarts sequence matching from a later viable first step") {
@@ -189,7 +231,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     now: { now }
                 )
 
-                let matched = await queries.inOrder(
+                let matched = try await queries.inOrder(
                     steps: [
                         StepQuery(name: "a", predicate: nil),
                         StepQuery(name: "b", predicate: nil),
@@ -230,13 +272,45 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     now: { now }
                 )
 
-                let count = await queries.count(
+                let count = try await queries.count(
                     name: "target", since: nil, until: nil, where: nil
                 )
-                let first = await queries.firstTime(name: "target", where: nil)
+                let first = try await queries.firstTime(name: "target", where: nil)
 
                 expect(count).to(equal(1))
                 expect(first).to(equal(target.timestamp))
+            }
+
+            it("rejects merged same-name history beyond the limit after deduplication") {
+                let source = IRTestEventLog()
+                source.history = try (0..<10_000).map { index in
+                    try stored(
+                        id: "persisted-\(index)",
+                        name: "purchase",
+                        secondsBeforeNow: TimeInterval(index + 1)
+                    )
+                }
+                let transient = try stored(
+                    id: "unique-transient",
+                    name: "purchase",
+                    secondsBeforeNow: 0
+                )
+                let queries = IREventQueriesAdapter(
+                    eventLog: source,
+                    distinctId: userId,
+                    additionalEvents: [transient],
+                    now: { now }
+                )
+
+                do {
+                    _ = try await queries.count(
+                        name: "purchase", since: nil, until: nil, where: nil
+                    )
+                    fail("Expected merged history truncation")
+                } catch {
+                    expect(error as? EventHistoryQueryError)
+                        .to(equal(.truncated(limit: 10_000)))
+                }
             }
 
             it("filters the default named-history query before applying its limit") {
@@ -297,13 +371,13 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     now: { now }
                 )
 
-                let impossibleMinimum = await queries.activePeriods(
+                let impossibleMinimum = try await queries.activePeriods(
                     name: "daily", period: .day, total: 1, min: 2, where: nil
                 )
-                let currentBucket = await queries.activePeriods(
+                let currentBucket = try await queries.activePeriods(
                     name: "daily", period: .day, total: 1, min: 1, where: nil
                 )
-                let priorBucket = await queries.activePeriods(
+                let priorBucket = try await queries.activePeriods(
                     name: "yesterday_only", period: .day, total: 1, min: 1, where: nil
                 )
 
@@ -327,10 +401,10 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     now: { now }
                 )
 
-                let exists = await queries.exists(
+                let exists = try await queries.exists(
                     name: "recovered_event", since: nil, until: nil, where: nil
                 )
-                let lastTime = await queries.lastTime(name: "recovered_event", where: nil)
+                let lastTime = try await queries.lastTime(name: "recovered_event", where: nil)
 
                 expect(exists).to(beTrue())
                 expect(lastTime).to(equal(recovered.timestamp))
@@ -369,7 +443,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     now: { now }
                 )
 
-                let count = await queries.count(
+                let count = try await queries.count(
                     name: "sqlite_event", since: nil, until: nil, where: nil
                 )
 
@@ -404,7 +478,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                 }
                 let queries = IREventQueriesAdapter(eventLog: log)
 
-                let matched = await queries.inOrder(
+                let matched = try await queries.inOrder(
                     steps: [
                         StepQuery(name: "a", predicate: nil),
                         StepQuery(name: "b", predicate: nil),

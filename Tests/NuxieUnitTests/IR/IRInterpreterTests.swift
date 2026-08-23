@@ -56,6 +56,8 @@ final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
     private var _stoppedResult = false
     private var _restartedResult = false
     private var _history: [StoredEvent] = []
+    private var _historyCoverage: EventHistoryCoverage = .complete
+    private var _historyCoverageAfterNextCount: EventHistoryCoverage?
 
     var existsResult: Bool {
         get { lock.withLock { _existsResult } }
@@ -97,13 +99,32 @@ final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
         get { lock.withLock { _history } }
         set { lock.withLock { _history = newValue } }
     }
+    var historyCoverageResult: EventHistoryCoverage {
+        get { lock.withLock { _historyCoverage } }
+        set { lock.withLock { _historyCoverage = newValue } }
+    }
+    var historyCoverageAfterNextCount: EventHistoryCoverage? {
+        get { lock.withLock { _historyCoverageAfterNextCount } }
+        set { lock.withLock { _historyCoverageAfterNextCount = newValue } }
+    }
+
+    func historyCoverage() async -> EventHistoryCoverage {
+        lock.withLock { _historyCoverage }
+    }
     
     func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Bool {
         return existsResult
     }
     
     func count(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Int {
-        return countResult
+        lock.withLock {
+            let result = _countResult
+            if let nextCoverage = _historyCoverageAfterNextCount {
+                _historyCoverage = nextCoverage
+                _historyCoverageAfterNextCount = nil
+            }
+            return result
+        }
     }
     
     func firstTime(name: String, where predicate: IRPredicate?) async -> Date? {
@@ -158,6 +179,23 @@ final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
             }
             .sorted { ascending ? $0.timestamp < $1.timestamp : $0.timestamp > $1.timestamp }
         return Array(matching.prefix(limit))
+    }
+    func queryEventsForIR(
+        _ distinctId: String,
+        name: String,
+        since: Date?,
+        until: Date?,
+        ascending: Bool,
+        limit: Int
+    ) async throws -> [StoredEvent] {
+        await getEventsForUser(
+            distinctId,
+            name: name,
+            since: since,
+            until: until,
+            ascending: ascending,
+            limit: limit
+        )
     }
     func getEvents(for sessionId: String) async -> [StoredEvent] { return [] }
 }
@@ -398,6 +436,67 @@ final class IRInterpreterTests: AsyncSpec {
                 
                 mockEvents.countResult = 0
                 await expect { try await interpreter.evalBool(expr) }.to(beFalse())
+            }
+
+            it("returns unknown when retention advances between coverage and query") {
+                mockEvents.countResult = 1
+                mockEvents.historyCoverageResult = .retainedWindow(
+                    startingAt: testDate.addingTimeInterval(-2 * 3_600)
+                )
+                mockEvents.historyCoverageAfterNextCount = .retainedWindow(
+                    startingAt: testDate.addingTimeInterval(-30 * 60)
+                )
+                let expr = IRExpr.eventsCount(
+                    name: "login",
+                    since: nil,
+                    until: nil,
+                    within: .duration(3_600),
+                    where_: nil
+                )
+
+                await expect { try await interpreter.evalValue(expr) }.to(equal(.unknown))
+
+                mockEvents.historyCoverageResult = .retainedWindow(
+                    startingAt: testDate.addingTimeInterval(-2 * 3_600)
+                )
+                mockEvents.historyCoverageAfterNextCount = .retainedWindow(
+                    startingAt: testDate.addingTimeInterval(-30 * 60)
+                )
+                do {
+                    _ = try await interpreter.evalBool(.not(expr))
+                    fail("Expected post-query coverage loss to survive negation")
+                } catch IRError.incompleteEventHistory {
+                    // Expected: boolean queries use the same post-query check.
+                }
+            }
+
+            it("evaluates active periods only when its implicit window is covered") {
+                mockEvents.activePeriodsResult = true
+                mockEvents.historyCoverageResult = .retainedWindow(
+                    startingAt: testDate.addingTimeInterval(-30 * 86_400)
+                )
+                let covered = IRExpr.eventsActivePeriods(
+                    name: "login",
+                    period: "day",
+                    totalPeriods: 7,
+                    minPeriods: 1,
+                    where_: nil
+                )
+                let crossing = IRExpr.eventsActivePeriods(
+                    name: "login",
+                    period: "month",
+                    totalPeriods: 12,
+                    minPeriods: 1,
+                    where_: nil
+                )
+
+                await expect { try await interpreter.evalBool(covered) }.to(beTrue())
+                do {
+                    _ = try await interpreter.evalBool(crossing)
+                    fail("Expected the active-period window outside retention to be unknown")
+                } catch IRError.incompleteEventHistory {
+                    // Expected: the runtime converts this to fail-closed false.
+                }
             }
             
             it("should check event timing") {

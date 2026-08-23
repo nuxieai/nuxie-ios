@@ -194,7 +194,20 @@ protocol EventHistoryReading: AnyObject, Sendable {
   func getEvents(for sessionId: String) async -> [StoredEvent]
 }
 
-protocol EventQuerySource: EventHistoryReading, IREventQueries {}
+/// Lossless storage seam used by IR. Unlike the application-facing history
+/// reads above, errors must remain observable so authorization can fail closed.
+protocol IREventHistoryReading: AnyObject, Sendable {
+  func queryEventsForIR(
+    _ distinctId: String,
+    name: String,
+    since: Date?,
+    until: Date?,
+    ascending: Bool,
+    limit: Int
+  ) async throws -> [StoredEvent]
+}
+
+protocol EventQuerySource: EventHistoryReading, IREventHistoryReading, IREventQueries {}
 
 protocol EventQueueLifecycle: AnyObject, Sendable {
   func onAppDidEnterBackground() async
@@ -358,27 +371,6 @@ protocol EventLogProtocol:
   func countEvents(name: String, distinctId: String, since: Date?, until: Date?) async -> Int
   func getLastEventTime(name: String, distinctId: String, since: Date?, until: Date?) async -> Date?
 
-  // MARK: - IR Evaluation Support
-
-  func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Bool
-  func count(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Int
-  func firstTime(name: String, where predicate: IRPredicate?) async -> Date?
-  func lastTime(name: String, where predicate: IRPredicate?) async -> Date?
-  func aggregate(
-    _ agg: Aggregate, name: String, prop: String, since: Date?, until: Date?,
-    where predicate: IRPredicate?
-  ) async -> Double?
-  func inOrder(
-    steps: [StepQuery], overallWithin: TimeInterval?, perStepWithin: TimeInterval?, since: Date?,
-    until: Date?
-  ) async -> Bool
-  func activePeriods(
-    name: String, period: Period, total: Int, min: Int, where predicate: IRPredicate?
-  ) async -> Bool
-  func stopped(name: String, inactiveFor: TimeInterval, where predicate: IRPredicate?) async -> Bool
-  func restarted(
-    name: String, inactiveFor: TimeInterval, within: TimeInterval, where predicate: IRPredicate?
-  ) async -> Bool
 }
 
 extension EventLogProtocol {
@@ -473,6 +465,11 @@ actor EventLog: EventLogProtocol {
   private let cleanupThresholdDays: Int
   private var insertsSinceCleanupCheck = 0
   private let cleanupCheckInterval: Int
+  /// Process-local backstop for a gap whose durable fence write also failed.
+  /// The durable store is authoritative across relaunches; this value prevents
+  /// unsafe answers for the remainder of the current process either way.
+  private var volatileHistoryCoverageStart: Date?
+  private static let irQueryLimit = 10_000
   private static let stableDropRetention: TimeInterval = 90 * 24 * 60 * 60
   private var mailboxPendingHandler: (@Sendable () async -> Void)?
   private var journeyOwnershipRejectedHandler:
@@ -634,6 +631,9 @@ actor EventLog: EventLogProtocol {
 
     do {
       try await store.initialize(path: snapshot?.customStoragePath)
+      _ = try await store.readOrInitializeHistoryCoverage(
+        startingAt: dateProvider.now()
+      )
     } catch let error as EventStorageError {
       if case .invalidSchema = error {
         throw error
@@ -790,11 +790,17 @@ actor EventLog: EventLogProtocol {
       ))
 
     // Store event locally (for history)
+    let historyTimestamp = dateProvider.now()
     do {
       try await storeHistoryEvent(
-        name: event, properties: finalProperties.value, distinctId: distinctId)
+        name: event,
+        properties: finalProperties.value,
+        distinctId: distinctId,
+        timestamp: historyTimestamp
+      )
     } catch {
       LogWarning("Failed to store event locally: \(error)")
+      await recordHistoryGap(at: historyTimestamp)
       // Continue - server tracking is more important for journey events
     }
 
@@ -898,6 +904,7 @@ actor EventLog: EventLogProtocol {
         try await performCleanupIfNeeded()
       } catch {
         LogWarning("Failed to store event locally: \(error)")
+        await recordHistoryGap(at: localEvent.timestamp)
       }
     }
 
@@ -986,6 +993,7 @@ actor EventLog: EventLogProtocol {
     guard !closeFlag.isClosed else { return nil }
     activeDurableCommitCount += 1
     defer { durableCommitDidFinish() }
+    let attemptedTimestamp = dateProvider.now()
     do {
       // Stable identity is policy-terminal. Replays return the canonical
       // captured/drop outcome before enrichment or invoking a changed hook.
@@ -1008,7 +1016,8 @@ actor EventLog: EventLogProtocol {
         id: eventId,
         name: event,
         distinctId: distinctId,
-        properties: finalProperties.value
+        properties: finalProperties.value,
+        timestamp: attemptedTimestamp
       )
       let transformedEvent: NuxieEvent?
       if let beforeSend = configuration?.beforeSend {
@@ -1030,7 +1039,7 @@ actor EventLog: EventLogProtocol {
       let outcome = try await store.commitStableCapture(
         eventId: eventId,
         event: transformedEvent.map(makeStoredEvent(from:)),
-        recordedAt: dateProvider.now()
+        recordedAt: attemptedTimestamp
       )
       if transformedEvent == nil {
         LogDebug("Event '\(event)' terminally dropped by beforeSend hook")
@@ -1054,6 +1063,7 @@ actor EventLog: EventLogProtocol {
       return capture
     } catch {
       LogError("EventLog: failed to durably capture system event")
+      await recordHistoryGap(at: attemptedTimestamp)
       return nil
     }
   }
@@ -1119,6 +1129,7 @@ actor EventLog: EventLogProtocol {
       try await performCleanupIfNeeded()
     } catch {
       LogWarning("Failed to store prepared trigger event locally: \(error)")
+      await recordHistoryGap(at: event.timestamp)
     }
     guard !closeFlag.isClosed else {
       activeDirectDeliveryIds.remove(event.id)
@@ -1282,6 +1293,7 @@ actor EventLog: EventLogProtocol {
       try await performCleanupIfNeeded()
     } catch {
       LogWarning("Failed to store prepared event locally: \(error)")
+      await recordHistoryGap(at: event.timestamp)
     }
   }
 
@@ -1340,6 +1352,7 @@ actor EventLog: EventLogProtocol {
         }
       } catch {
         LogWarning("Failed to commit server fact \(fact.id): \(error)")
+        await recordHistoryGap(at: event.timestamp)
       }
     }
   }
@@ -1512,6 +1525,7 @@ actor EventLog: EventLogProtocol {
       try await performCleanupIfNeeded()
     } catch {
       LogError("Failed to store event locally: \(error)")
+      await recordHistoryGap(at: event.timestamp)
       // Continue routing to other services even if storage fails
     }
 
@@ -1612,7 +1626,10 @@ actor EventLog: EventLogProtocol {
   /// Store a direct-delivery history row (delivered — these paths send the
   /// event themselves) with legacy device metadata.
   private func storeHistoryEvent(
-    name: String, properties: [String: Any], distinctId: String
+    name: String,
+    properties: [String: Any],
+    distinctId: String,
+    timestamp: Date
   ) async throws {
     var enrichedProperties = properties
     enrichedProperties["sdk_version"] = SDKVersion.current
@@ -1627,6 +1644,7 @@ actor EventLog: EventLogProtocol {
     let event = try StoredEvent(
       name: name,
       properties: enrichedProperties,
+      timestamp: timestamp,
       distinctId: distinctId
     )
     try await store.insertHistory(event)
@@ -1635,31 +1653,59 @@ actor EventLog: EventLogProtocol {
 
   /// Cleanup runs at most once per `cleanupCheckInterval` inserts — a
   /// per-insert COUNT(*) would be a wasted query on every event.
-  private func performCleanupIfNeeded() async throws {
-    insertsSinceCleanupCheck += 1
-    guard insertsSinceCleanupCheck >= cleanupCheckInterval else { return }
+  private func performCleanupIfNeeded(force: Bool = false) async throws {
+    if !force {
+      insertsSinceCleanupCheck += 1
+      guard insertsSinceCleanupCheck >= cleanupCheckInterval else { return }
+    }
     insertsSinceCleanupCheck = 0
 
     // Enforce the cap by COUNT (an age-only delete lets active users grow
     // unboundedly within the retention window), then apply the age policy on
     // top. Neither reaps rows still awaiting delivery.
     let eventCount = try await store.getEventCount()
-    let cappedDeletes = eventCount > maxEventsStored
-      ? try await store.deleteOldestDeliveredEvents(keeping: maxEventsStored)
-      : 0
     let cutoffDate =
       Calendar.current.date(
         byAdding: .day,
         value: -cleanupThresholdDays,
         to: dateProvider.now()
       ) ?? dateProvider.now()
-    let agedDeletes = try await store.deleteEventsOlderThan(cutoffDate)
+    let prune = try await store.pruneHistory(
+      keeping: maxEventsStored,
+      olderThan: cutoffDate
+    )
     let droppedDeletes = try await store.deleteStableDropsOlderThan(
       dateProvider.now().addingTimeInterval(-Self.stableDropRetention)
     )
     LogInfo(
-      "Retention cleanup: removed \(cappedDeletes) over-cap + \(agedDeletes) aged events + \(droppedDeletes) stable drops (had \(eventCount))"
+      "Retention cleanup: removed \(prune.countDeleted) over-cap + \(prune.ageDeleted) aged events + \(droppedDeletes) stable drops (had \(eventCount)); coverage starts \(prune.coverageStartingAt)"
     )
+  }
+
+  /// Fence exact history one persisted timestamp tick after a fact that was
+  /// known to the SDK but could not be committed. The in-memory fence moves
+  /// first; a simultaneous event+metadata disk failure therefore remains safe
+  /// for this process even though persistence cannot be guaranteed on relaunch.
+  private func recordHistoryGap(at timestamp: Date) async {
+    let boundary = Self.firstStoredTimestamp(after: timestamp)
+    volatileHistoryCoverageStart = max(
+      volatileHistoryCoverageStart ?? boundary,
+      boundary
+    )
+    do {
+      let durable = try await store.advanceHistoryCoverage(to: boundary)
+      volatileHistoryCoverageStart = max(
+        volatileHistoryCoverageStart ?? durable,
+        durable
+      )
+    } catch {
+      LogError("Failed to persist event-history coverage fence: \(error)")
+    }
+  }
+
+  private static func firstStoredTimestamp(after timestamp: Date) -> Date {
+    let milliseconds = floor(timestamp.timeIntervalSince1970 * 1_000) + 1
+    return Date(timeIntervalSince1970: milliseconds / 1_000)
   }
 
   private func loadPendingDelivery(limit: Int) async -> [NuxieEvent] {
@@ -1684,6 +1730,14 @@ actor EventLog: EventLogProtocol {
   private func markDelivered(ids: [String]) async -> Bool {
     do {
       try await store.markDelivered(ids: ids)
+      do {
+        // A very old pending row becomes retention-eligible only after its
+        // ack. Re-check immediately so a later cleanup cannot delete it while
+        // leaving the durable completeness horizon behind.
+        try await performCleanupIfNeeded(force: true)
+      } catch {
+        LogWarning("Failed to enforce retention after delivery ack: \(error)")
+      }
       return true
     } catch {
       // Worst case these rows re-send after relaunch; the server dedupes
@@ -2321,6 +2375,25 @@ actor EventLog: EventLogProtocol {
     }
   }
 
+  func queryEventsForIR(
+    _ distinctId: String,
+    name: String,
+    since: Date?,
+    until: Date?,
+    ascending: Bool,
+    limit: Int
+  ) async throws -> [StoredEvent] {
+    await ready.wait()
+    return try await store.queryEventsForUser(
+      distinctId,
+      name: name,
+      since: since,
+      until: until,
+      ascending: ascending,
+      limit: limit
+    )
+  }
+
   // MARK: - Event Query Methods
 
   public func hasEvent(name: String, distinctId: String, since: Date? = nil) async -> Bool {
@@ -2361,14 +2434,22 @@ actor EventLog: EventLogProtocol {
 
   // MARK: - IREvents Protocol Implementation
 
+  func historyCoverage() async throws -> EventHistoryCoverage {
+    await ready.wait()
+    let durable = try await store.historyCoverageStartingAt()
+    return .retainedWindow(
+      startingAt: max(durable, volatileHistoryCoverageStart ?? durable)
+    )
+  }
+
   public func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async
-    -> Bool
+    throws -> Bool
   {
-    return await count(name: name, since: since, until: until, where: predicate) > 0
+    return try await count(name: name, since: since, until: until, where: predicate) > 0
   }
 
   public func count(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async
-    -> Int
+    throws -> Int
   {
     let distinctId = identityService.getDistinctId()
     await ready.wait()
@@ -2376,18 +2457,18 @@ actor EventLog: EventLogProtocol {
     // Predicate-free counts go straight to SQL — counting within the last N
     // events of ALL names undercounts for active users.
     if predicate == nil {
-      return (try? await store.countEvents(
-        name: name, distinctId: distinctId, since: since, until: until)) ?? 0
+      return try await store.countEvents(
+        name: name, distinctId: distinctId, since: since, until: until)
     }
 
-    let events = await irEvents(
+    let events = try await irEvents(
       named: name, distinctId: distinctId, since: since, until: until, ascending: false)
-    return events.lazy
-      .filter { event in
-        let props = event.getPropertiesDict()
-        return PredicateEval.eval(predicate!, props: props)
-      }
-      .count
+    var matchingCount = 0
+    for event in events {
+      let props = try event.getPropertiesDictForIR()
+      if PredicateEval.eval(predicate!, props: props) { matchingCount += 1 }
+    }
+    return matchingCount
   }
 
   /// Name-filtered fetch for IR predicate queries — SQL narrows by
@@ -2395,59 +2476,75 @@ actor EventLog: EventLogProtocol {
   /// event's history.
   private func irEvents(
     named name: String, distinctId: String, since: Date?, until: Date?, ascending: Bool
-  ) async -> [StoredEvent] {
-    (try? await store.queryEventsForUser(
+  ) async throws -> [StoredEvent] {
+    let events = try await store.queryEventsForUser(
       distinctId, name: name, since: since, until: until,
-      ascending: ascending, limit: 10_000)) ?? []
+      ascending: ascending, limit: Self.irQueryLimit + 1)
+    guard events.count <= Self.irQueryLimit else {
+      throw EventHistoryQueryError.truncated(limit: Self.irQueryLimit)
+    }
+    return events
   }
 
-  public func firstTime(name: String, where predicate: IRPredicate?) async -> Date? {
+  public func firstTime(name: String, where predicate: IRPredicate?) async throws -> Date? {
     let distinctId = identityService.getDistinctId()
     await ready.wait()
 
     // Predicate-free → SQL MIN. Taking the earliest of the most RECENT N
     // events is wrong precisely for long-tenured users.
     if predicate == nil {
-      return (try? await store.getFirstEventTime(
-        name: name, distinctId: distinctId, since: nil, until: nil)) ?? nil
+      return try await store.getFirstEventTime(
+        name: name, distinctId: distinctId, since: nil, until: nil)
     }
 
-    let events = await irEvents(
+    let events = try await irEvents(
       named: name, distinctId: distinctId, since: nil, until: nil, ascending: true)
-    return events.first { event in
-      PredicateEval.eval(predicate!, props: event.getPropertiesDict())
-    }?.timestamp
+    for event in events {
+      if PredicateEval.eval(
+        predicate!,
+        props: try event.getPropertiesDictForIR()
+      ) {
+        return event.timestamp
+      }
+    }
+    return nil
   }
 
-  public func lastTime(name: String, where predicate: IRPredicate?) async -> Date? {
+  public func lastTime(name: String, where predicate: IRPredicate?) async throws -> Date? {
     let distinctId = identityService.getDistinctId()
     await ready.wait()
 
     if predicate == nil {
-      return (try? await store.getLastEventTime(
-        name: name, distinctId: distinctId, since: nil, until: nil)) ?? nil
+      return try await store.getLastEventTime(
+        name: name, distinctId: distinctId, since: nil, until: nil)
     }
 
-    let events = await irEvents(
+    let events = try await irEvents(
       named: name, distinctId: distinctId, since: nil, until: nil, ascending: false)
-    return events.first { event in
-      PredicateEval.eval(predicate!, props: event.getPropertiesDict())
-    }?.timestamp
+    for event in events {
+      if PredicateEval.eval(
+        predicate!,
+        props: try event.getPropertiesDictForIR()
+      ) {
+        return event.timestamp
+      }
+    }
+    return nil
   }
 
   public func aggregate(
     _ agg: Aggregate, name: String, prop: String, since: Date?, until: Date?,
     where predicate: IRPredicate?
-  ) async -> Double? {
+  ) async throws -> Double? {
     let distinctId = identityService.getDistinctId()
     await ready.wait()
-    let events = await irEvents(
+    let events = try await irEvents(
       named: name, distinctId: distinctId, since: since, until: until, ascending: false)
 
     let values: [Double] =
-      events
+      try events
       .compactMap { event -> Double? in
-        let props = event.getPropertiesDict()
+        let props = try event.getPropertiesDictForIR()
         guard predicate.map({ PredicateEval.eval($0, props: props) }) ?? true else { return nil }
         return Coercion.asNumber(props[prop])
       }
@@ -2471,21 +2568,21 @@ actor EventLog: EventLogProtocol {
   public func inOrder(
     steps: [StepQuery], overallWithin: TimeInterval?, perStepWithin: TimeInterval?, since: Date?,
     until: Date?
-  ) async -> Bool {
+  ) async throws -> Bool {
     let distinctId = identityService.getDistinctId()
     await ready.wait()
     // Per-step name-filtered fetches, merged chronologically — a heavy
     // unrelated event stream can no longer evict the sequence's events.
     var merged: [StoredEvent] = []
     for stepName in Set(steps.map(\.name)) {
-      merged += await irEvents(
+      merged += try await irEvents(
         named: stepName, distinctId: distinctId, since: since, until: until, ascending: true)
     }
     let events = merged.sorted {
       if $0.timestamp == $1.timestamp { return $0.id < $1.id }
       return $0.timestamp < $1.timestamp
     }
-    return IREventSequenceMatcher.matches(
+    return try IREventSequenceMatcher.matches(
       events: events,
       steps: steps,
       overallWithin: overallWithin,
@@ -2495,37 +2592,30 @@ actor EventLog: EventLogProtocol {
 
   public func activePeriods(
     name: String, period: Period, total: Int, min: Int, where predicate: IRPredicate?
-  ) async -> Bool {
+  ) async throws -> Bool {
     let distinctId = identityService.getDistinctId()
     await ready.wait()
-    guard total > 0 && min > 0 else { return false }
+    guard total > 0 && min > 0 && min <= total else { return false }
 
     // Calendar-bucket by UTC
-    let cal = Calendar(identifier: .gregorian)
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(secondsFromGMT: 0)!
     let now = dateProvider.now()
 
-    // Calculate the time window - the last 'total' periods from now
-    let windowStart: Date
-    switch period {
-    case .day:
-      windowStart = cal.date(byAdding: .day, value: -total, to: now) ?? now
-    case .week:
-      windowStart = cal.date(byAdding: .weekOfYear, value: -total, to: now) ?? now
-    case .month:
-      windowStart = cal.date(byAdding: .month, value: -total, to: now) ?? now
-    case .year:
-      windowStart = cal.date(byAdding: .year, value: -total, to: now) ?? now
-    }
+    guard let windowStart = period.activePeriodsWindowStart(
+      total: total,
+      now: now
+    ) else { return false }
 
     // Name+window-filtered at the SQL layer
-    let events = await irEvents(
+    let events = try await irEvents(
       named: name, distinctId: distinctId, since: windowStart, until: nil, ascending: false)
 
     // Count unique periods with activity within the time window
     var bucketsInWindow = Set<DateComponents>()
 
     for event in events {
-      let props = event.getPropertiesDict()
+      let props = try event.getPropertiesDictForIR()
       if let p = predicate, !PredicateEval.eval(p, props: props) { continue }
 
       let comps: DateComponents
@@ -2547,19 +2637,19 @@ actor EventLog: EventLogProtocol {
   }
 
   public func stopped(name: String, inactiveFor: TimeInterval, where predicate: IRPredicate?) async
-    -> Bool
+    throws -> Bool
   {
-    guard let last = await lastTime(name: name, where: predicate) else { return false }
+    guard let last = try await lastTime(name: name, where: predicate) else { return false }
     return Date().timeIntervalSince(last) >= inactiveFor
   }
 
   public func restarted(
     name: String, inactiveFor: TimeInterval, within: TimeInterval, where predicate: IRPredicate?
-  ) async -> Bool {
+  ) async throws -> Bool {
     let distinctId = identityService.getDistinctId()
     let now = Date()
     await ready.wait()
-    let events = await irEvents(
+    let events = try await irEvents(
       named: name, distinctId: distinctId, since: nil, until: nil, ascending: true)
 
     // Find any gap
@@ -2568,7 +2658,7 @@ actor EventLog: EventLogProtocol {
 
     for event in events {
       if let p = predicate {
-        let props = event.getPropertiesDict()
+        let props = try event.getPropertiesDictForIR()
         if !PredicateEval.eval(p, props: props) { continue }
       }
       if let pv = prev, event.timestamp.timeIntervalSince(pv) >= inactiveFor {

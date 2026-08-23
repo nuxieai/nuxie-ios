@@ -23,6 +23,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _pendingIds: Set<String> = []
     private var _deliveredIds: [String] = []
     private var _stableDroppedAt: [String: Date] = [:]
+    private var _historyCoverageStart: Date?
     private var _isInitialized = false
     private var _isClosed = false
 
@@ -41,6 +42,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public var stableDroppedIds: Set<String> {
         lock.withLock { Set(_stableDroppedAt.keys) }
     }
+    public var historyCoverageStart: Date? {
+        get { lock.withLock { _historyCoverageStart } }
+        set { lock.withLock { _historyCoverageStart = newValue } }
+    }
     public var isInitialized: Bool {
         get { lock.withLock { _isInitialized } }
         set { lock.withLock { _isInitialized = newValue } }
@@ -54,6 +59,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _initializeFailure: InitializeFailure = .none
     private var _shouldFailStore = false
     private var _shouldFailQuery = false
+    private var _shouldFailIRQuery = false
     private var _shouldFailMarkDelivered = false
     private var _pendingDeliveryQueryDelay: TimeInterval = 0
     private var _pendingInsertDelayNanoseconds: UInt64 = 0
@@ -75,6 +81,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public var shouldFailQuery: Bool {
         get { lock.withLock { _shouldFailQuery } }
         set { lock.withLock { _shouldFailQuery = newValue } }
+    }
+    public var shouldFailIRQuery: Bool {
+        get { lock.withLock { _shouldFailIRQuery } }
+        set { lock.withLock { _shouldFailIRQuery = newValue } }
     }
     public var shouldFailMarkDelivered: Bool {
         get { lock.withLock { _shouldFailMarkDelivered } }
@@ -149,6 +159,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _storedEvents.removeAll()
             _pendingIds.removeAll()
             _stableDroppedAt.removeAll()
+            _historyCoverageStart = nil
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
@@ -317,6 +328,82 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
+    public func readOrInitializeHistoryCoverage(startingAt: Date) async throws -> Date {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock coverage query error") }
+            if let existing = _historyCoverageStart { return existing }
+            let normalized = Self.coverageDate(startingAt)
+            _historyCoverageStart = normalized
+            return normalized
+        }
+    }
+
+    public func historyCoverageStartingAt() async throws -> Date {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock coverage query error") }
+            guard let startingAt = _historyCoverageStart else {
+                throw mockError(3, "Mock coverage is not initialized")
+            }
+            return startingAt
+        }
+    }
+
+    public func advanceHistoryCoverage(to startingAt: Date) async throws -> Date {
+        lock.withLock {
+            let normalized = Self.coverageDate(startingAt)
+            let advanced = max(_historyCoverageStart ?? normalized, normalized)
+            _historyCoverageStart = advanced
+            return advanced
+        }
+    }
+
+    public func pruneHistory(
+        keeping: Int,
+        olderThan: Date
+    ) async throws -> EventHistoryPruneResult {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock coverage query error") }
+            guard keeping >= 0 else { throw mockError(7, "Negative retention cap") }
+            guard var coverage = _historyCoverageStart else {
+                throw mockError(3, "Mock coverage is not initialized")
+            }
+
+            let agedIds = Set(_storedEvents
+                .filter { $0.timestamp < olderThan && !_pendingIds.contains($0.id) }
+                .map(\.id))
+            _storedEvents.removeAll { agedIds.contains($0.id) }
+            if !agedIds.isEmpty { coverage = max(coverage, Self.coverageDate(olderThan)) }
+
+            let overCap = max(0, _storedEvents.count - keeping)
+            let countCandidates = _storedEvents
+                .filter { !_pendingIds.contains($0.id) }
+                .sorted {
+                    if $0.timestamp == $1.timestamp { return $0.id < $1.id }
+                    return $0.timestamp < $1.timestamp
+                }
+                .prefix(overCap)
+            let countIds = Set(countCandidates.map(\.id))
+            if let newestDeleted = countCandidates.map(\.timestamp).max() {
+                coverage = max(
+                    coverage,
+                    Self.coverageDate(newestDeleted.addingTimeInterval(0.001))
+                )
+            }
+            _storedEvents.removeAll { countIds.contains($0.id) }
+            _pendingIds.subtract(countIds)
+            _historyCoverageStart = coverage
+            return EventHistoryPruneResult(
+                countDeleted: countIds.count,
+                ageDeleted: agedIds.count,
+                coverageStartingAt: coverage
+            )
+        }
+    }
+
+    private static func coverageDate(_ date: Date) -> Date {
+        Date(timeIntervalSince1970: (date.timeIntervalSince1970 * 1_000).rounded(.up) / 1_000)
+    }
+
     public func close() async {
         lock.withLock {
             _closeCallCount += 1
@@ -328,7 +415,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
 
     public func hasEvent(name: String, distinctId: String, since: Date?) async throws -> Bool {
         try lock.withLock {
-            if _shouldFailQuery {
+            if _shouldFailQuery || _shouldFailIRQuery {
                 throw mockError(3, "Mock query error")
             }
             let userEvents = _storedEvents.filter { $0.distinctId == distinctId && $0.name == name }
@@ -341,7 +428,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
 
     public func countEvents(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Int {
         try lock.withLock {
-            if _shouldFailQuery {
+            if _shouldFailQuery || _shouldFailIRQuery {
                 throw mockError(3, "Mock query error")
             }
             var userEvents = _storedEvents.filter { $0.distinctId == distinctId && $0.name == name }
@@ -357,7 +444,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
 
     public func getLastEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Date? {
         try lock.withLock {
-            if _shouldFailQuery {
+            if _shouldFailQuery || _shouldFailIRQuery {
                 throw mockError(3, "Mock query error")
             }
             var userEvents = _storedEvents.filter { $0.distinctId == distinctId && $0.name == name }
@@ -375,7 +462,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         _ distinctId: String, name: String, since: Date?, until: Date?,
         ascending: Bool, limit: Int
     ) async throws -> [StoredEvent] {
-        lock.withLock {
+        try lock.withLock {
+            if _shouldFailQuery || _shouldFailIRQuery {
+                throw mockError(3, "Mock IR query error")
+            }
             var filtered = _storedEvents.filter { $0.distinctId == distinctId && $0.name == name }
             if let since { filtered = filtered.filter { $0.timestamp >= since } }
             if let until { filtered = filtered.filter { $0.timestamp <= until } }
@@ -417,30 +507,6 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
-    @discardableResult
-    public func deleteEventsOlderThan(_ olderThan: Date) async throws -> Int {
-        lock.withLock {
-            let countBefore = _storedEvents.count
-            _storedEvents.removeAll { $0.timestamp < olderThan && !_pendingIds.contains($0.id) }
-            return countBefore - _storedEvents.count
-        }
-    }
-
-    @discardableResult
-    public func deleteOldestDeliveredEvents(keeping: Int) async throws -> Int {
-        lock.withLock {
-            let overCap = _storedEvents.count - keeping
-            guard overCap > 0 else { return 0 }
-            let deletable = _storedEvents
-                .filter { !_pendingIds.contains($0.id) }
-                .sorted { $0.timestamp < $1.timestamp }
-                .prefix(overCap)
-            let ids = Set(deletable.map(\.id))
-            _storedEvents.removeAll { ids.contains($0.id) }
-            return ids.count
-        }
-    }
-
     public func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int {
         try lock.withLock {
             _reassignEventsCallCount += 1
@@ -474,12 +540,14 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _pendingIds.removeAll()
             _deliveredIds.removeAll()
             _stableDroppedAt.removeAll()
+            _historyCoverageStart = nil
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
             _initializeFailure = .none
             _shouldFailStore = false
             _shouldFailQuery = false
+            _shouldFailIRQuery = false
             _initializeCallCount = 0
             _storeEventCallCount = 0
             _getRecentEventsCallCount = 0
