@@ -7,7 +7,7 @@ public actor MockJourneyService: JourneyServiceProtocol {
     // MARK: - Tracking Properties
     
     /// Track all started journeys
-    public var startedJourneys: [(experience: Experience, distinctId: String, originEventId: String?, journey: Journey?)] = []
+    var startedJourneys: [(experience: Experience, distinctId: String, originEventId: String?, journey: Journey?)] = []
     
     /// Track all resumed journeys
     public var resumedJourneys: [Journey] = []

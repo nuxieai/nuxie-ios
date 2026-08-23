@@ -7,7 +7,7 @@ import Foundation
 /// This is deliberately distinct from `AnyCodable`: the tagged reference cases
 /// (`Event.Field` and `Response.Field`) must survive decoding all the way to the
 /// interpreter instead of being lowered into an untyped IR envelope.
-public enum JourneyValue: Codable, Sendable, Equatable {
+enum JourneyValue: Codable, Sendable, Equatable {
     case null
     case bool(Bool)
     case number(Double)
@@ -25,7 +25,7 @@ public enum JourneyValue: Codable, Sendable, Equatable {
         case key
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         switch type {
@@ -46,7 +46,7 @@ public enum JourneyValue: Codable, Sendable, Equatable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .null: try container.encode("Null", forKey: .type)
@@ -100,7 +100,7 @@ public enum JourneyValue: Codable, Sendable, Equatable {
     }
 }
 
-public indirect enum JourneyCondition: Codable, Sendable, Equatable {
+indirect enum JourneyCondition: Codable, Sendable, Equatable {
     case truthy(JourneyValue)
     case compare(op: String, left: JourneyValue, right: JourneyValue)
     case contains(collection: JourneyValue, value: JourneyValue)
@@ -119,7 +119,7 @@ public indirect enum JourneyCondition: Codable, Sendable, Equatable {
         case condition
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
         case "Truthy": self = .truthy(try c.decode(JourneyValue.self, forKey: .value))
@@ -146,7 +146,7 @@ public indirect enum JourneyCondition: Codable, Sendable, Equatable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .truthy(let value):
@@ -174,14 +174,14 @@ public indirect enum JourneyCondition: Codable, Sendable, Equatable {
     }
 }
 
-public enum JourneyWaitTrigger: Codable, Sendable, Equatable {
+enum JourneyWaitTrigger: Codable, Sendable, Equatable {
     case responseChange
     case event(eventName: String, payloadSchema: JourneyEventPayloadSchema?)
     case eventOrResponseChange(eventName: String, payloadSchema: JourneyEventPayloadSchema?)
 
     private enum CodingKeys: String, CodingKey { case kind, eventName, payloadSchema }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .kind) {
         case "response_change": self = .responseChange
@@ -200,7 +200,7 @@ public enum JourneyWaitTrigger: Codable, Sendable, Equatable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .responseChange: try c.encode("response_change", forKey: .kind)
@@ -216,14 +216,14 @@ public enum JourneyWaitTrigger: Codable, Sendable, Equatable {
     }
 }
 
-public enum JourneyTimezone: Codable, Sendable, Equatable {
+enum JourneyTimezone: Codable, Sendable, Equatable {
     case device
     case appDefault
     case iana(String)
 
     private enum CodingKeys: String, CodingKey { case kind, identifier }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .kind) {
         case "device": self = .device
@@ -234,7 +234,7 @@ public enum JourneyTimezone: Codable, Sendable, Equatable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .device: try c.encode("device", forKey: .kind)
@@ -247,17 +247,17 @@ public enum JourneyTimezone: Codable, Sendable, Equatable {
 
 }
 
-public struct EventPayloadFieldSchema: Codable, Sendable, Equatable {
-    public let key: String
-    public let required: Bool
-    public let type: String
-    public let enumValues: [String]?
-    public let min: Double?
-    public let max: Double?
+struct EventPayloadFieldSchema: Codable, Sendable, Equatable {
+    let key: String
+    let required: Bool
+    let type: String
+    let enumValues: [String]?
+    let min: Double?
+    let max: Double?
 
     private enum CodingKeys: String, CodingKey { case key, required, type, `enum`, min, max }
 
-    public init(key: String, required: Bool, type: String, enumValues: [String]? = nil, min: Double? = nil, max: Double? = nil) {
+    init(key: String, required: Bool, type: String, enumValues: [String]? = nil, min: Double? = nil, max: Double? = nil) {
         self.key = key
         self.required = required
         self.type = type
@@ -266,7 +266,7 @@ public struct EventPayloadFieldSchema: Codable, Sendable, Equatable {
         self.max = max
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         key = try c.decode(String.self, forKey: .key)
         required = try c.decode(Bool.self, forKey: .required)
@@ -276,7 +276,7 @@ public struct EventPayloadFieldSchema: Codable, Sendable, Equatable {
         max = try c.decodeIfPresent(Double.self, forKey: .max)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(key, forKey: .key)
         try c.encode(required, forKey: .required)
@@ -287,19 +287,19 @@ public struct EventPayloadFieldSchema: Codable, Sendable, Equatable {
     }
 }
 
-public struct JourneyEventPayloadSchema: Codable, Sendable, Equatable {
-    public let type: String
-    public let fields: [EventPayloadFieldSchema]
-    public let additionalProperties: Bool
+struct JourneyEventPayloadSchema: Codable, Sendable, Equatable {
+    let type: String
+    let fields: [EventPayloadFieldSchema]
+    let additionalProperties: Bool
 
-    public init(type: String = "object", fields: [EventPayloadFieldSchema], additionalProperties: Bool) {
+    init(type: String = "object", fields: [EventPayloadFieldSchema], additionalProperties: Bool) {
         self.type = type
         self.fields = fields
         self.additionalProperties = additionalProperties
     }
 }
 
-public enum JourneyAction: Codable, Sendable {
+enum JourneyAction: Codable, Sendable {
     case navigate(NavigateAction)
     case back(BackAction)
     case delay(DelayAction)
@@ -374,7 +374,7 @@ public enum JourneyAction: Codable, Sendable {
         case exit
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let typeValue = (try? container.decode(ActionType.self, forKey: .type))
         switch typeValue {
@@ -453,7 +453,7 @@ public enum JourneyAction: Codable, Sendable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         switch self {
         case .navigate(let action):
             try action.encode(to: encoder)
@@ -599,14 +599,14 @@ extension JourneyAction {
     }
 }
 
-public struct NavigateAction: Codable, Sendable {
-    public let type: String
+struct NavigateAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let screenId: String
-    @_spi(Testing) public let transition: AnyCodable?
+    let nodeId: String?
+    let screenId: String
+    let transition: AnyCodable?
 
-    @_spi(Testing) public init(
+    init(
         type: String = "navigate",
         nodeId: String? = nil,
         screenId: String,
@@ -619,14 +619,14 @@ public struct NavigateAction: Codable, Sendable {
     }
 }
 
-public struct BackAction: Codable, Sendable {
-    public let type: String
+struct BackAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let steps: Int?
-    @_spi(Testing) public let transition: AnyCodable?
+    let nodeId: String?
+    let steps: Int?
+    let transition: AnyCodable?
 
-    @_spi(Testing) public init(
+    init(
         type: String = "back",
         nodeId: String? = nil,
         steps: Int? = nil,
@@ -639,13 +639,13 @@ public struct BackAction: Codable, Sendable {
     }
 }
 
-public struct DelayAction: Codable, Sendable {
-    public let type: String
+struct DelayAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let durationMs: Int
+    let nodeId: String?
+    let durationMs: Int
 
-    public init(type: String = "delay", nodeId: String? = nil, durationMs: Int) {
+    init(type: String = "delay", nodeId: String? = nil, durationMs: Int) {
         self.type = type
         self.nodeId = nodeId
         self.durationMs = durationMs
@@ -653,20 +653,20 @@ public struct DelayAction: Codable, Sendable {
 }
 
 /// A compiler-authored animation command lowered to the native Rive listener path.
-public struct StartAnimationAction: Codable, Sendable {
+struct StartAnimationAction: Codable, Sendable {
     /// The action discriminator. Defaults to `start_animation`.
-    public let type: String
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
+    let nodeId: String?
     /// Stable identifier for the authored animation.
-    public let animationId: String
+    let animationId: String
     /// Playback direction (`forward` or `reverse`).
-    public let direction: String?
+    let direction: String?
     /// Whether playback restarts when the action fires.
-    public let restart: Bool?
+    let restart: Bool?
 
     /// Creates a start-animation action.
-    public init(
+    init(
         type: String = "start_animation",
         nodeId: String? = nil,
         animationId: String,
@@ -681,17 +681,17 @@ public struct StartAnimationAction: Codable, Sendable {
     }
 }
 
-public struct TimeWindowAction: Codable, Sendable {
-    public let type: String
+struct TimeWindowAction: Codable, Sendable {
+    let type: String
     /// Internal execution identity. It is not part of the signed wire shape.
-    public let nodeId: String?
-    public let startTime: String
-    public let endTime: String
-    public let timezone: JourneyTimezone
-    public let daysOfWeek: [Int]
-    public let onInside: [JourneyAction]
+    let nodeId: String?
+    let startTime: String
+    let endTime: String
+    let timezone: JourneyTimezone
+    let daysOfWeek: [Int]
+    let onInside: [JourneyAction]
 
-    public init(
+    init(
         type: String = "time_window",
         nodeId: String? = nil,
         startTime: String,
@@ -711,7 +711,7 @@ public struct TimeWindowAction: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, startTime, endTime, timezone, daysOfWeek, onInside }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "time_window" else { throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "invalid time_window action") }
@@ -723,7 +723,7 @@ public struct TimeWindowAction: Codable, Sendable {
         onInside = try c.decode([JourneyAction].self, forKey: .onInside)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(startTime, forKey: .startTime)
@@ -734,16 +734,16 @@ public struct TimeWindowAction: Codable, Sendable {
     }
 }
 
-public struct WaitUntilAction: Codable, Sendable {
-    public let type: String
-    public let nodeId: String?
-    public let trigger: JourneyWaitTrigger
-    public let condition: JourneyCondition
-    public let maxTimeMs: Int
-    public let onSatisfied: [JourneyAction]
-    public let onTimeout: [JourneyAction]
+struct WaitUntilAction: Codable, Sendable {
+    let type: String
+    let nodeId: String?
+    let trigger: JourneyWaitTrigger
+    let condition: JourneyCondition
+    let maxTimeMs: Int
+    let onSatisfied: [JourneyAction]
+    let onTimeout: [JourneyAction]
 
-    public init(
+    init(
         type: String = "wait_until",
         nodeId: String? = nil,
         trigger: JourneyWaitTrigger,
@@ -763,7 +763,7 @@ public struct WaitUntilAction: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, trigger, condition, maxTimeMs, onSatisfied, onTimeout }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "wait_until" else { throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "invalid wait_until action") }
@@ -775,7 +775,7 @@ public struct WaitUntilAction: Codable, Sendable {
         onTimeout = try c.decode([JourneyAction].self, forKey: .onTimeout)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(trigger, forKey: .trigger)
@@ -786,13 +786,13 @@ public struct WaitUntilAction: Codable, Sendable {
     }
 }
 
-public struct ConditionAction: Codable, Sendable {
-    public let type: String
-    public let nodeId: String?
-    public let branches: [ConditionBranch]
-    public let defaultProgram: [JourneyAction]
+struct ConditionAction: Codable, Sendable {
+    let type: String
+    let nodeId: String?
+    let branches: [ConditionBranch]
+    let defaultProgram: [JourneyAction]
 
-    public init(
+    init(
         type: String = "condition",
         nodeId: String? = nil,
         branches: [ConditionBranch],
@@ -806,7 +806,7 @@ public struct ConditionAction: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, branches, defaultProgram }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "condition" else { throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "invalid condition action") }
@@ -815,7 +815,7 @@ public struct ConditionAction: Codable, Sendable {
         defaultProgram = try c.decode([JourneyAction].self, forKey: .defaultProgram)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(branches, forKey: .branches)
@@ -823,12 +823,12 @@ public struct ConditionAction: Codable, Sendable {
     }
 }
 
-public struct ConditionBranch: Codable, Sendable {
-    public let id: String
-    public let condition: JourneyCondition
-    public let program: [JourneyAction]
+struct ConditionBranch: Codable, Sendable {
+    let id: String
+    let condition: JourneyCondition
+    let program: [JourneyAction]
 
-    public init(id: String, condition: JourneyCondition, program: [JourneyAction]) {
+    init(id: String, condition: JourneyCondition, program: [JourneyAction]) {
         self.id = id
         self.condition = condition
         self.program = program
@@ -836,14 +836,14 @@ public struct ConditionBranch: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case id, condition, program }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         condition = try c.decode(JourneyCondition.self, forKey: .condition)
         program = try c.decode([JourneyAction].self, forKey: .program)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(condition, forKey: .condition)
@@ -851,16 +851,16 @@ public struct ConditionBranch: Codable, Sendable {
     }
 }
 
-public struct ExperimentAction: Codable, Sendable {
-    public let type: String
-    public let nodeId: String?
-    public let experimentId: String
-    public let name: String?
-    public let description: String?
-    public let hypothesis: String?
-    public let variants: [ExperimentVariant]
+struct ExperimentAction: Codable, Sendable {
+    let type: String
+    let nodeId: String?
+    let experimentId: String
+    let name: String?
+    let description: String?
+    let hypothesis: String?
+    let variants: [ExperimentVariant]
 
-    public init(
+    init(
         type: String = "experiment",
         nodeId: String? = nil,
         experimentId: String,
@@ -875,7 +875,7 @@ public struct ExperimentAction: Codable, Sendable {
         self.variants = variants
     }
 
-    public init(
+    init(
         type: String = "experiment",
         nodeId: String? = nil,
         experimentId: String,
@@ -895,7 +895,7 @@ public struct ExperimentAction: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, experimentId, name, description, hypothesis, variants }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         nodeId = nil
@@ -906,7 +906,7 @@ public struct ExperimentAction: Codable, Sendable {
         variants = try c.decode([ExperimentVariant].self, forKey: .variants)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(experimentId, forKey: .experimentId)
@@ -917,14 +917,14 @@ public struct ExperimentAction: Codable, Sendable {
     }
 }
 
-public struct ExperimentVariant: Codable, Sendable {
-    public let id: String
-    public let name: String?
-    public let percentage: Double
-    public let isHoldout: Bool
-    public let program: [JourneyAction]
+struct ExperimentVariant: Codable, Sendable {
+    let id: String
+    let name: String?
+    let percentage: Double
+    let isHoldout: Bool
+    let program: [JourneyAction]
 
-    public init(
+    init(
         id: String,
         name: String? = nil,
         percentage: Double,
@@ -940,7 +940,7 @@ public struct ExperimentVariant: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case id, name, percentage, isHoldout, program }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         name = try c.decodeIfPresent(String.self, forKey: .name)
@@ -949,7 +949,7 @@ public struct ExperimentVariant: Codable, Sendable {
         program = try c.decode([JourneyAction].self, forKey: .program)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encodeIfPresent(name, forKey: .name)
@@ -959,14 +959,14 @@ public struct ExperimentVariant: Codable, Sendable {
     }
 }
 
-public struct DeviceAvailableAction: Codable, Sendable {
-    public let type: String
-    public let nodeId: String?
-    public let claimWithinMs: Int
-    public let onAvailable: [JourneyAction]
-    public let onUnavailable: [JourneyAction]
+struct DeviceAvailableAction: Codable, Sendable {
+    let type: String
+    let nodeId: String?
+    let claimWithinMs: Int
+    let onAvailable: [JourneyAction]
+    let onUnavailable: [JourneyAction]
 
-    public init(
+    init(
         type: String = "device_available",
         nodeId: String? = nil,
         claimWithinMs: Int,
@@ -982,7 +982,7 @@ public struct DeviceAvailableAction: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, claimWithinMs, onAvailable, onUnavailable }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "device_available" else {
@@ -994,7 +994,7 @@ public struct DeviceAvailableAction: Codable, Sendable {
         onUnavailable = try c.decode([JourneyAction].self, forKey: .onUnavailable)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(claimWithinMs, forKey: .claimWithinMs)
@@ -1003,15 +1003,15 @@ public struct DeviceAvailableAction: Codable, Sendable {
     }
 }
 
-public struct SendEventAction: Codable, Sendable {
-    public let type: String
+struct SendEventAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let eventName: String
-    public let payload: [String: JourneyValue]?
-    @_spi(Testing) public let properties: [String: AnyCodable]?
+    let nodeId: String?
+    let eventName: String
+    let payload: [String: JourneyValue]?
+    let properties: [String: AnyCodable]?
 
-    @_spi(Testing) public init(
+    init(
         type: String = "send_event",
         nodeId: String? = nil,
         eventName: String,
@@ -1026,7 +1026,7 @@ public struct SendEventAction: Codable, Sendable {
         self.properties = properties
     }
 
-    public init(
+    init(
         type: String = "send_event",
         nodeId: String? = nil,
         eventName: String,
@@ -1041,7 +1041,7 @@ public struct SendEventAction: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, eventName, payload }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         nodeId = nil
@@ -1050,7 +1050,7 @@ public struct SendEventAction: Codable, Sendable {
         properties = payload?.mapValues { AnyCodable($0.foundationValue) }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(eventName, forKey: .eventName)
@@ -1059,22 +1059,22 @@ public struct SendEventAction: Codable, Sendable {
 }
 
 /// A experience action that emits a named journey milestone.
-public struct MilestoneAction: Codable, Sendable {
+struct MilestoneAction: Codable, Sendable {
     /// The action discriminator. Defaults to `milestone`.
-    public let type: String
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
+    let nodeId: String?
     /// Stable identifier used by journey goals and server folding.
-    public let milestoneId: String
+    let milestoneId: String
     /// Optional author-facing label.
-    public let label: String?
+    let label: String?
 
     /// Creates a milestone action.
     /// - Parameters:
     ///   - type: Action discriminator. Normally `milestone`.
     ///   - milestoneId: Non-empty stable milestone identifier.
     ///   - label: Optional author-facing label.
-    public init(
+    init(
         type: String = "milestone",
         nodeId: String? = nil,
         milestoneId: String,
@@ -1094,7 +1094,7 @@ public struct MilestoneAction: Codable, Sendable {
     }
 
     /// Decodes a milestone action and rejects a missing or blank milestone identifier.
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         type = try container.decodeIfPresent(String.self, forKey: .type) ?? "milestone"
         nodeId = try container.decodeIfPresent(String.self, forKey: .nodeId)
@@ -1111,7 +1111,7 @@ public struct MilestoneAction: Codable, Sendable {
         label = try container.decodeIfPresent(String.self, forKey: .label)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
         try container.encodeIfPresent(nodeId, forKey: .nodeId)
@@ -1120,14 +1120,14 @@ public struct MilestoneAction: Codable, Sendable {
     }
 }
 
-public struct UpdateCustomerAction: Codable, Sendable {
-    public let type: String
+struct UpdateCustomerAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    @_spi(Testing) public let attributes: [String: AnyCodable]
-    public let journeyAttributes: [String: JourneyValue]
+    let nodeId: String?
+    let attributes: [String: AnyCodable]
+    let journeyAttributes: [String: JourneyValue]
 
-    @_spi(Testing) public init(
+    init(
         type: String = "update_customer",
         nodeId: String? = nil,
         attributes: [String: AnyCodable]
@@ -1140,7 +1140,7 @@ public struct UpdateCustomerAction: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, attributes }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "update_customer" else {
@@ -1151,25 +1151,25 @@ public struct UpdateCustomerAction: Codable, Sendable {
         attributes = journeyAttributes.mapValues { AnyCodable($0.foundationValue) }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(journeyAttributes, forKey: .attributes)
     }
 }
 
-public struct SubmitResponseAction: Codable, Sendable {
-    public let type: String
+struct SubmitResponseAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public init(type: String = "submit_response") {
+    let nodeId: String?
+    init(type: String = "submit_response") {
         self.type = type
         self.nodeId = nil
     }
 
     private enum CodingKeys: String, CodingKey { case type }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "submit_response" else {
@@ -1178,40 +1178,40 @@ public struct SubmitResponseAction: Codable, Sendable {
         nodeId = nil
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
     }
 }
 
-public struct JourneyResponseSchema: Codable, Sendable {
-    public let responseSchemaId: String
-    public let responseSchemaVersionId: String?
+struct JourneyResponseSchema: Codable, Sendable {
+    let responseSchemaId: String
+    let responseSchemaVersionId: String?
 
-    public init(responseSchemaId: String, responseSchemaVersionId: String? = nil) {
+    init(responseSchemaId: String, responseSchemaVersionId: String? = nil) {
         self.responseSchemaId = responseSchemaId
         self.responseSchemaVersionId = responseSchemaVersionId
     }
 }
 
-public struct PurchaseAction: Codable, Sendable {
-    public let type: String
+struct PurchaseAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
+    let nodeId: String?
     /// Compiler-authored identity for the Product placement the customer saw.
     /// The runtime resolves this value to the exact signed placement and its
     /// already-fetched StoreKit product before checkout.
-    @_spi(Testing) public let placementId: AnyCodable
+    let placementId: AnyCodable
     /// Outcome outlets (Experience Logic 2026-07-04): outcome routing lives at the
     /// purchase site as wired chains. When present, the runner correlates the
     /// async purchase outcome back to this node and runs the matching chain.
     /// Global $purchase_* events still fire for cross-cutting listeners.
     /// Actions interpreted after a completed purchase.
-    public let onCompleted: [JourneyAction]?
+    let onCompleted: [JourneyAction]?
     /// Actions interpreted after a failed purchase.
-    public let onFailed: [JourneyAction]?
+    let onFailed: [JourneyAction]?
     /// Actions interpreted after a cancelled purchase.
-    public let onCancelled: [JourneyAction]?
+    let onCancelled: [JourneyAction]?
 
     /// Creates a purchase action for an exact signed product placement.
     ///
@@ -1222,7 +1222,7 @@ public struct PurchaseAction: Codable, Sendable {
     ///   - onCompleted: Actions to run after a completed purchase.
     ///   - onFailed: Actions to run after a failed purchase.
     ///   - onCancelled: Actions to run after a cancelled purchase.
-    @_spi(Testing) public init(
+    init(
         type: String = "purchase",
         nodeId: String? = nil,
         placementId: AnyCodable,
@@ -1242,7 +1242,7 @@ public struct PurchaseAction: Codable, Sendable {
         case type, placementId, productId, placementIndex, onCompleted, onFailed, onCancelled
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "purchase" else {
@@ -1262,7 +1262,7 @@ public struct PurchaseAction: Codable, Sendable {
         onCancelled = try c.decodeIfPresent([JourneyAction].self, forKey: .onCancelled)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(placementId, forKey: .placementId)
@@ -1272,18 +1272,18 @@ public struct PurchaseAction: Codable, Sendable {
     }
 }
 
-public struct RestoreAction: Codable, Sendable {
-    public let type: String
+struct RestoreAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
+    let nodeId: String?
     /// Actions interpreted when purchases are restored.
-    public let onRestored: [JourneyAction]?
+    let onRestored: [JourneyAction]?
     /// Actions interpreted when no restorable purchases exist.
-    public let onNoPurchases: [JourneyAction]?
+    let onNoPurchases: [JourneyAction]?
     /// Actions interpreted after a restore failure.
-    public let onFailed: [JourneyAction]?
+    let onFailed: [JourneyAction]?
 
-    public init(
+    init(
         type: String = "restore",
         nodeId: String? = nil,
         onRestored: [JourneyAction]? = nil,
@@ -1298,24 +1298,24 @@ public struct RestoreAction: Codable, Sendable {
     }
 }
 
-public struct RequestNotificationsAction: Codable, Sendable {
-    public let type: String
+struct RequestNotificationsAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
+    let nodeId: String?
 
-    public init(type: String = "request_notifications", nodeId: String? = nil) {
+    init(type: String = "request_notifications", nodeId: String? = nil) {
         self.type = type
         self.nodeId = nodeId
     }
 }
 
-public struct RequestPermissionAction: Codable, Sendable {
-    public let type: String
+struct RequestPermissionAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let permissionType: String
+    let nodeId: String?
+    let permissionType: String
 
-    public init(
+    init(
         type: String = "request_permission",
         nodeId: String? = nil,
         permissionType: String
@@ -1326,26 +1326,26 @@ public struct RequestPermissionAction: Codable, Sendable {
     }
 }
 
-public struct RequestTrackingAction: Codable, Sendable {
-    public let type: String
+struct RequestTrackingAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
+    let nodeId: String?
 
-    public init(type: String = "request_tracking", nodeId: String? = nil) {
+    init(type: String = "request_tracking", nodeId: String? = nil) {
         self.type = type
         self.nodeId = nodeId
     }
 }
 
-public struct OpenLinkAction: Codable, Sendable {
-    public let type: String
+struct OpenLinkAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    @_spi(Testing) public let url: AnyCodable
-    public let journeyURL: JourneyValue
-    public let target: String?
+    let nodeId: String?
+    let url: AnyCodable
+    let journeyURL: JourneyValue
+    let target: String?
 
-    @_spi(Testing) public init(
+    init(
         type: String = "open_link",
         nodeId: String? = nil,
         url: AnyCodable,
@@ -1360,7 +1360,7 @@ public struct OpenLinkAction: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, url, target }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "open_link" else {
@@ -1372,7 +1372,7 @@ public struct OpenLinkAction: Codable, Sendable {
         target = try c.decode(String.self, forKey: .target)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(journeyURL, forKey: .url)
@@ -1380,13 +1380,13 @@ public struct OpenLinkAction: Codable, Sendable {
     }
 }
 
-public struct DismissAction: Codable, Sendable {
-    public let type: String
+struct DismissAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let reason: String?
+    let nodeId: String?
+    let reason: String?
 
-    public init(
+    init(
         type: String = "dismiss",
         nodeId: String? = nil,
         reason: String? = nil
@@ -1397,15 +1397,15 @@ public struct DismissAction: Codable, Sendable {
     }
 }
 
-public struct CallDelegateAction: Codable, Sendable {
-    public let type: String
+struct CallDelegateAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let message: String
-    @_spi(Testing) public let payload: AnyCodable?
-    public let journeyPayload: [String: JourneyValue]?
+    let nodeId: String?
+    let message: String
+    let payload: AnyCodable?
+    let journeyPayload: [String: JourneyValue]?
 
-    @_spi(Testing) public init(
+    init(
         type: String = "call_delegate",
         nodeId: String? = nil,
         message: String,
@@ -1424,7 +1424,7 @@ public struct CallDelegateAction: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, message, payload }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "call_delegate" else {
@@ -1436,7 +1436,7 @@ public struct CallDelegateAction: Codable, Sendable {
         payload = journeyPayload.map { AnyCodable($0.mapValues(\.foundationValue)) }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(message, forKey: .message)
@@ -1444,20 +1444,20 @@ public struct CallDelegateAction: Codable, Sendable {
     }
 }
 
-public struct ConnectorAction: Codable, Sendable {
-    public let type: String
+struct ConnectorAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let accountRef: String
-    public let toolKey: String
-    @_spi(Testing) public let payload: AnyCodable
-    public let journeyPayload: [String: JourneyValue]
-    public let onSucceeded: [JourneyAction]?
-    public let onFailed: [JourneyAction]?
-    public let onTimeout: [JourneyAction]?
-    public let timeoutMs: Int?
+    let nodeId: String?
+    let accountRef: String
+    let toolKey: String
+    let payload: AnyCodable
+    let journeyPayload: [String: JourneyValue]
+    let onSucceeded: [JourneyAction]?
+    let onFailed: [JourneyAction]?
+    let onTimeout: [JourneyAction]?
+    let timeoutMs: Int?
 
-    @_spi(Testing) public init(
+    init(
         type: String = "connector_action",
         nodeId: String? = nil,
         accountRef: String,
@@ -1488,7 +1488,7 @@ public struct ConnectorAction: Codable, Sendable {
         case type, accountRef, toolKey, payload, timeoutMs, onSucceeded, onFailed, onTimeout
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
         guard type == "connector_action" else {
@@ -1505,7 +1505,7 @@ public struct ConnectorAction: Codable, Sendable {
         onTimeout = try c.decode([JourneyAction].self, forKey: .onTimeout)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
         try c.encode(accountRef, forKey: .accountRef)
@@ -1518,18 +1518,18 @@ public struct ConnectorAction: Codable, Sendable {
     }
 }
 
-public struct GrantEntitlementAction: Codable, Sendable {
-    public let type: String
+struct GrantEntitlementAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let featureId: String
-    public let balance: Double?
-    public let unlimited: Bool?
-    public let onSucceeded: [JourneyAction]?
-    public let onFailed: [JourneyAction]?
-    public let onTimeout: [JourneyAction]?
+    let nodeId: String?
+    let featureId: String
+    let balance: Double?
+    let unlimited: Bool?
+    let onSucceeded: [JourneyAction]?
+    let onFailed: [JourneyAction]?
+    let onTimeout: [JourneyAction]?
 
-    public init(
+    init(
         type: String = "grant_entitlement",
         nodeId: String? = nil,
         featureId: String,
@@ -1550,14 +1550,14 @@ public struct GrantEntitlementAction: Codable, Sendable {
     }
 }
 
-public struct SetViewModelAction: Codable, Sendable {
-    public let type: String
+struct SetViewModelAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let path: VmPathRef
-    @_spi(Testing) public let value: AnyCodable
+    let nodeId: String?
+    let path: VmPathRef
+    let value: AnyCodable
 
-    @_spi(Testing) public init(
+    init(
         type: String = "set_view_model",
         nodeId: String? = nil,
         path: VmPathRef,
@@ -1570,13 +1570,13 @@ public struct SetViewModelAction: Codable, Sendable {
     }
 }
 
-public struct FireTriggerAction: Codable, Sendable {
-    public let type: String
+struct FireTriggerAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let path: VmPathRef
+    let nodeId: String?
+    let path: VmPathRef
 
-    public init(
+    init(
         type: String = "fire_trigger",
         nodeId: String? = nil,
         path: VmPathRef
@@ -1587,15 +1587,15 @@ public struct FireTriggerAction: Codable, Sendable {
     }
 }
 
-public struct ListInsertAction: Codable, Sendable {
-    public let type: String
+struct ListInsertAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let path: VmPathRef
-    public let index: Int?
-    @_spi(Testing) public let value: AnyCodable
+    let nodeId: String?
+    let path: VmPathRef
+    let index: Int?
+    let value: AnyCodable
 
-    @_spi(Testing) public init(
+    init(
         type: String = "list_insert",
         nodeId: String? = nil,
         path: VmPathRef,
@@ -1610,14 +1610,14 @@ public struct ListInsertAction: Codable, Sendable {
     }
 }
 
-public struct ListRemoveAction: Codable, Sendable {
-    public let type: String
+struct ListRemoveAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let path: VmPathRef
-    public let index: Int
+    let nodeId: String?
+    let path: VmPathRef
+    let index: Int
 
-    public init(
+    init(
         type: String = "list_remove",
         nodeId: String? = nil,
         path: VmPathRef,
@@ -1630,15 +1630,15 @@ public struct ListRemoveAction: Codable, Sendable {
     }
 }
 
-public struct ListSwapAction: Codable, Sendable {
-    public let type: String
+struct ListSwapAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let path: VmPathRef
-    public let indexA: Int
-    public let indexB: Int
+    let nodeId: String?
+    let path: VmPathRef
+    let indexA: Int
+    let indexB: Int
 
-    public init(
+    init(
         type: String = "list_swap",
         nodeId: String? = nil,
         path: VmPathRef,
@@ -1653,15 +1653,15 @@ public struct ListSwapAction: Codable, Sendable {
     }
 }
 
-public struct ListMoveAction: Codable, Sendable {
-    public let type: String
+struct ListMoveAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let path: VmPathRef
-    public let from: Int
-    public let to: Int
+    let nodeId: String?
+    let path: VmPathRef
+    let from: Int
+    let to: Int
 
-    public init(
+    init(
         type: String = "list_move",
         nodeId: String? = nil,
         path: VmPathRef,
@@ -1676,15 +1676,15 @@ public struct ListMoveAction: Codable, Sendable {
     }
 }
 
-public struct ListSetAction: Codable, Sendable {
-    public let type: String
+struct ListSetAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let path: VmPathRef
-    public let index: Int
-    @_spi(Testing) public let value: AnyCodable
+    let nodeId: String?
+    let path: VmPathRef
+    let index: Int
+    let value: AnyCodable
 
-    @_spi(Testing) public init(
+    init(
         type: String = "list_set",
         nodeId: String? = nil,
         path: VmPathRef,
@@ -1699,13 +1699,13 @@ public struct ListSetAction: Codable, Sendable {
     }
 }
 
-public struct ListClearAction: Codable, Sendable {
-    public let type: String
+struct ListClearAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let path: VmPathRef
+    let nodeId: String?
+    let path: VmPathRef
 
-    public init(
+    init(
         type: String = "list_clear",
         nodeId: String? = nil,
         path: VmPathRef
@@ -1717,22 +1717,22 @@ public struct ListClearAction: Codable, Sendable {
 }
 
 /// Transfers journey ownership to another compiler-partitioned region.
-public struct HandoffAction: Codable, Sendable {
+struct HandoffAction: Codable, Sendable {
     /// The action discriminator. Defaults to `handoff`.
-    public let type: String
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String
+    let nodeId: String
     /// Stable graph edge crossed by this transfer.
-    public let edgeId: String
+    let edgeId: String
     /// Transfer direction, such as `device_to_server`.
-    public let direction: String
+    let direction: String
     /// Destination execution region.
-    public let toRegionId: String
+    let toRegionId: String
     /// First compiler-authored node in the destination region.
-    public let toNodeId: String
+    let toNodeId: String
 
     /// Creates an ownership-transfer action.
-    public init(
+    init(
         type: String = "handoff",
         nodeId: String,
         edgeId: String,
@@ -1749,13 +1749,13 @@ public struct HandoffAction: Codable, Sendable {
     }
 }
 
-public struct ExitAction: Codable, Sendable {
-    public let type: String
+struct ExitAction: Codable, Sendable {
+    let type: String
     /// Stable compiler-authored identity used by transition facts.
-    public let nodeId: String?
-    public let reason: String?
+    let nodeId: String?
+    let reason: String?
 
-    public init(type: String = "exit", nodeId: String? = nil, reason: String? = nil) {
+    init(type: String = "exit", nodeId: String? = nil, reason: String? = nil) {
         self.type = type
         self.nodeId = nodeId
         self.reason = reason

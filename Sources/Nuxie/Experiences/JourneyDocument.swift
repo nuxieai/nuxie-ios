@@ -173,15 +173,15 @@ struct ExperienceBehaviorDefinition: Sendable {
 // MARK: - Signed journey member
 
 /// Device execution content decoded only from the signed release descriptor.
-public struct JourneyDocument: Codable, Sendable {
-    public static let journeyEventHostKey = "__journey__"
+struct JourneyDocument: Codable, Sendable {
+    static let journeyEventHostKey = "__journey__"
 
-    public let schemaVersion: Int
-    public let screens: [JourneyScreen]
-    public let viewModelValues: [JourneyViewModelValue]?
+    let schemaVersion: Int
+    let screens: [JourneyScreen]
+    let viewModelValues: [JourneyViewModelValue]?
     /// Experience-scoped response schemas projected from the signed definition.
-    public let responseSchemas: [JourneyResponseSchema]?
-    public init(
+    let responseSchemas: [JourneyResponseSchema]?
+    init(
         schemaVersion: Int = 1,
         screens: [JourneyScreen],
         viewModelValues: [JourneyViewModelValue]? = nil,
@@ -202,7 +202,7 @@ public struct JourneyDocument: Codable, Sendable {
         case viewModelValues
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         screens = try container.decode([JourneyScreen].self, forKey: .screens)
@@ -210,7 +210,7 @@ public struct JourneyDocument: Codable, Sendable {
         responseSchemas = try container.decodeIfPresent([JourneyResponseSchema].self, forKey: .responseSchemas)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encode(screens, forKey: .screens)
@@ -220,14 +220,14 @@ public struct JourneyDocument: Codable, Sendable {
 
 }
 
-public struct JourneyViewModelValue: Codable, Sendable {
-    public let viewModelName: String
-    public let instanceId: String?
-    public let instanceName: String?
-    public let path: String
-    @_spi(Testing) public let value: AnyCodable
+struct JourneyViewModelValue: Codable, Sendable {
+    let viewModelName: String
+    let instanceId: String?
+    let instanceName: String?
+    let path: String
+    let value: AnyCodable
 
-    @_spi(Testing) public init(
+    init(
         viewModelName: String,
         instanceId: String? = nil,
         instanceName: String? = nil,
@@ -241,12 +241,12 @@ public struct JourneyViewModelValue: Codable, Sendable {
         self.value = value
     }
 }
-public struct JourneyScreen: Codable, Sendable {
-    public let id: String
-    public let defaultViewModelName: String?
-    public let defaultInstanceId: String?
+struct JourneyScreen: Codable, Sendable {
+    let id: String
+    let defaultViewModelName: String?
+    let defaultInstanceId: String?
 
-    public init(
+    init(
         id: String,
         defaultViewModelName: String? = nil,
         defaultInstanceId: String? = nil
@@ -259,12 +259,12 @@ public struct JourneyScreen: Codable, Sendable {
 
 // MARK: - View Model Path References
 
-public struct VmPathRef: Codable, Equatable, Sendable {
-    public let viewModelName: String?
-    public let path: String
-    public let isRelative: Bool?
+struct VmPathRef: Codable, Equatable, Sendable {
+    let viewModelName: String?
+    let path: String
+    let isRelative: Bool?
 
-    public init(viewModelName: String? = nil, path: String, isRelative: Bool? = nil) {
+    init(viewModelName: String? = nil, path: String, isRelative: Bool? = nil) {
         self.viewModelName = viewModelName
         self.path = path
         self.isRelative = isRelative
@@ -281,7 +281,7 @@ public struct VmPathRef: Codable, Equatable, Sendable {
         case path
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         _ = try container.decode(Kind.self, forKey: .kind)
         self.init(
@@ -291,7 +291,7 @@ public struct VmPathRef: Codable, Equatable, Sendable {
         )
     }
 
-    public func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(Kind.path, forKey: .kind)
         try container.encode(path, forKey: .path)
@@ -303,7 +303,7 @@ public struct VmPathRef: Codable, Equatable, Sendable {
         }
     }
 
-    public var normalizedPath: String {
+    var normalizedPath: String {
         let prefix = isRelative == true ? "path:rel" : "path"
         return "\(prefix):\(viewModelName ?? ""):\(path)"
     }
@@ -311,14 +311,14 @@ public struct VmPathRef: Codable, Equatable, Sendable {
 
 // MARK: - View Model Models
 
-public struct ViewModel: Codable, Sendable {
-    public let id: String
-    public let name: String
-    public let viewModelPathId: Int?
-    public let properties: [String: ViewModelProperty]
+struct ViewModel: Codable, Sendable {
+    let id: String
+    let name: String
+    let viewModelPathId: Int?
+    let properties: [String: ViewModelProperty]
 }
 
-public enum ViewModelPropertyType: String, Codable, Sendable {
+enum ViewModelPropertyType: String, Codable, Sendable {
     case string
     case number
     case boolean
@@ -332,19 +332,19 @@ public enum ViewModelPropertyType: String, Codable, Sendable {
     case viewModel = "viewModel"
 }
 
-public final class ViewModelProperty: Codable, Sendable {
-    public let type: ViewModelPropertyType
-    public let propertyId: Int?
-    @_spi(Testing) public let defaultValue: AnyCodable?
-    public let allowUnset: Bool?
-    public let required: Bool?
-    public let enumValues: [String]?
-    public let itemType: ViewModelProperty?
-    public let schema: [String: ViewModelProperty]?
-    public let viewModelId: String?
-    public let validation: ViewModelValidation?
+final class ViewModelProperty: Codable, Sendable {
+    let type: ViewModelPropertyType
+    let propertyId: Int?
+    let defaultValue: AnyCodable?
+    let allowUnset: Bool?
+    let required: Bool?
+    let enumValues: [String]?
+    let itemType: ViewModelProperty?
+    let schema: [String: ViewModelProperty]?
+    let viewModelId: String?
+    let validation: ViewModelValidation?
 
-    @_spi(Testing) public init(
+    init(
         type: ViewModelPropertyType,
         propertyId: Int? = nil,
         defaultValue: AnyCodable? = nil,
@@ -369,17 +369,17 @@ public final class ViewModelProperty: Codable, Sendable {
     }
 }
 
-public struct ViewModelValidation: Codable, Sendable {
-    public let min: Double?
-    public let max: Double?
-    public let minLength: Int?
-    public let maxLength: Int?
-    public let regex: String?
+struct ViewModelValidation: Codable, Sendable {
+    let min: Double?
+    let max: Double?
+    let minLength: Int?
+    let maxLength: Int?
+    let regex: String?
 }
 
-public struct ViewModelInstance: Codable, Sendable {
-    public let viewModelId: String
-    public let instanceId: String
-    public let name: String?
-    @_spi(Testing) public let values: [String: AnyCodable]
+struct ViewModelInstance: Codable, Sendable {
+    let viewModelId: String
+    let instanceId: String
+    let name: String?
+    let values: [String: AnyCodable]
 }

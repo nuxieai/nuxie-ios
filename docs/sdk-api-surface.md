@@ -15,12 +15,14 @@ All entry points live on the `NuxieSDK.shared` singleton facade.
 
 ## Module boundary
 
-Only the facade, configuration/delegate types, values appearing in facade
-signatures, and the package-authored experience schema are supported public
-API. Networking clients and response DTOs, persistence stores, service
-protocols, query adapters, evaluators, clocks, and mutable journey runtime
-state are implementation details. Tests use `@testable import Nuxie` when they
-need those seams; applications must not construct or depend on them.
+The supported public contract is the facade; configuration and delegates;
+feature and trigger-result values; the presentation types returned by the
+facade; and the commerce types used by the purchase seam. Signed release-wire,
+journey-document, view-model, and IR representations are internal alongside
+networking clients and response DTOs, persistence stores, service protocols,
+query adapters, evaluators, clocks, and mutable journey runtime state. Tests
+use `@testable import Nuxie` when they need those seams; applications must not
+construct or depend on them.
 
 `make check-public-api` builds the macOS and iOS modules and applies two
 platform checks: an exact declaration inventory plus Swift API Digester's
@@ -34,9 +36,9 @@ customer digest only. An intentional API change requires both code review and
 an explicit baseline update with `scripts/check-public-api.sh --update`.
 
 Published releases carry behavior through authenticated routes, execution
-plans, screen behaviors, and response sessions. `JourneyDocument` exposes
-only the canonical package-authored journey schema; runtime behavior and
-persistence remain private implementation details.
+plans, screen behaviors, and response sessions. The SDK authenticates and
+decodes that wire format internally; applications interact with the resulting
+behavior only through the supported facade and delegate seams.
 
 ## Lifecycle
 
@@ -94,7 +96,7 @@ run whose server ledger is missing.
 | --- | --- |
 | `showExperience(_:colorSchemeMode:) async throws` | Present an experience by id, optionally overriding its color scheme. |
 | `experienceViewController(for:colorSchemeMode:) async throws` | Embedding: returns the presentable view controller without presenting. |
-| `refreshProfile() async throws -> ProfileResponse` | Re-fetch cached config (experiences, segments, features). The SDK also refreshes automatically. |
+| `refreshProfile() async throws` | Re-fetch internal cached config (experiences, segments, features). The SDK also refreshes automatically. |
 
 ## Features (entitlements)
 
@@ -157,12 +159,13 @@ Journey execution events are internal analytics protocol details; no
 application-facing tracking API changed. Profile down-facts and server-owned
 segment membership seeds are decoded and applied internally.
 
-`ProfileResponse.releases` is the sole experience-delivery authority. The SDK
-authenticates and admits every exact inline descriptor envelope before behavior
-can participate in routing, then acquires the standalone RIV and every referenced
-content-addressed asset or script. Active entries are eligible for enrollment;
-pinned entries remain available only for exact persisted or mailbox restoration.
-`timeLimitSeconds` is preserved on the hydrated `Experience`.
+The internal profile release set is the sole experience-delivery authority.
+The SDK authenticates and admits every exact inline descriptor envelope before
+behavior can participate in routing, then acquires the standalone RIV and every
+referenced content-addressed asset or script. Active entries are eligible for
+enrollment; pinned entries remain available only for exact persisted or mailbox
+restoration. The authored time limit is preserved on the internal hydrated
+experience model.
 
 Descriptor delivery follows a fixed resilience policy:
 
@@ -184,8 +187,8 @@ Descriptor delivery follows a fixed resilience policy:
   product data; current StoreKit name, price, and period replace publisher-time
   catalog display values before the native runtime opens.
 
-`WindowUnit.second` is public so an authenticated `once_per_window` reentry
-policy can preserve publisher-authored whole-second windows without rounding.
+The internal reentry-window wire preserves publisher-authored whole-second
+`once_per_window` durations without rounding.
 
 Response-capture networking identifies the run as `journeyId` and sends
 `journey_id`; `ResponseRecordPayload` exposes the same `journeyId`. The removed
@@ -197,8 +200,8 @@ There is no new application-facing API. Published experiences may contain server
 
 ## Experiences: server-owned runs and handoff
 
-`Experience.trigger` is optional. Profiles include server-owned experiences so
-the SDK can render a
+The internal hydrated experience trigger is optional. Profiles include
+server-owned experiences so the SDK can render a
 mailbox-claimed device region, but omit their server-only webhook or API
 trigger configuration. A missing trigger means the experience cannot enroll
 from a local SDK event; it may still start after the server offers and

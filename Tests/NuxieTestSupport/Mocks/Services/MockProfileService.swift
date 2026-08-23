@@ -19,7 +19,7 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
         (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     private var _onAppBecameActiveHandler: (@Sendable () async -> Void)?
 
-    public var profileResponse: ProfileResponse? {
+    var profileResponse: ProfileResponse? {
         get { lock.withLock { _profileResponse } }
         set { lock.withLock { _profileResponse = newValue } }
     }
@@ -164,11 +164,11 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     
     // Retained for call-site compatibility; signed release fixtures are set
     // through setProfileResponse.
-    public func setExperiences(_ experiences: [Experience]) {
+    func setExperiences(_ experiences: [Experience]) {
         _ = experiences
     }
     
-    public func setProfileResponse(_ response: ProfileResponse) {
+    func setProfileResponse(_ response: ProfileResponse) {
         profileResponse = response
     }
 }

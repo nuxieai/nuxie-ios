@@ -6,7 +6,7 @@ extension IRExpr {
   /// Segment ids referenced by `segment` nodes anywhere in this expression.
   /// Drives Phase 9 segment scoping: only segments an experience can actually
   /// observe are evaluated on-device.
-  public var referencedSegmentIds: Set<String> {
+  var referencedSegmentIds: Set<String> {
     var ids = Set<String>()
     collectSegmentIds(into: &ids)
     return ids
@@ -82,13 +82,13 @@ extension IRExpr {
 }
 
 extension IREnvelope {
-  public var referencedSegmentIds: Set<String> { expr.referencedSegmentIds }
+  var referencedSegmentIds: Set<String> { expr.referencedSegmentIds }
 }
 
 extension Experience {
   /// Every segment id this experience can observe: the trigger condition,
   /// plus goal configuration (segment goals and IR filters).
-  public var referencedSegmentIds: Set<String> {
+  var referencedSegmentIds: Set<String> {
     var ids = Set<String>()
     if let trigger {
       switch trigger {

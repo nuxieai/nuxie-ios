@@ -11,7 +11,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var trackEventDelay: TimeInterval = 0
 
     public var profileDelay: TimeInterval = 0
-    public var profileResponse: ProfileResponse?
+    var profileResponse: ProfileResponse?
     public var batchResponse: BatchResponse = BatchResponse(
         status: "success",
         processed: 0,
@@ -123,7 +123,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     }
     
     // Configuration methods
-    public func setProfileResponse(_ response: ProfileResponse) {
+    func setProfileResponse(_ response: ProfileResponse) {
         self.profileResponse = response
     }
 

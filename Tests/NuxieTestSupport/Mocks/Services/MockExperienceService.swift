@@ -85,12 +85,12 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         set { withLock { _displayAttempts = newValue } }
     }
 
-    public var mockExperiences: [String: Experience] {
+    var mockExperiences: [String: Experience] {
         get { withLock { _mockExperiences } }
         set { withLock { _mockExperiences = newValue } }
     }
 
-    public var defaultMockExperience: Experience? {
+    var defaultMockExperience: Experience? {
         get { withLock { _defaultMockExperience } }
         set { withLock { _defaultMockExperience = newValue } }
     }
