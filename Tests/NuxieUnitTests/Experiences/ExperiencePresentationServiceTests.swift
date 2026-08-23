@@ -999,6 +999,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 }
                 expect(dismissed).to(haveCount(1))
                 expect(dismissed.first?.distinctId).to(equal(journeyDistinctId))
+                expect(dismissed.first?.properties["reason"] as? String).to(equal("host"))
             }
 
             it("preserves presentation when terminalization fails") { @MainActor in

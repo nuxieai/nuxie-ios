@@ -39,6 +39,13 @@ protocol EventStoreProtocol: Sendable {
   /// Returns whether the row was newly committed.
   func insertHistoryIfAbsent(_ event: StoredEvent) async throws -> Bool
 
+  /// Atomically claim a durable forwarding key and insert its history row.
+  /// The key is retained independently of ordinary event-history cleanup.
+  func insertHistoryIfAbsent(
+    _ event: StoredEvent,
+    forwardingDeduplicationKey: String
+  ) async throws -> Bool
+
   /// Insert the canonical captured record (stored row == wire payload)
   /// marked pending network delivery.
   func insertPending(_ event: StoredEvent) async throws
@@ -216,6 +223,12 @@ actor SQLiteEventStore: EventStoreProtocol {
       authoritative_epoch INTEGER NOT NULL,
       recorded_at INTEGER NOT NULL,
       PRIMARY KEY (source_event_id, journey_id, authoritative_epoch)
+    );
+    """
+
+  private let createForwardingDeduplicationSQL = """
+    CREATE TABLE IF NOT EXISTS forwarding_deduplication_keys (
+      deduplication_key TEXT PRIMARY KEY
     );
     """
 
@@ -434,6 +447,11 @@ actor SQLiteEventStore: EventStoreProtocol {
         targetVersion: targetVersion,
         operation: "create unresolved_journey_ownership_responses"
       )
+      try executeSchemaSQL(
+        createForwardingDeduplicationSQL,
+        targetVersion: targetVersion,
+        operation: "create forwarding_deduplication_keys"
+      )
       for indexSQL in createIndexSQL {
         try executeSchemaSQL(
           indexSQL,
@@ -475,6 +493,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     try verifyV1Schema(targetVersion: version)
     try verifyJourneyOwnershipFencesTable(targetVersion: version)
     try verifyUnresolvedJourneyOwnershipResponsesTable(targetVersion: version)
+    try verifyForwardingDeduplicationTable(targetVersion: version)
     try verifyIndex(
       named: "idx_unresolved_ownership_journey_epoch",
       expectedColumns: [("journey_id", false), ("authoritative_epoch", false)],
@@ -788,6 +807,37 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
   }
 
+  private func verifyForwardingDeduplicationTable(targetVersion: Int32) throws {
+    guard try schemaObjectType(
+      named: "forwarding_deduplication_keys",
+      targetVersion: targetVersion
+    ) == "table" else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify forwarding_deduplication_keys",
+        code: SQLITE_SCHEMA,
+        message: "forwarding_deduplication_keys is not a table"
+      )
+    }
+    let columns = try tableColumns(
+      named: "forwarding_deduplication_keys",
+      targetVersion: targetVersion
+    )
+    guard columns.count == 1,
+          let key = columns["deduplication_key"],
+          key.type.caseInsensitiveCompare("TEXT") == .orderedSame,
+          key.primaryKeyPosition == 1,
+          columns.values.filter(\.isPrimaryKey).count == 1
+    else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify forwarding_deduplication_keys",
+        code: SQLITE_SCHEMA,
+        message: "forwarding_deduplication_keys must define deduplication_key TEXT PRIMARY KEY"
+      )
+    }
+  }
+
   private func tableColumns(
     named tableName: String,
     targetVersion: Int32
@@ -1095,6 +1145,68 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   public func insertHistoryIfAbsent(_ event: StoredEvent) async throws -> Bool {
     try insertEventIfAbsent(event)
+  }
+
+  public func insertHistoryIfAbsent(
+    _ event: StoredEvent,
+    forwardingDeduplicationKey key: String
+  ) throws -> Bool {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else {
+      throw EventStorageError.insertFailed(
+        NSError(domain: "SQLite", code: 33, userInfo: [
+          NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))
+        ])
+      )
+    }
+    var transactionFinished = false
+    defer {
+      if !transactionFinished { _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) }
+    }
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(
+      db,
+      "INSERT OR IGNORE INTO forwarding_deduplication_keys (deduplication_key) VALUES (?);",
+      -1,
+      &statement,
+      nil
+    ) == SQLITE_OK else {
+      throw EventStorageError.insertFailed(
+        NSError(domain: "SQLite", code: 34, userInfo: [
+          NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))
+        ])
+      )
+    }
+    key.withCString { pointer in
+      sqlite3_bind_text(
+        statement,
+        1,
+        pointer,
+        Int32(key.utf8.count),
+        SQLITE_TRANSIENT
+      )
+    }
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw EventStorageError.insertFailed(
+        NSError(domain: "SQLite", code: 35, userInfo: [
+          NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))
+        ])
+      )
+    }
+
+    let claimed = sqlite3_changes(db) == 1
+    let inserted = claimed ? try insertEventIfAbsent(event) : false
+    guard sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK else {
+      throw EventStorageError.insertFailed(
+        NSError(domain: "SQLite", code: 36, userInfo: [
+          NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))
+        ])
+      )
+    }
+    transactionFinished = true
+    return inserted
   }
 
   public func queryStableCapture(

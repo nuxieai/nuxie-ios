@@ -80,6 +80,7 @@ final class NuxieCore: @unchecked Sendable {
   init(
     configuration: NuxieSetupConfiguration,
     runtimeSettings: NuxieRuntimeSettings,
+    appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in },
     overrides: NuxieCoreOverrides = .init()
   ) {
     self.configuration = configuration
@@ -249,6 +250,7 @@ final class NuxieCore: @unchecked Sendable {
       goalEvaluator: goalEvaluator,
       irRuntime: irRuntime,
       api: api,
+      appActionHandler: appActionHandler,
       presentationTrace: presentationTrace,
       restoredPresentationAttempt: overrides.restoredPresentationAttempt
     )
@@ -356,11 +358,13 @@ final class NuxieCore: @unchecked Sendable {
 
   convenience init(
     configuration: NuxieConfiguration,
+    appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in },
     overrides: NuxieCoreOverrides = .init()
   ) {
     self.init(
       configuration: NuxieSetupConfiguration(configuration),
       runtimeSettings: NuxieRuntimeSettings(configuration: configuration),
+      appActionHandler: appActionHandler,
       overrides: overrides
     )
   }

@@ -1,0 +1,119 @@
+{
+  "suite": "encodings/forwarded-activity",
+  "version": 1,
+  "description": "Stable analytics wire names and flat scalar properties for every NuxieActivity case.",
+  "vectors": [
+    {
+      "case": "experienceShown",
+      "name": "experience_shown",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1"}
+    },
+    {
+      "case": "experienceDismissed",
+      "name": "experience_dismissed",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "reason": "user"}
+    },
+    {
+      "case": "experienceTimedOut",
+      "name": "experience_timed_out",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1"}
+    },
+    {
+      "case": "experienceErrored",
+      "name": "experience_errored",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "message": "render failed"}
+    },
+    {
+      "case": "journeyStarted",
+      "name": "journey_started",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1"}
+    },
+    {
+      "case": "milestoneReached",
+      "name": "milestone_reached",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "milestone_id": "milestone-1"}
+    },
+    {
+      "case": "journeyConverted",
+      "name": "journey_converted",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1"}
+    },
+    {
+      "case": "journeyEnded",
+      "name": "journey_ended",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "exit_reason": "goal_met"}
+    },
+    {
+      "case": "purchaseCompleted",
+      "name": "purchase_completed",
+      "properties": {"product_id": "product-1", "store_product_id": "store.product.1", "placement_id": "placement-1", "experience_id": "exp-1", "price": 9.99, "display_price": "$9.99", "transaction_id": "transaction-1", "test_store": true}
+    },
+    {
+      "case": "purchaseFailed",
+      "name": "purchase_failed",
+      "properties": {"product_id": "product-1", "store_product_id": "store.product.1", "placement_id": "placement-1", "experience_id": "exp-1", "price": 9.99, "display_price": "$9.99", "transaction_id": "transaction-1", "test_store": true, "message": "declined"}
+    },
+    {
+      "case": "purchaseCancelled",
+      "name": "purchase_cancelled",
+      "properties": {"product_id": "product-2", "store_product_id": "store.product.2", "test_store": false}
+    },
+    {
+      "case": "purchasePending",
+      "name": "purchase_pending",
+      "properties": {"product_id": "product-2", "store_product_id": "store.product.2", "test_store": false}
+    },
+    {"case": "restoreCompleted", "name": "restore_completed", "properties": {}},
+    {"case": "restoreFailed", "name": "restore_failed", "properties": {"message": "offline"}},
+    {"case": "restoreNoPurchases", "name": "restore_no_purchases", "properties": {}},
+    {
+      "case": "purchaseSynced",
+      "name": "purchase_synced",
+      "properties": {"transaction_id": "transaction-2", "original_transaction_id": "original-2", "product_id": "product-2"}
+    },
+    {
+      "case": "featureUsed",
+      "name": "feature_used",
+      "properties": {"feature_id": "feature-1", "amount": 2.5, "entity_id": "entity-1"}
+    },
+    {
+      "case": "experimentExposure",
+      "name": "experiment_exposure",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "experiment_key": "experiment-1", "variant_key": "variant-a", "is_holdout": false, "is_fallback": true}
+    },
+    {
+      "case": "experimentError",
+      "name": "experiment_error",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "experiment_key": "experiment-1", "message": "variant missing"}
+    },
+    {
+      "case": "productsUnavailable",
+      "name": "products_unavailable",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "product_ids": "[\"product-1\",\"product-2\"]"}
+    },
+    {
+      "case": "screenShown",
+      "name": "screen_shown",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "screen_id": "screen-1"}
+    },
+    {
+      "case": "screenDismissed",
+      "name": "screen_dismissed",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "screen_id": "screen-1"}
+    },
+    {
+      "case": "experienceLoadFailed",
+      "name": "experience_load_failed",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "message": "signature invalid"}
+    },
+    {
+      "case": "permissionResolved",
+      "name": "permission_resolved",
+      "properties": {"experience_id": "exp-1", "experience_version": "v1", "journey_id": "journey-1", "kind": "tracking", "granted": true}
+    },
+    {"case": "appInstalled", "name": "app_installed", "properties": {}},
+    {"case": "appUpdated", "name": "app_updated", "properties": {"to_version": "2.0"}},
+    {"case": "appOpened", "name": "app_opened", "properties": {}},
+    {"case": "appBackgrounded", "name": "app_backgrounded", "properties": {}}
+  ]
+}

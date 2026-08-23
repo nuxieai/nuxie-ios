@@ -324,7 +324,7 @@ final class ExperienceDefinitionTests: XCTestCase {
             ["type": "dismiss"],
             ["type": "exit", "reason": "finished"],
             [
-                "type": "call_delegate", "message": "finished", "payload": [
+                "type": "app_action", "name": "finished", "payload": [
                     "source": ["type": "String", "value": "journey"],
                 ],
             ],
@@ -348,7 +348,9 @@ final class ExperienceDefinitionTests: XCTestCase {
               case .string("pro") = update.journeyAttributes["plan"],
               case .purchase(let purchase) = decoded[12],
               let placement = purchase.placementId.value as? [String: Any],
-              placement["literal"] as? String == "golden:monthly" else {
+              placement["literal"] as? String == "golden:monthly",
+              case .appAction(let appAction) = decoded[20],
+              case .string("journey") = appAction.payload?["source"] else {
             return XCTFail("canonical typed action values were not retained")
         }
     }
@@ -360,6 +362,26 @@ final class ExperienceDefinitionTests: XCTestCase {
         ]])
 
         XCTAssertThrowsError(try JSONDecoder().decode([JourneyAction].self, from: data))
+    }
+
+    func testRetiredWireActionIsRejectedByDecoderAndSchema() throws {
+        let retiredType = ["call", "delegate"].joined(separator: "_")
+        let legacyAction: [String: Any] = [
+            "type": retiredType,
+            "message": "legacy",
+        ]
+        let data = try JSONSerialization.data(withJSONObject: [legacyAction])
+        XCTAssertThrowsError(try JSONDecoder().decode([JourneyAction].self, from: data))
+
+        var descriptor = try goldenDescriptorObject()
+        var journey = try XCTUnwrap(descriptor["journey"] as? [String: Any])
+        var routes = try XCTUnwrap(journey["routes"] as? [[String: Any]])
+        routes[0]["program"] = [legacyAction]
+        journey["routes"] = routes
+        descriptor["journey"] = journey
+        XCTAssertThrowsError(
+            try ExperienceReleaseDescriptorSchemaValidator.validate(descriptor)
+        )
     }
 
     private func fixtureData(_ name: String) throws -> Data {

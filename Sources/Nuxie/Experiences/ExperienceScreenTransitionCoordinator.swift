@@ -38,7 +38,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     ) async -> Void
     private let onScreenActive: (_ screenId: String) async -> Void
     private let onProductsResolved: (_ products: [StoreProduct]) -> Void
-    private let onProductsUnavailable: (_ screenId: String) async -> Void
+    private let onProductsUnavailable: (
+        _ screenId: String,
+        _ productIds: [String]
+    ) async -> Void
     private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
 
     private var navigationController: UINavigationController?
@@ -89,7 +92,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         ) async -> Void,
         onScreenActive: @escaping (_ screenId: String) async -> Void,
         onProductsResolved: @escaping (_ products: [StoreProduct]) -> Void,
-        onProductsUnavailable: @escaping (_ screenId: String) async -> Void,
+        onProductsUnavailable: @escaping (
+            _ screenId: String,
+            _ productIds: [String]
+        ) async -> Void,
         onRuntimeFailure: @escaping (_ screenId: String, _ error: Error) -> Void
     ) {
         self.experience = experience
@@ -491,13 +497,13 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     request.screenId
                 )
             } catch {
-                if case ExperienceError.productsUnavailable = error {
+                if case ExperienceError.productsUnavailable(let productIds) = error {
                     request.completion(false, request.screenId)
                     for queued in navigationRequests {
                         queued.completion(false, queued.screenId)
                     }
                     navigationRequests.removeAll()
-                    await onProductsUnavailable(request.screenId)
+                    await onProductsUnavailable(request.screenId, productIds)
                     break
                 }
                 LogWarning(

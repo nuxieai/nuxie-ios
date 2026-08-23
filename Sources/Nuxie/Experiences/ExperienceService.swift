@@ -490,7 +490,7 @@ enum ExperienceError: LocalizedError {
     case invalidManifest
     case downloadFailed
     case noProductsConfigured
-    case productsUnavailable
+    case productsUnavailable([String])
     case configurationFailed(Error)
 
     var errorDescription: String? {

@@ -1,8 +1,6 @@
 import Foundation
 
 extension Notification.Name {
-    /// Posted when a call delegate action is executed
-    static let nuxieCallDelegate = Notification.Name("com.nuxie.callDelegate")
     /// Posted when a purchase action is executed
     static let nuxiePurchase = Notification.Name("com.nuxie.purchase")
     /// Posted when a restore action is executed

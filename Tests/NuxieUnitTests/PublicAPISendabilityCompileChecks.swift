@@ -60,6 +60,13 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(EventResponse.self)
     requireSendable(EventFlushStrategy.self)
     requireSendable(AnyCodable.self)
+    requireSendable(NuxieActivityValue.self)
+    requireSendable(NuxieActivityInfo.self)
+    requireSendable(NuxieActivity.self)
+    requireSendable(DismissReason.self)
+    requireSendable(PurchaseInfo.self)
+    requireSendable(PermissionKind.self)
+    requireSendable(AppAction.self)
 
     // Features / entitlements
     requireSendable(FeatureAccess.self)
@@ -80,6 +87,8 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(Journey.self)
     requireSendable(JourneyStatus.self)
     requireSendable(JourneyExitReason.self)
+    requireSendable(JourneyAction.self)
+    requireSendable(AppActionStep.self)
     requireSendable(ResumeReason.self)
 
     // StoreKit
@@ -231,6 +240,14 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     func featureAccessDidChange(
       _ featureId: String, from oldValue: FeatureAccess?, to newValue: FeatureAccess
     ) {}
+
+    func nuxieDidEmit(_ info: NuxieActivityInfo) {
+      _ = info.properties.analyticsDictionary
+    }
+
+    func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction) {
+      _ = action.experience
+    }
   }
 
   @MainActor

@@ -25,6 +25,8 @@ enum JourneyTransitionAnalytics {
 
 /// Protocol for journey management
 protocol JourneyServiceProtocol: AnyObject, Sendable {
+  /// Forwarding context for a restored journey; see ActivityForwardingPipeline.
+  func forwardingExperienceRef(journeyId: String) -> ExperienceRef?
   @discardableResult
   func startJourney(for experience: Experience, distinctId: String, originEventId: String?) async -> Journey?
 
@@ -180,6 +182,7 @@ actor JourneyService: JourneyServiceProtocol {
   private let goalEvaluator: GoalEvaluatorProtocol
   private let irRuntime: IRRuntime
   private let api: ResponseWriting
+  private let appActionHandler: @MainActor @Sendable (AppAction) -> Void
   private let presentationTrace: ExperiencePresentationTraceRecording
   private let restoredPresentationAttempt: ExperiencePresentationAttempt?
 
@@ -230,6 +233,7 @@ actor JourneyService: JourneyServiceProtocol {
     goalEvaluator: GoalEvaluatorProtocol,
     irRuntime: IRRuntime,
     api: ResponseWriting,
+    appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in },
     presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace(),
     restoredPresentationAttempt: ExperiencePresentationAttempt? = nil
   ) {
@@ -248,6 +252,7 @@ actor JourneyService: JourneyServiceProtocol {
     self.goalEvaluator = goalEvaluator
     self.irRuntime = irRuntime
     self.api = api
+    self.appActionHandler = appActionHandler
     self.presentationTrace = presentationTrace
     self.restoredPresentationAttempt = restoredPresentationAttempt
     self.timerScheduler = JourneyTimerScheduler(
@@ -548,6 +553,14 @@ actor JourneyService: JourneyServiceProtocol {
     inMemoryJourneysById[journey.id] = journey
 
     let enrollmentState = await journey.snapshot()
+    forwardingContextIndex.record(
+      journeyId: journey.id,
+      experienceRef: ExperienceRef(
+        experienceId: enrollmentState.experienceId,
+        experienceVersion: enrollmentState.experienceVersion,
+        journeyId: journey.id
+      )
+    )
     do {
       _ = try await eventLog.trackWithResponse(
         JourneyEvents.journeyEnrolled,
@@ -896,6 +909,14 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func restorePersistedJourney(_ journey: Journey, state: JourneySnapshot) {
     inMemoryJourneysById[journey.id] = journey
+    forwardingContextIndex.record(
+      journeyId: journey.id,
+      experienceRef: ExperienceRef(
+        experienceId: state.experienceId,
+        experienceVersion: state.experienceVersion,
+        journeyId: journey.id
+      )
+    )
     if let pending = state.executionState.pendingAction,
        let resumeAt = pending.resumeAt {
       scheduleResume(journeyId: journey.id, at: resumeAt)
@@ -1007,6 +1028,15 @@ actor JourneyService: JourneyServiceProtocol {
     let fractional = ISO8601DateFormatter()
     fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+  }
+
+  /// Lock-guarded journey -> experience index for the forwarding pipeline.
+  /// Read without touching this actor so activity curation can never form a
+  /// wait cycle with journey shutdown (which joins EventLog drains).
+  nonisolated let forwardingContextIndex = ForwardingJourneyContextIndex()
+
+  nonisolated func forwardingExperienceRef(journeyId: String) -> ExperienceRef? {
+    forwardingContextIndex.experienceRef(journeyId: journeyId)
   }
 
   public func getActiveJourneys(for distinctId: String) async -> [Journey] {
@@ -1121,7 +1151,8 @@ actor JourneyService: JourneyServiceProtocol {
 
   func handleRuntimeProductsUnavailable(
     journeyId: String,
-    screenId: String
+    screenId: String,
+    productIds: [String]
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId],
@@ -1130,7 +1161,7 @@ actor JourneyService: JourneyServiceProtocol {
     LogWarning(
       "JourneyService: live products unavailable for screen \(screenId) in journey \(journeyId)"
     )
-    let outcome = await runner.handleRuntimeProductsUnavailable()
+    let outcome = await runner.handleRuntimeProductsUnavailable(productIds: productIds)
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
     await handleOutcome(outcome, journey: journey)
   }
@@ -2325,6 +2356,24 @@ actor JourneyService: JourneyServiceProtocol {
       properties: propertiesBox.value,
       distinctId: scopedDistinctId
     )
+    // The permission outcome is already resolved at stage time; announce it
+    // to the typed forwarding stream before any routing can terminate the
+    // journey and early-return past this handler (ownership guards protect
+    // journey routing, never delegate forwarding). Delegate-facing copy only.
+    let announceState = await journey.snapshot()
+    var announceProperties = stage.localEvent.properties
+    announceProperties["experience_id"] = announceState.experienceId
+    announceProperties["experience_version"] = announceState.experienceVersion
+    await eventLog.announceTransientActivity(
+      canonicalName: eventName,
+      event: NuxieEvent(
+        id: stage.localEvent.id,
+        name: stage.localEvent.name,
+        distinctId: stage.localEvent.distinctId,
+        properties: announceProperties,
+        timestamp: stage.localEvent.timestamp
+      )
+    )
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let localScopedEvent = stage.localEvent
 
@@ -2351,7 +2400,6 @@ actor JourneyService: JourneyServiceProtocol {
 
     let (trackedEvent, response) = await trackScopedEvent(stage, properties: properties)
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
-
     let scopedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: scopedDistinctId)
     let trackedTransientEvent = makeStoredEvent(from: scopedEvent)
 
@@ -2455,7 +2503,6 @@ actor JourneyService: JourneyServiceProtocol {
       runner: runner,
       sourceCompleted: sourceJourneyCompleted
     ) else { return }
-
     let scopedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: scopedDistinctId)
     await eventLog.storePreparedEventInHistory(localScopedEvent)
     guard await ownsScopedCallbackContinuation(
@@ -2850,10 +2897,24 @@ actor JourneyService: JourneyServiceProtocol {
           let runner = experienceRunners[journeyId],
           journey.distinctId == distinctId,
           await ownsExecutableJourney(journey, runner: runner) else { return }
+    let scopedDistinctId = journey.distinctId
+    let state = await journey.snapshot()
+    let properties: [String: Any] = [
+      "journey_id": journeyId,
+      "experience_id": state.experienceId,
+      "experience_version": state.experienceVersion,
+      "type": permissionType,
+    ]
     let stage = await stageScopedEvent(
       name: SystemEventNames.permissionDenied,
-      properties: ["journey_id": journeyId, "type": permissionType],
-      distinctId: distinctId
+      properties: properties,
+      distinctId: scopedDistinctId
+    )
+    // Announce before any routing can terminate the journey; the staged
+    // properties already carry the journey's experience context.
+    await eventLog.announceTransientActivity(
+      canonicalName: SystemEventNames.permissionDenied,
+      event: stage.localEvent
     )
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let localScopedEvent = stage.localEvent
@@ -3031,6 +3092,7 @@ actor JourneyService: JourneyServiceProtocol {
         apiClient: api,
         dateProvider: dateProvider,
         irRuntime: irRuntime,
+        appActionHandler: appActionHandler,
         responseSessionModule: controlExperience.definition?.responseSchema.map { _ in
           ResponseSessionModule(
             store: JourneyResponseSessionStore(
@@ -3876,10 +3938,10 @@ actor JourneyService: JourneyServiceProtocol {
       } catch {
         LogError("Failed to present selected screen \(pending.screenId): \(error)")
         guard await ownsExecutableJourney(journey, runner: runner) else { return }
-        if case ExperienceError.productsUnavailable = error,
+        if case ExperienceError.productsUnavailable(let productIds) = error,
            experienceRunners[journey.id] === runner {
           await handleOutcome(
-            await runner.handleProductsUnavailable(),
+            await runner.handleProductsUnavailable(productIds: productIds),
             journey: journey,
             runner: runner
           )
@@ -4405,6 +4467,17 @@ actor JourneyService: JourneyServiceProtocol {
     let candidates = snapshots ?? journeyStore.loadActiveJourneys()
     for snapshot in candidates where snapshot.pendingHostExitCapture {
       guard !completingJourneyIds.contains(snapshot.id) else { continue }
+      // Recovered host exits bypass restorePersistedJourney; seed the
+      // forwarding index so the recovered $journey_exited keeps its
+      // experience identity in the typed activity stream.
+      forwardingContextIndex.record(
+        journeyId: snapshot.id,
+        experienceRef: ExperienceRef(
+          experienceId: snapshot.experienceId,
+          experienceVersion: snapshot.experienceVersion,
+          journeyId: snapshot.id
+        )
+      )
       guard isRecoverablePendingHostExit(snapshot) else {
         LogError(
           "JourneyService: retaining malformed pending host exit \(snapshot.id)"
@@ -5308,5 +5381,39 @@ extension JourneyService: PresentationAttemptJourneyRouting {
     presentationAttempt: ExperiencePresentationAttempt?
   ) async -> [JourneyTriggerResult] {
     await routeEvent(event, presentationAttempt: presentationAttempt) ?? []
+  }
+}
+
+
+extension JourneyServiceProtocol {
+  func forwardingExperienceRef(journeyId: String) -> ExperienceRef? { nil }
+}
+
+/// Journey -> experience identity index readable without actor hops. Entries
+/// are retained past journey completion (bounded by LRU) so terminal
+/// activities queued behind the route worker can still resolve their
+/// experience identity; eviction only occurs under the recency cap.
+final class ForwardingJourneyContextIndex: @unchecked Sendable {
+  private static let maximumEntries = 1024
+  private let lock = NSLock()
+  private var refs: [String: ExperienceRef] = [:]
+  private var recency: [String] = []
+
+  init() {}
+
+  func record(journeyId: String, experienceRef: ExperienceRef) {
+    lock.withLock {
+      refs[journeyId] = experienceRef
+      recency.removeAll { $0 == journeyId }
+      recency.append(journeyId)
+      if recency.count > Self.maximumEntries {
+        let evicted = recency.removeFirst()
+        refs.removeValue(forKey: evicted)
+      }
+    }
+  }
+
+  func experienceRef(journeyId: String) -> ExperienceRef? {
+    lock.withLock { refs[journeyId] }
   }
 }

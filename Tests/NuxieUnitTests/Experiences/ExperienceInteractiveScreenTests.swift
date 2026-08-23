@@ -9,6 +9,59 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    func testAppActionResolvesPayloadAndDeliversBeforeItsRider() async throws {
+        let mocks = MockFactory.shared
+        mocks.eventLog.reset()
+        let recorder = await MainActor.run { AppActionRecorder() }
+        let runtime = try makeJourneyRunner(
+            document: JourneyDocument(screens: [JourneyScreen(id: "screen_1")]),
+            appActionHandler: { action in
+                recorder.record(
+                    action,
+                    riderCount: mocks.eventLog.trackedEvents.filter {
+                        $0.name == JourneyEvents.appActionRequested
+                    }.count
+                )
+            }
+        )
+
+        await runtime.runner.handleAppAction(
+            AppActionStep(
+                nodeId: "action-1",
+                name: "export_finished",
+                payload: [
+                    "literal": .string("ready"),
+                    "count": .eventField("count"),
+                    "nested": .array([.string("a"), .number(2)]),
+                ]
+            ),
+            context: JourneyRunner.TriggerContext(
+                screenId: "screen_1",
+                componentId: nil,
+                handlerId: nil,
+                instanceId: nil,
+                payload: ["count": 3]
+            )
+        )
+
+        let delivery = await MainActor.run { recorder.delivery }
+        let action = try XCTUnwrap(delivery?.action)
+        XCTAssertEqual(delivery?.riderCount, 0)
+        XCTAssertEqual(action.name, "export_finished")
+        XCTAssertEqual(action.payload?["literal"], .string("ready"))
+        XCTAssertEqual(action.payload?["count"], .int(3))
+        XCTAssertEqual(action.payload?["nested"], .string("[\"a\",2]") )
+        XCTAssertEqual(action.experience.experienceId, "interactive-experience")
+        XCTAssertEqual(action.experience.experienceVersion, "interactive-build")
+        XCTAssertEqual(action.experience.journeyId, runtime.journey.id)
+
+        let rider = try XCTUnwrap(
+            mocks.eventLog.trackedEvents.last { $0.name == JourneyEvents.appActionRequested }
+        )
+        XCTAssertEqual(rider.properties?["name"] as? String, "export_finished")
+        XCTAssertEqual((rider.properties?["payload"] as? [String: Any])?["count"] as? Int, 3)
+    }
+
     func testSignedDynamicPurchaseFollowsSelectedProductToPlacement() async throws {
         let fixtureRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -3621,7 +3674,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     private func makeJourneyRunner(
-        document: JourneyDocument
+        document: JourneyDocument,
+        appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in }
     ) throws -> (runner: JourneyRunner, journey: Journey) {
         let base = Experience(
             id: "interactive-experience",
@@ -3636,11 +3690,15 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             experienceType: nil,
             journey: document
         )
-        return try makeJourneyRunner(experience: base)
+        return try makeJourneyRunner(
+            experience: base,
+            appActionHandler: appActionHandler
+        )
     }
 
     private func makeJourneyRunner(
-        experience base: Experience
+        experience base: Experience,
+        appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in }
     ) throws -> (runner: JourneyRunner, journey: Journey) {
         let mocks = MockFactory.shared
         // The runner's identity fence only executes last-mile effects for the
@@ -3681,6 +3739,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 apiClient: mocks.nuxieApi,
                 dateProvider: mocks.dateProvider,
                 irRuntime: runtime,
+                appActionHandler: appActionHandler,
                 persistEntryActionClaim: { _ in true }
             ),
             journey
@@ -3774,6 +3833,15 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             }
         }
         throw CocoaError(.fileNoSuchFile)
+    }
+}
+
+@MainActor
+private final class AppActionRecorder {
+    private(set) var delivery: (action: AppAction, riderCount: Int)?
+
+    func record(_ action: AppAction, riderCount: Int) {
+        delivery = (action, riderCount)
     }
 }
 

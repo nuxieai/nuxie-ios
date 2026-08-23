@@ -351,6 +351,7 @@ class ExperienceViewModel {
         eventLog.track(
             JourneyEvents.experienceArtifactLoadSucceeded,
             properties: JourneyEvents.experienceArtifactLoadSucceededProperties(
+                experienceId: experience.id,
                 experienceVersion: experience.versionId,
                 artifactBuildId: artifactTelemetryContext.artifactBuildId,
                 artifactSource: currentArtifactSource.rawValue,
@@ -368,6 +369,7 @@ class ExperienceViewModel {
         eventLog.track(
             JourneyEvents.experienceArtifactLoadFailed,
             properties: JourneyEvents.experienceArtifactLoadFailedProperties(
+                experienceId: experience.id,
                 experienceVersion: experience.versionId,
                 artifactBuildId: artifactTelemetryContext.artifactBuildId,
                 artifactSource: currentArtifactSource.rawValue,

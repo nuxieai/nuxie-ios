@@ -46,7 +46,7 @@ final class JourneyEvents: Sendable {
 
     static let customerUpdated = "$customer_updated"
     static let eventSent = "$event_sent"
-    static let delegateCalled = "$delegate_called"
+    static let appActionRequested = "$app_action_requested"
 
     /// Real exposure from a server experiment assignment. Properties are
     /// pinned by `fixtures/journeys/golden-journeys.json`.
@@ -248,12 +248,14 @@ final class JourneyEvents: Sendable {
     /// - Returns: Canonical event properties.
     static func experienceDismissedProperties(
         experienceVersion: String,
-        journey: JourneySnapshot
+        journey: JourneySnapshot,
+        reason: DismissReason
     ) -> [String: Any] {
         return [
             "journey_id": journey.id,
             "experience_id": journey.experienceId,
-            "experience_version": experienceVersion
+            "experience_version": experienceVersion,
+            "reason": reason.rawValue,
         ]
     }
 
@@ -329,12 +331,14 @@ final class JourneyEvents: Sendable {
     ///   - artifactContentHash: Verified artifact content hash.
     /// - Returns: Canonical event properties.
     static func experienceArtifactLoadSucceededProperties(
+        experienceId: String,
         experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
         artifactContentHash: String
     ) -> [String: Any] {
         return experienceArtifactLoadBaseProperties(
+            experienceId: experienceId,
             experienceVersion: experienceVersion,
             artifactBuildId: artifactBuildId,
             artifactSource: artifactSource,
@@ -352,6 +356,7 @@ final class JourneyEvents: Sendable {
     ///   - errorMessage: Diagnostic message, when available.
     /// - Returns: Canonical event properties.
     static func experienceArtifactLoadFailedProperties(
+        experienceId: String,
         experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
@@ -359,6 +364,7 @@ final class JourneyEvents: Sendable {
         errorMessage: String?
     ) -> [String: Any] {
         var properties = experienceArtifactLoadBaseProperties(
+            experienceId: experienceId,
             experienceVersion: experienceVersion,
             artifactBuildId: artifactBuildId,
             artifactSource: artifactSource,
@@ -371,12 +377,14 @@ final class JourneyEvents: Sendable {
     }
 
     private static func experienceArtifactLoadBaseProperties(
+        experienceId: String,
         experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
         artifactContentHash: String
     ) -> [String: Any] {
         return [
+            "experience_id": experienceId,
             "experience_version": experienceVersion,
             "artifact_build_id": artifactBuildId,
             "artifact_source": artifactSource,
@@ -433,24 +441,24 @@ final class JourneyEvents: Sendable {
         return properties
     }
 
-    /// Builds journey and experience context for a delegate-call rider.
+    /// Builds journey and experience context for an app-action rider.
     ///
     /// - Parameters:
-    ///   - journey: Journey that initiated the delegate call.
+    ///   - journey: Journey that requested the app action.
     ///   - screenId: Originating screen identifier, when available.
-    ///   - message: Authored delegate message.
-    ///   - payload: Authored delegate payload, when supplied.
+    ///   - name: Authored app-action name.
+    ///   - payload: Resolved app-action payload, when supplied.
     /// - Returns: Canonical rider properties.
-    static func delegateCalledProperties(
+    static func appActionRequestedProperties(
         journey: JourneySnapshot,
         screenId: String?,
-        message: String,
+        name: String,
         payload: Any?
     ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
             "experience_id": journey.experienceId,
-            "message": message
+            "name": name
         ]
         if let screenId {
             properties["screen_id"] = screenId
@@ -491,6 +499,26 @@ final class JourneyEvents: Sendable {
             properties["assignment_source"] = assignmentSource
         }
         return properties
+    }
+
+    /// Builds journey, experience, and assignment context for a failed
+    /// experiment exposure. The failure still identifies the exact published
+    /// experience and journey even though no variant program ran.
+    public static func experimentExposureErrorProperties(
+        journey: JourneySnapshot,
+        experimentKey: String,
+        variantKey: String,
+        experienceVersion: String?,
+        reason: String
+    ) -> [String: Any] {
+        [
+            "journey_id": journey.id,
+            "experience_id": journey.experienceId,
+            "experience_version": experienceVersion as Any,
+            "experiment_key": experimentKey,
+            "variant_key": variantKey,
+            "reason": reason,
+        ]
     }
 }
 

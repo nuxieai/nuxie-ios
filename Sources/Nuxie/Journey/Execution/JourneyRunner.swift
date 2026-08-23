@@ -215,6 +215,7 @@ actor JourneyRunner {
     private let apiClient: ResponseWriting
     private let dateProvider: DateProviderProtocol
     private let irRuntime: IRRuntime
+    private let appActionHandler: @MainActor @Sendable (AppAction) -> Void
     /// The exact signed execution plan selected for this route and start
     /// plane. Plan selection is fail-closed.
     private let executionPlan: JourneyExecutionPlan?
@@ -340,6 +341,7 @@ actor JourneyRunner {
         apiClient: ResponseWriting,
         dateProvider: DateProviderProtocol,
         irRuntime: IRRuntime,
+        appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in },
         responseSessionModule: ResponseSessionModule? = nil,
         persistResponseRetryMarker: @escaping @Sendable (JourneySnapshot) async -> Bool = { _ in true },
         persistEntryActionClaim: @escaping @Sendable (JourneySnapshot) async -> Bool,
@@ -361,6 +363,7 @@ actor JourneyRunner {
         self.apiClient = apiClient
         self.dateProvider = dateProvider
         self.irRuntime = irRuntime
+        self.appActionHandler = appActionHandler
         let definition = experience.definition
         let persistedPlanId = initialState.executionState.planId
         let persistedPlan = persistedPlanId.flatMap { definition?.executionPlan(id: $0) }
@@ -690,6 +693,7 @@ actor JourneyRunner {
             name: SystemEventNames.screenShown,
             properties: ["screen_id": screenId]
         )
+        await captureLocalSystemEvent(event)
         let hasScreenRoute = experience.definition?.route(
             host: .screen(screenId),
             eventName: event.name
@@ -726,6 +730,7 @@ actor JourneyRunner {
             name: SystemEventNames.screenDismissed,
             properties: ["screen_id": screenId, "method": method]
         )
+        await captureLocalSystemEvent(event)
         let outcome = await dispatchScreenLifecycleEvent(
             event,
             screenId: screenId
@@ -888,7 +893,7 @@ actor JourneyRunner {
     /// `$products_unavailable` journey branch before any renderer is attached.
     /// The abandoned presentation continuation is deliberately discarded: it
     /// may contain actions whose terms depended on the unavailable products.
-    func handleProductsUnavailable() async -> RunOutcome? {
+    func handleProductsUnavailable(productIds: [String] = []) async -> RunOutcome? {
         guard await executionRemainsLive() else { return nil }
         let state = await journey.snapshot()
         guard await executionRemainsLive(),
@@ -914,14 +919,14 @@ actor JourneyRunner {
         isPrePresentationControlActive = true
         isRuntimeReady = false
 
-        return await dispatchProductsUnavailableEvent()
+        return await dispatchProductsUnavailableEvent(productIds: productIds)
     }
 
     /// Runs the same authored fallback when a later commercial screen cannot
     /// resolve its live products. Unlike the pre-reveal path above, the active
     /// presentation remains attached so the handler can navigate to a
     /// non-commercial fallback screen.
-    func handleRuntimeProductsUnavailable() async -> RunOutcome? {
+    func handleRuntimeProductsUnavailable(productIds: [String] = []) async -> RunOutcome? {
         guard await executionRemainsLive() else { return nil }
         let state = await journey.snapshot()
         guard await executionRemainsLive(),
@@ -941,19 +946,22 @@ actor JourneyRunner {
             current.executionState.navigationStack.removeLast()
         }
         guard await executionRemainsLive() else { return nil }
-        return await dispatchProductsUnavailableEvent()
+        return await dispatchProductsUnavailableEvent(productIds: productIds)
     }
 
-    private func dispatchProductsUnavailableEvent() async -> RunOutcome? {
+    private func dispatchProductsUnavailableEvent(productIds: [String]) async -> RunOutcome? {
         let event = NuxieEvent(
             name: SystemEventNames.productsUnavailable,
             distinctId: journey.distinctId,
             properties: [
                 "experience_id": experience.id,
                 "experience_version_id": experience.versionId,
+                "journey_id": journey.id,
+                "product_ids": productIds,
             ],
             timestamp: dateProvider.now()
         )
+        await captureLocalSystemEvent(event)
         guard await acceptsEventTrigger(event) else {
             return .exited(.error)
         }
@@ -1872,11 +1880,20 @@ actor JourneyRunner {
     }
 
     private func makeSystemEvent(name: String, properties: [String: Any]) -> NuxieEvent {
+        var properties = properties
+        properties["experience_id"] = experience.id
+        properties["experience_version"] = experience.versionId
+        properties["journey_id"] = journey.id
         return NuxieEvent(
             name: name,
             distinctId: journey.distinctId,
             properties: properties
         )
+    }
+
+    private func captureLocalSystemEvent(_ event: NuxieEvent) async {
+        guard let prepared = await eventLog.applyBeforeSend(to: event) else { return }
+        await eventLog.storePreparedEventInHistory(prepared)
     }
 
     private func runEntryActionsIfNeeded() async -> RunOutcome? {
@@ -2476,7 +2493,7 @@ actor JourneyRunner {
         let replayResult: ActionResult
         switch action {
         case .purchase, .restore, .requestNotifications, .requestPermission,
-             .requestTracking, .openLink, .callDelegate, .updateCustomer:
+             .requestTracking, .openLink, .appAction, .updateCustomer:
             replayResult = .continue
         case .dismiss, .back:
             replayResult = .stopSequence
@@ -2744,8 +2761,8 @@ actor JourneyRunner {
             return await handleOpenLink(openLink, context: context)
         case .dismiss(let dismiss):
             return await handleDismiss(dismiss, context: context)
-        case .callDelegate(let callDelegate):
-            await handleCallDelegate(callDelegate, context: context)
+        case .appAction(let appAction):
+            await handleAppAction(appAction, context: context)
             return .continue
         case .connectorAction(let effect):
             return await handleConnectorEffect(
@@ -3077,11 +3094,13 @@ actor JourneyRunner {
         if let assignedKey = resolution.errorAssignedVariantKey, !initialState.isGhost {
             eventLog.track(
                 JourneyEvents.experimentExposureError,
-                properties: [
-                    "experiment_key": experimentKey,
-                    "variant_key": assignedKey,
-                    "reason": "variant_not_found"
-                ],
+                properties: JourneyEvents.experimentExposureErrorProperties(
+                    journey: initialState,
+                    experimentKey: experimentKey,
+                    variantKey: assignedKey,
+                    experienceVersion: journey.experienceVersion,
+                    reason: "variant_not_found"
+                ),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
@@ -3131,11 +3150,14 @@ actor JourneyRunner {
             case .fallback(let assignmentSource):
                 eventLog.track(
                     JourneyEvents.experimentExposureFallback,
-                    properties: [
-                        "experiment_key": experimentKey,
-                        "variant_key": variant.id,
-                        "assignment_source": assignmentSource
-                    ],
+                    properties: JourneyEvents.experimentExposureProperties(
+                        journey: exposureState,
+                        experimentKey: experimentKey,
+                        variantKey: variant.id,
+                        experienceVersion: journey.experienceVersion,
+                        isHoldout: variant.isHoldout,
+                        assignmentSource: assignmentSource
+                    ),
                     userProperties: nil,
                     userPropertiesSetOnce: nil
                 )
@@ -3610,38 +3632,40 @@ actor JourneyRunner {
         return .null
     }
 
-    private func handleCallDelegate(
-        _ action: CallDelegateAction,
+    func handleAppAction(
+        _ action: AppActionStep,
         context: TriggerContext
     ) async {
         guard await executionRemainsLive() else { return }
-        var userInfo: [String: Any] = [
-            "message": action.message,
-            "journeyId": journey.id,
-            "experienceId": journey.experienceId,
-        ]
-        if let payload = action.journeyPayload {
-            userInfo["payload"] = await resolveJourneyRecord(payload, payload: context.payload)
-            guard await executionRemainsLive() else { return }
+        let resolvedPayload: [String: Any]?
+        if let payload = action.payload {
+            resolvedPayload = await resolveJourneyRecord(payload, payload: context.payload)
+        } else {
+            resolvedPayload = nil
         }
-
+        let state = await journey.snapshot()
+        guard await executionRemainsLive() else { return }
         guard lastMileEffectRemainsLive() else { return }
-        NotificationCenter.default.post(
-            name: .nuxieCallDelegate,
-            object: nil,
-            userInfo: userInfo
+        await appActionHandler(
+            AppAction(
+                name: action.name,
+                payload: resolvedPayload.map(NuxieActivityValue.resolvedRecord),
+                experience: ExperienceRef(
+                    experienceId: state.experienceId,
+                    experienceVersion: state.experienceVersion,
+                    journeyId: state.id
+                )
+            )
         )
 
-        let state = await journey.snapshot()
         guard await executionRemainsLive(), !state.isGhost else { return }
-        guard lastMileEffectRemainsLive() else { return }
         eventLog.track(
-            JourneyEvents.delegateCalled,
-            properties: JourneyEvents.delegateCalledProperties(
+            JourneyEvents.appActionRequested,
+            properties: JourneyEvents.appActionRequestedProperties(
                 journey: state,
                 screenId: context.screenId ?? state.executionState.currentScreenId,
-                message: action.message,
-                payload: action.journeyPayload.map { $0.mapValues(\.foundationValue) }
+                name: action.name,
+                payload: resolvedPayload
             ),
             userProperties: nil,
             userPropertiesSetOnce: nil

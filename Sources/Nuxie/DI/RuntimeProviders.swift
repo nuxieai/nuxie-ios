@@ -16,9 +16,29 @@ protocol SystemEventSink: AnyObject, Sendable {
         eventId: String,
         distinctId: String
     ) async -> Bool
+    func captureAccepted(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool
 }
 
 extension SystemEventSink {
+    func captureAccepted(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        await captureOnly(
+            name,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId
+        )
+    }
+
     func capture(
         _ name: String,
         properties: [String: Any]?,
@@ -42,6 +62,7 @@ extension SystemEventSink {
             distinctId: distinctId
         )
     }
+
 }
 
 final class DiscardingSystemEventSink: SystemEventSink, Sendable {
@@ -99,6 +120,21 @@ final class TriggerSystemEventSink: SystemEventSink, @unchecked Sendable {
     ) async -> Bool {
         let properties = UncheckedSendable(properties)
         return await triggerProvider().captureSystemEventOnly(
+            name,
+            properties: properties.value,
+            eventId: eventId,
+            distinctId: distinctId
+        )
+    }
+
+    func captureAccepted(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        let properties = UncheckedSendable(properties)
+        return await triggerProvider().captureAcceptedSystemEvent(
             name,
             properties: properties.value,
             eventId: eventId,

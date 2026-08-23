@@ -13,6 +13,12 @@ protocol TriggerServiceProtocol: AnyObject, Sendable {
     eventId: String,
     distinctId: String
   ) async -> Bool
+  func captureAcceptedSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool
   func trigger(
     _ event: String,
     properties: sending [String: Any]?,
@@ -21,6 +27,20 @@ protocol TriggerServiceProtocol: AnyObject, Sendable {
 }
 
 extension TriggerServiceProtocol {
+  func captureAcceptedSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool {
+    await captureSystemEventOnly(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId
+    )
+  }
+
   func captureSystemEvent(
     _ event: String,
     properties: sending [String: Any]?,
@@ -158,6 +178,20 @@ actor TriggerService: TriggerServiceProtocol {
       eventId: eventId,
       distinctId: distinctId
     ) != nil
+  }
+
+  func captureAcceptedSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool {
+    await eventLog.captureAcceptedSystemEvent(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId
+    )
   }
 
   private func trigger(

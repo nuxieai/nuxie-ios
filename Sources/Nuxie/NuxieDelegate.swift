@@ -30,10 +30,21 @@ public protocol NuxieDelegate: AnyObject {
     ///   - oldValue: Previous access state (nil if feature was not previously cached)
     ///   - newValue: New access state
     func featureAccessDidChange(_ featureId: String, from oldValue: FeatureAccess?, to newValue: FeatureAccess)
+
+    /// Called once for each curated Nuxie activity after durable capture.
+    ///
+    /// Activities arrive in capture order. This callback is observational;
+    /// use `NuxieConfiguration.beforeSend` to filter or transform events.
+    func nuxieDidEmit(_ info: NuxieActivityInfo)
+
+    /// Called when an experience's Run App Action step asks the host app to act.
+    func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction)
 }
 
 // MARK: - Default Implementations
 
 public extension NuxieDelegate {
     func featureAccessDidChange(_ featureId: String, from oldValue: FeatureAccess?, to newValue: FeatureAccess) {}
+    func nuxieDidEmit(_ info: NuxieActivityInfo) {}
+    func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction) {}
 }

@@ -30,14 +30,14 @@ device-authored `$journey_*` fact carries the epoch the device owns.
 | Event | Properties |
 | --- | --- |
 | `$experience_shown` | `journey_id`, `experience_id`, `experience_version` |
-| `$experience_dismissed` | `journey_id`, `experience_id`, `experience_version` |
+| `$experience_dismissed` | `journey_id`, `experience_id`, `experience_version`, `reason` |
 | `$experience_purchased` | `journey_id`, `experience_id`, `experience_version`, optional `product_id` |
 | `$experience_timed_out` | `journey_id`, `experience_id`, `experience_version` |
 | `$experience_errored` | `journey_id`, `experience_id`, `experience_version`, optional `error_message` |
-| `$experience_artifact_load_succeeded` | `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash` |
-| `$experience_artifact_load_failed` | `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash`, optional `error_message` |
+| `$experience_artifact_load_succeeded` | `experience_id`, `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash` |
+| `$experience_artifact_load_failed` | `experience_id`, `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash`, optional `error_message` |
 
-The related `$customer_updated`, `$event_sent`, and `$delegate_called` rider
+The related `$customer_updated`, `$event_sent`, and `$app_action_requested` rider
 events carry `experience_id`. `$experiment_exposure` carries both
 `experience_id` and `experience_version`. Authored script events receive
 `journey_id`, `experience_id`, and `screen_id` from the runner.
@@ -88,8 +88,8 @@ The old journey start, lifecycle, goal-hit, node-executed, and completed event f
 
 ## Pre-presentation controls
 
-`$products_unavailable` is a local journey control event, not an analytics
-event. The SDK dispatches it to the authenticated journey's global handler when
+`$products_unavailable` is both a local journey control event and a curated
+host-forwarding activity. The SDK dispatches it to the authenticated journey's global handler when
 one or more required live StoreKit products cannot be resolved. This happens
 before renderer attachment. The abandoned commercial presentation and its
 continuation are discarded; an authored `onProductsUnavailable` branch can

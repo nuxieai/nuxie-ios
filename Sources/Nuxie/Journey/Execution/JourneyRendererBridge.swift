@@ -202,11 +202,13 @@ final class JourneyRendererBridge:
 
   func experienceViewController(
     _ controller: ExperienceViewController,
-    didFailToResolveProductsFor screenId: String
+    didFailToResolveProductsFor screenId: String,
+    productIds: [String]
   ) async {
     await journeyService?.handleRuntimeProductsUnavailable(
       journeyId: journeyId,
-      screenId: screenId
+      screenId: screenId,
+      productIds: productIds
     )
   }
 

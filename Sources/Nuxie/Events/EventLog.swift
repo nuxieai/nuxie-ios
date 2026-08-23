@@ -68,6 +68,7 @@ private enum CaptureCommand: Sendable {
 
 private enum RouteCommand: Sendable {
   case event(NuxieEvent)
+  case durable(CommittedCapture, handlers: [DurableCommitHandler])
   case barrier(CheckedContinuation<Void, Never>)
   case shutdown
 }
@@ -81,6 +82,18 @@ enum EventFlushStrategy: Equatable, Sendable {
 /// A committed-event subscriber callback. Invoked in commit order, after the
 /// event is persisted (pending delivery) and staged for the network.
 typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
+
+/// A newly persisted capture as observed by host-side analytics forwarding.
+/// The canonical name is retained before `beforeSend` so a host rename cannot
+/// change which typed activity the SDK reports.
+struct CommittedCapture: Sendable {
+  let canonicalName: String
+  let event: NuxieEvent
+  let occurredAt: Date
+  let receivedAt: Date
+}
+
+typealias DurableCommitHandler = @Sendable (CommittedCapture) async -> Void
 
 /// An exact, durably committed trigger event plus its independently running
 /// server round trip. Callers can route the committed event locally without
@@ -155,6 +168,14 @@ protocol EventTriggerTracking: AnyObject, Sendable {
   func journeyEventOwnershipState(
     _ ownership: JourneyEventOwnership
   ) async -> JourneyEventOwnershipState
+  /// Persist a server-accepted system event for history/forwarding without
+  /// uploading it again.
+  func captureAcceptedSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool
   func prepareTriggerProperties(
     _ properties: sending [String: Any]?
   ) async -> sending [String: Any]
@@ -235,6 +256,23 @@ extension EventTriggerTracking {
     return .captured(capture)
   }
 
+  func captureAcceptedSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool {
+    let enriched = await prepareTriggerProperties(properties)
+    let exact = NuxieEvent(
+      id: eventId,
+      name: event,
+      distinctId: distinctId,
+      properties: enriched
+    )
+    guard let prepared = await applyBeforeSend(to: exact) else { return true }
+    await storePreparedEventInHistory(prepared)
+    return true
+  }
 }
 
 protocol EventHistoryReading: AnyObject, Sendable {
@@ -281,13 +319,22 @@ protocol ProfileEventSink: AnyObject, Sendable {
 }
 
 protocol JourneyRunnerEventAccess: EventCapturing, EventTriggerTracking {
+  func drainCapturedEvents() async
   func drain() async
+}
+
+extension JourneyRunnerEventAccess {
+  func drainCapturedEvents() async {
+    await drain()
+  }
 }
 
 protocol JourneyEventAccess:
   JourneyRunnerEventAccess,
   EventHistoryReading
 {
+  /// Transient forwarding announce; see EventLogProtocol.
+  func announceTransientActivity(canonicalName: String, event: NuxieEvent) async
   func setJourneyOwnershipRejectedHandler(
     _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
   ) async
@@ -317,6 +364,19 @@ protocol EventLogProtocol:
   func subscribeCommitted(
     where filter: (@Sendable (NuxieEvent) -> Bool)?,
     handler: @escaping CommittedEventHandler
+  ) async
+
+  /// Announce a transient (non-persisted) system outcome to the forwarding
+  /// pipeline. Scoped permission resolutions ride the transient lane, so this
+  /// is their only path to `nuxieDidEmit`.
+  func announceTransientActivity(canonicalName: String, event: NuxieEvent) async
+
+  /// Subscribe to newly durable captures on the committed-events seam.
+  /// Eligibility is snapshotted at commit time so late observers do not
+  /// receive an earlier capture that was waiting behind route work.
+  func subscribeCommitted(
+    when isEnabled: @escaping @Sendable () -> Bool,
+    handler: @escaping DurableCommitHandler
   ) async
 
   func onAppDidEnterBackground() async
@@ -428,9 +488,16 @@ protocol EventLogProtocol:
 }
 
 extension EventLogProtocol {
+  func announceTransientActivity(canonicalName: String, event: NuxieEvent) async {}
+
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
   }
+
+  func subscribeCommitted(
+    when isEnabled: @escaping @Sendable () -> Bool,
+    handler: @escaping DurableCommitHandler
+  ) async {}
 
   func getEventsForUser(
     _ distinctId: String,
@@ -572,7 +639,14 @@ actor EventLog: EventLogProtocol {
     let filter: (@Sendable (NuxieEvent) -> Bool)?
     let handler: CommittedEventHandler
   }
+  private struct DurableCommitSubscriber {
+    let isEnabled: @Sendable () -> Bool
+    let handler: DurableCommitHandler
+  }
   private var subscribers: [Subscriber] = []
+  private var durableCommitSubscribers: [DurableCommitSubscriber] = []
+  /// Canonical names retained across the public prepare/apply/commit seam.
+  private var preparedCanonicalNamesById: [String: String] = [:]
 
   // MARK: - Delivery (durable queue + bounded in-memory window)
 
@@ -622,6 +696,8 @@ actor EventLog: EventLogProtocol {
   private var terminalDirectDeliveryIds: Set<String> = []
   private var isTriggerDeliveryHeld = false
   private var triggerDeliveryWaiters: [CheckedContinuation<Void, Never>] = []
+  private var isDurableCommitLaneHeld = false
+  private var durableCommitLaneWaiters: [CheckedContinuation<Void, Never>] = []
   private var activeDurableCommitCount = 0
   private var durableCommitDrainWaiters: [CheckedContinuation<Void, Never>] = []
   private var preparedDeliveryTasks: [UUID: Task<EventResponse, Never>] = [:]
@@ -772,6 +848,16 @@ actor EventLog: EventLogProtocol {
     subscribers.append(Subscriber(filter: filter, handler: handler))
   }
 
+  public func subscribeCommitted(
+    when isEnabled: @escaping @Sendable () -> Bool,
+    handler: @escaping DurableCommitHandler
+  ) async {
+    durableCommitSubscribers.append(DurableCommitSubscriber(
+      isEnabled: isEnabled,
+      handler: handler
+    ))
+  }
+
   // MARK: - Lifecycle
 
   public func onAppDidEnterBackground() async {
@@ -878,6 +964,9 @@ actor EventLog: EventLogProtocol {
 
     // Wait for initialization
     await ready.wait()
+    guard !closeFlag.isClosed else { throw CancellationError() }
+    await drainCaptureWorker()
+    guard !closeFlag.isClosed else { throw CancellationError() }
 
     switch flushStrategy {
     case .none:
@@ -924,8 +1013,19 @@ actor EventLog: EventLogProtocol {
     activeDirectDeliveryIds.insert(localEvent.id)
     var wasPersisted = false
     do {
+      // Deliberately outside the durable-commit lane: an authoritative
+      // ownership response must be able to fence a stable capture that is
+      // suspended in its own store commit, so this insert cannot queue
+      // behind it. Forwarding order across concurrent lanes therefore
+      // follows commit completion, which is the order the store made each
+      // capture durable.
       try await store.insertPending(makeStoredEvent(from: localEvent))
       wasPersisted = true
+      announceDurable(
+        canonicalName: event,
+        event: localEvent,
+        applyBeforeSendForwardGate: true
+      )
       try await performCleanupIfNeeded()
     } catch {
       LogWarning("Failed to store event locally: \(error)")
@@ -1011,13 +1111,18 @@ actor EventLog: EventLogProtocol {
 
     await acquireTriggerDelivery()
     var ownsTriggerDelivery = true
+    var ownsDurableCommit = false
     defer {
       if ownsTriggerDelivery {
         releaseTriggerDelivery()
       }
+      if ownsDurableCommit {
+        endDurableCommit()
+      }
     }
 
     await ready.wait()
+    guard !closeFlag.isClosed else { throw CancellationError() }
     await waitForPreparedTriggerDeliveries()
 
     // An ordinary user trigger must not overtake accepted events or identity
@@ -1026,6 +1131,11 @@ actor EventLog: EventLogProtocol {
     // issuing the old /batch + /event pair. Internal control events and
     // non-persistent scoped events still require the direct-response path.
     await drainCaptureWorker()
+    guard !closeFlag.isClosed else { throw CancellationError() }
+    if persistToHistory {
+      guard await beginDurableCommit() else { throw CancellationError() }
+      ownsDurableCommit = true
+    }
     var hasPredecessors = true
     do {
       hasPredecessors = try await store.getPendingDeliveryCount()
@@ -1092,11 +1202,18 @@ actor EventLog: EventLogProtocol {
         )
         try await store.insertPending(stored)
         wasPersisted = true
+        announceDurable(
+          canonicalName: event,
+          event: localEvent,
+          applyBeforeSendForwardGate: !applyBeforeSend
+        )
         try await performCleanupIfNeeded()
       } catch {
         LogWarning("Failed to store event locally: \(error)")
         await recordHistoryGap(at: localEvent.timestamp)
       }
+      ownsDurableCommit = false
+      endDurableCommit()
     }
 
     if hasPredecessors, persistToHistory, !localEvent.name.hasPrefix("$") {
@@ -1268,8 +1385,12 @@ actor EventLog: EventLogProtocol {
 
     await ready.wait()
     guard !closeFlag.isClosed else { return .failed }
-    activeDurableCommitCount += 1
-    defer { durableCommitDidFinish() }
+    // A stable system capture is an immediate API, but it still follows all
+    // earlier fire-and-forget captures. It must also hold the shared commit
+    // lane while storage suspends so a later capture cannot announce first.
+    await drainCaptureWorker()
+    guard await beginDurableCommit() else { return .failed }
+    defer { endDurableCommit() }
     let attemptedTimestamp = dateProvider.now()
     do {
       if let ownership {
@@ -1362,6 +1483,7 @@ actor EventLog: EventLogProtocol {
       ) else { return .ownershipLost }
       if case .captured(_, isNew: true) = outcome {
         await enqueueForDelivery(capture.event, isPersisted: true)
+        announceDurable(canonicalName: event, event: capture.event)
       }
       do {
         try await performCleanupIfNeeded()
@@ -1375,6 +1497,57 @@ actor EventLog: EventLogProtocol {
       LogError("EventLog: failed to durably capture system event")
       await recordHistoryGap(at: attemptedTimestamp)
       return .failed
+    }
+  }
+
+
+  func captureAcceptedSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool {
+    guard !event.isEmpty, !closeFlag.isClosed else { return false }
+    await ready.wait()
+    guard !closeFlag.isClosed else { return false }
+    await drainCaptureWorker()
+    guard await beginDurableCommit() else { return false }
+    defer { endDurableCommit() }
+
+    let enriched = await buildTriggerProperties(properties)
+    let original = NuxieEvent(
+      id: eventId,
+      name: event,
+      distinctId: distinctId,
+      properties: enriched
+    )
+    let prepared: NuxieEvent
+    if let beforeSend = configuration?.beforeSend {
+      guard let transformed = beforeSend(original) else {
+        LogDebug("Event '\(event)' dropped by beforeSend hook")
+        return true
+      }
+      prepared = NuxieEvent(
+        id: eventId,
+        name: transformed.name,
+        distinctId: distinctId,
+        properties: transformed.properties,
+        timestamp: original.timestamp
+      )
+    } else {
+      prepared = original
+    }
+
+    do {
+      let inserted = try await store.insertHistoryIfAbsent(makeStoredEvent(from: prepared))
+      if inserted {
+        announceDurable(canonicalName: event, event: prepared)
+        try await performCleanupIfNeeded()
+      }
+      return true
+    } catch {
+      LogWarning("Failed to commit accepted system event '\(event)': \(error)")
+      return false
     }
   }
 
@@ -1426,17 +1599,17 @@ actor EventLog: EventLogProtocol {
     await drainCaptureWorker()
     guard !closeFlag.isClosed else { return offlinePreparedCommit(for: event) }
 
-    // Teardown waits for this whole durable-commit phase. Register before the
-    // first store await so close cannot snapshot an empty delivery-task set,
-    // close storage, and strand a commit that has not created its task yet.
-    activeDurableCommitCount += 1
-    defer { durableCommitDidFinish() }
+    // Teardown waits for this whole durable-commit phase. The shared lane also
+    // prevents a later direct or stable capture from overtaking this insert.
+    guard await beginDurableCommit() else { return offlinePreparedCommit(for: event) }
+    defer { endDurableCommit() }
 
     extractUserProperties(from: event)
     activeDirectDeliveryIds.insert(event.id)
     var wasPersisted = false
+    var wasInserted = false
     do {
-      _ = try await store.insertPendingIfAbsent(makeStoredEvent(from: event))
+      wasInserted = try await store.insertPendingIfAbsent(makeStoredEvent(from: event))
       wasPersisted = true
       try await performCleanupIfNeeded()
     } catch {
@@ -1446,6 +1619,17 @@ actor EventLog: EventLogProtocol {
     guard !closeFlag.isClosed else {
       activeDirectDeliveryIds.remove(event.id)
       return offlinePreparedCommit(for: event)
+    }
+    let canonicalName = preparedCanonicalNamesById.removeValue(forKey: event.id)
+      ?? event.name
+    // Bounded safety valve: dual registration can leave an alias behind when
+    // a transform does not preserve ids; cap the map so it can never grow
+    // unbounded under storage failure or alias buildup.
+    if preparedCanonicalNamesById.count > 256 {
+      preparedCanonicalNamesById.removeAll()
+    }
+    if wasInserted {
+      announceDurable(canonicalName: canonicalName, event: event)
     }
 
     let taskID = UUID()
@@ -1508,6 +1692,29 @@ actor EventLog: EventLogProtocol {
     let waiters = durableCommitDrainWaiters
     durableCommitDrainWaiters.removeAll()
     waiters.forEach { $0.resume() }
+  }
+
+  /// Serializes every store mutation that can become a forwarded activity.
+  /// Actor reentrancy alone is insufficient because distinct capture paths
+  /// suspend in storage and could otherwise announce out of capture order.
+  private func beginDurableCommit(allowDuringClose: Bool = false) async -> Bool {
+    guard allowDuringClose || !closeFlag.isClosed else { return false }
+    activeDurableCommitCount += 1
+    if isDurableCommitLaneHeld {
+      await withCheckedContinuation { durableCommitLaneWaiters.append($0) }
+    } else {
+      isDurableCommitLaneHeld = true
+    }
+    return true
+  }
+
+  private func endDurableCommit() {
+    if durableCommitLaneWaiters.isEmpty {
+      isDurableCommitLaneHeld = false
+    } else {
+      durableCommitLaneWaiters.removeFirst().resume()
+    }
+    durableCommitDidFinish()
   }
 
   private func waitForDurableCommitsToFinish() async {
@@ -1683,14 +1890,40 @@ actor EventLog: EventLogProtocol {
 
   public func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent? {
     guard let beforeSend = configuration?.beforeSend else { return event }
-    return beforeSend(event)
+    guard let transformed = beforeSend(event) else { return nil }
+    // Every caller pins the original event id across the transform (the log
+    // owns identity); registering under both ids keeps the classification
+    // correct even for a hypothetical caller that stores the transformed id,
+    // and the hoisted removal in storePreparedEventInHistory consumes
+    // whichever key the stored event carries.
+    preparedCanonicalNamesById[event.id] = event.name
+    if transformed.id != event.id {
+      preparedCanonicalNamesById[transformed.id] = event.name
+    }
+    return transformed
   }
 
   public func storePreparedEventInHistory(_ event: NuxieEvent) async {
     await ready.wait()
+    guard !closeFlag.isClosed else { return }
+    await drainCaptureWorker()
+    guard await beginDurableCommit() else { return }
+    defer { endDurableCommit() }
 
+    // Consume the canonical-name registration before the insert attempt so a
+    // storage failure can never strand entries in the map.
+    let canonicalName = preparedCanonicalNamesById.removeValue(forKey: event.id)
+      ?? event.name
+    // Same bounded safety valve as the trigger commit lane: a transform that
+    // did not preserve ids can leave one alias behind per capture.
+    if preparedCanonicalNamesById.count > 256 {
+      preparedCanonicalNamesById.removeAll()
+    }
     do {
-      try await store.insertHistory(makeStoredEvent(from: event))
+      let inserted = try await store.insertHistoryIfAbsent(makeStoredEvent(from: event))
+      if inserted {
+        announceDurable(canonicalName: canonicalName, event: event)
+      }
       try await performCleanupIfNeeded()
     } catch {
       LogWarning("Failed to store prepared event locally: \(error)")
@@ -1701,20 +1934,36 @@ actor EventLog: EventLogProtocol {
   public func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async {
     guard !facts.isEmpty else { return }
     await ready.wait()
+    guard !closeFlag.isClosed else { return }
+    await drainCaptureWorker()
+    guard await beginDurableCommit() else { return }
+    defer { endDurableCommit() }
 
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
     for fact in facts {
+      let receivedAt = dateProvider.now()
       var properties: [String: Any]
+      let occurredAt: Date
+      var forwardingDeduplicationKey: String?
       switch fact.properties {
       case .converted(let converted):
+        forwardingDeduplicationKey = conversionDeduplicationKey(converted: converted)
+        occurredAt = converted.at
         properties = [
           "journey_id": converted.journeyId,
           "at": formatter.string(from: converted.at),
           "source_fact_ref": converted.sourceFactRef,
         ]
+        properties.merge(
+          await committedJourneyExperienceProperties(
+            journeyId: converted.journeyId,
+            distinctId: distinctId
+          )
+        ) { current, _ in current }
       case .effectCompleted(let completed):
+        occurredAt = fact.timestamp
         properties = [
           "journey_id": completed.journeyId,
           "node_id": completed.nodeId,
@@ -1728,6 +1977,7 @@ actor EventLog: EventLogProtocol {
           properties["error"] = error.value
         }
       case .superseded(let superseded):
+        occurredAt = fact.timestamp
         properties = [
           "journey_id": superseded.journeyId,
         ]
@@ -1737,25 +1987,87 @@ actor EventLog: EventLogProtocol {
       }
       properties["$server_fact_id"] = fact.id
       properties[StoredEvent.originProperty] = StoredEventOrigin.server.rawValue
-      let event = NuxieEvent(
+      let sourceEvent = NuxieEvent(
         id: fact.id,
         name: fact.event.rawValue,
         distinctId: distinctId,
         properties: properties,
         timestamp: fact.timestamp
       )
+      let event = sourceEvent
 
       do {
-        let inserted = try await store.insertHistoryIfAbsent(makeStoredEvent(from: event))
+        let stored = makeStoredEvent(from: event)
+        let inserted = if let forwardingDeduplicationKey {
+          try await store.insertHistoryIfAbsent(
+            stored,
+            forwardingDeduplicationKey: forwardingDeduplicationKey
+          )
+        } else {
+          try await store.insertHistoryIfAbsent(stored)
+        }
         if inserted {
-          try await performCleanupIfNeeded()
+          announceDurable(
+            canonicalName: fact.event.rawValue,
+            event: event,
+            occurredAt: occurredAt,
+            receivedAt: receivedAt,
+            applyBeforeSendForwardGate: true
+          )
           routeContinuation.yield(.event(event))
+          try await performCleanupIfNeeded()
         }
       } catch {
         LogWarning("Failed to commit server fact \(fact.id): \(error)")
         await recordHistoryGap(at: event.timestamp)
       }
     }
+  }
+
+  private func conversionDeduplicationKey(
+    converted: JourneyConvertedProperties
+  ) -> String {
+    let goalKey: String
+    if let value = converted.goal?.value,
+       JSONSerialization.isValidJSONObject(["goal": value]),
+       let data = try? JSONSerialization.data(
+        withJSONObject: ["goal": value],
+        options: [.sortedKeys, .withoutEscapingSlashes]
+       ) {
+      goalKey = String(decoding: data, as: UTF8.self)
+    } else {
+      // Older down-facts omit the immutable goal snapshot. Such journeys
+      // have one goal, so this sentinel is the portable identity for it.
+      goalKey = "<unspecified>"
+    }
+    let components = [converted.journeyId, goalKey].map {
+      Data($0.utf8).base64EncodedString()
+    }
+    return (["journey-conversion"] + components).joined(separator: ".")
+  }
+
+  private func committedJourneyExperienceProperties(
+    journeyId: String,
+    distinctId: String
+  ) async -> [String: Any] {
+    do {
+      let events = try await store.queryEventsForUser(distinctId, limit: .max)
+      for event in events.reversed() {
+        let properties = event.getPropertiesDict()
+        guard properties["journey_id"] as? String == journeyId,
+              let experienceId = properties["experience_id"] as? String else {
+          continue
+        }
+        var result: [String: Any] = ["experience_id": experienceId]
+        if let version = properties["experience_version"] as? String {
+          result["experience_version"] = version
+        }
+        return result
+      }
+    } catch {
+      LogWarning("Failed to resolve journey experience context: \(error)")
+    }
+    return [:]
   }
 
   public func setMailboxPendingHandler(
@@ -2035,19 +2347,21 @@ actor EventLog: EventLogProtocol {
     }
     ownershipFenceRetryTasks.removeAll()
 
-    // Stop accepting new commands and ask the workers to stop.
+    // Stop accepting new captures, then let the capture worker finish every
+    // accepted command while routing is still available. A drained capture
+    // may persist and announce an event, so the route worker must outlive it.
     captureContinuation.yield(.shutdown)
     captureContinuation.finish()
-    routeContinuation.yield(.shutdown)
-    routeContinuation.finish()
 
     flushTimerTask?.cancel()
     flushTimerTask = nil
 
-    // Deterministic teardown: wait for both workers to finish their queued
-    // commands and exit. Without this, a test (or re-setup) can tear down
-    // shared collaborators while a worker is still mid-command.
+    // Deterministic teardown: finish capture first so its final durable
+    // announcements remain ordered ahead of route shutdown.
     await captureWorker?.value
+
+    routeContinuation.yield(.shutdown)
+    routeContinuation.finish()
     await routeWorker?.value
 
     await store.close()
@@ -2063,8 +2377,8 @@ actor EventLog: EventLogProtocol {
       // beforeSend) must apply to pre-configure captures too — commands
       // buffer in the stream until the store opens.
       await ready.wait()
-      guard let finalEvent = await buildEvent(from: payload) else { return }
-      await commit(finalEvent)
+      guard let capture = await buildEvent(from: payload) else { return }
+      await commit(capture.event, canonicalName: capture.canonicalName)
 
     case .flush(let cont):
       guard await ready.isOpen() else {
@@ -2096,6 +2410,11 @@ actor EventLog: EventLogProtocol {
         await subscriber.handler(event)
       }
 
+    case .durable(let capture, let handlers):
+      for handler in handlers {
+        await handler(capture)
+      }
+
     case .barrier(let cont):
       cont.resume()
 
@@ -2107,7 +2426,12 @@ actor EventLog: EventLogProtocol {
   /// Persist the canonical captured record (stored row == wire payload,
   /// marked pending), stage it for network delivery, then announce it to
   /// committed-event subscribers in order.
-  private func commit(_ event: NuxieEvent) async {
+  private func commit(_ event: NuxieEvent, canonicalName: String) async {
+    // The nonisolated capture entry point rejects new work after close begins.
+    // Commands already accepted into the capture stream must still cross the
+    // durable lane while close drains that stream.
+    guard await beginDurableCommit(allowDuringClose: true) else { return }
+    defer { endDurableCommit() }
     extractUserProperties(from: event)
     var wasPersisted = false
     do {
@@ -2131,7 +2455,47 @@ actor EventLog: EventLogProtocol {
     // can flush this hit.
     await enqueueForDelivery(event, isPersisted: wasPersisted)
 
+    if wasPersisted {
+      announceDurable(canonicalName: canonicalName, event: event)
+    }
+
     routeContinuation.yield(.event(event))
+  }
+
+  public func announceTransientActivity(canonicalName: String, event: NuxieEvent) async {
+    announceDurable(
+      canonicalName: canonicalName,
+      event: event,
+      applyBeforeSendForwardGate: true
+    )
+  }
+
+  private func announceDurable(
+    canonicalName: String,
+    event: NuxieEvent,
+    occurredAt: Date? = nil,
+    receivedAt: Date? = nil,
+    applyBeforeSendForwardGate: Bool = false
+  ) {
+    // Direct journey facts bypass capture-side beforeSend so their wire
+    // command, durable capture, and journey routing remain authoritative.
+    // Consult the hook here only as a forwarding gate: nil suppresses this
+    // announcement without changing any of those paths.
+    if applyBeforeSendForwardGate,
+       let beforeSend = configuration?.beforeSend,
+       beforeSend(event) == nil {
+      return
+    }
+    let handlers = durableCommitSubscribers.compactMap { subscriber in
+      subscriber.isEnabled() ? subscriber.handler : nil
+    }
+    guard !handlers.isEmpty else { return }
+    routeContinuation.yield(.durable(CommittedCapture(
+      canonicalName: canonicalName,
+      event: event,
+      occurredAt: occurredAt ?? event.timestamp,
+      receivedAt: receivedAt ?? event.timestamp
+    ), handlers: handlers))
   }
 
   /// Extract and update user properties from event
@@ -2159,7 +2523,9 @@ actor EventLog: EventLogProtocol {
 
   // MARK: - Enrichment
 
-  private func buildEvent(from p: TrackPayload) async -> NuxieEvent? {
+  private func buildEvent(
+    from p: TrackPayload
+  ) async -> (canonicalName: String, event: NuxieEvent)? {
     // Stage 1: Add session ID if not already present
     var propertiesWithSession = p.properties
     if propertiesWithSession["$session_id"] == nil {
@@ -2188,16 +2554,19 @@ actor EventLog: EventLogProtocol {
       }
       var transformedProperties = transformedEvent.properties
       transformedProperties["$distinct_id"] = p.forcedDistinctId
-      return NuxieEvent(
-        id: transformedEvent.id,
-        name: transformedEvent.name,
-        distinctId: p.forcedDistinctId,
-        properties: transformedProperties,
-        timestamp: transformedEvent.timestamp
+      return (
+        p.name,
+        NuxieEvent(
+          id: transformedEvent.id,
+          name: transformedEvent.name,
+          distinctId: p.forcedDistinctId,
+          properties: transformedProperties,
+          timestamp: transformedEvent.timestamp
+        )
       )
     }
 
-    return nuxieEvent
+    return (p.name, nuxieEvent)
   }
 
   private func buildTriggerProperties(
@@ -2226,15 +2595,10 @@ actor EventLog: EventLogProtocol {
 
   // MARK: - History persistence
 
-  /// Store a direct-delivery history row (delivered — these paths send the
-  /// event themselves) with legacy device metadata.
-  private func storeHistoryEvent(
-    name: String,
-    properties: [String: Any],
-    distinctId: String,
-    timestamp: Date
-  ) async throws {
-    var enrichedProperties = properties
+  /// Build a direct-delivery history row with legacy device metadata while
+  /// preserving the exact event identity and timestamp used on the wire.
+  private func makeHistoryStoredEvent(from event: NuxieEvent) throws -> StoredEvent {
+    var enrichedProperties = event.properties
     enrichedProperties["sdk_version"] = SDKVersion.current
     enrichedProperties["platform"] = currentPlatform()
     if enrichedProperties["device_model"] == nil {
@@ -2244,14 +2608,13 @@ actor EventLog: EventLogProtocol {
       enrichedProperties["os_version"] = osVersionString()
     }
 
-    let event = try StoredEvent(
-      name: name,
+    return try StoredEvent(
+      id: event.id,
+      name: event.name,
       properties: enrichedProperties,
-      timestamp: timestamp,
-      distinctId: distinctId
+      timestamp: event.timestamp,
+      distinctId: event.distinctId
     )
-    try await store.insertHistory(event)
-    try await performCleanupIfNeeded()
   }
 
   /// Cleanup runs at most once per `cleanupCheckInterval` inserts — a
@@ -3008,6 +3371,11 @@ actor EventLog: EventLogProtocol {
     await drainCaptureWorker()
   }
 
+  public func drainCapturedEvents() async {
+    guard !closeFlag.isClosed else { return }
+    await drainCaptureWorker()
+  }
+
   private func drainCaptureWorker() async {
     await withCheckedContinuation { cont in
       // A finished stream drops the yielded barrier; resume immediately so a
@@ -3430,4 +3798,9 @@ actor EventLog: EventLogProtocol {
     return "unknown"
     #endif
   }
+}
+
+
+extension JourneyEventAccess {
+  func announceTransientActivity(canonicalName: String, event: NuxieEvent) async {}
 }

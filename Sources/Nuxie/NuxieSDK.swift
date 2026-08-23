@@ -1,5 +1,65 @@
 import Foundation
 
+private final class ActivityDelegatePresence: @unchecked Sendable {
+  private final class WeakReference: @unchecked Sendable {
+    weak var value: AnyObject?
+
+    init(_ value: AnyObject) {
+      self.value = value
+    }
+  }
+
+  private let lock = NSLock()
+  private weak var current: AnyObject?
+  private var committedTargets: [WeakReference?] = []
+  private var committedTargetsHead = 0
+
+  func set(_ value: AnyObject?) {
+    lock.lock()
+    current = value
+    lock.unlock()
+  }
+
+  /// Snapshots the exact delegate that was alive when a capture committed.
+  /// The matching route callback consumes this FIFO entry, preventing a
+  /// replacement delegate from receiving older, backlogged activity.
+  func snapshotForCommit() {
+    lock.lock()
+    defer { lock.unlock() }
+    // Keep the forwarding pipeline subscribed for every capture so it can
+    // retain journey context even while no delegate is installed. A nil
+    // target still records that this capture must not be replayed later.
+    if let current {
+      committedTargets.append(WeakReference(current))
+    } else {
+      committedTargets.append(nil)
+    }
+  }
+
+  func takeCommittedTarget() -> AnyObject? {
+    lock.lock()
+    defer { lock.unlock() }
+    guard committedTargetsHead < committedTargets.count else { return nil }
+    let target = committedTargets[committedTargetsHead]?.value
+    committedTargetsHead += 1
+    // Amortized O(1) FIFO: compact once the consumed prefix dominates so a
+    // burst of captures behind a slow delegate never costs O(N^2).
+    if committedTargetsHead > 64,
+       committedTargetsHead * 2 >= committedTargets.count {
+      committedTargets.removeFirst(committedTargetsHead)
+      committedTargetsHead = 0
+    }
+    return target
+  }
+
+  func clearCommittedTargets() {
+    lock.lock()
+    committedTargets.removeAll()
+    committedTargetsHead = 0
+    lock.unlock()
+  }
+}
+
 /// Main entry point for the Nuxie SDK
 // @unchecked Sendable: the singleton facade's graph state is isolated by
 // SerializedSDKLifecycle. Delegate access retains its existing weak-reference
@@ -23,7 +83,10 @@ public final class NuxieSDK: @unchecked Sendable {
   }
 
   /// Delegate for receiving SDK callbacks
-  public weak var delegate: NuxieDelegate?
+  public weak var delegate: NuxieDelegate? {
+    didSet { activityDelegatePresence.set(delegate) }
+  }
+  private let activityDelegatePresence = ActivityDelegatePresence()
 
   /// Whether the SDK has been configured
   public var isSetup: Bool {
@@ -116,6 +179,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       let core = NuxieCore(
         configuration: setupConfiguration,
         runtimeSettings: runtimeSettings,
+        appActionHandler: { [weak self] action in
+          self?.deliverAppAction(action)
+        },
         overrides: overrides
       )
 
@@ -140,9 +206,34 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       LogDebug("Setting up event system...")
       let eventLog = core.eventLog
       let journeyService = core.journeys
+      let activityForwardingPipeline = ActivityForwardingPipeline(
+        journeyContextResolver: { [weak journeyService] journeyId in
+          journeyService?.forwardingExperienceRef(journeyId: journeyId)
+        }
+      )
 
       let eventSystemSetupTask = Task {
         guard !Task.isCancelled else { return }
+        await eventLog.subscribeCommitted(
+          when: { [weak self] in
+            guard let self else { return false }
+            self.activityDelegatePresence.snapshotForCommit()
+            return true
+          }
+        ) { [weak self] capture in
+          guard let self else { return }
+          let target = self.activityDelegatePresence.takeCommittedTarget()
+          guard let activity = await activityForwardingPipeline.activity(for: capture) else { return }
+          await self.deliverActivity(
+            NuxieActivityInfo(
+              id: capture.event.id,
+              timestamp: capture.occurredAt,
+              receivedAt: capture.receivedAt,
+              activity: activity
+            ),
+            to: target
+          )
+        }
         await eventLog.subscribeCommitted { [weak journeyService] event in
           await journeyService?.handleEvent(event)
         }
@@ -216,6 +307,21 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     LogInfo("Setup completed with API key: \(NuxieLogger.shared.logAPIKey(setupConfiguration.apiKey))")
   }
 
+  @MainActor
+  func deliverActivity(_ info: NuxieActivityInfo) {
+    delegate?.nuxieDidEmit(info)
+  }
+
+  @MainActor
+  private func deliverActivity(_ info: NuxieActivityInfo, to target: AnyObject?) {
+    (target as? NuxieDelegate)?.nuxieDidEmit(info)
+  }
+
+  @MainActor
+  func deliverAppAction(_ action: AppAction) {
+    delegate?.nuxie(self, didRequestAppAction: action)
+  }
+
   /// Manually shut down the SDK and clean up resources
   /// This is typically not needed as the singleton will clean up automatically
   public func shutdown() async {
@@ -244,6 +350,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
       await core.journeys.shutdown()
       await core.eventLog.close()
+      self.activityDelegatePresence.clearCommittedTargets()
       await core.profile.cleanupExpired()
 
       LogInfo("SDK shutdown completed")
@@ -1029,8 +1136,14 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
     // Build properties for $feature_used event
     var properties: [String: Any] = [
-      "feature_extId": featureId
+      "feature_extId": featureId,
+      "amount": amount,
+      "value": amount,
     ]
+
+    if let entityId {
+      properties["entityId"] = entityId
+    }
 
     if setUsage {
       properties["setUsage"] = true
@@ -1049,6 +1162,11 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
           entityId: entityId,
           metadata: metadata?.mapValues(AnyCodable.init)
         ) {
+      // Decided posture (UNIV-2039/UNIV-2586): purchase-backed atomic use
+      // forwards as purchaseSynced only. The platform contract pins one
+      // emission per accepted receipt, so no \$feature_used event (and no
+      // featureUsed activity) is emitted here; the ordinary usage path below
+      // owns featureUsed forwarding.
       return purchaseBackedResult
     }
 
@@ -1060,13 +1178,38 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     let api = core.api
     // Boxed to hand the write-once payload across the API boundary.
     let propertiesBox = UncheckedSendable(properties)
-    let response = try await api.trackEvent(
-      event: SystemEventNames.featureUsed,
+    let enrichedProperties = await core.eventLog.prepareTriggerProperties(propertiesBox.value)
+    let exactEvent = NuxieEvent(
+      name: SystemEventNames.featureUsed,
       distinctId: distinctId,
-      properties: propertiesBox.value,
-      value: amount,
-      entityId: entityId
+      properties: enrichedProperties
     )
+    // The authoritative consumption command always sends the canonical
+    // event; beforeSend is a capture-side hook and shapes only the local
+    // history copy. A hook that drops the event suppresses history, never
+    // the server-confirmed usage.
+    let response = try await api.trackEvent(exactEvent)
+
+    // The server accepted this usage under the captured identity; its
+    // durable record and facts belong to that customer regardless of who is
+    // current now, so commit both before the identity guard can throw.
+    let accepted = response.status == "ok" || response.status == "success"
+    if accepted,
+       let transformed = await core.eventLog.applyBeforeSend(to: exactEvent) {
+      // The log owns identity: the history copy keeps the accepted event's
+      // id (the forwarding idempotency key), scoped identity, and timestamp
+      // no matter how the hook reshaped the payload.
+      var historyProperties = transformed.properties
+      historyProperties["$distinct_id"] = exactEvent.distinctId
+      await core.eventLog.storePreparedEventInHistory(NuxieEvent(
+        id: exactEvent.id,
+        name: transformed.name,
+        distinctId: exactEvent.distinctId,
+        properties: historyProperties,
+        timestamp: exactEvent.timestamp
+      ))
+    }
+    await core.eventLog.commitServerFacts(response.facts ?? [], distinctId: distinctId)
 
     guard identityService.getDistinctId() == distinctId else {
       throw CancellationError()
@@ -1081,7 +1224,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
     // Build result from response
     return FeatureUsageResult(
-      success: response.status == "ok" || response.status == "success",
+      success: accepted,
       featureId: featureId,
       amountUsed: amount,
       message: response.message,

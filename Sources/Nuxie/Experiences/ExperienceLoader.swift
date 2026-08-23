@@ -500,7 +500,7 @@ actor ExperienceLoader {
             )
         }
         let productIDs = requiredProductIDs(for: initialScreenID, in: release)
-        guard !productIDs.isEmpty else { throw ExperienceError.productsUnavailable }
+        guard !productIDs.isEmpty else { throw ExperienceError.productsUnavailable([]) }
         let productSpan = presentationTraceContext?.begin(
             .storeKitProductLookup,
             attributes: [
@@ -521,7 +521,7 @@ actor ExperienceLoader {
             )
             guard Set(products.map(\.storeProductId)) == productIDs,
                   Set(products.map(\.placementId)) == placementIDs else {
-                throw ExperienceError.productsUnavailable
+                throw ExperienceError.productsUnavailable(Array(productIDs).sorted())
             }
             if let productSpan { presentationTraceContext?.complete(productSpan) }
         } catch {
@@ -529,7 +529,7 @@ actor ExperienceLoader {
                 presentationTraceContext?.fail(productSpan, error: error)
             }
             if error is CancellationError { throw error }
-            throw ExperienceError.productsUnavailable
+            throw ExperienceError.productsUnavailable(Array(productIDs).sorted())
         }
         guard releasesByVersion[key]?.releaseID == release.releaseID else {
             throw CancellationError()
@@ -904,7 +904,7 @@ actor ExperienceLoader {
         let placementIDs = requiredPlacementIDs(for: screenID, in: release)
         guard !placementIDs.isEmpty else { return [] }
         let productIDs = requiredProductIDs(for: screenID, in: release)
-        guard !productIDs.isEmpty else { throw ExperienceError.productsUnavailable }
+        guard !productIDs.isEmpty else { throw ExperienceError.productsUnavailable([]) }
         let span = presentationTraceContext?.begin(
             .storeKitProductLookup,
             attributes: [
@@ -922,14 +922,14 @@ actor ExperienceLoader {
             guard Set(products.map(\.storeProductId)) == productIDs,
                   Set(products.map(\.placementId)) == placementIDs,
                   releasesByVersion[key]?.releaseID == releaseID else {
-                throw ExperienceError.productsUnavailable
+                throw ExperienceError.productsUnavailable(Array(productIDs).sorted())
             }
             if let span { presentationTraceContext?.complete(span) }
             return products
         } catch {
             if let span { presentationTraceContext?.fail(span, error: error) }
             if error is CancellationError { throw error }
-            throw ExperienceError.productsUnavailable
+            throw ExperienceError.productsUnavailable(Array(productIDs).sorted())
         }
     }
 
@@ -1446,7 +1446,7 @@ actor ExperienceLoader {
                 guard let productType = StoreProductType(
                     rawValue: binding.product.store.productType
                 ) else {
-                    throw ExperienceError.productsUnavailable
+                    throw ExperienceError.productsUnavailable(Array(identifiers).sorted())
                 }
                 let preview = binding.product.preview
                 let period = ProductPeriod(rawValue: preview.period)
@@ -1508,7 +1508,7 @@ actor ExperienceLoader {
         let resolved = try await productService.fetchProducts(for: identifiers)
         let productsByID = Dictionary(uniqueKeysWithValues: resolved.map { ($0.id, $0) })
         guard productsByID.count == identifiers.count else {
-            throw ExperienceError.productsUnavailable
+            throw ExperienceError.productsUnavailable(Array(identifiers).sorted())
         }
         var storeProducts: [StoreProduct] = []
         storeProducts.reserveCapacity(bindings.count)
@@ -1517,7 +1517,7 @@ actor ExperienceLoader {
                   let productType = StoreProductType(
                     rawValue: binding.product.store.productType
                   ) else {
-                throw ExperienceError.productsUnavailable
+                throw ExperienceError.productsUnavailable(Array(identifiers).sorted())
             }
             var resolvedProduct = try await storeProductResolver.resolve(
                 experienceVersionId: release.releaseID.identity.experienceVersionId,

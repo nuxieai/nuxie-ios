@@ -674,24 +674,34 @@ actor TransactionService {
                     distinctId: initiatingDistinctId
                 )
             }
-            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
+            var failureProperties: [String: Any] = [
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
                 "reason": "already_owned"
-            ])
+            ]
+            if let context = product.purchaseContext {
+                failureProperties["experience_id"] = context.experienceId
+            }
+            failureProperties["test_store"] = product.isTestStoreProduct
+            eventSink.emit(SystemEventNames.purchaseFailed, properties: failureProperties)
             return PurchaseSyncResult()
 
         case .subscriptionChangeRequired:
             removeCheckoutRecovery(for: checkoutProduct)
             let error = StoreKitError.subscriptionChangeRequired(product.storeProductId)
             LogInfo("TransactionService: Subscription change required for product: \(product.productId)")
-            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
+            var failureProperties: [String: Any] = [
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
                 "reason": "subscription_change_required"
-            ])
+            ]
+            if let context = product.purchaseContext {
+                failureProperties["experience_id"] = context.experienceId
+            }
+            failureProperties["test_store"] = product.isTestStoreProduct
+            eventSink.emit(SystemEventNames.purchaseFailed, properties: failureProperties)
             throw error
 
         case .cancelled:
@@ -706,12 +716,17 @@ actor TransactionService {
             }
             LogError("TransactionService: Purchase failed for product: \(product.productId), error: \(error)")
             // Track failed purchase event
-            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
+            var failureProperties: [String: Any] = [
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
                 "error": error.localizedDescription
-            ])
+            ]
+            if let context = product.purchaseContext {
+                failureProperties["experience_id"] = context.experienceId
+            }
+            failureProperties["test_store"] = product.isTestStoreProduct
+            eventSink.emit(SystemEventNames.purchaseFailed, properties: failureProperties)
             throw StoreKitError.purchaseFailed(error)
             
         case .pending:

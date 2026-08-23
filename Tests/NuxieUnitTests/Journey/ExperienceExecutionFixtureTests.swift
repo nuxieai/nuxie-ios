@@ -162,7 +162,8 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                         JourneyEvents.experienceDismissed,
                         JourneyEvents.experienceDismissedProperties(
                             experienceVersion: "flow-version-1",
-                            journey: journey
+                            journey: journey,
+                            reason: .user
                         )
                     ),
                     vector(
@@ -191,6 +192,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     vector(
                         JourneyEvents.experienceArtifactLoadSucceeded,
                         JourneyEvents.experienceArtifactLoadSucceededProperties(
+                            experienceId: "experience-1",
                             experienceVersion: "flow-version-1",
                             artifactBuildId: "build-1",
                             artifactSource: "network",
@@ -200,6 +202,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     vector(
                         JourneyEvents.experienceArtifactLoadFailed,
                         JourneyEvents.experienceArtifactLoadFailedProperties(
+                            experienceId: "experience-1",
                             experienceVersion: "flow-version-1",
                             artifactBuildId: "build-1",
                             artifactSource: "network",
@@ -225,11 +228,11 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                         )
                     ),
                     vector(
-                        JourneyEvents.delegateCalled,
-                        JourneyEvents.delegateCalledProperties(
+                        JourneyEvents.appActionRequested,
+                        JourneyEvents.appActionRequestedProperties(
                             journey: journey,
                             screenId: "screen-1",
-                            message: "complete",
+                            name: "complete",
                             payload: ["source": "vector"]
                         )
                     ),

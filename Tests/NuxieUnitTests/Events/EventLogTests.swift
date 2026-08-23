@@ -1339,6 +1339,32 @@ final class EventLogTests: AsyncSpec {
                     let response = await committed.response.value
                     expect(response.status).to(equal("offline"))
                 }
+
+                it("persists a queued fire-and-forget capture while closing") {
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    try await log.configure(configuration: testConfig)
+
+                    log.track(
+                        "queued_during_close",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await log.close()
+
+                    let stored = mockStore.storedEvents.first {
+                        $0.name == "queued_during_close"
+                    }
+                    guard let stored else {
+                        return fail("close discarded the queued capture")
+                    }
+                    expect(mockStore.pendingIds).to(contain(stored.id))
+                    await expect { await received.names }
+                        .to(equal(["queued_during_close"]))
+                }
             }
         }
     }

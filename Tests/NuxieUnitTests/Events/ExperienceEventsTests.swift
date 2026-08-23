@@ -50,6 +50,7 @@ final class ExperienceEventsTests: AsyncSpec {
 
             it("experienceArtifactLoadSucceededProperties includes artifact metadata") {
                 let properties = JourneyEvents.experienceArtifactLoadSucceededProperties(
+                    experienceId: "experience-123",
                     experienceVersion: "flow-abc",
                     artifactBuildId: "build-1",
                     artifactSource: "cached_artifact",
@@ -64,6 +65,7 @@ final class ExperienceEventsTests: AsyncSpec {
 
             it("experienceArtifactLoadFailedProperties includes error message when provided") {
                 let properties = JourneyEvents.experienceArtifactLoadFailedProperties(
+                    experienceId: "experience-123",
                     experienceVersion: "flow-abc",
                     artifactBuildId: "build-1",
                     artifactSource: "downloaded_artifact",
@@ -75,7 +77,7 @@ final class ExperienceEventsTests: AsyncSpec {
                 expect(properties["artifact_build_id"] as? String).to(equal("build-1"))
             }
 
-            it("uses experience ids on customer, event, and delegate riders") {
+            it("uses experience ids on customer, event, and app-action riders") {
                 let customer = JourneyEvents.customerUpdatedProperties(
                     journey: journey,
                     screenId: "screen-1",
@@ -87,14 +89,14 @@ final class ExperienceEventsTests: AsyncSpec {
                     eventName: "answered",
                     eventProperties: [:]
                 )
-                let delegate = JourneyEvents.delegateCalledProperties(
+                let appAction = JourneyEvents.appActionRequestedProperties(
                     journey: journey,
                     screenId: "screen-1",
-                    message: "completed",
+                    name: "completed",
                     payload: nil
                 )
 
-                for properties in [customer, event, delegate] {
+                for properties in [customer, event, appAction] {
                     expect(properties["experience_id"] as? String)
                         .to(equal(journey.experienceId))
                 }
@@ -113,6 +115,32 @@ final class ExperienceEventsTests: AsyncSpec {
                     .to(equal(journey.experienceId))
                 expect(properties["experience_version"] as? String)
                     .to(equal("flow-abc"))
+            }
+
+            it("uses exact experience identity on experiment fallback and error") {
+                let fallback = JourneyEvents.experimentExposureProperties(
+                    journey: journey,
+                    experimentKey: "checkout",
+                    variantKey: "control",
+                    experienceVersion: "flow-abc",
+                    isHoldout: false,
+                    assignmentSource: "no_assignment"
+                )
+                let error = JourneyEvents.experimentExposureErrorProperties(
+                    journey: journey,
+                    experimentKey: "checkout",
+                    variantKey: "retired-treatment",
+                    experienceVersion: "flow-abc",
+                    reason: "variant_not_found"
+                )
+
+                for properties in [fallback, error] {
+                    expect(properties["journey_id"] as? String).to(equal(journey.id))
+                    expect(properties["experience_id"] as? String)
+                        .to(equal(journey.experienceId))
+                    expect(properties["experience_version"] as? String)
+                        .to(equal("flow-abc"))
+                }
             }
         }
     }

@@ -490,18 +490,27 @@ struct JourneyConvertedProperties: Codable, Equatable, Sendable {
     public let at: Date
     /// Identifier of the source fact used for attribution.
     public let sourceFactRef: String
+    /// Canonical goal identity/snapshot when supplied by the server.
+    public let goal: AnyCodable?
 
     /// Creates canonical converted-fact properties.
-    public init(journeyId: String, at: Date, sourceFactRef: String) {
+    public init(
+        journeyId: String,
+        at: Date,
+        sourceFactRef: String,
+        goal: AnyCodable? = nil
+    ) {
         self.journeyId = journeyId
         self.at = at
         self.sourceFactRef = sourceFactRef
+        self.goal = goal
     }
 
     private enum CodingKeys: String, CodingKey, Sendable {
         case journeyId = "journey_id"
         case at
         case sourceFactRef = "source_fact_ref"
+        case goal
     }
 }
 

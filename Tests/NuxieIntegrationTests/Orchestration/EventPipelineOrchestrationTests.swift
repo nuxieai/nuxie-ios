@@ -38,6 +38,22 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 config.testingOverrides.flushInterval = 3600
                 config.testingOverrides.retryCount = 1
                 config.testingOverrides.retryDelay = 0.01
+                config.beforeSend = { event in
+                    switch event.id {
+                    case "integration-server-fact-drop":
+                        return nil
+                    case "integration-server-fact-rename":
+                        return NuxieEvent(
+                            id: event.id,
+                            name: "host_renamed_server_fact",
+                            distinctId: "hijacked-user",
+                            properties: ["journey_id": "hijacked-journey"],
+                            timestamp: event.timestamp.addingTimeInterval(60)
+                        )
+                    default:
+                        return event
+                    }
+                }
                 identity = MockIdentityService()
                 sessions = SessionService()
                 dateProvider = SystemDateProvider()
@@ -135,6 +151,129 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 let stored = await eventLog.getRecentEvents(limit: 10)
                 expect(stored.map(\.name)).to(contain("offline_event"))
             }
+
+            it("persists and routes canonical server facts across beforeSend gates") {
+                let routed = OrchestrationEventRecorder()
+                let forwarded = OrchestrationCaptureRecorder()
+                await eventLog.subscribeCommitted { event in
+                    await routed.append(event)
+                }
+                await eventLog.subscribeCommitted(when: { true }) { capture in
+                    await forwarded.append(capture)
+                }
+
+                let droppedForwardingFact = JourneyDownFact(
+                    id: "integration-server-fact-drop",
+                    event: .converted,
+                    timestamp: Date(timeIntervalSince1970: 1_900_001_000),
+                    properties: JourneyConvertedProperties(
+                        journeyId: "journey-drop",
+                        at: Date(timeIntervalSince1970: 1_900_000_990),
+                        sourceFactRef: "source-drop"
+                    )
+                )
+                let renamedForwardingFact = JourneyDownFact(
+                    id: "integration-server-fact-rename",
+                    event: .converted,
+                    timestamp: Date(timeIntervalSince1970: 1_900_002_000),
+                    properties: JourneyConvertedProperties(
+                        journeyId: "journey-rename",
+                        at: Date(timeIntervalSince1970: 1_900_001_990),
+                        sourceFactRef: "source-rename"
+                    )
+                )
+
+                await eventLog.commitServerFacts(
+                    [droppedForwardingFact, renamedForwardingFact],
+                    distinctId: "canonical-user"
+                )
+                await eventLog.drain()
+
+                let storedById = Dictionary(
+                    uniqueKeysWithValues: await eventLog.getRecentEvents(limit: 10)
+                        .map { ($0.id, $0) }
+                )
+                for (id, journeyId) in [
+                    (droppedForwardingFact.id, "journey-drop"),
+                    (renamedForwardingFact.id, "journey-rename"),
+                ] {
+                    let stored = storedById[id]
+                    expect(stored?.name).to(equal(JourneyEvents.journeyConverted))
+                    expect(stored?.distinctId).to(equal("canonical-user"))
+                    expect(stored?.getPropertiesDict()["journey_id"] as? String)
+                        .to(equal(journeyId))
+                }
+
+                let routedById = await routed.valuesById
+                expect(routedById[droppedForwardingFact.id]?.name)
+                    .to(equal(JourneyEvents.journeyConverted))
+                expect(routedById[renamedForwardingFact.id]?.name)
+                    .to(equal(JourneyEvents.journeyConverted))
+
+                let forwardedById = await forwarded.valuesById
+                expect(forwardedById[droppedForwardingFact.id]).to(beNil())
+                expect(forwardedById[renamedForwardingFact.id]?.canonicalName)
+                    .to(equal(JourneyEvents.journeyConverted))
+                expect(forwardedById[renamedForwardingFact.id]?.event.name)
+                    .to(equal(JourneyEvents.journeyConverted))
+            }
+
+            it("drains an accepted fire-and-forget capture before shutdown") {
+                let routed = OrchestrationEventRecorder()
+                await eventLog.subscribeCommitted { event in
+                    await routed.append(event)
+                }
+
+                eventLog.track(
+                    "queued_during_orchestration_close",
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                await eventLog.close()
+
+                let routedNames = await routed.valuesById.values.map(\.name)
+                expect(routedNames)
+                    .to(contain("queued_during_orchestration_close"))
+
+                let relaunchService = EventLog(
+                    identity: identity,
+                    sessions: sessions,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                try await relaunchService.configure(configuration: config)
+                let stored = await relaunchService.getRecentEvents(limit: 10)
+                expect(stored.map(\.name))
+                    .to(contain("queued_during_orchestration_close"))
+                let queuedCount = await relaunchService.getQueuedEventCount()
+                expect(queuedCount).to(equal(1))
+                await relaunchService.close()
+            }
         }
+    }
+}
+
+private actor OrchestrationEventRecorder {
+    private var events: [NuxieEvent] = []
+
+    func append(_ event: NuxieEvent) {
+        events.append(event)
+    }
+
+    var valuesById: [String: NuxieEvent] {
+        Dictionary(uniqueKeysWithValues: events.map { ($0.id, $0) })
+    }
+}
+
+private actor OrchestrationCaptureRecorder {
+    private var captures: [CommittedCapture] = []
+
+    func append(_ capture: CommittedCapture) {
+        captures.append(capture)
+    }
+
+    var valuesById: [String: CommittedCapture] {
+        Dictionary(uniqueKeysWithValues: captures.map { ($0.event.id, $0) })
     }
 }

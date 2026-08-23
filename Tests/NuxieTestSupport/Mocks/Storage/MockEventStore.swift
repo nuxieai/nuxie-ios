@@ -27,6 +27,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _journeyOwnershipFences: [String: Int] = [:]
     private var _unresolvedJourneyOwnershipResponses:
         [String: Set<JourneyEventOwnership>] = [:]
+    private var _forwardingDeduplicationKeys: Set<String> = []
     private var _isInitialized = false
     private var _isClosed = false
 
@@ -199,6 +200,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _historyCoverageStart = nil
             _journeyOwnershipFences.removeAll()
             _unresolvedJourneyOwnershipResponses.removeAll()
+            _forwardingDeduplicationKeys.removeAll()
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
@@ -221,6 +223,24 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _storeEventCallCount += 1
             if _shouldFailStore {
                 throw mockError(2, "Mock store error")
+            }
+            guard !_storedEvents.contains(where: { $0.id == event.id }) else {
+                return false
+            }
+            _storedEvents.append(event)
+            return true
+        }
+    }
+
+    public func insertHistoryIfAbsent(
+        _ event: StoredEvent,
+        forwardingDeduplicationKey key: String
+    ) async throws -> Bool {
+        try lock.withLock {
+            _storeEventCallCount += 1
+            if _shouldFailStore { throw mockError(2, "Mock store error") }
+            guard _forwardingDeduplicationKeys.insert(key).inserted else {
+                return false
             }
             guard !_storedEvents.contains(where: { $0.id == event.id }) else {
                 return false

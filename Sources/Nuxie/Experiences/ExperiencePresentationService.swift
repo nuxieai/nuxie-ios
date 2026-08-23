@@ -774,11 +774,23 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
 
         switch reason {
         case .userDismissed, .goalMet, .hostDismissed:
+            let dismissalReason: DismissReason
+            switch reason {
+            case .goalMet:
+                dismissalReason = .goalMet
+            case .hostDismissed:
+                dismissalReason = .host
+            case .userDismissed:
+                dismissalReason = .user
+            case .error:
+                preconditionFailure("error dismissal reasons are handled separately")
+            }
             eventLog.track(
                 JourneyEvents.experienceDismissed,
                 properties: JourneyEvents.experienceDismissedProperties(
                     experienceVersion: experienceVersionId,
-                    journey: state
+                    journey: state,
+                    reason: dismissalReason
                 ),
                 userProperties: nil,
                 userPropertiesSetOnce: nil,

@@ -107,7 +107,8 @@ protocol ExperienceRuntimeDelegate: AnyObject {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didFailToResolveProductsFor screenId: String
+        didFailToResolveProductsFor screenId: String,
+        productIds: [String]
     ) async
 
     func experienceViewController(
@@ -215,7 +216,8 @@ extension ExperienceRuntimeDelegate {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didFailToResolveProductsFor screenId: String
+        didFailToResolveProductsFor screenId: String,
+        productIds: [String]
     ) async {}
 
     func experienceViewController(
@@ -880,7 +882,18 @@ class ExperienceViewController: NuxiePlatformViewController {
 
     func emitSystemEvent(_ name: String, properties: [String: Any]) {
         guard !hostDismissalRequested else { return }
-        systemEventSink.emit(name, properties: properties.isEmpty ? nil : properties)
+        var enriched = properties
+        // Purchase outcomes from a presented experience always carry the
+        // experience identity so the forwarded activity keeps its context.
+        let purchaseOutcomes: Set<String> = [
+            SystemEventNames.purchaseFailed,
+            SystemEventNames.purchaseCancelled,
+            SystemEventNames.purchasePending,
+        ]
+        if purchaseOutcomes.contains(name), enriched["experience_id"] == nil {
+            enriched["experience_id"] = experience.id
+        }
+        systemEventSink.emit(name, properties: enriched.isEmpty ? nil : enriched)
     }
 
     func performDismiss(reason: CloseReason = .userDismissed) {
@@ -1138,14 +1151,15 @@ class ExperienceViewController: NuxiePlatformViewController {
                         }
                         self.mergeResolvedProducts(products)
                     },
-                    onProductsUnavailable: { [weak self] screenId in
+                    onProductsUnavailable: { [weak self] screenId, productIds in
                         guard let self,
                               self.runtimeSession.isCurrent(generation) else {
                             return
                         }
                         await self.runtimeDelegate?.experienceViewController(
                             self,
-                            didFailToResolveProductsFor: screenId
+                            didFailToResolveProductsFor: screenId,
+                            productIds: productIds
                         )
                     },
                     onRuntimeFailure: { [weak self] screenId, error in
@@ -2050,7 +2064,8 @@ extension ExperienceViewController {
                     properties: [
                         "placement_id": placementId,
                         "product_id": storeProduct.productId,
-                        "store_product_id": storeProduct.storeProductId
+                        "store_product_id": storeProduct.storeProductId,
+                        "test_store": storeProduct.isTestStoreProduct
                     ]
                 )
             } catch StoreKitError.purchasePending {
@@ -2063,7 +2078,8 @@ extension ExperienceViewController {
                     properties: [
                         "placement_id": placementId,
                         "product_id": storeProduct.productId,
-                        "store_product_id": storeProduct.storeProductId
+                        "store_product_id": storeProduct.storeProductId,
+                        "test_store": storeProduct.isTestStoreProduct
                     ]
                 )
             } catch StoreKitError.productTermsChanged {
@@ -2079,7 +2095,8 @@ extension ExperienceViewController {
                 if let runtimeDelegate = self.runtimeDelegate {
                     await runtimeDelegate.experienceViewController(
                         self,
-                        didFailToResolveProductsFor: screenId
+                        didFailToResolveProductsFor: screenId,
+                        productIds: [storeProduct.storeProductId]
                     )
                 } else {
                     let error = StoreKitError.productTermsChanged(
@@ -2091,6 +2108,7 @@ extension ExperienceViewController {
                             "placement_id": placementId,
                             "product_id": storeProduct.productId,
                             "store_product_id": storeProduct.storeProductId,
+                            "test_store": storeProduct.isTestStoreProduct,
                             "reason": "product_terms_changed"
                         ]
                     )
@@ -2113,6 +2131,7 @@ extension ExperienceViewController {
                         "placement_id": placementId,
                         "product_id": storeProduct.productId,
                         "store_product_id": storeProduct.storeProductId,
+                        "test_store": storeProduct.isTestStoreProduct,
                         "error": error.localizedDescription
                     ]
                 )
