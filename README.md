@@ -257,6 +257,9 @@ Apple's commerce and receipt lifecycle). Test Store is for Nuxie Experience
 qualification; use StoreKit Configuration or Sandbox before shipping native
 commerce behavior.
 
+SDK contributors can run the checked-in real StoreKitTest qualification suite
+with `make test-storekit`; see [Native StoreKit qualification](docs/storekit-test-qualification.md).
+
 ### Purchases (optional)
 
 StoreKit checkout works without configuration. Provide a purchase delegate only when

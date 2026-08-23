@@ -292,6 +292,57 @@ targets:
         - NuxieSDKIntegrationTests
       gatherCoverageData: false
 
+  NuxieStoreKitTestHost:
+    type: application
+    platform: iOS
+    sources:
+      - path: Tests/NuxieStoreKitTestHost/Sources
+        name: NuxieStoreKitTestHost
+    dependencies:
+      - sdk: StoreKit.framework
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.storekit-test-host
+      PRODUCT_NAME: NuxieStoreKitTestHost
+      MARKETING_VERSION: 0.1.0
+      CURRENT_PROJECT_VERSION: 1
+      SWIFT_VERSION: 5.9
+      IPHONEOS_DEPLOYMENT_TARGET: 17.0
+      NUXIE_STOREKIT_REQUIRE_AVAILABLE: 0
+      GENERATE_INFOPLIST_FILE: YES
+      SUPPORTS_MACCATALYST: NO
+      TARGETED_DEVICE_FAMILY: "1,2"
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+
+  NuxieSDKStoreKitTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/NuxieStoreKitTests
+        name: NuxieStoreKitTests
+        excludes:
+          - Fixtures/*.storekit
+      - path: Tests/NuxieStoreKitTests/Fixtures/NuxieNativeCommerce.storekit
+        buildPhase: resources
+    dependencies:
+      - target: NuxieStoreKitTestHost
+      - target: NuxieSDK
+      - target: NuxieRuntime
+        link: false
+      - target: NuxieTestSupportiOS
+      - sdk: StoreKitTest.framework
+      - sdk: XCTest.framework
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.storekittests
+      SWIFT_PACKAGE_NAME: Nuxie
+      SWIFT_STRICT_CONCURRENCY: complete
+      SWIFT_VERSION: 5.9
+      IPHONEOS_DEPLOYMENT_TARGET: 17.0
+      GENERATE_INFOPLIST_FILE: YES
+      SUPPORTS_MACCATALYST: NO
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+
   NuxieExperienceRuntimeHostApp:
     type: application
     platform: iOS
@@ -502,6 +553,24 @@ schemes:
     test:
       targets:
         - NuxieSDKIntegrationTests
+      gatherCoverageData: false
+
+  NuxieSDKStoreKitTests:
+    build:
+      targets:
+        NuxieStoreKitTestHost: all
+        NuxieSDK: all
+        NuxieSDKStoreKitTests: all
+    run:
+      config: Debug
+      executable: NuxieStoreKitTestHost
+      macroExpansion: NuxieStoreKitTestHost
+    test:
+      macroExpansion: NuxieStoreKitTestHost
+      environmentVariables:
+        NUXIE_STOREKIT_REQUIRE_AVAILABLE: $(NUXIE_STOREKIT_REQUIRE_AVAILABLE)
+      targets:
+        - NuxieSDKStoreKitTests
       gatherCoverageData: false
 
   NuxieExperienceRuntimeUITests:

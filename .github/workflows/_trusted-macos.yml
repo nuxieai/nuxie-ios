@@ -119,6 +119,12 @@ jobs:
             -resultBundlePath UnitTestResults.xcresult \
             -enableCodeCoverage "$COVERAGE"
 
+      - name: Run native StoreKit qualification
+        run: >-
+          make test-storekit
+          TEST_DESTINATION='${{ steps.sim.outputs.destination }}'
+          XCODEBUILD_TEST_FLAGS='-resultBundlePath StoreKitTestResults.xcresult'
+
       - name: Audit customer framework
         run: make verify-customer-framework
 
@@ -132,6 +138,15 @@ jobs:
           name: unit-test-results
           path: UnitTestResults.xcresult
           retention-days: 5
+
+      - name: Upload StoreKit Test Results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storekit-test-results
+          path: StoreKitTestResults.xcresult
+          retention-days: 5
+          if-no-files-found: ignore
 
   macos-build:
     name: Build (macOS)
