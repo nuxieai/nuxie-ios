@@ -58,14 +58,23 @@ def inventories(digest: Any) -> tuple[list[str], list[str]]:
 REMOVED = object()
 
 
-def customer_digest(value: Any) -> Any:
+def customer_digest(value: Any, spi_usrs: frozenset[str] = frozenset()) -> Any:
+    """Drop SPI-marked subtrees and any declaration whose USR is SPI.
+
+    A USR can appear both unmarked and beneath an SPI node; the inventory
+    assigns such duplicates to SPI, so the customer digest must drop the
+    unmarked copy too or the compatibility baseline would retain an SPI
+    declaration the text inventory rejects.
+    """
     if isinstance(value, dict):
         if value.get("spi_group_names"):
+            return REMOVED
+        if isinstance(value.get("usr"), str) and value["usr"] in spi_usrs:
             return REMOVED
 
         filtered: dict[str, Any] = {}
         for key, child in value.items():
-            filtered_child = customer_digest(child)
+            filtered_child = customer_digest(child, spi_usrs)
             if filtered_child is not REMOVED:
                 filtered[key] = filtered_child
         return filtered
@@ -73,7 +82,7 @@ def customer_digest(value: Any) -> Any:
     if isinstance(value, list):
         filtered_children = []
         for child in value:
-            filtered_child = customer_digest(child)
+            filtered_child = customer_digest(child, spi_usrs)
             if filtered_child is not REMOVED:
                 filtered_children.append(filtered_child)
         return filtered_children
@@ -121,7 +130,10 @@ def main() -> int:
         arguments.spi_output.write_text(inventory_text(spi), encoding="utf-8")
 
     if arguments.customer_digest_output is not None:
-        filtered_digest = customer_digest(digest)
+        spi_usrs = frozenset(
+            declaration.split("\t", 1)[0] for declaration in spi
+        )
+        filtered_digest = customer_digest(digest, spi_usrs)
         if filtered_digest is REMOVED:
             raise ValueError("swift-api-digester root unexpectedly belongs to SPI")
         with arguments.customer_digest_output.open("w", encoding="utf-8") as output:
