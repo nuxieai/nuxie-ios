@@ -54,7 +54,7 @@ derived from `project.yml` and is not committed.
 | Boundary | Deterministic assertion |
 | --- | --- |
 | Successful native purchase | A real `Product.purchase` returns verified JWS evidence and its finish closure retires `Transaction.unfinished`. |
-| Cancellation | A typed StoreKitTest `StoreKitError.userCancelled` produces Nuxie's cancelled outcome and no transaction. |
+| Cancellation | A typed StoreKitTest `StoreKitError.userCancelled` produces Nuxie's cancelled outcome. StoreKitTest may retain the failed attempt in `allTransactions()`. |
 | Pending purchase | Ask to Buy returns pending; explicit approval publishes the real unfinished transaction. |
 | Restore | A StoreKitTest non-consumable is found through `AppStore.sync` and `Transaction.currentEntitlements`. |
 | Revocation | Refunding the non-consumable removes restore/ownership and permits a new purchase. |
@@ -68,6 +68,41 @@ acceptance boundary is renewal *or* revocation. The fixture deliberately stays
 small and contains no subscription product. Cancellation and Ask to Buy use
 StoreKitTest's deterministic controls rather than attempting to automate Apple
 system sheets.
+
+## Qualification status: parked for Xcode 27
+
+As of 2026-08-23, native StoreKit qualification is blocked by Apple tooling and
+is not a launch gate for SDK code changes. Keep the tests fail-closed; do not
+delete, weaken, or silently skip them to make CI green.
+
+The failure reproduces independently of Nuxie's purchase adapter:
+
+- Xcode 26.6 (17F113) with iOS 26.3, 26.4, and 26.5 Simulators leaves the
+  `SKTestSession` storefront empty and reports `SKInternalErrorDomain` code 3.
+- Xcode 26.6 with a physical iOS 26.6 device lets
+  `SKTestSession.buyProduct(identifier:)` create a transaction, but the same
+  catalog through `Product.purchase()` returns `AMSErrorDomain` code 305 with
+  `cancel-purchase-batch = 1`. Manually confirming the purchase produces a
+  signed local receipt before Xcode cancels its own response.
+- A non-consumable created through `SKTestSession` does not appear in
+  `Transaction.currentEntitlements`, so the real restore path cannot observe
+  the fixture transaction.
+
+Apple stated that the configuration problem was fixed for iOS 26.6
+Simulators, while developers report that the failure remains in 26.6 under
+[FB22836426](https://developer.apple.com/forums/thread/830493). The local
+physical-device evidence is consistent with that unresolved StoreKitTest
+bridge defect.
+
+Requalify when stable Xcode 27 and a stable iOS 27 runtime are available:
+
+1. Run `make test-storekit` against a fresh iOS 27 Simulator.
+2. Run the `NuxieSDKStoreKitTests` scheme on a physical iOS 27 device with
+   `NUXIE_STOREKIT_REQUIRE_AVAILABLE=1`.
+3. Require all ten tests to pass without skips, manual transaction injection,
+   or weakened assertions.
+4. Record the Xcode build, runtime build, destination, and result in this
+   section before changing the qualification status.
 
 ## StoreKitTest daemon compatibility
 
