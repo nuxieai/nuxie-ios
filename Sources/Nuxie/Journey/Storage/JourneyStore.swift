@@ -40,6 +40,14 @@ protocol JourneyStoreProtocol: Sendable {
 // @unchecked Sendable: stateless beyond immutable directories/coders; all
 // journey mutations experience through the JourneyService actor.
 final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
+
+    private enum StorageError: Error {
+        case identifierMismatch
+    }
+
+    private static let activeFilePrefix = "journey_v1_"
+    private static let completionUserPrefix = "user_v1_"
+    private static let completionFilePrefix = "experience_v1_"
     
     // MARK: - Properties
     
@@ -95,7 +103,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     
     /// Save an active journey
     public func saveJourney(_ journey: JourneySnapshot) throws {
-        let file = activeDir.appendingPathComponent("journey_\(journey.id).json")
+        let file = activeFile(for: journey.id)
         let data = try encoder.encode(journey)
         
         try data.write(to: file, options: .atomic)
@@ -113,8 +121,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         }
         
         let journeys = files.compactMap { file -> JourneySnapshot? in
-            guard file.pathExtension == "json",
-                  file.lastPathComponent.hasPrefix("journey_") else {
+            guard Self.isCurrentActiveFileName(file.lastPathComponent) else {
                 return nil
             }
             
@@ -123,7 +130,12 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
                 guard hasSupportedStateVersion(data, fileName: file.lastPathComponent) else {
                     return nil
                 }
-                return try decoder.decode(JourneySnapshot.self, from: data)
+                let journey = try decoder.decode(JourneySnapshot.self, from: data)
+                guard file.lastPathComponent == Self.activeFileName(for: journey.id) else {
+                    LogError("Rejected journey file whose name does not match its identifier")
+                    return nil
+                }
+                return journey
             } catch {
                 LogError("Failed to load journey from \(file.lastPathComponent): \(error)")
                 // Consider deleting corrupt file
@@ -138,7 +150,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     
     /// Load a specific journey by ID
     public func loadJourney(id: String) -> JourneySnapshot? {
-        let file = activeDir.appendingPathComponent("journey_\(id).json")
+        let file = activeFile(for: id)
         
         guard FileManager.default.fileExists(atPath: file.path) else {
             return nil
@@ -149,7 +161,12 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
             guard hasSupportedStateVersion(data, fileName: file.lastPathComponent) else {
                 return nil
             }
-            return try decoder.decode(JourneySnapshot.self, from: data)
+            let journey = try decoder.decode(JourneySnapshot.self, from: data)
+            guard Self.identifiersMatchExactly(journey.id, id) else {
+                LogError("Rejected journey file whose payload identifier does not match its key")
+                return nil
+            }
+            return journey
         } catch {
             LogError("Failed to load journey \(id): \(error)")
             return nil
@@ -158,7 +175,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     
     /// Delete a journey
     public func deleteJourney(id: String) {
-        let file = activeDir.appendingPathComponent("journey_\(id).json")
+        let file = activeFile(for: id)
         
         do {
             try FileManager.default.removeItem(at: file)
@@ -171,20 +188,28 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     
     /// Record journey completion (for frequency tracking)
     public func recordCompletion(_ record: JourneyCompletionRecord) throws {
-        // Create user directory if needed
-        let userDir = completedDir.appendingPathComponent(record.distinctId)
-        try? FileManager.default.createDirectory(
+        let userDir = completionUserDirectory(for: record.distinctId)
+        try FileManager.default.createDirectory(
             at: userDir,
             withIntermediateDirectories: true
         )
-        
-        // Save completion record
-        let file = userDir.appendingPathComponent("experience_\(record.experienceId).json")
-        
-        // Load existing records or create new array
+
+        let file = completionFile(
+            distinctId: record.distinctId,
+            experienceId: record.experienceId
+        )
+
         var records: [JourneyCompletionRecord] = []
-        if let existingData = try? Data(contentsOf: file),
-           let existingRecords = try? decoder.decode([JourneyCompletionRecord].self, from: existingData) {
+        if FileManager.default.fileExists(atPath: file.path) {
+            let existingData = try Data(contentsOf: file)
+            let existingRecords = try decoder.decode([JourneyCompletionRecord].self, from: existingData)
+            guard recordsMatch(
+                existingRecords,
+                distinctId: record.distinctId,
+                experienceId: record.experienceId
+            ) else {
+                throw StorageError.identifierMismatch
+            }
             records = existingRecords
         }
         
@@ -210,11 +235,11 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     ///   - experienceId: Stable experience definition identifier.
     /// - Returns: `true` when at least one completion is stored.
     public func hasCompletedExperience(distinctId: String, experienceId: String) -> Bool {
-        let file = completedDir
-            .appendingPathComponent(distinctId)
-            .appendingPathComponent("experience_\(experienceId).json")
-        
-        return FileManager.default.fileExists(atPath: file.path)
+        guard let records = loadCompletionRecords(
+            distinctId: distinctId,
+            experienceId: experienceId
+        ) else { return false }
+        return !records.isEmpty
     }
     
     /// Returns the user's most recent completion time for an experience.
@@ -224,27 +249,23 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     ///   - experienceId: Stable experience definition identifier.
     /// - Returns: Most recent completion timestamp, or `nil` when none exists.
     public func lastCompletionTime(distinctId: String, experienceId: String) -> Date? {
-        let file = completedDir
-            .appendingPathComponent(distinctId)
-            .appendingPathComponent("experience_\(experienceId).json")
-        
-        guard let data = try? Data(contentsOf: file),
-              let records = try? decoder.decode([JourneyCompletionRecord].self, from: data),
-              let lastRecord = records.last else {
-            return nil
-        }
-        
-        return lastRecord.completedAt
+        loadCompletionRecords(
+            distinctId: distinctId,
+            experienceId: experienceId
+        )?.last?.completedAt
     }
     
     /// Clean up old journeys and records
     public func cleanup(olderThan date: Date) {
-        // Clean up active journeys
-        cleanupDirectory(activeDir, olderThan: date, prefix: "journey_")
+        cleanupCurrentFiles(
+            in: activeDir,
+            olderThan: date,
+            matching: Self.isCurrentActiveFileName
+        )
         
         // Clean up completion records older than 90 days
         let ninetyDaysAgo = dateProvider.date(byAddingTimeInterval: -90 * 24 * 3600, to: dateProvider.now())
-        cleanupDirectory(completedDir, olderThan: ninetyDaysAgo, recursive: true)
+        cleanupCompletionRecords(olderThan: ninetyDaysAgo)
 
         var receipts = loadHandledEvents()
         receipts = receipts.filter { $0.value >= ninetyDaysAgo }
@@ -274,6 +295,82 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     private func saveHandledEvents(_ receipts: [String: Date]) throws {
         let data = try encoder.encode(receipts)
         try data.write(to: handledEventsFile, options: .atomic)
+    }
+
+    private func activeFile(for id: String) -> URL {
+        activeDir.appendingPathComponent(Self.activeFileName(for: id))
+    }
+
+    private static func activeFileName(for id: String) -> String {
+        "\(activeFilePrefix)\(opaqueKey(domain: "active-journey", identifier: id)).json"
+    }
+
+    private func completionUserDirectory(for distinctId: String) -> URL {
+        completedDir.appendingPathComponent(
+            "\(Self.completionUserPrefix)\(Self.opaqueKey(domain: "completion-user", identifier: distinctId))",
+            isDirectory: true
+        )
+    }
+
+    private func completionFile(distinctId: String, experienceId: String) -> URL {
+        completionUserDirectory(for: distinctId).appendingPathComponent(
+            "\(Self.completionFilePrefix)\(Self.opaqueKey(domain: "completion-experience", identifier: experienceId)).json"
+        )
+    }
+
+    private static func opaqueKey(domain: String, identifier: String) -> String {
+        var material = Data("nuxie-journey-store-v1:\(domain)".utf8)
+        material.append(0)
+        material.append(contentsOf: identifier.utf8)
+        return SHA256Provider.hexDigest(material)
+    }
+
+    private static func identifiersMatchExactly(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf8.elementsEqual(rhs.utf8)
+    }
+
+    private static func isCurrentActiveFileName(_ name: String) -> Bool {
+        isOpaqueName(name, prefix: activeFilePrefix, suffix: ".json")
+    }
+
+    private static func isCurrentCompletionUserDirectoryName(_ name: String) -> Bool {
+        isOpaqueName(name, prefix: completionUserPrefix, suffix: "")
+    }
+
+    private static func isCurrentCompletionFileName(_ name: String) -> Bool {
+        isOpaqueName(name, prefix: completionFilePrefix, suffix: ".json")
+    }
+
+    private static func isOpaqueName(_ name: String, prefix: String, suffix: String) -> Bool {
+        guard name.hasPrefix(prefix), name.hasSuffix(suffix) else { return false }
+        let digestStart = name.index(name.startIndex, offsetBy: prefix.count)
+        let digestEnd = name.index(name.endIndex, offsetBy: -suffix.count)
+        let digest = name[digestStart..<digestEnd]
+        return digest.count == 64 && digest.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+    }
+
+    private func loadCompletionRecords(
+        distinctId: String,
+        experienceId: String
+    ) -> [JourneyCompletionRecord]? {
+        let file = completionFile(distinctId: distinctId, experienceId: experienceId)
+        guard let data = try? Data(contentsOf: file),
+              let records = try? decoder.decode([JourneyCompletionRecord].self, from: data),
+              recordsMatch(records, distinctId: distinctId, experienceId: experienceId) else {
+            return nil
+        }
+        return records
+    }
+
+    private func recordsMatch(
+        _ records: [JourneyCompletionRecord],
+        distinctId: String,
+        experienceId: String
+    ) -> Bool {
+        records.allSatisfy {
+            Self.identifiersMatchExactly($0.distinctId, distinctId)
+                && Self.identifiersMatchExactly($0.experienceId, experienceId)
+        }
     }
 
     private func hasSupportedStateVersion(_ data: Data, fileName: String) -> Bool {
@@ -306,29 +403,40 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         }
     }
     
-    private func cleanupDirectory(_ directory: URL, olderThan date: Date, prefix: String? = nil, recursive: Bool = false) {
-        guard let enumerator = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.creationDateKey],
-            options: recursive ? [] : [.skipsSubdirectoryDescendants]
-        ) else {
-            return
+    private func cleanupCompletionRecords(olderThan date: Date) {
+        guard let userDirectories = try? FileManager.default.contentsOfDirectory(
+            at: completedDir,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) else { return }
+
+        for userDirectory in userDirectories
+        where Self.isCurrentCompletionUserDirectoryName(userDirectory.lastPathComponent) {
+            cleanupCurrentFiles(
+                in: userDirectory,
+                olderThan: date,
+                matching: Self.isCurrentCompletionFileName
+            )
         }
-        
-        for case let file as URL in enumerator {
-            guard file.pathExtension == "json" else { continue }
-            
-            if let prefix = prefix,
-               !file.lastPathComponent.hasPrefix(prefix) {
-                continue
-            }
-            
-            if let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
-               let creationDate = attributes[.creationDate] as? Date,
-               creationDate < date {
-                try? FileManager.default.removeItem(at: file)
-                LogDebug("Deleted old file: \(file.lastPathComponent)")
-            }
+    }
+
+    private func cleanupCurrentFiles(
+        in directory: URL,
+        olderThan date: Date,
+        matching isCurrentFileName: (String) -> Bool
+    ) {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.creationDateKey, .isRegularFileKey]
+        ) else { return }
+
+        for file in files where isCurrentFileName(file.lastPathComponent) {
+            guard let values = try? file.resourceValues(
+                forKeys: [.creationDateKey, .isRegularFileKey]
+            ), values.isRegularFile == true,
+              let creationDate = values.creationDate,
+              creationDate < date else { continue }
+            try? FileManager.default.removeItem(at: file)
+            LogDebug("Deleted old file: \(file.lastPathComponent)")
         }
     }
 }

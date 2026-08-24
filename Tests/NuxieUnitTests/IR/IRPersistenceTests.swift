@@ -1,6 +1,7 @@
 import Foundation
 import Quick
 import Nimble
+import XCTest
 @testable import Nuxie
 
 final class IRPersistenceTests: AsyncSpec {
@@ -72,6 +73,16 @@ final class IRPersistenceTests: AsyncSpec {
 
         describe("journey persistence") {
             var tempRoot: URL!
+
+            func onlyActiveJourneyFile() throws -> URL {
+                let directory = tempRoot.appendingPathComponent("nuxie/journeys/active")
+                return try XCTUnwrap(
+                    FileManager.default.contentsOfDirectory(
+                        at: directory,
+                        includingPropertiesForKeys: nil
+                    ).first
+                )
+            }
 
             beforeEach {
                 tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -206,9 +217,7 @@ final class IRPersistenceTests: AsyncSpec {
                     dateProvider: SystemDateProvider()
                 )
                 try store.saveJourney(journey)
-                let file = tempRoot
-                    .appendingPathComponent("nuxie/journeys/active")
-                    .appendingPathComponent("journey_\(journey.id).json")
+                let file = try onlyActiveJourneyFile()
                 var object = try JSONSerialization.jsonObject(
                     with: Data(contentsOf: file)
                 ) as! [String: Any]
@@ -236,9 +245,7 @@ final class IRPersistenceTests: AsyncSpec {
                     dateProvider: SystemDateProvider()
                 )
                 try store.saveJourney(journey)
-                let file = tempRoot
-                    .appendingPathComponent("nuxie/journeys/active")
-                    .appendingPathComponent("journey_\(journey.id).json")
+                let file = try onlyActiveJourneyFile()
                 var object = try JSONSerialization.jsonObject(
                     with: Data(contentsOf: file)
                 ) as! [String: Any]
