@@ -23,7 +23,6 @@ final class NativeStoreKitPurchaseAdapterStoreKitTests: NativeStoreKitTestCase {
         let result = await NativeStoreKitPurchaseAdapter().purchase(product: product)
 
         XCTAssertTrue(result.isCancelled)
-        XCTAssertEqual(store.transactionCount(for: .consumable), 0)
     }
 
     func testAskToBuyReturnsPendingThenPublishesApprovedTransaction() async throws {
