@@ -281,6 +281,12 @@ public actor MockNuxieApi: NuxieApiProtocol {
         trackEventCalls.append(call)
         sentEvents.append(event)
 
+        if trackEventDelay > 0 {
+            try await Task.sleep(
+                nanoseconds: UInt64(trackEventDelay * 1_000_000_000)
+            )
+        }
+
         if shouldFailTrackEvent {
             if let error = trackEventError {
                 throw error

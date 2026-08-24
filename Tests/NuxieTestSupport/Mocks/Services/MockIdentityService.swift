@@ -65,6 +65,20 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
         }
     }
 
+    @discardableResult
+    public func setUserProperties(
+        _ properties: [String: Any],
+        ifCurrentDistinctIdMatches expectedDistinctId: String
+    ) -> Bool {
+        lock.withLock {
+            guard _distinctId == expectedDistinctId else { return false }
+            for (key, value) in properties {
+                _userProperties[key] = value
+            }
+            return true
+        }
+    }
+
     public func setOnceUserProperties(_ properties: [String: Any]) {
         lock.withLock {
             for (key, value) in properties {

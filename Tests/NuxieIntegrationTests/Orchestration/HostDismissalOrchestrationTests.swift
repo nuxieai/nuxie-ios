@@ -181,6 +181,113 @@ final class HostDismissalOrchestrationTests: AsyncSpec {
                 )
                 expect(exitsAfterSuccess).to(haveCount(1))
             }
+
+            it("recovers interrupted host exit captures") { @MainActor in
+                let triggerName = "host-dismissal-recovery-trigger"
+                let experienceId = "host-dismissal-recovery-experience"
+                let flowId = "host-dismissal-recovery-flow"
+                let distinctId = "host-dismissal-recovery-user"
+                let api = MockNuxieApi()
+                let dateProvider = MockDateProvider()
+                let sleepProvider = MockSleepProvider()
+                sleepProvider.shouldCompleteImmediately = true
+                let experience = OrchestrationFixtures.experience(
+                    id: experienceId,
+                    flowId: flowId,
+                    eventName: triggerName,
+                    reentry: .oneTime
+                )
+                let flow = try OrchestrationFixtures.exitFlow(
+                    id: flowId,
+                    trigger: triggerName,
+                    effect: "unused-after-host-dismissal-recovery"
+                )
+                let booted = try await OrchestrationStack.boot(
+                    storageURL: storageURL,
+                    api: api,
+                    dateProvider: dateProvider,
+                    sleepProvider: sleepProvider,
+                    distinctId: distinctId
+                )
+                stack = booted
+                try await booted.installProfile(
+                    experiences: [experience],
+                    journeys: [flow]
+                )
+
+                _ = await booted.trigger(triggerName)
+                let journey = try XCTUnwrap(booted.presentation.lastPresentedJourney)
+                await booted.eventLog.drain()
+                _ = await booted.eventLog.flushEvents()
+
+                await booted.kill()
+                await booted.presentation.dismissCurrentExperienceFromHost()
+
+                let interrupted = try XCTUnwrap(
+                    booted.journeyStoreOnDisk().loadJourney(id: journey.id)
+                )
+                expect(interrupted.status).to(equal(.completed))
+                expect(interrupted.exitReason).to(equal(.dismissed))
+                expect(interrupted.pendingHostExitCapture).to(beTrue())
+                let exitsBeforeRecovery = await booted.storedEvents(
+                    named: JourneyEvents.journeyExited
+                )
+                expect(exitsBeforeRecovery).to(beEmpty())
+
+                // Terminal persistence suppresses reentry immediately even
+                // when EventLog is unavailable. Exit capture remains a
+                // separate recoverable obligation.
+                expect(
+                    booted.journeyStoreOnDisk().hasCompletedExperience(
+                        distinctId: distinctId,
+                        experienceId: experienceId
+                    )
+                ).to(beTrue())
+
+                let recovered = try await OrchestrationStack.boot(
+                    storageURL: storageURL,
+                    api: api,
+                    dateProvider: dateProvider,
+                    sleepProvider: sleepProvider,
+                    distinctId: distinctId
+                )
+                stack = recovered
+
+                expect(recovered.journeyStoreOnDisk().loadJourney(id: journey.id))
+                    .to(beNil())
+                let recoveredStore = recovered.journeyStoreOnDisk()
+                expect(
+                    recoveredStore.hasCompletedExperience(
+                        distinctId: distinctId,
+                        experienceId: experienceId
+                    )
+                ).to(beTrue())
+                expect(
+                    recoveredStore.lastCompletionTime(
+                        distinctId: distinctId,
+                        experienceId: experienceId
+                    )
+                ).to(equal(interrupted.completedAt))
+                let exits = await recovered.storedEvents(
+                    named: JourneyEvents.journeyExited
+                )
+                expect(exits).to(haveCount(1))
+                let exit = try XCTUnwrap(exits.first)
+                expect(exit.id).to(equal(
+                    "journey-exited:\(journey.id):\(interrupted.epoch)"
+                ))
+                expect(exit.distinctId).to(equal(distinctId))
+                let properties = try exit.getProperties().mapValues(\.value)
+                expect(properties["journey_id"] as? String).to(equal(journey.id))
+                expect(properties["epoch"] as? Int).to(equal(interrupted.epoch))
+                expect(properties["reason"] as? String).to(equal("dismissed"))
+                expect(properties["dismissed_by"] as? String).to(equal("host"))
+                let completedAt = try XCTUnwrap(interrupted.completedAt)
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                expect(properties["at"] as? String)
+                    .to(equal(formatter.string(from: completedAt)))
+            }
         }
     }
 }

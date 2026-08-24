@@ -32,6 +32,15 @@ protocol IdentityServiceProtocol: Sendable {
   /// Set user properties (overwrites existing)
   func setUserProperties(_ properties: [String: Any])
 
+  /// Atomically apply properties only while `expectedDistinctId` is still
+  /// current. Journey actions use this to avoid crossing an identify/reset
+  /// boundary between validation and mutation.
+  @discardableResult
+  func setUserProperties(
+    _ properties: [String: Any],
+    ifCurrentDistinctIdMatches expectedDistinctId: String
+  ) -> Bool
+
   /// Set user properties only if they don't exist
   func setOnceUserProperties(_ properties: [String: Any])
 
@@ -192,6 +201,24 @@ final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
 
   public func setUserProperties(_ properties: [String: Any]) {
     setUserProperties(properties, for: nil)
+  }
+
+  @discardableResult
+  public func setUserProperties(
+    _ properties: [String: Any],
+    ifCurrentDistinctIdMatches expectedDistinctId: String
+  ) -> Bool {
+    queue.sync {
+      guard getDistinctIdLocked() == expectedDistinctId else { return false }
+      var currentProps = userPropertiesById[expectedDistinctId] ?? [:]
+      for (key, value) in properties { currentProps[key] = value }
+      userPropertiesById[expectedDistinctId] = currentProps
+      persistLocked()
+      LogDebug(
+        "Set \(properties.count) user properties for \(NuxieLogger.shared.logDistinctID(expectedDistinctId))"
+      )
+      return true
+    }
   }
 
   public func setUserProperties(_ properties: [String: Any], for id: String?) {

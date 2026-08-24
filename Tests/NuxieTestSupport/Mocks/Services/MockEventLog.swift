@@ -35,7 +35,13 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         (id: UUID, task: Task<EventResponse, Never>)?
     private var _preparedTriggerBeforeSend:
         (@Sendable (NuxieEvent) -> NuxieEvent?)?
+    private var _prepareTriggerPropertiesHandler: (@Sendable () async -> Void)?
+    private var _drainHandler: (@Sendable () async -> Void)?
+    private var _trackWithResponseHandler: (@Sendable (String) async -> Void)?
     private var _capturedEventObserver: (@Sendable (NuxieEvent) -> Void)?
+    private var _journeyOwnershipFences: [String: Int] = [:]
+    private var _shouldFailJourneyOwnershipCheck = false
+    private var _stableOwnedCaptures: [String: DurableTriggerCapture] = [:]
     private var _resetGeneration: UInt64 = 0
 
     public var preparedTriggerBeforeSend:
@@ -44,9 +50,28 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         set { lock.withLock { _preparedTriggerBeforeSend = newValue } }
     }
 
+    public var prepareTriggerPropertiesHandler: (@Sendable () async -> Void)? {
+        get { lock.withLock { _prepareTriggerPropertiesHandler } }
+        set { lock.withLock { _prepareTriggerPropertiesHandler = newValue } }
+    }
+
+    public var drainHandler: (@Sendable () async -> Void)? {
+        get { lock.withLock { _drainHandler } }
+        set { lock.withLock { _drainHandler = newValue } }
+    }
+
+    public var trackWithResponseHandler: (@Sendable (String) async -> Void)? {
+        get { lock.withLock { _trackWithResponseHandler } }
+        set { lock.withLock { _trackWithResponseHandler = newValue } }
+    }
+
     public var capturedEventObserver: (@Sendable (NuxieEvent) -> Void)? {
         get { lock.withLock { _capturedEventObserver } }
         set { lock.withLock { _capturedEventObserver = newValue } }
+    }
+    public var shouldFailJourneyOwnershipCheck: Bool {
+        get { lock.withLock { _shouldFailJourneyOwnershipCheck } }
+        set { lock.withLock { _shouldFailJourneyOwnershipCheck = newValue } }
     }
     
     public private(set) var routedEvents: [NuxieEvent] {
@@ -458,7 +483,13 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _journeyOwnershipRejectedHandler = nil
             _journeyHandoffDeliveredHandler = nil
             _preparedTriggerBeforeSend = nil
+            _prepareTriggerPropertiesHandler = nil
+            _drainHandler = nil
+            _trackWithResponseHandler = nil
             _capturedEventObserver = nil
+            _journeyOwnershipFences.removeAll()
+            _shouldFailJourneyOwnershipCheck = false
+            _stableOwnedCaptures.removeAll()
             lastEventTimes.removeAll()
             _trackWithResponseCalls.removeAll()
             _trackForTriggerCalls.removeAll()
@@ -507,7 +538,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _trackWithResponseResultsByEvent: [String: EventResponse] = [:]
     private var _trackWithResponseError: Error?
     private var _trackWithResponseCalls: [
-        (event: String, properties: [String: Any]?, flushPendingEvents: Bool, flushStrategy: EventFlushStrategy)
+        (event: String, properties: [String: Any]?, flushPendingEvents: Bool, flushStrategy: EventFlushStrategy, distinctIdOverride: String?)
     ] = []
     private var _trackForTriggerCalls: [
         (event: String, properties: [String: Any]?, persistToHistory: Bool, distinctIdOverride: String?)
@@ -535,7 +566,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
     
     public private(set) var trackWithResponseCalls: [
-        (event: String, properties: [String: Any]?, flushPendingEvents: Bool, flushStrategy: EventFlushStrategy)
+        (event: String, properties: [String: Any]?, flushPendingEvents: Bool, flushStrategy: EventFlushStrategy, distinctIdOverride: String?)
     ] {
         get { lock.withLock { _trackWithResponseCalls } }
         set { lock.withLock { _trackWithResponseCalls = newValue } }
@@ -596,7 +627,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         )
 
         let nuxieEvent = TestEventBuilder(name: event)
-            .withDistinctId(distinctIdOverride ?? "test-distinct-id")
+            .withDistinctId(
+                distinctIdOverride ?? identity?.getDistinctId() ?? "test-distinct-id"
+            )
             .withProperties(enrichedProperties)
             .build()
 
@@ -617,6 +650,78 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
 
         await applyEventResponseSignals(response)
         return (nuxieEvent, response)
+    }
+
+    public func captureOwnedJourneySystemEvent(
+        _ event: String,
+        properties: sending [String: Any]?,
+        eventId: String,
+        distinctId: String,
+        ownership: JourneyEventOwnership
+    ) async -> DurableOwnedTriggerCaptureResult {
+        let propertiesBox = UncheckedSendable(properties)
+        lock.withLock {
+            _trackForTriggerCalls.append((
+                event: event,
+                properties: propertiesBox.value,
+                persistToHistory: true,
+                distinctIdOverride: distinctId
+            ))
+        }
+
+        let enriched = await prepareTriggerProperties(
+            propertiesBox.value,
+            userProperties: nil,
+            userPropertiesSetOnce: nil
+        )
+        let original = NuxieEvent(
+            id: eventId,
+            name: event,
+            distinctId: distinctId,
+            properties: enriched
+        )
+        let transformed = await applyBeforeSend(to: original).map {
+            NuxieEvent(
+                id: eventId,
+                name: $0.name,
+                distinctId: distinctId,
+                properties: $0.properties,
+                timestamp: original.timestamp
+            )
+        }
+        let fallback = DurableTriggerCapture(
+            event: original,
+            routesLocally: false
+        )
+        let committed: (capture: DurableTriggerCapture?, isNew: Bool) = lock.withLock {
+            if (_journeyOwnershipFences[ownership.journeyId] ?? Int.min)
+                >= ownership.epoch {
+                return (nil, false)
+            }
+            if let existing = _stableOwnedCaptures[eventId] {
+                return (existing, false)
+            }
+            let capture = transformed.map { DurableTriggerCapture(event: $0) } ?? fallback
+            _stableOwnedCaptures[eventId] = capture
+            return (capture, true)
+        }
+        guard let capture = committed.capture else { return .ownershipLost }
+        if committed.isNew, capture.routesLocally {
+            _ = await route(capture.event)
+        }
+        return .captured(capture)
+    }
+
+    public func journeyEventOwnershipState(
+        _ ownership: JourneyEventOwnership
+    ) async -> JourneyEventOwnershipState {
+        lock.withLock {
+            guard !_shouldFailJourneyOwnershipCheck else { return .unavailable }
+            return (_journeyOwnershipFences[ownership.journeyId] ?? Int.min)
+                >= ownership.epoch
+                ? .ownershipLost
+                : .owned
+        }
     }
 
     public func commitPreparedTriggerEvent(
@@ -700,6 +805,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         userProperties: sending [String: Any]?,
         userPropertiesSetOnce: sending [String: Any]?
     ) async -> sending [String: Any] {
+        let handler = lock.withLock { _prepareTriggerPropertiesHandler }
+        await handler?()
         var finalProperties = properties ?? [:]
         if let userProperties { finalProperties["$set"] = userProperties }
         if let userPropertiesSetOnce { finalProperties["$set_once"] = userPropertiesSetOnce }
@@ -748,15 +855,31 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         properties: [String: Any]?,
         flushStrategy: EventFlushStrategy
     ) async throws -> EventResponse {
+        try await trackWithResponse(
+            event,
+            properties: properties,
+            flushStrategy: flushStrategy,
+            distinctIdOverride: nil
+        )
+    }
+
+    public func trackWithResponse(
+        _ event: String,
+        properties: [String: Any]?,
+        flushStrategy: EventFlushStrategy,
+        distinctIdOverride: String?
+    ) async throws -> EventResponse {
+        let handler = lock.withLock { _trackWithResponseHandler }
+        await handler?(event)
         lock.withLock {
             _trackWithResponseCalls.append((
                 event: event,
                 properties: properties,
                 flushPendingEvents: flushStrategy != .none,
-                flushStrategy: flushStrategy
+                flushStrategy: flushStrategy,
+                distinctIdOverride: distinctIdOverride
             ))
         }
-
         let (result, error): (EventResponse?, Error?) = lock.withLock {
             (
                 _trackWithResponseResultsByEvent[event] ?? _trackWithResponseResult,
@@ -794,6 +917,24 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 return read()
             }
         }
+        lock.withLock {
+            guard !Task.isCancelled,
+                  expectedGeneration == nil || _resetGeneration == expectedGeneration else {
+                return
+            }
+            if let ownership = response.journeyClaim, !ownership.accepted {
+                _journeyOwnershipFences[ownership.journeyId] = max(
+                    _journeyOwnershipFences[ownership.journeyId] ?? Int.min,
+                    ownership.epoch
+                )
+            }
+            if let ownership = response.journeyOwnership {
+                _journeyOwnershipFences[ownership.journeyId] = max(
+                    _journeyOwnershipFences[ownership.journeyId] ?? Int.min,
+                    ownership.epoch
+                )
+            }
+        }
         if response.mailboxPending == true {
             let handler = current { _mailboxPendingHandler }
             await handler?()
@@ -813,6 +954,13 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
     }
 
+    /// Delivers only the response-side ownership/mailbox signals. Tests use
+    /// this to place an authoritative response at an exact suspension point
+    /// without introducing an unrelated trigger capture.
+    public func deliverEventResponseSignals(_ response: EventResponse) async {
+        await applyEventResponseSignals(response)
+    }
+
     // MARK: - Cleanup
 
     public func close() async {
@@ -826,6 +974,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         lock.withLock {
             _drainCallCount += 1
         }
+        let handler = lock.withLock { _drainHandler }
+        await handler?()
     }
 
     // MARK: - Lifecycle Events

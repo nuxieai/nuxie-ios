@@ -642,6 +642,45 @@ final class EventLogDeliveryTests: AsyncSpec {
                     expect(mockStore.deliveredIds).to(contain(claim.id))
                 }
 
+                it("replays a claim directly when its ownership response marker is unresolved") {
+                    let ownership = JourneyEventOwnership(
+                        journeyId: "journey-marked-claim",
+                        epoch: 3
+                    )
+                    let claim = NuxieEvent(
+                        id: "marked-claim-id",
+                        name: JourneyEvents.journeyClaimed,
+                        distinctId: "user123",
+                        properties: [
+                            "journey_id": ownership.journeyId,
+                            "epoch": ownership.epoch,
+                        ]
+                    )
+                    try await mockStore.recordUnresolvedJourneyOwnershipResponse(
+                        sourceEventId: claim.id,
+                        ownership: ownership,
+                        recordedAt: Date(timeIntervalSince1970: 1)
+                    )
+                    // A replay may omit an ownership signal already returned
+                    // for this idempotency key; the source marker carries it.
+                    await mockApi.setTrackEventResponse(.success())
+                    await log.enqueueForDelivery(claim)
+
+                    let result = await log.performFlush(forceSend: true)
+
+                    expect(result).to(beTrue())
+                    await expect { await mockApi.directEvents.map(\.id) }
+                        .to(equal([claim.id]))
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(0))
+                    expect(mockStore.journeyOwnershipFences[ownership.journeyId])
+                        .to(equal(ownership.epoch))
+                    expect(
+                        mockStore.unresolvedJourneyOwnershipResponses[claim.id]
+                    ).to(beNil())
+                    expect(mockStore.deliveredIds).to(contain(claim.id))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
                 it("preserves one idempotency key from a failed direct handoff through retry") {
                     await mockApi.setTrackEventFailure(true)
 

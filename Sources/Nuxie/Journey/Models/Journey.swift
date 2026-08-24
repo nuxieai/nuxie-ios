@@ -801,6 +801,9 @@ struct JourneySnapshot: Codable, Sendable {
     /// A failed response operation keeps the draft retryable across runner
     /// reconstruction and app restart.
     public var responseSessionRetryRequired: Bool
+    /// A host-authored terminal transition whose stable exit fact has not yet
+    /// been acknowledged by EventLog's durable capture seam.
+    internal var pendingHostExitCapture: Bool
 
     /// Timestamps
     public let startedAt: Date
@@ -863,6 +866,7 @@ struct JourneySnapshot: Codable, Sendable {
         self.responseSessionReceipts = [:]
         self.pendingResponseFieldWrites = [:]
         self.responseSessionRetryRequired = false
+        self.pendingHostExitCapture = false
 
         self.startedAt = now
         self.updatedAt = now
@@ -900,6 +904,7 @@ struct JourneySnapshot: Codable, Sendable {
         case responseSessionReceipts
         case pendingResponseFieldWrites
         case responseSessionRetryRequired
+        case pendingHostExitCapture
         case startedAt
         case updatedAt
         case completedAt
@@ -945,6 +950,10 @@ struct JourneySnapshot: Codable, Sendable {
             Bool.self,
             forKey: .responseSessionRetryRequired
         )
+        pendingHostExitCapture = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .pendingHostExitCapture
+        ) ?? false
         startedAt = try container.decode(Date.self, forKey: .startedAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
@@ -975,6 +984,9 @@ struct JourneySnapshot: Codable, Sendable {
         try container.encode(responseSessionReceipts, forKey: .responseSessionReceipts)
         try container.encode(pendingResponseFieldWrites, forKey: .pendingResponseFieldWrites)
         try container.encode(responseSessionRetryRequired, forKey: .responseSessionRetryRequired)
+        if pendingHostExitCapture {
+            try container.encode(true, forKey: .pendingHostExitCapture)
+        }
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(completedAt, forKey: .completedAt)
@@ -1203,6 +1215,18 @@ final class Journey: Sendable {
         await stateOwner.releaseHostDismissalReservation()
     }
 
+    func discardLocally(
+        terminalStatus: JourneyStatus,
+        at date: Date,
+        authority: JourneyTerminalTransitionAuthority
+    ) async -> JourneyLocalDiscardCommit? {
+        await stateOwner.discardLocally(
+            terminalStatus: terminalStatus,
+            at: date,
+            authority: authority
+        )
+    }
+
     @discardableResult
     func update<T: Sendable>(
         _ body: @Sendable (inout JourneySnapshot) -> T
@@ -1257,9 +1281,15 @@ struct JourneyVersionedSnapshot: Sendable {
     let revision: UInt64
 }
 
+struct JourneyLocalDiscardCommit: Sendable {
+    let previous: JourneySnapshot
+    let revokedHostDismissalReservation: Bool
+}
+
 enum JourneyTerminalTransitionAuthority: Equatable, Sendable {
     case ordinary
     case host
+    case authoritativeOwnershipLoss
 }
 
 private actor JourneyStateOwner {
@@ -1305,16 +1335,58 @@ private actor JourneyStateOwner {
         authority: JourneyTerminalTransitionAuthority
     ) -> Bool {
         guard revision == expectedRevision else { return false }
-        if hostDismissalReserved, authority != .host {
+        if hostDismissalReserved, authority == .ordinary {
             return false
         }
         value = snapshot
         revision &+= 1
+        if authority == .authoritativeOwnershipLoss {
+            hostDismissalReserved = false
+        }
         return true
     }
 
     func releaseHostDismissalReservation() {
         hostDismissalReserved = false
+    }
+
+    /// Local quarantine/ownership loss is unconditional once admitted. It is
+    /// intentionally a single actor operation rather than a bounded CAS loop:
+    /// stale callbacks must not be able to keep an old-user journey alive by
+    /// repeatedly advancing its revision.
+    func discardLocally(
+        terminalStatus: JourneyStatus,
+        at date: Date,
+        authority: JourneyTerminalTransitionAuthority
+    ) -> JourneyLocalDiscardCommit? {
+        let revokesPendingHostExit = authority == .authoritativeOwnershipLoss
+            && value.status == .completed
+            && value.pendingHostExitCapture
+        guard value.status.isLive || revokesPendingHostExit else { return nil }
+        if hostDismissalReserved, authority == .ordinary { return nil }
+
+        let previous = value
+        let revokedHostDismissalReservation = hostDismissalReserved
+            && authority == .authoritativeOwnershipLoss
+        if terminalStatus == .cancelled {
+            value.cancel(at: date)
+        } else {
+            value.status = terminalStatus
+            value.updatedAt = date
+        }
+        if revokesPendingHostExit {
+            value.exitReason = nil
+            value.completedAt = nil
+            value.pendingHostExitCapture = false
+        }
+        if authority == .authoritativeOwnershipLoss {
+            hostDismissalReserved = false
+        }
+        revision &+= 1
+        return JourneyLocalDiscardCommit(
+            previous: previous,
+            revokedHostDismissalReservation: revokedHostDismissalReservation
+        )
     }
 
     func update<T: Sendable>(

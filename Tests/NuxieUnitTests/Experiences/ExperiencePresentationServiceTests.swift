@@ -20,6 +20,7 @@ private final class ExperiencePresentationLifecycleRecorder {
     var isShellPresented: () -> Bool = { false }
     var hostDismissalWillHandler: (@MainActor () async -> Void)?
     var hostDismissalHandler: (@MainActor () async -> Void)?
+    var hostDismissalResult = true
 }
 
 extension ExperiencePresentationLifecycleRecorder:
@@ -41,12 +42,14 @@ extension ExperiencePresentationLifecycleRecorder: ExperienceRuntimeDelegate {
         ordinaryDismissalReasons.append(reason)
     }
 
+    @discardableResult
     func experienceViewControllerDidRequestHostDismiss(
         _ controller: ExperienceViewController
-    ) async {
+    ) async -> Bool {
         hostDismissalStarted = true
         await hostDismissalHandler?()
         hostDismissalFinished = true
+        return hostDismissalResult
     }
 
     func experienceViewControllerWillRequestHostDismiss(
@@ -967,6 +970,239 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 expect(mockWindowProvider.createdWindows).to(beEmpty())
             }
 
+            it("attributes host dismissal to the journey identity") { @MainActor in
+                let flowId = "host-dismiss-identity"
+                let journeyDistinctId = "journey-user"
+                let identity = MockIdentityService()
+                identity.setDistinctId("replacement-user")
+                mockEventLog.identity = identity
+
+                let journey = Journey(
+                    experience: makeExperience(id: "identity-experience"),
+                    distinctId: journeyDistinctId,
+                    now: Date()
+                )
+                let mockVC = MockExperienceViewController(
+                    mockExperienceVersionId: flowId
+                )
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                try! await service.presentExperience(
+                    flowId,
+                    from: journey,
+                    runtimeDelegate: nil
+                )
+
+                await service.dismissCurrentExperienceFromHost()
+
+                let dismissed = mockEventLog.routedEvents.filter {
+                    $0.name == JourneyEvents.experienceDismissed
+                }
+                expect(dismissed).to(haveCount(1))
+                expect(dismissed.first?.distinctId).to(equal(journeyDistinctId))
+            }
+
+            it("preserves presentation when terminalization fails") { @MainActor in
+                let flowId = "host-dismiss-terminalization-retry"
+                let mockVC = MockExperienceViewController(
+                    mockExperienceVersionId: flowId
+                )
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                recorder.hostDismissalResult = false
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                try! await service.presentExperience(
+                    flowId,
+                    from: nil,
+                    runtimeDelegate: recorder
+                )
+                let window = mockWindowProvider.createdWindows.first
+
+                await service.dismissCurrentExperienceFromHost()
+
+                expect(service.isExperiencePresented).to(beTrue())
+                expect(service.currentExperienceViewController).to(beIdenticalTo(mockVC))
+                expect(window?.dismissCalled).to(beFalse())
+                expect(window?.destroyCalled).to(beFalse())
+                expect(mockVC.prepareForDismissalCallCount).to(equal(0))
+                expect(mockVC.shutdownRuntimeCallCount).to(equal(0))
+
+                recorder.hostDismissalResult = true
+                await service.dismissCurrentExperienceFromHost()
+
+                expect(service.isExperiencePresented).to(beFalse())
+                expect(window?.dismissCalled).to(beTrue())
+                expect(window?.destroyCalled).to(beTrue())
+                expect(mockVC.prepareForDismissalCallCount).to(equal(1))
+                expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
+            }
+
+            it("releases host dismissal ownership after identity cancellation removes its journey") { @MainActor in
+                let cancelledFlowId = "host-dismiss-cancelled-journey"
+                let cancelledVC = MockExperienceViewController(
+                    mockExperienceVersionId: cancelledFlowId
+                )
+                let replacementFlowId = "host-dismiss-after-identity-cancellation"
+                let replacementVC = MockExperienceViewController(
+                    mockExperienceVersionId: replacementFlowId
+                )
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                recorder.hostDismissalResult = false
+                let journey = Journey(
+                    experience: makeExperience(id: "cancelled-presentation-journey"),
+                    distinctId: "old-user",
+                    now: Date()
+                )
+                mockExperienceService.mockViewControllers[cancelledFlowId] = cancelledVC
+                mockExperienceService.mockViewControllers[replacementFlowId] = replacementVC
+                try! await service.presentExperience(
+                    cancelledFlowId,
+                    from: journey,
+                    runtimeDelegate: recorder
+                )
+                let cancelledWindow = mockWindowProvider.createdWindows[0]
+
+                // Identity transition cancellation has already removed this
+                // journey from its owner before the host callback arrives.
+                await journey.cancel(at: Date())
+                await service.dismissCurrentExperienceFromHost()
+
+                expect(service.isExperiencePresented).to(beFalse())
+                expect(cancelledWindow.dismissCalled).to(beTrue())
+                expect(cancelledWindow.destroyCalled).to(beTrue())
+                expect(cancelledVC.shutdownRuntimeCallCount).to(equal(1))
+
+                let replacement = try! await service.presentExperience(
+                    replacementFlowId,
+                    from: nil,
+                    runtimeDelegate: nil
+                )
+                expect(replacement).to(beIdenticalTo(replacementVC))
+                expect(service.currentExperienceViewController)
+                    .to(beIdenticalTo(replacementVC))
+            }
+
+            it("keeps queued replacement behind a failed host dismissal until retry succeeds") { @MainActor in
+                let currentFlowId = "host-dismiss-failed-current"
+                let currentVC = MockExperienceViewController(
+                    mockExperienceVersionId: currentFlowId
+                )
+                let replacementFlowId = "host-dismiss-failed-replacement"
+                let replacementVC = MockExperienceViewController(
+                    mockExperienceVersionId: replacementFlowId
+                )
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                let firstTerminalizationGate = ExperiencePresentationTestGate()
+                recorder.hostDismissalResult = false
+                recorder.hostDismissalHandler = {
+                    await firstTerminalizationGate.wait()
+                }
+                mockExperienceService.mockViewControllers[currentFlowId] = currentVC
+                mockExperienceService.mockViewControllers[replacementFlowId] = replacementVC
+                try! await service.presentExperience(
+                    currentFlowId,
+                    from: nil,
+                    runtimeDelegate: recorder
+                )
+                let currentWindow = mockWindowProvider.createdWindows[0]
+
+                let failedDismissal = Task { @MainActor in
+                    await service.dismissCurrentExperienceFromHost()
+                }
+                await firstTerminalizationGate.waitUntilSuspended()
+
+                let replacementStarted = ExperiencePresentationTestSignal()
+                let replacement = Task { @MainActor in
+                    replacementStarted.signal()
+                    return PollingBox(try await service.presentExperience(
+                        replacementFlowId,
+                        from: nil,
+                        runtimeDelegate: nil
+                    ))
+                }
+                await replacementStarted.wait()
+                await Task.yield()
+
+                firstTerminalizationGate.resume()
+                await failedDismissal.value
+                for _ in 0..<100
+                where !currentWindow.destroyCalled
+                    && replacementVC.prepareForPresentationCallCount == 0 {
+                    await Task.yield()
+                }
+
+                expect(service.currentExperienceViewController).to(beIdenticalTo(currentVC))
+                expect(currentWindow.dismissCalled).to(beFalse())
+                expect(currentWindow.destroyCalled).to(beFalse())
+                expect(currentVC.shutdownRuntimeCallCount).to(equal(0))
+                expect(replacementVC.prepareForPresentationCallCount).to(equal(0))
+                expect(mockWindowProvider.createdWindows).to(haveCount(1))
+
+                recorder.hostDismissalHandler = nil
+                recorder.hostDismissalResult = true
+                await service.dismissCurrentExperienceFromHost()
+                let presentedReplacement = try! await replacement.value.value
+
+                expect(currentWindow.dismissCalled).to(beTrue())
+                expect(currentWindow.destroyCalled).to(beTrue())
+                expect(currentVC.shutdownRuntimeCallCount).to(equal(1))
+                expect(presentedReplacement).to(beIdenticalTo(replacementVC))
+                expect(service.currentExperienceViewController).to(beIdenticalTo(replacementVC))
+                expect(mockWindowProvider.createdWindows).to(haveCount(2))
+            }
+
+            it("releases concurrent host callers after a failed attempt without releasing presentation ownership") { @MainActor in
+                let flowId = "host-dismiss-concurrent-failure"
+                let mockVC = MockExperienceViewController(
+                    mockExperienceVersionId: flowId
+                )
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                let firstTerminalizationGate = ExperiencePresentationTestGate()
+                recorder.hostDismissalResult = false
+                recorder.hostDismissalHandler = {
+                    await firstTerminalizationGate.wait()
+                }
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                try! await service.presentExperience(
+                    flowId,
+                    from: nil,
+                    runtimeDelegate: recorder
+                )
+                let window = mockWindowProvider.createdWindows[0]
+
+                let failedDismissal = Task { @MainActor in
+                    await service.dismissCurrentExperienceFromHost()
+                }
+                await firstTerminalizationGate.waitUntilSuspended()
+
+                let concurrentDismissalStarted = ExperiencePresentationTestSignal()
+                let concurrentDismissalFinished = ExperiencePresentationTestSignal()
+                let concurrentDismissal = Task { @MainActor in
+                    concurrentDismissalStarted.signal()
+                    await service.dismissCurrentExperienceFromHost()
+                    concurrentDismissalFinished.signal()
+                }
+                await concurrentDismissalStarted.wait()
+
+                firstTerminalizationGate.resume()
+                await failedDismissal.value
+                for _ in 0..<100 where !concurrentDismissalFinished.isSignaled {
+                    await Task.yield()
+                }
+
+                expect(concurrentDismissalFinished.isSignaled).to(beTrue())
+                expect(service.currentExperienceViewController).to(beIdenticalTo(mockVC))
+                expect(window.dismissCalled).to(beFalse())
+                expect(window.destroyCalled).to(beFalse())
+
+                recorder.hostDismissalHandler = nil
+                recorder.hostDismissalResult = true
+                await service.dismissCurrentExperienceFromHost()
+                await concurrentDismissal.value
+
+                expect(service.isExperiencePresented).to(beFalse())
+                expect(window.dismissCalled).to(beTrue())
+                expect(window.destroyCalled).to(beTrue())
+            }
+
             it("waits for an in-flight purchase before host dismissal") { @MainActor in
                 let testStore = SuspendedExperienceTestStore()
                 let transactionService = TransactionService(
@@ -1539,6 +1775,8 @@ private final class ExperiencePresentationTestGate {
 private final class ExperiencePresentationTestSignal {
     private var wasSignaled = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var isSignaled: Bool { wasSignaled }
 
     func signal() {
         guard !wasSignaled else { return }

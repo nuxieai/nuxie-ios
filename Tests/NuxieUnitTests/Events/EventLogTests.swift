@@ -1181,6 +1181,68 @@ final class EventLogTests: AsyncSpec {
                         .to(equal(["prepared_first", "direct_second", "$journey_claimed"]))
                 }
 
+                it("does not deadlock a queued ownership decision behind a waiting trigger") {
+                    let transport = DecisionPredecessorPreparedEventTransport()
+                    let orderedLog = EventLog(
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
+                        apiClient: transport,
+                        store: mockStore
+                    )
+                    log = orderedLog
+                    try await orderedLog.configure(configuration: testConfig)
+                    let callback = DecisionOwnershipCallbackRecorder()
+                    let decisionStore = mockStore!
+                    await orderedLog.setJourneyHandoffDeliveredHandler { journeyId in
+                        await callback.record(
+                            journeyId: journeyId,
+                            sourceWasAcknowledged: decisionStore.deliveredIds.contains(
+                                "queued-handoff-before-prepared"
+                            )
+                        )
+                    }
+
+                    await orderedLog.enqueueForDelivery(NuxieEvent(
+                        id: "queued-handoff-before-prepared",
+                        name: JourneyEvents.journeyHandoff,
+                        distinctId: "test-distinct-id",
+                        properties: [
+                            "journey_id": "deadlock-journey",
+                            "epoch": 0,
+                        ]
+                    ))
+                    let prepared = await orderedLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "prepared-after-handoff-id",
+                            name: "prepared_first",
+                            distinctId: "test-distinct-id"
+                        )
+                    )
+                    await transport.waitUntilDecisionStarted()
+                    let waitingTrigger = Task {
+                        try await orderedLog.trackForTrigger("direct_second")
+                    }
+                    await expect { await orderedLog.triggerDeliveryIsHeld() }
+                        .toEventually(beTrue())
+
+                    await transport.releaseDecision()
+
+                    _ = await prepared.response.value
+                    _ = try await waitingTrigger.value
+                    await expect { await transport.startedNames }.to(equal([
+                        JourneyEvents.journeyHandoff,
+                        "prepared_first",
+                        "direct_second",
+                    ]))
+                    await expect { await callback.journeyIds }
+                        .to(equal(["deadlock-journey"]))
+                    await expect { await callback.sourceWasAcknowledgedAtCallback }
+                        .to(equal([false]))
+                    expect(mockStore.deliveredIds)
+                        .to(contain("queued-handoff-before-prepared"))
+                }
+
                 it("keeps later prepared events behind an older failed delivery") {
                     let transport = FailedPredecessorPreparedEventTransport()
                     let orderedLog = EventLog(
@@ -1451,6 +1513,81 @@ private actor OrderedPreparedEventTransport: EventTransport {
             eventId: id,
             mailboxPending: name == "prepared_first" && mailboxPendingForFirst
         )
+    }
+}
+
+private actor DecisionPredecessorPreparedEventTransport: EventTransport {
+    private var started: [String] = []
+    private var decisionStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var decisionRelease: CheckedContinuation<Void, Never>?
+    private var decisionReleased = false
+
+    var startedNames: [String] { started }
+
+    func waitUntilDecisionStarted() async {
+        guard !started.contains(JourneyEvents.journeyHandoff) else { return }
+        await withCheckedContinuation { decisionStartWaiters.append($0) }
+    }
+
+    func releaseDecision() {
+        decisionReleased = true
+        decisionRelease?.resume()
+        decisionRelease = nil
+    }
+
+    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
+        BatchResponse(
+            status: "success",
+            processed: events.count,
+            failed: 0,
+            total: events.count,
+            errors: nil
+        )
+    }
+
+    func trackEvent(
+        event: String,
+        distinctId: String,
+        properties: sending [String: Any]?,
+        value: Double?,
+        entityId: String?
+    ) async throws -> EventResponse {
+        await track(name: event, id: event)
+    }
+
+    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
+        await track(name: event.name, id: event.id)
+    }
+
+    private func track(name: String, id: String) async -> EventResponse {
+        started.append(name)
+        guard name == JourneyEvents.journeyHandoff else {
+            return EventResponse(status: "ok", eventId: id)
+        }
+        decisionStartWaiters.forEach { $0.resume() }
+        decisionStartWaiters.removeAll()
+        if !decisionReleased {
+            await withCheckedContinuation { decisionRelease = $0 }
+        }
+        return EventResponse(
+            status: "ok",
+            eventId: id,
+            journeyOwnership: .init(
+                journeyId: "deadlock-journey",
+                accepted: true,
+                epoch: 1
+            )
+        )
+    }
+}
+
+private actor DecisionOwnershipCallbackRecorder {
+    private(set) var journeyIds: [String] = []
+    private(set) var sourceWasAcknowledgedAtCallback: [Bool] = []
+
+    func record(journeyId: String, sourceWasAcknowledged: Bool) {
+        journeyIds.append(journeyId)
+        sourceWasAcknowledgedAtCallback.append(sourceWasAcknowledged)
     }
 }
 

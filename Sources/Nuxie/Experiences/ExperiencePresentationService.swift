@@ -56,6 +56,23 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     private struct PresentationOperationState {
         var presentationID: UUID?
     }
+
+    private enum HostDismissalOwnership {
+        case inProgress(presentationID: UUID)
+        case retryRequired(presentationID: UUID)
+
+        var presentationID: UUID {
+            switch self {
+            case .inProgress(let presentationID), .retryRequired(let presentationID):
+                return presentationID
+            }
+        }
+
+        var attemptIsInProgress: Bool {
+            if case .inProgress = self { return true }
+            return false
+        }
+    }
     
     // MARK: - Dependencies
     
@@ -76,8 +93,9 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     private var currentPresentationID: UUID?
     private var presentationAttemptGeneration: UInt64 = 0
     private var presentationCleanupTask: Task<Void, Never>?
-    private var hostDismissalPresentationID: UUID?
-    private var hostDismissalWaiters: [CheckedContinuation<Void, Never>] = []
+    private var hostDismissalOwnership: HostDismissalOwnership?
+    private var hostDismissalOwnershipWaiters: [CheckedContinuation<Void, Never>] = []
+    private var hostDismissalAttemptWaiters: [CheckedContinuation<Void, Never>] = []
     private var activePresentationOperations: [UUID: PresentationOperationState] = [:]
     private var presentationOperationWaiters:
         [UUID: [CheckedContinuation<Void, Never>]] = [:]
@@ -193,7 +211,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         initialScreenID: String?,
         expectedCommit: JourneyPendingPresentation?
     ) async throws -> ExperienceViewController {
-        await waitForHostDismissalIfNeeded()
+        await waitForHostDismissalOwnershipIfNeeded()
         let presentationOperationID = beginPresentationOperation()
         defer { finishPresentationOperation(presentationOperationID) }
         LogInfo("ExperiencePresentationService: Presenting experience \(experienceVersionId)")
@@ -414,7 +432,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             LogDebug("ExperiencePresentationService: No experience to dismiss")
             return
         }
-        await waitForHostDismissalIfNeeded()
+        await waitForHostDismissalOwnershipIfNeeded()
         guard currentPresentationID == presentationID else { return }
         presentationAttemptGeneration &+= 1
         
@@ -432,7 +450,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             LogDebug("ExperiencePresentationService: No experience to dismiss")
             return
         }
-        await waitForHostDismissalIfNeeded()
+        await waitForHostDismissalOwnershipIfNeeded()
         guard currentPresentationID == presentationID else { return }
         presentationAttemptGeneration &+= 1
 
@@ -446,8 +464,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     }
 
     func dismissCurrentExperienceFromHost() async {
-        if hostDismissalPresentationID != nil {
-            await waitForHostDismissalIfNeeded()
+        if hostDismissalOwnership?.attemptIsInProgress == true {
+            await waitForHostDismissalAttemptIfNeeded()
             return
         }
         guard let presentationID = currentPresentationID,
@@ -457,9 +475,23 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         }
 
         let runtimeDelegate = currentRuntimeDelegate
-        hostDismissalPresentationID = presentationID
+        if let ownedPresentationID = hostDismissalOwnership?.presentationID,
+           ownedPresentationID != presentationID {
+            finishHostDismissalOwnership(presentationID: ownedPresentationID)
+        }
+        hostDismissalOwnership = .inProgress(presentationID: presentationID)
         experienceViewController.beginHostDismissal()
-        defer { finishHostDismissalReservation(presentationID: presentationID) }
+        var retryRequired = false
+        defer {
+            if retryRequired, currentPresentationID == presentationID {
+                hostDismissalOwnership = .retryRequired(
+                    presentationID: presentationID
+                )
+            } else {
+                finishHostDismissalOwnership(presentationID: presentationID)
+            }
+            finishHostDismissalAttempt()
+        }
         presentationAttemptGeneration &+= 1
 
         await runtimeDelegate?.experienceViewControllerWillRequestHostDismiss(
@@ -475,13 +507,29 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         await experienceViewController.waitForInFlightCommerceBeforeHostDismissal()
         guard currentPresentationID == presentationID else { return }
 
-        await experienceViewController.prepareForDismissal(reason: .hostDismissed)
-        guard currentPresentationID == presentationID else { return }
-
-        await runtimeDelegate?.experienceViewControllerDidRequestHostDismiss(
+        let terminalized = await runtimeDelegate?.experienceViewControllerDidRequestHostDismiss(
             experienceViewController
-        )
+        ) ?? true
         guard currentPresentationID == presentationID else { return }
+        guard terminalized else {
+            // A false result normally means that the journey's terminal write
+            // should be retried. An identity change can instead have already
+            // cancelled and removed the journey while its host presentation is
+            // still visible. There is then nothing left to terminalize, so do
+            // not retain host-dismissal ownership and wedge later presents.
+            if let journey = currentJourney,
+               !(await journey.snapshot()).status.isLive {
+                await finishPresentation(
+                    id: presentationID,
+                    reason: .hostDismissed,
+                    dismissWindow: true
+                )
+                return
+            }
+            experienceViewController.cancelHostDismissal()
+            retryRequired = true
+            return
+        }
 
         await finishPresentation(
             id: presentationID,
@@ -508,8 +556,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         reason: CloseReason,
         presentationID: UUID
     ) async {
-        if hostDismissalPresentationID == presentationID {
-            await waitForHostDismissalIfNeeded()
+        if hostDismissalOwnership?.presentationID == presentationID {
+            await waitForHostDismissalOwnershipIfNeeded()
             return
         }
         await finishPresentation(
@@ -598,18 +646,31 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         }
     }
 
-    private func waitForHostDismissalIfNeeded() async {
-        guard hostDismissalPresentationID != nil else { return }
+    private func waitForHostDismissalOwnershipIfNeeded() async {
+        guard hostDismissalOwnership != nil else { return }
         await withCheckedContinuation { continuation in
-            hostDismissalWaiters.append(continuation)
+            hostDismissalOwnershipWaiters.append(continuation)
         }
     }
 
-    private func finishHostDismissalReservation(presentationID: UUID) {
-        guard hostDismissalPresentationID == presentationID else { return }
-        hostDismissalPresentationID = nil
-        let waiters = hostDismissalWaiters
-        hostDismissalWaiters.removeAll()
+    private func waitForHostDismissalAttemptIfNeeded() async {
+        guard hostDismissalOwnership?.attemptIsInProgress == true else { return }
+        await withCheckedContinuation { continuation in
+            hostDismissalAttemptWaiters.append(continuation)
+        }
+    }
+
+    private func finishHostDismissalOwnership(presentationID: UUID) {
+        guard hostDismissalOwnership?.presentationID == presentationID else { return }
+        hostDismissalOwnership = nil
+        let waiters = hostDismissalOwnershipWaiters
+        hostDismissalOwnershipWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    private func finishHostDismissalAttempt() {
+        let waiters = hostDismissalAttemptWaiters
+        hostDismissalAttemptWaiters.removeAll()
         waiters.forEach { $0.resume() }
     }
 
@@ -617,7 +678,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         _ presentationID: UUID,
         reason: CloseReason?
     ) -> Bool {
-        guard hostDismissalPresentationID == presentationID else { return false }
+        guard hostDismissalOwnership?.presentationID == presentationID else { return false }
         return reason != .hostDismissed
     }
 
@@ -684,7 +745,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         attemptGeneration: UInt64,
         fallbackWindow: PresentationWindowProtocol
     ) async throws {
-        if hostDismissalPresentationID == presentationID {
+        if hostDismissalOwnership?.presentationID == presentationID {
             throw CancellationError()
         }
         guard !Task.isCancelled,
@@ -720,7 +781,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                     journey: state
                 ),
                 userProperties: nil,
-                userPropertiesSetOnce: nil
+                userPropertiesSetOnce: nil,
+                distinctIdOverride: journey.distinctId
             )
         case .error(let error):
             eventLog.track(
