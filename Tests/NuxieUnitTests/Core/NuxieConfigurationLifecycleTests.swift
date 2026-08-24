@@ -1,5 +1,5 @@
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
 private actor StartupLifecycleProbe {
