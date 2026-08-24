@@ -225,11 +225,11 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                         )
                     ),
                     vector(
-                        JourneyEvents.delegateCalled,
-                        JourneyEvents.delegateCalledProperties(
+                        JourneyEvents.appActionRequested,
+                        JourneyEvents.appActionRequestedProperties(
                             journey: journey,
                             screenId: "screen-1",
-                            message: "complete",
+                            name: "complete",
                             payload: ["source": "vector"]
                         )
                     ),

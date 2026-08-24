@@ -30,10 +30,14 @@ public protocol NuxieDelegate: AnyObject {
     ///   - oldValue: Previous access state (nil if feature was not previously cached)
     ///   - newValue: New access state
     func featureAccessDidChange(_ featureId: String, from oldValue: FeatureAccess?, to newValue: FeatureAccess)
+
+    /// Called when an experience's Run App Action step asks the host app to act.
+    func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction)
 }
 
 // MARK: - Default Implementations
 
 public extension NuxieDelegate {
     func featureAccessDidChange(_ featureId: String, from oldValue: FeatureAccess?, to newValue: FeatureAccess) {}
+    func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction) {}
 }

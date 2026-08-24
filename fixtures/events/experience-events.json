@@ -56,8 +56,8 @@
       ]
     },
     {
-      "event": "$delegate_called",
-      "properties": ["experience_id", "journey_id", "message", "payload", "screen_id"]
+      "event": "$app_action_requested",
+      "properties": ["experience_id", "journey_id", "name", "payload", "screen_id"]
     },
     {
       "event": "$experiment_exposure",

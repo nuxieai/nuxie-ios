@@ -691,13 +691,13 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         case "request_tracking": required = ["type"]; optional = []
         case "open_link": required = ["type", "url", "target"]; optional = []
         case "dismiss", "exit": required = ["type"]; optional = ["reason"]
-        case "call_delegate": required = ["type", "message"]; optional = ["payload"]
+        case "app_action": required = ["type", "name"]; optional = ["nodeId", "payload"]
         case "connector_action": required = ["type", "accountRef", "toolKey", "payload", "timeoutMs", "onSucceeded", "onFailed", "onTimeout"]; optional = []
         case "grant_entitlement": required = ["type", "featureId", "onSucceeded", "onFailed", "onTimeout"]; optional = ["balance", "unlimited"]
         default: try invalid("\(path).type")
         }
         _ = try object(action, required: required, optional: optional, path: path)
-        for field in ["screenId", "eventName", "experimentId", "milestoneId", "permissionType", "accountRef", "toolKey", "featureId"] where action[field] != nil {
+        for field in ["screenId", "eventName", "experimentId", "milestoneId", "permissionType", "accountRef", "toolKey", "featureId", "nodeId"] where action[field] != nil {
             try identifier(action[field], path: "\(path).\(field)")
         }
         if type == "navigate", let screenID = action["screenId"] as? String, !screenIDs.contains(screenID) {
@@ -770,8 +770,8 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         case "open_link":
             try validateJourneyStringValue(action["url"], path: "\(path).url")
             try enumeration(action["target"], values: ["external", "in_app"], path: "\(path).target")
-        case "call_delegate":
-            try boundedString(action["message"], minimum: 1, maximumUTF16: 2_048, path: "\(path).message")
+        case "app_action":
+            try boundedString(action["name"], minimum: 1, maximumUTF16: 2_048, path: "\(path).name")
             if let payload = action["payload"] { try validateJourneyValueRecord(payload, path: "\(path).payload") }
         case "connector_action":
             try validateJourneyValueRecord(action["payload"], path: "\(path).payload")

@@ -215,6 +215,7 @@ actor JourneyRunner {
     private let apiClient: ResponseWriting
     private let dateProvider: DateProviderProtocol
     private let irRuntime: IRRuntime
+    private let appActionHandler: @MainActor @Sendable (AppAction) -> Void
     /// The exact signed execution plan selected for this route and start
     /// plane. Plan selection is fail-closed.
     private let executionPlan: JourneyExecutionPlan?
@@ -340,6 +341,7 @@ actor JourneyRunner {
         apiClient: ResponseWriting,
         dateProvider: DateProviderProtocol,
         irRuntime: IRRuntime,
+        appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in },
         responseSessionModule: ResponseSessionModule? = nil,
         persistResponseRetryMarker: @escaping @Sendable (JourneySnapshot) async -> Bool = { _ in true },
         persistEntryActionClaim: @escaping @Sendable (JourneySnapshot) async -> Bool,
@@ -361,6 +363,7 @@ actor JourneyRunner {
         self.apiClient = apiClient
         self.dateProvider = dateProvider
         self.irRuntime = irRuntime
+        self.appActionHandler = appActionHandler
         let definition = experience.definition
         let persistedPlanId = initialState.executionState.planId
         let persistedPlan = persistedPlanId.flatMap { definition?.executionPlan(id: $0) }
@@ -2476,7 +2479,7 @@ actor JourneyRunner {
         let replayResult: ActionResult
         switch action {
         case .purchase, .restore, .requestNotifications, .requestPermission,
-             .requestTracking, .openLink, .callDelegate, .updateCustomer:
+             .requestTracking, .openLink, .appAction, .updateCustomer:
             replayResult = .continue
         case .dismiss, .back:
             replayResult = .stopSequence
@@ -2744,8 +2747,8 @@ actor JourneyRunner {
             return await handleOpenLink(openLink, context: context)
         case .dismiss(let dismiss):
             return await handleDismiss(dismiss, context: context)
-        case .callDelegate(let callDelegate):
-            await handleCallDelegate(callDelegate, context: context)
+        case .appAction(let appAction):
+            await handleAppAction(appAction, context: context)
             return .continue
         case .connectorAction(let effect):
             return await handleConnectorEffect(
@@ -3610,38 +3613,54 @@ actor JourneyRunner {
         return .null
     }
 
-    private func handleCallDelegate(
-        _ action: CallDelegateAction,
+    func handleAppAction(
+        _ action: AppActionStep,
         context: TriggerContext
     ) async {
         guard await executionRemainsLive() else { return }
-        var userInfo: [String: Any] = [
-            "message": action.message,
-            "journeyId": journey.id,
-            "experienceId": journey.experienceId,
-        ]
-        if let payload = action.journeyPayload {
-            userInfo["payload"] = await resolveJourneyRecord(payload, payload: context.payload)
-            guard await executionRemainsLive() else { return }
+        let resolvedPayload: [String: Any]?
+        if let payload = action.payload {
+            resolvedPayload = await resolveJourneyRecord(payload, payload: context.payload)
+        } else {
+            resolvedPayload = nil
         }
 
-        guard lastMileEffectRemainsLive() else { return }
-        NotificationCenter.default.post(
-            name: .nuxieCallDelegate,
-            object: nil,
-            userInfo: userInfo
-        )
-
         let state = await journey.snapshot()
-        guard await executionRemainsLive(), !state.isGhost else { return }
+        guard await executionRemainsLive() else { return }
         guard lastMileEffectRemainsLive() else { return }
+        let appAction = AppAction(
+            name: action.name,
+            payload: resolvedPayload.map(AppActionValue.resolvedRecord),
+            experience: ExperienceRef(
+                experienceId: state.experienceId,
+                experienceVersion: state.experienceVersion,
+                journeyId: state.id
+            )
+        )
+        await MainActor.run { [weak self] in
+            // The hop to the main actor can queue behind other work; an
+            // identity change or shutdown may retire this runner meanwhile.
+            // Re-check the fence here so a stale action can never be handed
+            // to the host for a replacement user.
+            guard let self, self.lastMileEffectRemainsLive() else { return }
+            self.appActionHandler(appAction)
+        }
+
+        // The snapshot above predates the main-actor callback; a server
+        // supersede can have ghosted the journey while it was suspended, so
+        // re-read before emitting the accounting rider.
+        let postCallbackState = await journey.snapshot()
+        guard await executionRemainsLive(), !postCallbackState.isGhost else { return }
         eventLog.track(
-            JourneyEvents.delegateCalled,
-            properties: JourneyEvents.delegateCalledProperties(
+            JourneyEvents.appActionRequested,
+            properties: JourneyEvents.appActionRequestedProperties(
                 journey: state,
                 screenId: context.screenId ?? state.executionState.currentScreenId,
-                message: action.message,
-                payload: action.journeyPayload.map { $0.mapValues(\.foundationValue) }
+                name: action.name,
+                // The rider rides the wire and is JSON-encoded downstream;
+                // reuse the delegate payload's sanitizer so a non-finite
+                // resolved field cannot fail encoding for the whole event.
+                payload: resolvedPayload.map(AppActionValue.sanitizedRecord)
             ),
             userProperties: nil,
             userPropertiesSetOnce: nil

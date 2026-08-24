@@ -320,7 +320,7 @@ enum JourneyAction: Codable, Sendable {
     case requestTracking(RequestTrackingAction)
     case openLink(OpenLinkAction)
     case dismiss(DismissAction)
-    case callDelegate(CallDelegateAction)
+    case appAction(AppActionStep)
     case connectorAction(ConnectorAction)
     case grantEntitlement(GrantEntitlementAction)
     case setViewModel(SetViewModelAction)
@@ -359,7 +359,7 @@ enum JourneyAction: Codable, Sendable {
         case requestTracking = "request_tracking"
         case openLink = "open_link"
         case dismiss
-        case callDelegate = "call_delegate"
+        case appAction = "app_action"
         case connectorAction = "connector_action"
         case grantEntitlement = "grant_entitlement"
         case setViewModel = "set_view_model"
@@ -418,8 +418,8 @@ enum JourneyAction: Codable, Sendable {
             self = .openLink(try OpenLinkAction(from: decoder))
         case .dismiss:
             self = .dismiss(try DismissAction(from: decoder))
-        case .callDelegate:
-            self = .callDelegate(try CallDelegateAction(from: decoder))
+        case .appAction:
+            self = .appAction(try AppActionStep(from: decoder))
         case .connectorAction:
             self = .connectorAction(try ConnectorAction(from: decoder))
         case .grantEntitlement:
@@ -495,7 +495,7 @@ enum JourneyAction: Codable, Sendable {
             try action.encode(to: encoder)
         case .dismiss(let action):
             try action.encode(to: encoder)
-        case .callDelegate(let action):
+        case .appAction(let action):
             try action.encode(to: encoder)
         case .connectorAction(let action):
             try action.encode(to: encoder)
@@ -569,7 +569,7 @@ extension JourneyAction {
             return action.nodeId
         case .dismiss(let action):
             return action.nodeId
-        case .callDelegate(let action):
+        case .appAction(let action):
             return action.nodeId
         case .connectorAction(let action):
             return action.nodeId
@@ -1397,50 +1397,52 @@ struct DismissAction: Codable, Sendable {
     }
 }
 
-struct CallDelegateAction: Codable, Sendable {
+/// Wire model for a published Run App Action journey step.
+struct AppActionStep: Codable, Sendable {
+    /// Canonical wire discriminator. Its value is always `app_action`.
     let type: String
     /// Stable compiler-authored identity used by transition facts.
     let nodeId: String?
-    let message: String
-    let payload: AnyCodable?
-    let journeyPayload: [String: JourneyValue]?
+    /// Designer-authored action name delivered to the host application.
+    let name: String
+    /// Authored values that are resolved against the journey context at runtime.
+    let payload: [String: JourneyValue]?
 
     init(
-        type: String = "call_delegate",
+        type: String = "app_action",
         nodeId: String? = nil,
-        message: String,
-        payload: AnyCodable? = nil
+        name: String,
+        payload: [String: JourneyValue]? = nil
     ) {
         self.type = type
         self.nodeId = nodeId
-        self.message = message
+        self.name = name
         self.payload = payload
-        if let payload, let values = payload.value as? [String: Any] {
-            self.journeyPayload = values.mapValues(JourneyValue.fromFoundation)
-        } else {
-            self.journeyPayload = nil
-        }
     }
 
-    private enum CodingKeys: String, CodingKey { case type, message, payload }
+    private enum CodingKeys: String, CodingKey { case type, nodeId, name, payload }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
-        guard type == "call_delegate" else {
-            throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "invalid call_delegate action")
+        guard type == "app_action" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: c,
+                debugDescription: "invalid app_action step"
+            )
         }
-        nodeId = nil
-        message = try c.decode(String.self, forKey: .message)
-        journeyPayload = try c.decodeIfPresent([String: JourneyValue].self, forKey: .payload)
-        payload = journeyPayload.map { AnyCodable($0.mapValues(\.foundationValue)) }
+        nodeId = try c.decodeIfPresent(String.self, forKey: .nodeId)
+        name = try c.decode(String.self, forKey: .name)
+        payload = try c.decodeIfPresent([String: JourneyValue].self, forKey: .payload)
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
-        try c.encode(message, forKey: .message)
-        try c.encodeIfPresent(journeyPayload, forKey: .payload)
+        try c.encodeIfPresent(nodeId, forKey: .nodeId)
+        try c.encode(name, forKey: .name)
+        try c.encodeIfPresent(payload, forKey: .payload)
     }
 }
 

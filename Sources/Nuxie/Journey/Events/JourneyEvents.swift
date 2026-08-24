@@ -46,7 +46,7 @@ final class JourneyEvents: Sendable {
 
     static let customerUpdated = "$customer_updated"
     static let eventSent = "$event_sent"
-    static let delegateCalled = "$delegate_called"
+    static let appActionRequested = "$app_action_requested"
 
     /// Real exposure from a server experiment assignment. Properties are
     /// pinned by `fixtures/journeys/golden-journeys.json`.
@@ -433,24 +433,24 @@ final class JourneyEvents: Sendable {
         return properties
     }
 
-    /// Builds journey and experience context for a delegate-call rider.
+    /// Builds journey and experience context for an app-action rider.
     ///
     /// - Parameters:
-    ///   - journey: Journey that initiated the delegate call.
+    ///   - journey: Journey that requested the app action.
     ///   - screenId: Originating screen identifier, when available.
-    ///   - message: Authored delegate message.
-    ///   - payload: Authored delegate payload, when supplied.
+    ///   - name: Authored app-action name.
+    ///   - payload: Resolved app-action payload, when supplied.
     /// - Returns: Canonical rider properties.
-    static func delegateCalledProperties(
+    static func appActionRequestedProperties(
         journey: JourneySnapshot,
         screenId: String?,
-        message: String,
+        name: String,
         payload: Any?
     ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
             "experience_id": journey.experienceId,
-            "message": message
+            "name": name
         ]
         if let screenId {
             properties["screen_id"] = screenId

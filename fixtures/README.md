@@ -8,7 +8,7 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `events/down-facts`: repeated server facts commit once, never upload, and route once to subscribers.
 - `events/experience-events`: canonical `$experience_*` names and the
   experience identity/version properties carried by presentation facts and
-  their customer/event/delegate/experiment riders.
+  their customer/event/app-action/experiment riders.
 - `events/atomic-purchase-sync`: exact `$purchase_synced` properties plus the
   stable retry identity, capture-before-retirement ordering, evidence
   retention, post-use access, and one-emission contract for atomic

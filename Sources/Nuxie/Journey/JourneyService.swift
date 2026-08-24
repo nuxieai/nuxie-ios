@@ -180,6 +180,7 @@ actor JourneyService: JourneyServiceProtocol {
   private let goalEvaluator: GoalEvaluatorProtocol
   private let irRuntime: IRRuntime
   private let api: ResponseWriting
+  private let appActionHandler: @MainActor @Sendable (AppAction) -> Void
   private let presentationTrace: ExperiencePresentationTraceRecording
   private let restoredPresentationAttempt: ExperiencePresentationAttempt?
 
@@ -230,6 +231,7 @@ actor JourneyService: JourneyServiceProtocol {
     goalEvaluator: GoalEvaluatorProtocol,
     irRuntime: IRRuntime,
     api: ResponseWriting,
+    appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in },
     presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace(),
     restoredPresentationAttempt: ExperiencePresentationAttempt? = nil
   ) {
@@ -248,6 +250,7 @@ actor JourneyService: JourneyServiceProtocol {
     self.goalEvaluator = goalEvaluator
     self.irRuntime = irRuntime
     self.api = api
+    self.appActionHandler = appActionHandler
     self.presentationTrace = presentationTrace
     self.restoredPresentationAttempt = restoredPresentationAttempt
     self.timerScheduler = JourneyTimerScheduler(
@@ -3031,6 +3034,7 @@ actor JourneyService: JourneyServiceProtocol {
         apiClient: api,
         dateProvider: dateProvider,
         irRuntime: irRuntime,
+        appActionHandler: appActionHandler,
         responseSessionModule: controlExperience.definition?.responseSchema.map { _ in
           ResponseSessionModule(
             store: JourneyResponseSessionStore(
