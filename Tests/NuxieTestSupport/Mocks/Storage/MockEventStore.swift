@@ -24,6 +24,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _deliveredIds: [String] = []
     private var _stableDroppedAt: [String: Date] = [:]
     private var _historyCoverageStart: Date?
+    private var _journeyOwnershipFences: [String: Int] = [:]
+    private var _unresolvedJourneyOwnershipResponses:
+        [String: Set<JourneyEventOwnership>] = [:]
     private var _isInitialized = false
     private var _isClosed = false
 
@@ -46,6 +49,13 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         get { lock.withLock { _historyCoverageStart } }
         set { lock.withLock { _historyCoverageStart = newValue } }
     }
+    public var journeyOwnershipFences: [String: Int] {
+        lock.withLock { _journeyOwnershipFences }
+    }
+    public var unresolvedJourneyOwnershipResponses:
+        [String: Set<JourneyEventOwnership>] {
+        lock.withLock { _unresolvedJourneyOwnershipResponses }
+    }
     public var isInitialized: Bool {
         get { lock.withLock { _isInitialized } }
         set { lock.withLock { _isInitialized = newValue } }
@@ -61,6 +71,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _shouldFailQuery = false
     private var _shouldFailIRQuery = false
     private var _shouldFailMarkDelivered = false
+    private var _shouldFailOwnershipFenceRecord = false
+    private var _shouldFailUnresolvedJourneyOwnershipResponseRecord = false
     private var _pendingDeliveryQueryDelay: TimeInterval = 0
     private var _pendingInsertDelayNanoseconds: UInt64 = 0
     private var _stableCaptureDelayNanoseconds: UInt64 = 0
@@ -90,6 +102,16 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         get { lock.withLock { _shouldFailMarkDelivered } }
         set { lock.withLock { _shouldFailMarkDelivered = newValue } }
     }
+    public var shouldFailOwnershipFenceRecord: Bool {
+        get { lock.withLock { _shouldFailOwnershipFenceRecord } }
+        set { lock.withLock { _shouldFailOwnershipFenceRecord = newValue } }
+    }
+    /// Makes unresolved ownership-response marker writes fail independently
+    /// from ownership-fence writes.
+    public var shouldFailUnresolvedJourneyOwnershipResponseRecord: Bool {
+        get { lock.withLock { _shouldFailUnresolvedJourneyOwnershipResponseRecord } }
+        set { lock.withLock { _shouldFailUnresolvedJourneyOwnershipResponseRecord = newValue } }
+    }
     public var pendingDeliveryQueryDelay: TimeInterval {
         get { lock.withLock { _pendingDeliveryQueryDelay } }
         set { lock.withLock { _pendingDeliveryQueryDelay = newValue } }
@@ -114,6 +136,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _getEventCountCallCount = 0
     private var _closeCallCount = 0
     private var _reassignEventsCallCount = 0
+    private var _journeyOwnershipFenceRecordCallCount = 0
+    private var _unresolvedJourneyOwnershipResponseRecordCallCount = 0
+    private var _journeyOwnershipFenceWriteCount = 0
 
     public var initializeCallCount: Int { lock.withLock { _initializeCallCount } }
     public var storeEventCallCount: Int { lock.withLock { _storeEventCallCount } }
@@ -122,6 +147,18 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public var getEventCountCallCount: Int { lock.withLock { _getEventCountCallCount } }
     public var closeCallCount: Int { lock.withLock { _closeCallCount } }
     public var reassignEventsCallCount: Int { lock.withLock { _reassignEventsCallCount } }
+    /// Total attempted ownership-fence writes, including failed attempts.
+    public var unresolvedJourneyOwnershipResponseRecordCallCount: Int {
+        lock.withLock { _unresolvedJourneyOwnershipResponseRecordCallCount }
+    }
+
+    public var journeyOwnershipFenceRecordCallCount: Int {
+        lock.withLock { _journeyOwnershipFenceRecordCallCount }
+    }
+    /// Successful ownership-fence writes.
+    public var journeyOwnershipFenceWriteCount: Int {
+        lock.withLock { _journeyOwnershipFenceWriteCount }
+    }
 
     // Session tracking
     private var _currentSessionId = UUID.v7().uuidString
@@ -160,9 +197,12 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _pendingIds.removeAll()
             _stableDroppedAt.removeAll()
             _historyCoverageStart = nil
+            _journeyOwnershipFences.removeAll()
+            _unresolvedJourneyOwnershipResponses.removeAll()
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
+            _shouldFailOwnershipFenceRecord = false
         }
     }
 
@@ -205,7 +245,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public func commitStableCapture(
         eventId: String,
         event: StoredEvent?,
-        recordedAt: Date
+        recordedAt: Date,
+        ownership: JourneyEventOwnership?
     ) async throws -> StableEventCaptureOutcome {
         let delayNanoseconds = lock.withLock {
             _stableCaptureCommitCallCount += 1
@@ -221,6 +262,23 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 return .captured(existing, isNew: false)
             }
             if _stableDroppedAt[eventId] != nil { return .dropped }
+            if let ownership,
+               (_journeyOwnershipFences[ownership.journeyId] ?? Int.min)
+                >= ownership.epoch {
+                return .ownershipLost
+            }
+            if let ownership,
+               _unresolvedJourneyOwnershipResponses.values
+                .flatMap({ $0 })
+                .contains(where: {
+                    $0.journeyId == ownership.journeyId
+                        && $0.epoch >= ownership.epoch
+                }) {
+                throw mockError(
+                    3,
+                    "Mock unresolved journey ownership response"
+                )
+            }
             guard let event else {
                 _stableDroppedAt[eventId] = recordedAt
                 return .dropped
@@ -228,6 +286,83 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _storedEvents.append(event)
             _pendingIds.insert(eventId)
             return .captured(event, isNew: true)
+        }
+    }
+
+    public func recordJourneyOwnershipLoss(
+        _ ownership: JourneyEventOwnership,
+        recordedAt: Date
+    ) async throws {
+        try lock.withLock {
+            _journeyOwnershipFenceRecordCallCount += 1
+            if _shouldFailStore || _shouldFailOwnershipFenceRecord {
+                throw mockError(2, "Mock ownership fence store error")
+            }
+            _journeyOwnershipFenceWriteCount += 1
+            let current = _journeyOwnershipFences[ownership.journeyId]
+            _journeyOwnershipFences[ownership.journeyId] = max(
+                current ?? Int.min,
+                ownership.epoch
+            )
+        }
+    }
+
+    public func hasJourneyOwnershipLoss(
+        _ ownership: JourneyEventOwnership
+    ) async throws -> Bool {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            return (_journeyOwnershipFences[ownership.journeyId] ?? Int.min)
+                >= ownership.epoch
+        }
+    }
+
+    public func recordUnresolvedJourneyOwnershipResponse(
+        sourceEventId: String,
+        ownership: JourneyEventOwnership,
+        recordedAt _: Date
+    ) async throws {
+        lock.withLock { _unresolvedJourneyOwnershipResponseRecordCallCount += 1 }
+        try lock.withLock {
+            if _shouldFailStore || _shouldFailUnresolvedJourneyOwnershipResponseRecord {
+                throw mockError(2, "Mock unresolved ownership response store error")
+            }
+            _unresolvedJourneyOwnershipResponses[sourceEventId, default: []]
+                .insert(ownership)
+        }
+    }
+
+    public func hasUnresolvedJourneyOwnershipResponse(
+        _ ownership: JourneyEventOwnership
+    ) async throws -> Bool {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            return _unresolvedJourneyOwnershipResponses.values
+                .flatMap { $0 }
+                .contains {
+                    $0.journeyId == ownership.journeyId
+                        && $0.epoch >= ownership.epoch
+                }
+        }
+    }
+
+    public func queryUnresolvedJourneyOwnershipResponse(
+        sourceEventId: String
+    ) async throws -> [JourneyEventOwnership] {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            return Array(_unresolvedJourneyOwnershipResponses[sourceEventId] ?? [])
+        }
+    }
+
+    public func clearUnresolvedJourneyOwnershipResponse(
+        sourceEventId: String
+    ) async throws {
+        try lock.withLock {
+            if _shouldFailStore {
+                throw mockError(2, "Mock unresolved ownership response delete error")
+            }
+            _unresolvedJourneyOwnershipResponses.removeValue(forKey: sourceEventId)
         }
     }
 
@@ -541,6 +676,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _deliveredIds.removeAll()
             _stableDroppedAt.removeAll()
             _historyCoverageStart = nil
+            _journeyOwnershipFences.removeAll()
+            _unresolvedJourneyOwnershipResponses.removeAll()
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
@@ -548,12 +685,16 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _shouldFailStore = false
             _shouldFailQuery = false
             _shouldFailIRQuery = false
+            _shouldFailOwnershipFenceRecord = false
+            _shouldFailUnresolvedJourneyOwnershipResponseRecord = false
             _initializeCallCount = 0
             _storeEventCallCount = 0
             _getRecentEventsCallCount = 0
             _getEventsForUserCallCount = 0
             _getEventCountCallCount = 0
             _closeCallCount = 0
+            _journeyOwnershipFenceRecordCallCount = 0
+            _journeyOwnershipFenceWriteCount = 0
             _currentSessionId = UUID.v7().uuidString
         }
     }

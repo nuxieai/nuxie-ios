@@ -3643,6 +3643,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         experience base: Experience
     ) throws -> (runner: JourneyRunner, journey: Journey) {
         let mocks = MockFactory.shared
+        // The runner's identity fence only executes last-mile effects for the
+        // journey's own user; align the harness identity with the journey.
+        mocks.identityService.setDistinctId("interactive-user")
         var initialState = JourneySnapshot(
             experience: base,
             distinctId: "interactive-user",

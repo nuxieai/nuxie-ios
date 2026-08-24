@@ -13,6 +13,7 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     private var _shouldThrowOnSave = false
     private var _shouldThrowOnRecord = false
     private var _shouldThrowOnHandledEventRecord = false
+    private var _shouldFailOnDelete = false
 
     public var shouldThrowOnSave: Bool {
         get { withLock { _shouldThrowOnSave } }
@@ -25,6 +26,10 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     public var shouldThrowOnHandledEventRecord: Bool {
         get { withLock { _shouldThrowOnHandledEventRecord } }
         set { withLock { _shouldThrowOnHandledEventRecord = newValue } }
+    }
+    public var shouldFailOnDelete: Bool {
+        get { withLock { _shouldFailOnDelete } }
+        set { withLock { _shouldFailOnDelete = newValue } }
     }
 
     private func withLock<T>(_ body: () throws -> T) rethrows -> T {
@@ -50,8 +55,13 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         return withLock { activeJourneys[id] }
     }
     
-    public func deleteJourney(id: String) {
-        withLock { _ = activeJourneys.removeValue(forKey: id) }
+    @discardableResult
+    public func deleteJourney(id: String) -> Bool {
+        withLock {
+            guard !_shouldFailOnDelete else { return false }
+            _ = activeJourneys.removeValue(forKey: id)
+            return true
+        }
     }
     
     public func recordCompletion(_ record: JourneyCompletionRecord) throws {
@@ -60,7 +70,16 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
                 throw NSError(domain: "TestError", code: 2, userInfo: [NSLocalizedDescriptionKey: "Mock record error"])
             }
             let key = "\(record.distinctId):\(record.experienceId)"
-            completionRecords[key, default: []].append(record)
+            var records = completionRecords[key, default: []]
+            records.removeAll { $0.journeyId == record.journeyId }
+            records.append(record)
+            records.sort {
+                if $0.completedAt == $1.completedAt {
+                    return $0.journeyId < $1.journeyId
+                }
+                return $0.completedAt < $1.completedAt
+            }
+            completionRecords[key] = Array(records.suffix(10))
         }
     }
     
@@ -130,6 +149,7 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
             _shouldThrowOnSave = false
             _shouldThrowOnRecord = false
             _shouldThrowOnHandledEventRecord = false
+            _shouldFailOnDelete = false
         }
     }
     

@@ -248,7 +248,8 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
                         journey: state
                     ),
                     userProperties: nil,
-                    userPropertiesSetOnce: nil
+                    userPropertiesSetOnce: nil,
+                    distinctIdOverride: journey.distinctId
                 )
             case .error(let error):
                 eventLog.track(
@@ -270,13 +271,21 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
         let (controller, delegate) = lock.withLock {
             (_currentExperienceViewController, _currentRuntimeDelegate)
         }
+        var terminalized = true
         if let controller {
             controller.beginHostDismissal()
             await delegate?.experienceViewControllerWillRequestHostDismiss(controller)
             await controller.waitForInFlightCommerceBeforeHostDismissal()
-            await controller.prepareForDismissal(reason: .hostDismissed)
-            await delegate?.experienceViewControllerDidRequestHostDismiss(controller)
+            terminalized = await delegate?.experienceViewControllerDidRequestHostDismiss(
+                controller
+            ) ?? true
+            if terminalized {
+                await controller.prepareForDismissal(reason: .hostDismissed)
+            } else {
+                controller.cancelHostDismissal()
+            }
         }
+        guard terminalized else { return }
         await dismissCurrentExperience(reason: .hostDismissed)
     }
 

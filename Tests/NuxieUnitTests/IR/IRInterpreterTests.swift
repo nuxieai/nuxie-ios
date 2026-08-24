@@ -34,6 +34,16 @@ final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchec
     func clearUserCache(distinctId: String?) {}
     func getUserProperties() -> [String: Any] { lock.withLock { _properties } }
     func setUserProperties(_ properties: [String: Any]) { lock.withLock { self._properties = properties } }
+    func setUserProperties(
+        _ properties: [String: Any],
+        ifCurrentDistinctIdMatches expectedDistinctId: String
+    ) -> Bool {
+        lock.withLock {
+            guard distinctId == expectedDistinctId else { return false }
+            _properties = properties
+            return true
+        }
+    }
     func setOnceUserProperties(_ properties: [String: Any]) {
         lock.withLock {
             for (key, value) in properties where self._properties[key] == nil {

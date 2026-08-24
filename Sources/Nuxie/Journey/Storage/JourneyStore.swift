@@ -12,7 +12,8 @@ protocol JourneyStoreProtocol: Sendable {
     func loadJourney(id: String) -> JourneySnapshot?
     
     /// Delete a journey
-    func deleteJourney(id: String)
+    @discardableResult
+    func deleteJourney(id: String) -> Bool
     
     /// Record journey completion
     func recordCompletion(_ record: JourneyCompletionRecord) throws
@@ -174,15 +175,26 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     }
     
     /// Delete a journey
-    public func deleteJourney(id: String) {
+    @discardableResult
+    public func deleteJourney(id: String) -> Bool {
         let file = activeFile(for: id)
-        
+
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            return true
+        }
         do {
             try FileManager.default.removeItem(at: file)
             LogDebug("Deleted journey file: \(file.lastPathComponent)")
+            return true
         } catch {
-            // File might not exist, which is fine
-            LogDebug("Journey file not found for deletion: \(id)")
+            // A racing successful remover is equivalent to success. Every
+            // other error must remain visible to callers so they can retain a
+            // terminal quarantine instead of assuming a live file is gone.
+            guard FileManager.default.fileExists(atPath: file.path) else {
+                return true
+            }
+            LogError("Failed to delete journey \(id): \(error)")
+            return false
         }
     }
     
@@ -213,10 +225,24 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
             records = existingRecords
         }
         
-        // Append new record
+        // A retained terminal host snapshot can replay this write after a
+        // crash between completion accounting and snapshot deletion. Treat
+        // the journey id as the idempotency key so that recovery never burns
+        // an additional once-per-window admission.
+        records.removeAll { $0.journeyId == record.journeyId }
         records.append(record)
+
+        // Recovery can replay an older retained snapshot after newer journeys
+        // completed. Keep the file chronological so `lastCompletionTime`
+        // remains the actual latest completion rather than the latest write.
+        records.sort {
+            if $0.completedAt == $1.completedAt {
+                return $0.journeyId < $1.journeyId
+            }
+            return $0.completedAt < $1.completedAt
+        }
         
-        // Keep only last 10 completions per experience
+        // Keep only last 10 distinct completions per experience.
         if records.count > 10 {
             records = Array(records.suffix(10))
         }

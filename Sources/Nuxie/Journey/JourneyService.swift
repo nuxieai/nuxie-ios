@@ -194,6 +194,10 @@ actor JourneyService: JourneyServiceProtocol {
   private let timerScheduler: JourneyTimerScheduler
   private var completingJourneyIds: Set<String> = []
   private var journeyCompletionWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+  /// A failed terminal write may leave an already-admitted host dismissal
+  /// retryable after identity has changed. Authorization is bound to the exact
+  /// retained Journey object so a replacement run can never inherit it.
+  private var hostDismissalRetryAuthorizations: [String: Journey] = [:]
   private var claimingJourneyIds: Set<String> = []
   private var admissionsInProgress: Set<AdmissionKey> = []
   private var restoredPresentationRetriesInProgress: Set<String> = []
@@ -274,9 +278,13 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     let persisted = journeyStore.loadActiveJourneys()
-    LogInfo("Restored \(persisted.count) active journeys")
+    let livePersisted = persisted.filter {
+      $0.status.isLive && !$0.pendingHostExitCapture
+    }
 
-    for persistedSnapshot in persisted where persistedSnapshot.status.isLive {
+    var restoredJourneyCount = 0
+    for persistedSnapshot in livePersisted {
+      guard await canUsePersistedJourney(persistedSnapshot) else { continue }
       var snapshot = persistedSnapshot
       if let restoredPresentationAttempt,
          snapshot.distinctId == identityService.getDistinctId(),
@@ -302,7 +310,14 @@ actor JourneyService: JourneyServiceProtocol {
         }
       }
       restorePersistedJourney(Journey(snapshot: snapshot), state: snapshot)
+      restoredJourneyCount += 1
     }
+    LogInfo("Restored \(restoredJourneyCount) active journeys")
+
+    // Publish live snapshots before terminal recovery yields into EventLog.
+    // An identify/reset racing a blocked recovery can then see and quarantine
+    // every old-user journey instead of having initialize resurrect it later.
+    await retryPendingHostExitCaptures(in: persisted)
 
     if let profile = await profileService.getCachedProfile(
       distinctId: identityService.getDistinctId()
@@ -382,6 +397,7 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   public func onAppWillEnterForeground() async {
+    await retryPendingHostExitCaptures()
     await checkExpiredTimers()
 
     let now = dateProvider.now()
@@ -397,6 +413,7 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   public func onAppBecameActive() async {
+    await retryPendingHostExitCaptures()
     await experiencePresentationService.onAppBecameActive()
     await retryRestoredPresentations()
   }
@@ -406,9 +423,11 @@ actor JourneyService: JourneyServiceProtocol {
     await experiencePresentationService.onAppDidEnterBackground()
 
     for journey in inMemoryJourneysById.values {
+      guard await ownsExecutableJourney(journey) else { continue }
       let state = await journey.snapshot()
-      guard state.status.isLive else { continue }
-      persistJourney(state)
+      guard await ownsExecutableJourney(journey),
+            state.status.isLive,
+            persistJourney(state) else { continue }
       enqueueParking(state, reason: .background)
     }
 
@@ -424,6 +443,7 @@ actor JourneyService: JourneyServiceProtocol {
     scopedAuthoredResponseTail = nil
     pendingScopedAuthoredResponses.removeAll()
     directlyHandledPreparedResponseSequences.removeAll()
+    hostDismissalRetryAuthorizations.removeAll()
   }
 
   public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
@@ -431,18 +451,46 @@ actor JourneyService: JourneyServiceProtocol {
 
     let oldJourneys = await getActiveJourneys(for: oldDistinctId)
     for journey in oldJourneys {
+      if hostDismissalRetryAuthorizations[journey.id] === journey {
+        continue
+      }
       await cancelJourney(journey)
+      guard inMemoryJourneysById[journey.id] === journey,
+            (await journey.snapshot()).status.isLive,
+            !(await journey.hasHostDismissalReservation()) else {
+        continue
+      }
+      await discardLocalJourney(journey, terminalStatus: .cancelled)
     }
 
     let persisted = journeyStore.loadActiveJourneys()
       .filter { $0.distinctId == newDistinctId && $0.status.isLive }
 
     for snapshot in persisted {
-      let journey = Journey(snapshot: snapshot)
-      inMemoryJourneysById[journey.id] = journey
-      if let pending = snapshot.executionState.pendingAction, let resumeAt = pending.resumeAt {
-        scheduleResume(journeyId: snapshot.id, at: resumeAt)
+      guard await canUsePersistedJourney(snapshot) else { continue }
+
+      // A failed host terminalization deliberately retains the exact journey
+      // and runner while the user is away. Reuse that object when the same
+      // identity returns; replacing only the journey dictionary entry would
+      // split mutations between the new object and the runner's old object.
+      if let retained = inMemoryJourneysById[snapshot.id] {
+        let retainedState = await retained.snapshot()
+        guard inMemoryJourneysById[snapshot.id] === retained,
+              retained.distinctId == newDistinctId,
+              retainedState.status.isLive else {
+          LogWarning(
+            "JourneyService: refused to replace retained journey \(snapshot.id) during identity restore"
+          )
+          continue
+        }
+        if let pending = retainedState.executionState.pendingAction,
+           let resumeAt = pending.resumeAt {
+          scheduleResume(journeyId: retained.id, at: resumeAt)
+        }
+        continue
       }
+
+      restorePersistedJourney(Journey(snapshot: snapshot), state: snapshot)
     }
 
     await checkExpiredTimers()
@@ -507,7 +555,9 @@ actor JourneyService: JourneyServiceProtocol {
           journey: enrollmentState,
           experience: experience,
           triggerRef: originEventId ?? "device:\(journey.id)"
-        )
+        ),
+        flushStrategy: .eventLog,
+        distinctIdOverride: enrollmentState.distinctId
       )
     } catch {
       LogWarning("JourneyService: Failed to persist journey enrollment: \(error)")
@@ -545,7 +595,9 @@ actor JourneyService: JourneyServiceProtocol {
 
   public func resumeJourney(_ journey: Journey) async {
     let state = await journey.snapshot()
-    guard state.status == .paused || state.status == .active else { return }
+    guard inMemoryJourneysById[journey.id] === journey,
+          journey.distinctId == identityService.getDistinctId(),
+          state.status == .paused || state.status == .active else { return }
 
     guard let experience = await getExperience(
       id: journey.experienceId,
@@ -556,6 +608,8 @@ actor JourneyService: JourneyServiceProtocol {
       return
     }
 
+    guard await ownsExecutableJourney(journey) else { return }
+
     guard let runner = await ensureRunner(
       for: journey,
       experience: experience,
@@ -565,8 +619,9 @@ actor JourneyService: JourneyServiceProtocol {
       return
     }
 
+    guard await ownsExecutableJourney(journey),
+          experienceRunners[journey.id] === runner else { return }
     await journey.resume(at: dateProvider.now())
-    inMemoryJourneysById[journey.id] = journey
 
     let outcome = await runner.resumePendingAction(reason: .timer, event: nil)
     await handleOutcome(outcome, journey: journey)
@@ -723,12 +778,20 @@ actor JourneyService: JourneyServiceProtocol {
       "JourneyService: discarding epoch-rejected journey \(journeyId); " +
       "device=\(state.epoch), authoritative=\(authoritativeEpoch)"
     LogWarning(.sensitive(warning))
-    await discardLocalJourney(journey, terminalStatus: .superseded)
+    await discardLocalJourney(
+      journey,
+      terminalStatus: .superseded,
+      authority: .authoritativeOwnershipLoss
+    )
   }
 
   private func handleJourneyHandoffDelivered(journeyId: String) async {
     guard let journey = inMemoryJourneysById[journeyId] else { return }
-    await discardLocalJourney(journey, terminalStatus: .transferred)
+    await discardLocalJourney(
+      journey,
+      terminalStatus: .transferred,
+      authority: .authoritativeOwnershipLoss
+    )
   }
 
   private func handleMailbox(
@@ -840,6 +903,46 @@ actor JourneyService: JourneyServiceProtocol {
     }
   }
 
+  /// A response-side ownership fence is authoritative across process death.
+  /// Persisted state is therefore admissible only after EventLog verifies the
+  /// exact journey epoch. An unavailable store fails closed for this attempt
+  /// but retains the only recovery snapshot; only confirmed ownership loss
+  /// authorizes deletion.
+  private func canUsePersistedJourney(_ snapshot: JourneySnapshot) async -> Bool {
+    let ownership = JourneyEventOwnership(
+      journeyId: snapshot.id,
+      epoch: snapshot.epoch
+    )
+    switch await eventLog.journeyEventOwnershipState(ownership) {
+    case .owned:
+      return true
+    case .unavailable:
+      LogWarning(
+        "JourneyService: ownership unavailable for persisted journey \(snapshot.id); retaining it for recovery"
+      )
+      return false
+    case .ownershipLost:
+      LogWarning(
+        "JourneyService: refusing persisted journey \(snapshot.id) at fenced epoch \(snapshot.epoch)"
+      )
+      if let retained = inMemoryJourneysById[snapshot.id] {
+        if await discardLocalJourney(
+          retained,
+          terminalStatus: .superseded,
+          authority: .authoritativeOwnershipLoss
+        ) {
+          return false
+        }
+      }
+      if !journeyStore.deleteJourney(id: snapshot.id) {
+        LogError(
+          "JourneyService: failed to delete quarantined persisted journey \(snapshot.id)"
+        )
+      }
+      return false
+    }
+  }
+
   private func beginClaimedDeviceRegion(
     _ journey: Journey,
     experience: Experience
@@ -876,6 +979,10 @@ actor JourneyService: JourneyServiceProtocol {
           let atValue = event.properties["at"] as? String,
           let at = parseExecutionDate(atValue),
           let sourceFactRef = event.properties["source_fact_ref"] as? String else {
+      return
+    }
+    guard await ownsExecutableJourney(journey),
+          !(await hasHostDismissalPriority(journey)) else {
       return
     }
 
@@ -931,26 +1038,34 @@ actor JourneyService: JourneyServiceProtocol {
     controller: ExperienceViewController
   ) async -> Bool {
     guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId] else { return false }
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return false }
     let attachedController = await runner.viewController
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     if let attachedController {
       guard attachedController === controller else { return false }
     } else {
       await runner.attach(viewController: controller)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     }
     let state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     if let pending = state.executionState.pendingPresentation,
        !(await experienceService.validatesPresentationCommit(pending)) {
+      guard await ownsExecutableJourney(journey, runner: runner) else { return false }
       await retireStalePresentation(journey: journey, commit: pending)
       return false
     }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     let committed = await runner.commitRendererAttachment()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     let stillAuthoritative: Bool
     if let pending = state.executionState.pendingPresentation {
       stillAuthoritative = await experienceService.validatesPresentationCommit(pending)
     } else {
       stillAuthoritative = true
     }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     if !committed || !stillAuthoritative {
       if !stillAuthoritative,
          let pending = state.executionState.pendingPresentation {
@@ -968,20 +1083,25 @@ actor JourneyService: JourneyServiceProtocol {
   ) async -> Bool {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId],
-          await runner.viewController === controller,
-          await runner.isRuntimeReady else { return false }
+          await ownsExecutableJourney(journey, runner: runner) else { return false }
+    guard await runner.viewController === controller,
+          await ownsExecutableJourney(journey, runner: runner),
+          await runner.isRuntimeReady,
+          await ownsExecutableJourney(journey, runner: runner) else { return false }
     let state = await journey.snapshot()
-    guard state.status.isLive,
+    guard await ownsExecutableJourney(journey, runner: runner),
+          state.status.isLive,
           state.executionState.currentScreenId == screenId else { return false }
 
     await resumePendingScreenEvents(journeyId: journeyId)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     await resumePendingScreenBatches(journeyId: journeyId)
 
-    guard inMemoryJourneysById[journeyId] === journey,
-          experienceRunners[journeyId] === runner,
+    guard await ownsExecutableJourney(journey, runner: runner),
           await runner.viewController === controller,
+          await ownsExecutableJourney(journey, runner: runner),
           await runner.isRuntimeReady,
-          (await journey.snapshot()).status.isLive else { return false }
+          await ownsExecutableJourney(journey, runner: runner) else { return false }
     return true
   }
 
@@ -990,10 +1110,13 @@ actor JourneyService: JourneyServiceProtocol {
     controller: ExperienceViewController
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId] else { return }
-    guard await runner.viewController === controller else { return }
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
+    guard await runner.viewController === controller,
+          await ownsExecutableJourney(journey, runner: runner) else { return }
 
     let outcome = await runner.handleRuntimeReady()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     await handleOutcome(outcome, journey: journey)
   }
 
@@ -1002,15 +1125,15 @@ actor JourneyService: JourneyServiceProtocol {
     screenId: String
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId] else { return }
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
 
     LogWarning(
       "JourneyService: live products unavailable for screen \(screenId) in journey \(journeyId)"
     )
-    await handleOutcome(
-      await runner.handleRuntimeProductsUnavailable(),
-      journey: journey
-    )
+    let outcome = await runner.handleRuntimeProductsUnavailable()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
+    await handleOutcome(outcome, journey: journey)
   }
 
   func handlePresentationTraceStage(
@@ -1045,13 +1168,18 @@ actor JourneyService: JourneyServiceProtocol {
     screenId: String
   ) async -> Bool {
     guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId] else { return false }
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return false }
 
     let previousState = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     let previousScreenId = previousState.executionState.currentScreenId
     let outcome = await runner.handleScreenChanged(screenId)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     await handleOutcome(outcome, journey: journey)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     var state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     let persistedTransition = persistJourney(state)
 
     if !state.isGhost,
@@ -1063,13 +1191,17 @@ actor JourneyService: JourneyServiceProtocol {
             journey: state,
             fromNode: previousScreenId,
             toNode: screenId
-          )
+          ),
+          flushStrategy: .eventLog,
+          distinctIdOverride: state.distinctId
         )
       } catch {
         LogWarning("JourneyService: Failed to persist transition to \(screenId): \(error)")
       }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     }
     state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     return persistedTransition && persistJourney(state)
   }
 
@@ -1088,15 +1220,19 @@ actor JourneyService: JourneyServiceProtocol {
       return true
     }
 
-    guard let runner = experienceRunners[journeyId] else { return false }
+    guard let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return false }
 
     let outcome = await runner.handleScreenDismissed(
       screenId,
       revealingScreenId: revealingScreenId,
       method: method
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     await handleOutcome(outcome, journey: journey)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     var state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return false }
     let persistedTransition = persistJourney(state)
 
     if let revealingScreenId, !state.isGhost {
@@ -1107,12 +1243,16 @@ actor JourneyService: JourneyServiceProtocol {
             journey: state,
             fromNode: screenId,
             toNode: revealingScreenId
-          )
+          ),
+          flushStrategy: .eventLog,
+          distinctIdOverride: state.distinctId
         )
       } catch {
         LogWarning("JourneyService: Failed to persist transition to \(revealingScreenId): \(error)")
       }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return false }
       state = await journey.snapshot()
+      guard await ownsExecutableJourney(journey, runner: runner) else { return false }
       return persistedTransition && persistJourney(state)
     }
     return persistedTransition
@@ -1123,9 +1263,11 @@ actor JourneyService: JourneyServiceProtocol {
     change: ExperienceRendererViewModelChange
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId] else { return }
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
 
     let state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let outcome = await runner.handleDidSet(
       path: change.path,
       value: change.value,
@@ -1134,8 +1276,12 @@ actor JourneyService: JourneyServiceProtocol {
       instanceId: change.instanceId,
       isTrigger: change.isTrigger
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     await handleOutcome(outcome, journey: journey)
-    persistJourney(await journey.snapshot())
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
+    let updatedState = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
+    persistJourney(updatedState)
   }
 
   func handleRendererEvent(
@@ -1144,27 +1290,34 @@ actor JourneyService: JourneyServiceProtocol {
   ) async {
     guard !rendererEvent.name.isEmpty else { return }
     guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId] else { return }
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
 
     let eventProperties = await eventLog.prepareTriggerProperties(
       rendererEvent.properties,
       userProperties: nil,
       userPropertiesSetOnce: nil
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let event = NuxieEvent(
       name: rendererEvent.name,
       distinctId: journey.distinctId,
       properties: eventProperties
     )
     let state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let outcome = await runner.dispatchScreenEvent(
       event,
       screenId: rendererEvent.screenId ?? state.executionState.currentScreenId,
       componentId: rendererEvent.componentId,
       instanceId: rendererEvent.instanceId
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     await handleOutcome(outcome, journey: journey)
-    persistJourney(await journey.snapshot())
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
+    let updatedState = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
+    persistJourney(updatedState)
 
     let routedEvent: NuxieEvent
     let response: EventResponse?
@@ -1185,7 +1338,10 @@ actor JourneyService: JourneyServiceProtocol {
       response = nil
     }
 
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
+
     let experiences = await getAllExperiences(for: routedEvent.distinctId) ?? []
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let sourceExperience = sourceScopedGoalExperience(for: journey, experiences: experiences)
     let transientEvent = makeStoredEvent(from: routedEvent)
     await processActiveJourneys(
@@ -1195,6 +1351,7 @@ actor JourneyService: JourneyServiceProtocol {
       restrictedToJourneyIds: [journeyId],
       skipEventTriggerForJourneyIds: [journeyId]
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     await routeRendererEventOutsideSourceJourney(
       routedEvent,
@@ -1202,6 +1359,7 @@ actor JourneyService: JourneyServiceProtocol {
       excludedExperienceId: journey.experienceId,
       experiences: experiences
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     await handleScopedGatePlan(
       response?.gatePlan(),
       sourceJourney: journey,
@@ -1251,9 +1409,11 @@ actor JourneyService: JourneyServiceProtocol {
     runtime: ScreenControlRuntime
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
-          experienceRunners[journeyId] != nil else { return }
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     let state = await journey.snapshot()
-    guard let scope,
+    guard await ownsExecutableJourney(journey, runner: runner),
+          let scope,
           state.status.isLive, !state.isGhost,
           let activeScreenId = state.executionState.currentScreenId,
           !activeScreenId.isEmpty,
@@ -1288,6 +1448,7 @@ actor JourneyService: JourneyServiceProtocol {
       definition: action,
       invocation: invocation
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     switch result {
     case .failure(let error):
       LogWarning(
@@ -1304,7 +1465,9 @@ actor JourneyService: JourneyServiceProtocol {
         )
         return
       }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       let drain = await runtime.router.drain(batch)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       if drain.status != .drained {
         LogWarning(
           "JourneyService: screen action \(invocation.actionId) drain ended with \(drain.status)"
@@ -1362,8 +1525,11 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func screenEventRouterRun(journeyId: String) async -> ScreenEventRouterRun? {
-    guard let journey = inMemoryJourneysById[journeyId] else { return nil }
+    guard let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return nil }
     let state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
     return ScreenEventRouterRun(
       journeyId: journeyId,
       experienceId: journey.experienceId,
@@ -1383,9 +1549,11 @@ actor JourneyService: JourneyServiceProtocol {
 
   func screenControlRunScope(journeyId: String) async -> ScreenControlRunScope? {
     guard let journey = inMemoryJourneysById[journeyId],
-          experienceRunners[journeyId] != nil else { return nil }
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return nil }
     let state = await journey.snapshot()
-    guard state.status.isLive, !state.isGhost,
+    guard await ownsExecutableJourney(journey, runner: runner),
+          state.status.isLive, !state.isGhost,
           let screenId = state.executionState.currentScreenId,
           !screenId.isEmpty else { return nil }
     return ScreenControlRunScope(
@@ -1403,6 +1571,7 @@ actor JourneyService: JourneyServiceProtocol {
   ) async -> ScreenResponseEmissionResult {
     guard let journey = inMemoryJourneysById[run.journeyId],
           let runner = experienceRunners[run.journeyId],
+          await ownsExecutableJourney(journey, runner: runner),
           let definition = screenControlRuntimes[run.journeyId]?.definition,
           let schema = definition.responseSchema,
           let field = emission.payload["field"]?.foundationValue as? String,
@@ -1415,7 +1584,8 @@ actor JourneyService: JourneyServiceProtocol {
       return .rejected(message: "response set emission has no value")
     }
     let before = await journey.snapshot()
-    guard before.status.isLive, !before.isGhost,
+    guard await ownsExecutableJourney(journey, runner: runner),
+          before.status.isLive, !before.isGhost,
           before.executionState.pendingAction == nil else {
       return .rejected(message: "journey cannot accept a response mutation")
     }
@@ -1424,7 +1594,14 @@ actor JourneyService: JourneyServiceProtocol {
       screenId: source.screenId,
       field: field
     )
-    persistJourney(await journey.snapshot())
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      return .rejected(message: "journey no longer owns renderer execution")
+    }
+    let updatedState = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      return .rejected(message: "journey no longer owns renderer execution")
+    }
+    persistJourney(updatedState)
     await completeDeferredDismissIfReady(journeyId: journey.id)
     return result
   }
@@ -1432,16 +1609,27 @@ actor JourneyService: JourneyServiceProtocol {
   private func acceptScreenCustomerEvent(
     _ acceptance: ScreenCustomerEventAcceptance
   ) async throws -> ScreenCustomerEventAdmission {
-    guard case .screen(_, let sourceJourneyId, _) = acceptance.event.source,
-          let journey = inMemoryJourneysById[sourceJourneyId] else {
+    guard case .screen(let sourceExperienceId, let sourceJourneyId, _) = acceptance.event.source,
+          let journey = inMemoryJourneysById[sourceJourneyId],
+          let runner = experienceRunners[sourceJourneyId],
+          sourceExperienceId == journey.experienceId,
+          acceptance.event.customerId == journey.distinctId,
+          await ownsExecutableJourney(journey, runner: runner) else {
       throw NuxieError.eventRoutingFailed
     }
-    if let record = (await journey.snapshot()).executionState.screenRouting
+    let initial = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      throw NuxieError.eventRoutingFailed
+    }
+    if let record = initial.executionState.screenRouting
       .eventRecords[acceptance.event.id] {
       if (record.phase == .admitted || record.phase == .routeExecuting),
          pendingScreenEvents[acceptance.event.id] == nil,
          let event = restoredScreenEvent(from: record) {
         let commit = await eventLog.commitPreparedTriggerEvent(event)
+        guard await ownsExecutableJourney(journey, runner: runner) else {
+          throw NuxieError.eventRoutingFailed
+        }
         pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
           journeyId: sourceJourneyId,
           event: event,
@@ -1454,7 +1642,7 @@ actor JourneyService: JourneyServiceProtocol {
         localRoute: record.phase == .admitted ? record.localRoute : .alreadyProcessed
       )
     }
-    if (await journey.snapshot()).executionState.screenRouting.recentEventIds
+    if initial.executionState.screenRouting.recentEventIds
       .contains(acceptance.event.id) {
       return ScreenCustomerEventAdmission(
         disposition: .duplicate,
@@ -1466,6 +1654,9 @@ actor JourneyService: JourneyServiceProtocol {
       userProperties: nil,
       userPropertiesSetOnce: nil
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      throw NuxieError.eventRoutingFailed
+    }
     let exactEvent = NuxieEvent(
       id: acceptance.event.id,
       name: acceptance.event.name,
@@ -1474,6 +1665,9 @@ actor JourneyService: JourneyServiceProtocol {
       timestamp: parseExecutionDate(acceptance.event.occurredAt) ?? dateProvider.now()
     )
     guard let prepared = await eventLog.applyBeforeSend(to: exactEvent) else {
+      guard await ownsExecutableJourney(journey, runner: runner) else {
+        throw NuxieError.eventRoutingFailed
+      }
       let persisted = await persistScreenEventRecord(
         JourneyScreenEventRecord(
           sourceEvent: acceptance.event,
@@ -1491,11 +1685,17 @@ actor JourneyService: JourneyServiceProtocol {
         ),
         journey: journey
       )
-      guard persisted else { throw NuxieError.eventRoutingFailed }
+      guard persisted,
+            await ownsExecutableJourney(journey, runner: runner) else {
+        throw NuxieError.eventRoutingFailed
+      }
       return ScreenCustomerEventAdmission(
         disposition: .accepted,
         localRoute: .none
       )
+    }
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      throw NuxieError.eventRoutingFailed
     }
 
     let localRoute: ScreenLocalRouteDisposition
@@ -1529,7 +1729,13 @@ actor JourneyService: JourneyServiceProtocol {
     guard await persistScreenEventRecord(record, journey: journey) else {
       throw NuxieError.eventRoutingFailed
     }
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      throw NuxieError.eventRoutingFailed
+    }
     let commit = await eventLog.commitPreparedTriggerEvent(prepared)
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      throw NuxieError.eventRoutingFailed
+    }
     pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
       journeyId: sourceJourneyId,
       event: prepared,
@@ -1550,7 +1756,8 @@ actor JourneyService: JourneyServiceProtocol {
           case .screen(_, let journeyId, let source) = event.source,
           let pending = pendingScreenEvents[event.id],
           let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId] else { return }
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     let outcome = await runner.dispatchAdmittedScreenEvent(
       pending.event,
       screenId: screenId,
@@ -1558,10 +1765,12 @@ actor JourneyService: JourneyServiceProtocol {
       instanceId: source.instanceId,
       admission: route
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     await handleOutcome(outcome, journey: journey)
-    guard inMemoryJourneysById[journeyId] === journey else { return }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let state = await journey.snapshot()
-    guard state.status.isLive else { return }
+    guard await ownsExecutableJourney(journey, runner: runner),
+          state.status.isLive else { return }
     guard persistJourney(state) else { return }
     _ = await updateScreenEventPhase(
       event.id,
@@ -1573,35 +1782,53 @@ actor JourneyService: JourneyServiceProtocol {
   private func finishScreenSourceEvent(_ event: ScreenCustomerEvent) async {
     guard case .screen(_, let journeyId, _) = event.source,
           let pending = pendingScreenEvents.removeValue(forKey: event.id) else { return }
-    let journey = inMemoryJourneysById[journeyId]
+    guard pending.journeyId == journeyId,
+          pending.event.id == event.id,
+          pending.event.distinctId == event.customerId,
+          let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId],
+          event.customerId == journey.distinctId,
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     let exactEvent = pending.event
-    let belongsToSourceIdentity = exactEvent.distinctId == journey?.distinctId
     let experiences = await getAllExperiences(for: exactEvent.distinctId) ?? []
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let transientEvent = makeStoredEvent(from: exactEvent)
-    if belongsToSourceIdentity {
-      await processActiveJourneys(
-        for: exactEvent,
-        experiences: experiences,
-        transientEventsByJourneyId: [journeyId: [transientEvent]],
-        restrictedToJourneyIds: [journeyId],
-        skipEventTriggerForJourneyIds: [journeyId]
-      )
-    }
+    await processActiveJourneys(
+      for: exactEvent,
+      experiences: experiences,
+      transientEventsByJourneyId: [journeyId: [transientEvent]],
+      restrictedToJourneyIds: [journeyId],
+      skipEventTriggerForJourneyIds: [journeyId]
+    )
+    let sourceCompleted = (await journey.snapshot()).status == .completed
+    guard await ownsScopedCallbackContinuation(
+      journey,
+      runner: runner,
+      sourceCompleted: sourceCompleted
+    ) else { return }
     await routeRendererEventOutsideSourceJourney(
       exactEvent,
       sourceJourneyId: journeyId,
       excludedExperienceId: pending.excludedExperienceId,
       experiences: experiences
     )
+    guard await ownsScopedCallbackContinuation(
+      journey,
+      runner: runner,
+      sourceCompleted: sourceCompleted
+    ) else { return }
     let response = await pending.commit.response.value
+    guard await ownsScopedCallbackContinuation(
+      journey,
+      runner: runner,
+      sourceCompleted: sourceCompleted
+    ) else { return }
     await handleScopedGatePlan(
       response.gatePlan(),
-      sourceJourney: belongsToSourceIdentity
-        ? journey.flatMap { inMemoryJourneysById[journeyId] === $0 ? $0 : nil }
-        : nil,
-      sourceExperience: belongsToSourceIdentity ? journey.flatMap {
-        sourceScopedGoalExperience(for: $0, experiences: experiences)
-      } : nil
+      sourceJourney: sourceCompleted ? nil : journey,
+      sourceExperience: sourceCompleted
+        ? nil
+        : sourceScopedGoalExperience(for: journey, experiences: experiences)
     )
     markPreparedResponseSequenceHandledDirectly(pending.commit.sequence)
     _ = await updateScreenEventPhase(
@@ -1735,22 +1962,28 @@ actor JourneyService: JourneyServiceProtocol {
     journey: Journey,
     _ update: (inout JourneyScreenRoutingState) -> Void
   ) async -> Bool {
+    guard let runner = experienceRunners[journey.id],
+          await ownsExecutableJourney(journey, runner: runner) else { return false }
     for _ in 0..<4 {
+      guard await ownsExecutableJourney(journey, runner: runner) else { return false }
       let versioned = await journey.versionedSnapshot()
-      guard inMemoryJourneysById[journey.id] === journey else { return false }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return false }
       var candidate = versioned.snapshot
       update(&candidate.executionState.screenRouting)
       candidate.updatedAt = dateProvider.now()
       guard await journey.replace(candidate, ifRevisionEquals: versioned.revision) else {
+        guard await ownsExecutableJourney(journey, runner: runner) else { return false }
         continue
       }
-      guard inMemoryJourneysById[journey.id] === journey else { return false }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return false }
       do {
         try journeyStore.saveJourney(candidate)
       } catch {
+        guard await ownsExecutableJourney(journey, runner: runner) else { return false }
         await journey.update { current in
           current.executionState.screenRouting = versioned.snapshot.executionState.screenRouting
         }
+        guard await ownsExecutableJourney(journey, runner: runner) else { return false }
         LogWarning(
           "JourneyService: failed to persist screen routing for \(journey.id): \(error)"
         )
@@ -1780,7 +2013,9 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func resumePendingScreenEvents(journeyId: String) async {
-    guard let journey = inMemoryJourneysById[journeyId] else { return }
+    guard let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     let records = (await journey.snapshot()).executionState.screenRouting.eventRecords.values
       .filter {
         $0.phase == .admitted || $0.phase == .routeExecuting
@@ -1792,14 +2027,18 @@ actor JourneyService: JourneyServiceProtocol {
         if left != right { return left < right }
         return lhs.sourceEvent.id < rhs.sourceEvent.id
       }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     for record in records {
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       if record.phase == .finished {
         await resumeDurableScreenAuthoredEvents(record, journey: journey)
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
         await cleanupFinishedScreenRouteAdmissions(journey)
         continue
       }
       guard let event = restoredScreenEvent(from: record) else { continue }
       let commit = await eventLog.commitPreparedTriggerEvent(event)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       pendingScreenEvents[record.sourceEvent.id] = PendingScreenEvent(
         journeyId: journeyId,
         event: event,
@@ -1809,11 +2048,15 @@ actor JourneyService: JourneyServiceProtocol {
       if (record.phase == .admitted || record.phase == .routeExecuting),
          case .ready(let route) = record.localRoute {
         await runScreenLocalRoute(route, event: record.sourceEvent)
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
       }
-      if let refreshed = (await journey.snapshot()).executionState.screenRouting
+      let refreshedState = await journey.snapshot()
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
+      if let refreshed = refreshedState.executionState.screenRouting
         .eventRecords[record.sourceEvent.id],
         !refreshed.pendingAuthoredEvents.isEmpty {
         await resumeDurableScreenAuthoredEvents(refreshed, journey: journey)
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
       }
       await finishScreenSourceEvent(record.sourceEvent)
     }
@@ -1871,18 +2114,40 @@ actor JourneyService: JourneyServiceProtocol {
     journeyId: String,
     request: ExperienceRendererOpenLinkRequest
   ) async {
-    guard let runner = experienceRunners[journeyId] else { return }
+    guard let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     await runner.handleRuntimeOpenLink(
       url: request.urlString,
       target: request.target,
       screenId: request.screenId,
       instanceId: request.instanceId
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
   }
 
   func reserveHostDismissal(journeyId: String) async {
     guard let journey = inMemoryJourneysById[journeyId] else { return }
-    _ = await journey.reserveHostDismissal()
+    let isAuthorizedRetry = hostDismissalRetryAuthorizations[journeyId] === journey
+    let isCurrentlyExecutable = isAuthorizedRetry
+      ? true
+      : await ownsExecutableJourney(journey)
+    guard isCurrentlyExecutable,
+          await journey.reserveHostDismissal() else { return }
+
+    let reservationRemainsAdmitted: Bool
+    if isAuthorizedRetry {
+      let state = await journey.snapshot()
+      reservationRemainsAdmitted = inMemoryJourneysById[journeyId] === journey
+        && state.status.isLive
+    } else {
+      reservationRemainsAdmitted = await ownsExecutableJourney(journey)
+    }
+    guard reservationRemainsAdmitted else {
+      await journey.releaseHostDismissalReservation()
+      return
+    }
+    hostDismissalRetryAuthorizations.removeValue(forKey: journeyId)
   }
 
   func handleRuntimeDismiss(
@@ -1891,12 +2156,24 @@ actor JourneyService: JourneyServiceProtocol {
     controller: ExperienceViewController
   ) async {
     guard let journey = inMemoryJourneysById[journeyId] else { return }
-    let runner = experienceRunners[journeyId]
 
-    if reason != .hostDismissed,
-       await journey.hasHostDismissalReservation() {
+    if reason == .hostDismissed {
+      _ = await handleRuntimeHostDismiss(
+        journeyId: journeyId,
+        controller: controller
+      )
       return
     }
+
+    guard let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner),
+          await runner.viewController === controller,
+          await ownsExecutableJourney(journey, runner: runner) else { return }
+
+    if await journey.hasHostDismissalReservation() {
+      return
+    }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     if reason == .userDismissed,
        let traceState = presentationTraceStates[journeyId],
@@ -1911,61 +2188,89 @@ actor JourneyService: JourneyServiceProtocol {
       )
     }
 
-    if reason == .hostDismissed {
-      await completeJourney(
-        journey,
-        reason: .dismissed,
-        dismissedBy: .host
-      )
-      return
-    }
-
     await postDismissNotification(for: journey, reason: reason)
-
-    guard let runner else { return }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     var state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     // A failed response operation deliberately keeps the draft and the live
     // journey available for an explicit retry. Do not turn that recovery path
     // into an abandonment merely because the renderer was dismissed.
     let runnerHasFailedResponseOperation = await runner.hasFailedResponseOperation()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     if state.responseSessionRetryRequired || runnerHasFailedResponseOperation {
       if await runner.isSynchronizingResponseFields() {
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
         await runner.deferDismiss(reason: reason)
       }
       return
     }
 
     state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     if state.status.isLive {
       await evaluateGoalIfNeeded(journey)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       if let reason = await exitDecision(journey) {
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
         await completeJourney(journey, reason: reason)
         return
       }
     }
 
     state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     if state.status.isLive, await runner.hasPendingPermissionWork() {
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       await runner.deferDismiss(reason: reason)
       return
     }
 
-    if (await journey.snapshot()).status.isLive {
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
+    if (await journey.snapshot()).status.isLive,
+       await ownsExecutableJourney(journey, runner: runner) {
       await completeJourney(journey, reason: dismissalExitReason(for: reason))
     }
+  }
+
+  @discardableResult
+  func handleRuntimeHostDismiss(
+    journeyId: String,
+    controller: ExperienceViewController
+  ) async -> Bool {
+    guard let journey = inMemoryJourneysById[journeyId] else {
+      return true
+    }
+    guard await journey.hasHostDismissalReservation(),
+          inMemoryJourneysById[journeyId] === journey else {
+      return false
+    }
+    await completeJourney(
+      journey,
+      reason: .dismissed,
+      dismissedBy: .host
+    )
+    let terminalized = !(await journey.snapshot()).status.isLive
+    if terminalized {
+      hostDismissalRetryAuthorizations.removeValue(forKey: journeyId)
+    } else if inMemoryJourneysById[journeyId] === journey {
+      hostDismissalRetryAuthorizations[journeyId] = journey
+    }
+    return terminalized
   }
 
   private func postDismissNotification(
     for journey: Journey,
     reason: CloseReason
   ) async {
+    guard inMemoryJourneysById[journey.id] === journey else { return }
     var userInfo: [String: Any] = [
       "journeyId": journey.id,
       "experienceId": journey.experienceId
     ]
     let state = await journey.snapshot()
+    guard inMemoryJourneysById[journey.id] === journey else { return }
     if let screenId = state.executionState.currentScreenId {
       userInfo["screenId"] = screenId
     }
@@ -1981,14 +2286,43 @@ actor JourneyService: JourneyServiceProtocol {
     )
   }
 
+  /// Host dismissal may legitimately finish under the journey's old identity,
+  /// so its post-capture checks use exact object ownership rather than the
+  /// current-identity execution predicate.
+  private func ownsHostCompletion(
+    _ journey: Journey,
+    runner: JourneyRunner?
+  ) -> Bool {
+    guard inMemoryJourneysById[journey.id] === journey else { return false }
+    if let runner {
+      return experienceRunners[journey.id] === runner
+    }
+    return experienceRunners[journey.id] == nil
+  }
+
+  /// Host dismissal owns terminalization from reservation until either a
+  /// durable host exit commits or that exact admitted retry is revoked. Check
+  /// the service-side retry authorization on both sides of the Journey actor
+  /// hop so actor reentrancy cannot briefly expose an ordinary mutation path.
+  private func hasHostDismissalPriority(_ journey: Journey) async -> Bool {
+    if hostDismissalRetryAuthorizations[journey.id] === journey {
+      return true
+    }
+    let isReserved = await journey.hasHostDismissalReservation()
+    return isReserved || hostDismissalRetryAuthorizations[journey.id] === journey
+  }
+
   func handleScopedPermissionEvent(
     journeyId: String,
     eventName: String,
     properties: sending [String: Any],
     distinctId: String
   ) async {
-    let journey = inMemoryJourneysById[journeyId]
-    let scopedDistinctId = journey?.distinctId ?? distinctId
+    guard let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId],
+          journey.distinctId == distinctId,
+          await ownsExecutableJourney(journey, runner: runner) else { return }
+    let scopedDistinctId = journey.distinctId
 
     // Boxed to hand the write-once payload through the staging pipeline.
     let propertiesBox = UncheckedSendable(properties)
@@ -1997,16 +2331,15 @@ actor JourneyService: JourneyServiceProtocol {
       properties: propertiesBox.value,
       distinctId: scopedDistinctId
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let localScopedEvent = stage.localEvent
 
-    let cachedExperiences: [Experience]? = if journey != nil {
-      await getAllExperiences(for: scopedDistinctId)
-    } else {
-      nil
-    }
+    let cachedExperiences = await getAllExperiences(for: scopedDistinctId)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let transientEvent = stage.transientEvent
     if let cachedExperiences {
       let activeJourneyIds = await getActiveJourneys(for: localScopedEvent.distinctId).map(\.id)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       let transientEventsByJourneyId: [String: [StoredEvent]] = Dictionary(
         uniqueKeysWithValues: activeJourneyIds.map { ($0, [transientEvent]) }
       )
@@ -2016,15 +2349,14 @@ actor JourneyService: JourneyServiceProtocol {
         transientEventsByJourneyId: transientEventsByJourneyId,
         restrictedToJourneyIds: nil
       )
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
     }
 
     await completeDeferredDismissIfReady(journeyId: journeyId)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     let (trackedEvent, response) = await trackScopedEvent(stage, properties: properties)
-
-    guard journey != nil else {
-      return
-    }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     let scopedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: scopedDistinctId)
     let trackedTransientEvent = makeStoredEvent(from: scopedEvent)
@@ -2034,14 +2366,23 @@ actor JourneyService: JourneyServiceProtocol {
     } else {
       await getAllExperiences(for: scopedEvent.distinctId)
     }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     if let experiences {
       await startAndProcessMatchingJourneys(
         for: scopedEvent,
         transientEvent: trackedTransientEvent,
         experiences: experiences
       )
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
     }
-    await handleScopedGatePlan(response?.gatePlan())
+    await handleScopedGatePlan(
+      response?.gatePlan(),
+      sourceJourney: journey,
+      sourceExperience: sourceScopedGoalExperience(
+        for: journey,
+        experiences: experiences ?? cachedExperiences
+      )
+    )
   }
 
   func handleScopedMilestoneEvent(
@@ -2051,11 +2392,12 @@ actor JourneyService: JourneyServiceProtocol {
     screenId: String?,
     handlerId: String? = nil
   ) async {
-    guard let journey = inMemoryJourneysById[journeyId] else {
-      return
-    }
+    guard let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     let sourceState = await journey.snapshot()
-    guard !sourceState.isGhost else { return }
+    guard await ownsExecutableJourney(journey, runner: runner),
+          !sourceState.isGhost else { return }
 
     let scopedDistinctId = journey.distinctId
     let properties = JourneyEvents.journeyMilestoneProperties(
@@ -2069,20 +2411,33 @@ actor JourneyService: JourneyServiceProtocol {
       properties: goalPropertiesBox.value,
       distinctId: scopedDistinctId
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let localScopedEvent = stage.localEvent
     let cachedExperiences: [Experience]? = await getAllExperiences(for: scopedDistinctId)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let transientEvent = stage.transientEvent
     let sourceJourneyCompleted = await processSourceScopedGoalJourneyEvent(
       journey,
+      runner: runner,
       event: localScopedEvent,
       transientEvent: transientEvent,
       shouldDispatchToRunner: false
     )
+    guard await ownsScopedCallbackContinuation(
+      journey,
+      runner: runner,
+      sourceCompleted: sourceJourneyCompleted
+    ) else { return }
     let otherActiveJourneyIds = Set(
       await getActiveJourneys(for: localScopedEvent.distinctId)
         .map(\.id)
         .filter { $0 != journey.id }
     )
+    guard await ownsScopedCallbackContinuation(
+      journey,
+      runner: runner,
+      sourceCompleted: sourceJourneyCompleted
+    ) else { return }
     if !otherActiveJourneyIds.isEmpty {
       let transientEventsByJourneyId: [String: [StoredEvent]] = Dictionary(
         uniqueKeysWithValues: otherActiveJourneyIds.map { ($0, [transientEvent]) }
@@ -2093,18 +2448,38 @@ actor JourneyService: JourneyServiceProtocol {
         transientEventsByJourneyId: transientEventsByJourneyId,
         restrictedToJourneyIds: otherActiveJourneyIds
       )
+      guard await ownsScopedCallbackContinuation(
+        journey,
+        runner: runner,
+        sourceCompleted: sourceJourneyCompleted
+      ) else { return }
     }
 
     let (trackedEvent, response) = await trackScopedEvent(stage, properties: properties)
+    guard await ownsScopedCallbackContinuation(
+      journey,
+      runner: runner,
+      sourceCompleted: sourceJourneyCompleted
+    ) else { return }
 
     let scopedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: scopedDistinctId)
     await eventLog.storePreparedEventInHistory(localScopedEvent)
+    guard await ownsScopedCallbackContinuation(
+      journey,
+      runner: runner,
+      sourceCompleted: sourceJourneyCompleted
+    ) else { return }
 
     let experiences = if let cachedExperiences {
       cachedExperiences
     } else {
       await getAllExperiences(for: scopedEvent.distinctId)
     }
+    guard await ownsScopedCallbackContinuation(
+      journey,
+      runner: runner,
+      sourceCompleted: sourceJourneyCompleted
+    ) else { return }
     let resolvedSourceExperience = sourceScopedGoalExperience(
       for: journey,
       experiences: experiences ?? cachedExperiences
@@ -2113,10 +2488,16 @@ actor JourneyService: JourneyServiceProtocol {
     if !sourceJourneyStillCompleted {
       sourceJourneyStillCompleted = await processSourceScopedGoalJourneyEvent(
         journey,
+        runner: runner,
         event: scopedEvent,
         transientEvent: transientEvent,
         shouldDispatchToRunner: true
       )
+      guard await ownsScopedCallbackContinuation(
+        journey,
+        runner: runner,
+        sourceCompleted: sourceJourneyStillCompleted
+      ) else { return }
     }
     if let experiences {
       await startAndProcessMatchingJourneys(
@@ -2124,10 +2505,15 @@ actor JourneyService: JourneyServiceProtocol {
         transientEvent: transientEvent,
         experiences: experiences
       )
+      guard await ownsScopedCallbackContinuation(
+        journey,
+        runner: runner,
+        sourceCompleted: sourceJourneyStillCompleted
+      ) else { return }
     }
     await handleScopedGatePlan(
       response?.gatePlan(),
-      sourceJourney: journey,
+      sourceJourney: sourceJourneyStillCompleted ? nil : journey,
       sourceExperience: resolvedSourceExperience
     )
   }
@@ -2151,15 +2537,21 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func commitScopedAuthoredEvent(
     sourceJourney journey: Journey,
+    runner: JourneyRunner,
     event: JourneyRunner.AuthoredEvent
   ) async -> CommittedScopedAuthoredEvent? {
+    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
     let sourceState = await journey.snapshot()
-    guard !sourceState.isGhost else { return nil }
+    guard await ownsExecutableJourney(journey, runner: runner),
+          !sourceState.isGhost else { return nil }
     let isScreenRouteEvent = event.screenRouteAdmissionId != nil
-    if isScreenRouteEvent,
-       await isDurablyDroppedScreenAuthoredEvent(event.id, journey: journey) {
-      await removeDurableScreenAuthoredEvent(event.id, journey: journey)
-      return nil
+    if isScreenRouteEvent {
+      let isDropped = await isDurablyDroppedScreenAuthoredEvent(event.id, journey: journey)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
+      if isDropped {
+        await removeDurableScreenAuthoredEvent(event.id, journey: journey)
+        return nil
+      }
     }
 
     var properties = event.properties.mapValues(\.value)
@@ -2179,8 +2571,11 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     let preparedEvent: NuxieEvent
-    if isScreenRouteEvent,
-       let restored = await durablePreparedAuthoredEvent(event.id, journey: journey) {
+    let restored = isScreenRouteEvent
+      ? await durablePreparedAuthoredEvent(event.id, journey: journey)
+      : nil
+    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
+    if let restored {
       preparedEvent = restored
     } else {
       let propertiesBox = UncheckedSendable(properties)
@@ -2191,11 +2586,14 @@ actor JourneyService: JourneyServiceProtocol {
         eventId: event.id,
         occurredAt: event.occurredAt
       )
+      guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
       guard let prepared = await eventLog.applyBeforeSend(to: stage.localEvent) else {
+        guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
         if isScreenRouteEvent,
            !(await markScreenAuthoredEventDropped(event.id, journey: journey)) {
           return nil
         }
+        guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
         eventLog.track(
           JourneyEvents.eventSent,
           properties: eventSentProperties,
@@ -2214,10 +2612,16 @@ actor JourneyService: JourneyServiceProtocol {
           prepared: prepared,
           journey: journey
         ) else { return nil }
+        guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
       }
       preparedEvent = prepared
     }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
     let commit = await eventLog.commitPreparedTriggerEvent(preparedEvent)
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      markPreparedResponseSequenceHandledDirectly(commit.sequence)
+      return nil
+    }
     return CommittedScopedAuthoredEvent(
       authored: event,
       commit: commit,
@@ -2227,8 +2631,15 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func routeCommittedScopedAuthoredEvent(
     _ committedAuthoredEvent: CommittedScopedAuthoredEvent,
-    sourceJourney journey: Journey
+    sourceJourney journey: Journey,
+    runner: JourneyRunner
   ) async -> RoutedScopedAuthoredEvent {
+    let aborted = RoutedScopedAuthoredEvent(
+      commit: committedAuthoredEvent.commit,
+      sourceCompleted: true,
+      experiences: nil
+    )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
     let journeyId = journey.id
     let authored = committedAuthoredEvent.authored
     let committed = committedAuthoredEvent.commit
@@ -2238,9 +2649,11 @@ actor JourneyService: JourneyServiceProtocol {
     let cachedExperiences = await getAllExperiences(
       for: confirmedEvent.distinctId
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
     let sourceCompleted = if belongsToSourceIdentity {
       await processSourceScopedGoalJourneyEvent(
         journey,
+        runner: runner,
         event: confirmedEvent,
         transientEvent: transientEvent,
         shouldDispatchToRunner: false
@@ -2248,10 +2661,12 @@ actor JourneyService: JourneyServiceProtocol {
     } else {
       false
     }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+    let sourceState = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
     if belongsToSourceIdentity,
        !sourceCompleted,
-       let runner = experienceRunners[journeyId],
-      (await journey.snapshot()).status.isLive {
+       sourceState.status.isLive {
       let outcome: JourneyRunner.RunOutcome?
       let authoredHostId = authored.hostId ?? authored.screenId
       if let admissionId = authored.screenRouteAdmissionId,
@@ -2309,13 +2724,16 @@ actor JourneyService: JourneyServiceProtocol {
       } else {
         outcome = await runner.dispatchEventTrigger(confirmedEvent)
       }
-      await handleOutcome(outcome, journey: journey)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+      await handleOutcome(outcome, journey: journey, runner: runner)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
     }
 
     let otherJourneyIds = Set(
       await getActiveJourneys(for: confirmedEvent.distinctId).map(\.id)
         .filter { $0 != journey.id }
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
     if !otherJourneyIds.isEmpty {
       await processActiveJourneys(
         for: confirmedEvent,
@@ -2325,6 +2743,7 @@ actor JourneyService: JourneyServiceProtocol {
         ),
         restrictedToJourneyIds: otherJourneyIds
       )
+      guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
     }
 
     let experiences = if let cachedExperiences {
@@ -2332,12 +2751,14 @@ actor JourneyService: JourneyServiceProtocol {
     } else {
       await getAllExperiences(for: confirmedEvent.distinctId)
     }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
     if let experiences {
       await startAndProcessMatchingJourneys(
         for: confirmedEvent,
         transientEvent: transientEvent,
         experiences: experiences
       )
+      guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
     }
     return RoutedScopedAuthoredEvent(
       commit: committed,
@@ -2431,27 +2852,40 @@ actor JourneyService: JourneyServiceProtocol {
     permissionType: String,
     distinctId: String
   ) async {
+    guard let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId],
+          journey.distinctId == distinctId,
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     let stage = await stageScopedEvent(
       name: SystemEventNames.permissionDenied,
       properties: ["journey_id": journeyId, "type": permissionType],
       distinctId: distinctId
     )
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let localScopedEvent = stage.localEvent
     let transientEvent = stage.transientEvent
     if let experiences = await getAllExperiences(for: distinctId) {
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       await processActiveJourneys(
         for: localScopedEvent,
         experiences: experiences,
         transientEventsByJourneyId: [journeyId: [transientEvent]],
         restrictedToJourneyIds: [journeyId]
       )
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
     }
 
     await completeDeferredDismissIfReady(journeyId: journeyId)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     let (_, response) = await trackScopedEvent(stage, properties: stage.enrichedProperties)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
-    await handleScopedGatePlan(response?.gatePlan())
+    await handleScopedGatePlan(
+      response?.gatePlan(),
+      sourceJourney: journey,
+      sourceExperience: nil
+    )
   }
 
   // MARK: - Helpers
@@ -2463,43 +2897,63 @@ actor JourneyService: JourneyServiceProtocol {
   private func completeDeferredDismissIfReady(journeyId: String) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId],
-          (await journey.snapshot()).status.isLive,
-          let reason = await runner.consumeDeferredDismissReasonIfReady() else { return }
+          await ownsExecutableJourney(journey, runner: runner),
+          let reason = await runner.consumeDeferredDismissReasonIfReady(),
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     await completeJourney(journey, reason: dismissalExitReason(for: reason))
   }
 
   private func processSourceScopedGoalJourneyEvent(
     _ journey: Journey,
+    runner: JourneyRunner,
     event: NuxieEvent,
     transientEvent: StoredEvent,
     shouldDispatchToRunner: Bool
   ) async -> Bool {
+    guard await ownsExecutableJourney(journey, runner: runner) else { return true }
     await evaluateGoalIfNeeded(
       journey,
       transientEvents: [transientEvent]
     )
-    if !(await shouldDeferExitDecision(for: journey)) {
-      if let reason = await exitDecision(journey) {
+    guard await ownsExecutableJourney(journey, runner: runner) else { return true }
+    let shouldDefer = await shouldDeferExitDecision(for: journey)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return true }
+    if !shouldDefer {
+      let reason = await exitDecision(journey)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return true }
+      if let reason {
         await completeJourney(journey, reason: reason)
         return true
       }
     }
-    if await shouldCompletePresentedScopedGoalJourney(journey) {
-      if let controller = await experienceRunners[journey.id]?.viewController {
+    let shouldCompletePresented = await shouldCompletePresentedScopedGoalJourney(journey)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return true }
+    if shouldCompletePresented {
+      let controller = await runner.viewController
+      guard await ownsExecutableJourney(journey, runner: runner) else { return true }
+      if let controller {
         await controller.prepareForDismissal(reason: .goalMet)
+        guard await ownsExecutableJourney(journey, runner: runner) else { return true }
         await handleRuntimeDismiss(
           journeyId: journey.id,
           reason: .goalMet,
           controller: controller
         )
+        guard await ownsScopedCallbackContinuation(
+          journey,
+          runner: runner,
+          sourceCompleted: true
+        ) else { return true }
         await experiencePresentationService.dismissCurrentExperience(reason: .goalMet)
       } else {
         await experiencePresentationService.dismissCurrentExperience()
+        guard await ownsExecutableJourney(journey, runner: runner) else { return true }
         await completeJourney(journey, reason: .goalMet)
       }
       return true
     }
     var state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return true }
     guard shouldDispatchToRunner else {
       return !state.status.isLive
     }
@@ -2508,17 +2962,16 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     if let pending = state.executionState.pendingAction, pending.kind == .waitUntil {
-      if let runner = experienceRunners[journey.id] {
-        await resumePendingWaitForEvent(journey, runner: runner, pending: pending, event: event)
-      }
+      await resumePendingWaitForEvent(journey, runner: runner, pending: pending, event: event)
       return !(await journey.snapshot()).status.isLive
     }
 
-    if let runner = experienceRunners[journey.id] {
-      let outcome = await runner.dispatchEventTrigger(event)
-      await handleOutcome(outcome, journey: journey)
-    }
+    let outcome = await runner.dispatchEventTrigger(event)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return true }
+    await handleOutcome(outcome, journey: journey, runner: runner)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return true }
     state = await journey.snapshot()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return true }
     return !state.status.isLive
   }
 
@@ -2545,6 +2998,7 @@ actor JourneyService: JourneyServiceProtocol {
     if let existing = experienceRunners[journey.id] {
       return existing
     }
+    guard await ownsExecutableJourney(journey) else { return nil }
 
     let versionId = experience.versionId
     let controlExperience: Experience
@@ -2557,6 +3011,8 @@ actor JourneyService: JourneyServiceProtocol {
       ) else { return nil }
       controlExperience = hydrated
     }
+
+    guard await ownsExecutableJourney(journey) else { return nil }
 
     let initialState = await journey.snapshot()
     let runner = JourneyRunner(
@@ -2606,6 +3062,8 @@ actor JourneyService: JourneyServiceProtocol {
       return nil
     }
 
+    guard await ownsExecutableJourney(journey) else { return nil }
+
     await runner.setOnShowScreen { [weak self, weak runner] (screenId: String, transition: AnyCodable?) async -> Bool in
       guard let self else { return false }
       let controller = try? await self.presentExperienceIfNeeded(
@@ -2622,6 +3080,7 @@ actor JourneyService: JourneyServiceProtocol {
       }
       return false
     }
+    guard await ownsExecutableJourney(journey) else { return nil }
     experienceRunners[journey.id] = runner
     if let definition = controlExperience.definition {
       let dateProvider = self.dateProvider
@@ -2710,6 +3169,60 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     return runner
+  }
+
+  /// Revalidates a runner-building/resume operation after each suspension.
+  /// Exact object identity prevents a late task from reinstalling a journey
+  /// that identity quarantine or authoritative ownership already removed.
+  private func ownsExecutableJourney(_ journey: Journey) async -> Bool {
+    guard inMemoryJourneysById[journey.id] === journey,
+          journey.distinctId == identityService.getDistinctId() else {
+      return false
+    }
+    let state = await journey.snapshot()
+    return inMemoryJourneysById[journey.id] === journey
+      && journey.distinctId == identityService.getDistinctId()
+      && state.status.isLive
+  }
+
+  /// Revalidates a renderer callback against the exact runner that admitted
+  /// it. Identity transitions and ownership loss can remove or replace both
+  /// objects while the callback is suspended on the runner actor.
+  private func ownsExecutableJourney(
+    _ journey: Journey,
+    runner: JourneyRunner
+  ) async -> Bool {
+    guard inMemoryJourneysById[journey.id] === journey,
+          experienceRunners[journey.id] === runner,
+          journey.distinctId == identityService.getDistinctId(),
+          (await journey.snapshot()).status.isLive else {
+      return false
+    }
+    return inMemoryJourneysById[journey.id] === journey
+      && experienceRunners[journey.id] === runner
+      && journey.distinctId == identityService.getDistinctId()
+  }
+
+  /// A scoped event may deliberately complete its own source journey while
+  /// preserving the rest of that event's delivery. Only that exact completed
+  /// object, with no replacement installed and the same current identity, may
+  /// continue after terminalization.
+  private func ownsScopedCallbackContinuation(
+    _ journey: Journey,
+    runner: JourneyRunner,
+    sourceCompleted: Bool
+  ) async -> Bool {
+    if !sourceCompleted {
+      return await ownsExecutableJourney(journey, runner: runner)
+    }
+    guard identityService.getDistinctId() == journey.distinctId,
+          inMemoryJourneysById[journey.id] == nil,
+          experienceRunners[journey.id] == nil else { return false }
+    let state = await journey.snapshot()
+    return identityService.getDistinctId() == journey.distinctId
+      && inMemoryJourneysById[journey.id] == nil
+      && experienceRunners[journey.id] == nil
+      && state.status == .completed
   }
 
   /// The runner for `journey`, rebuilding it on demand for a restored
@@ -2942,14 +3455,36 @@ actor JourneyService: JourneyServiceProtocol {
     }
   }
 
-  private func handleOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
+  private func handleOutcome(
+    _ outcome: JourneyRunner.RunOutcome?,
+    journey: Journey,
+    runner expectedRunner: JourneyRunner? = nil
+  ) async {
+    guard let runner = expectedRunner ?? experienceRunners[journey.id],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     var holdsScopedAuthoredResponseScheduling = false
-    if let runner = experienceRunners[journey.id] {
-      for authoredEvent in await runner.takeAuthoredEvents() {
-        guard let event = await commitScopedAuthoredEvent(
-          sourceJourney: journey,
-          event: authoredEvent
-        ) else { continue }
+    defer {
+      if holdsScopedAuthoredResponseScheduling {
+        scopedAuthoredOutcomeDepth -= 1
+      }
+      scheduleReadyScopedAuthoredResponses()
+    }
+    let authoredEvents = await runner.takeAuthoredEvents()
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
+    for authoredEvent in authoredEvents {
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
+      guard let event = await commitScopedAuthoredEvent(
+        sourceJourney: journey,
+        runner: runner,
+        event: authoredEvent
+      ) else {
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
+        continue
+      }
+      guard await ownsExecutableJourney(journey, runner: runner) else {
+        markPreparedResponseSequenceHandledDirectly(event.commit.sequence)
+        return
+      }
         if !holdsScopedAuthoredResponseScheduling {
           scopedAuthoredOutcomeDepth += 1
           holdsScopedAuthoredResponseScheduling = true
@@ -2966,11 +3501,20 @@ actor JourneyService: JourneyServiceProtocol {
             markPreparedResponseSequenceHandledDirectly(event.commit.sequence)
             continue
           }
+          guard await ownsExecutableJourney(journey, runner: runner) else {
+            markPreparedResponseSequenceHandledDirectly(event.commit.sequence)
+            return
+          }
         }
         let routed = await routeCommittedScopedAuthoredEvent(
           event,
-          sourceJourney: journey
+          sourceJourney: journey,
+          runner: runner
         )
+        guard await ownsExecutableJourney(journey, runner: runner) else {
+          markPreparedResponseSequenceHandledDirectly(event.commit.sequence)
+          return
+        }
         stageScopedAuthoredResponse(
           routed,
           sequence: event.commit.sequence,
@@ -2978,6 +3522,7 @@ actor JourneyService: JourneyServiceProtocol {
         )
         if event.authored.screenRouteAdmissionId != nil {
           await markScreenAuthoredEventRouted(event.authored.id, journey: journey)
+          guard await ownsExecutableJourney(journey, runner: runner) else { return }
         }
         // Expose the rider only after the authored event has completed local
         // routing. Production EventLog subscribers may run as soon as capture
@@ -2992,16 +3537,14 @@ actor JourneyService: JourneyServiceProtocol {
         )
         if event.authored.screenRouteAdmissionId != nil {
           await removeDurableScreenAuthoredEvent(event.authored.id, journey: journey)
+          guard await ownsExecutableJourney(journey, runner: runner) else { return }
         }
-      }
     }
 
-    await applyRunOutcome(outcome, journey: journey)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
+    await applyRunOutcome(outcome, journey: journey, runner: runner)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     await cleanupFinishedScreenRouteAdmissions(journey)
-    if holdsScopedAuthoredResponseScheduling {
-      scopedAuthoredOutcomeDepth -= 1
-    }
-    scheduleReadyScopedAuthoredResponses()
   }
 
   private func cleanupFinishedScreenRouteAdmissions(_ journey: Journey) async {
@@ -3071,7 +3614,10 @@ actor JourneyService: JourneyServiceProtocol {
     _ record: JourneyScreenEventRecord,
     journey: Journey
   ) async {
+    guard let runner = experienceRunners[journey.id],
+          await ownsExecutableJourney(journey, runner: runner) else { return }
     for stored in record.pendingAuthoredEvents {
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       let authored = JourneyRunner.AuthoredEvent(
         id: stored.id,
         name: stored.name,
@@ -3084,10 +3630,16 @@ actor JourneyService: JourneyServiceProtocol {
       )
       guard let committed = await commitScopedAuthoredEvent(
         sourceJourney: journey,
+        runner: runner,
         event: authored
       ) else {
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
         await removeDurableScreenAuthoredEvent(stored.id, journey: journey)
         continue
+      }
+      guard await ownsExecutableJourney(journey, runner: runner) else {
+        markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
+        return
       }
       let shouldRoute: Bool
       switch stored.phase {
@@ -3103,6 +3655,10 @@ actor JourneyService: JourneyServiceProtocol {
           markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
           continue
         }
+        guard await ownsExecutableJourney(journey, runner: runner) else {
+          markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
+          return
+        }
         shouldRoute = true
       case .routingClaimed:
         shouldRoute = true
@@ -3113,9 +3669,15 @@ actor JourneyService: JourneyServiceProtocol {
       if shouldRoute {
         routed = await routeCommittedScopedAuthoredEvent(
           committed,
-          sourceJourney: journey
+          sourceJourney: journey,
+          runner: runner
         )
+        guard await ownsExecutableJourney(journey, runner: runner) else {
+          markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
+          return
+        }
         await markScreenAuthoredEventRouted(stored.id, journey: journey)
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
       } else {
         routed = RoutedScopedAuthoredEvent(
           commit: committed.commit,
@@ -3131,6 +3693,7 @@ actor JourneyService: JourneyServiceProtocol {
         distinctIdOverride: journey.distinctId
       )
       await handleScopedAuthoredResponse(routed, sourceJourney: journey)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
       await removeDurableScreenAuthoredEvent(stored.id, journey: journey)
     }
@@ -3271,17 +3834,26 @@ actor JourneyService: JourneyServiceProtocol {
     }
   }
 
-  private func applyRunOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
-    guard inMemoryJourneysById[journey.id] === journey else { return }
+  private func applyRunOutcome(
+    _ outcome: JourneyRunner.RunOutcome?,
+    journey: Journey,
+    runner: JourneyRunner
+  ) async {
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     guard let outcome else { return }
     switch outcome {
     case .present:
       let state = await journey.snapshot()
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       guard persistPresentationCommit(state, for: journey) else { return }
       guard let pending = state.executionState.pendingPresentation else { return }
-      guard pending.experienceId == state.experienceId,
-            pending.experienceVersionId == state.experienceVersion,
-            await experienceService.validatesPresentationCommit(pending) else {
+      let matchesJourney = pending.experienceId == state.experienceId
+        && pending.experienceVersionId == state.experienceVersion
+      let validatesPending = matchesJourney
+        ? await experienceService.validatesPresentationCommit(pending)
+        : false
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
+      guard validatesPending else {
         await completeJourney(journey, reason: .error)
         return
       }
@@ -3291,37 +3863,45 @@ actor JourneyService: JourneyServiceProtocol {
           journey: journey,
           commit: pending
         )
-        guard inMemoryJourneysById[journey.id] === journey else { return }
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
         let afterPresentation = await journey.snapshot()
-        guard presentationCommit(
-                afterPresentation.executionState.pendingPresentation,
-                matches: pending
-              ) || presentationCommit(
-                afterPresentation.executionState.currentPresentation,
-                matches: pending
-              ),
-              await experienceService.validatesPresentationCommit(pending) else {
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
+        let stillValid = await experienceService.validatesPresentationCommit(pending)
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
+        guard (presentationCommit(
+          afterPresentation.executionState.pendingPresentation,
+          matches: pending
+        ) || presentationCommit(
+          afterPresentation.executionState.currentPresentation,
+          matches: pending
+        )), stillValid else {
           await retireStalePresentation(journey: journey, commit: pending)
           return
         }
         _ = controller
       } catch {
         LogError("Failed to present selected screen \(pending.screenId): \(error)")
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
         if case ExperienceError.productsUnavailable = error,
-           let runner = experienceRunners[journey.id] {
+           experienceRunners[journey.id] === runner {
           await handleOutcome(
             await runner.handleProductsUnavailable(),
-            journey: journey
+            journey: journey,
+            runner: runner
           )
           return
         }
-        if !(await experienceService.validatesPresentationCommit(pending)) {
+        let stillValid = await experienceService.validatesPresentationCommit(pending)
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
+        if !stillValid {
           await retireStalePresentation(journey: journey, commit: pending)
         }
       }
     case .paused(let pending):
       await journey.pause(at: dateProvider.now())
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       let state = await journey.snapshot()
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       guard persistPauseCheckpoint(state, for: journey) else { return }
       enqueueParking(
         state,
@@ -3332,8 +3912,10 @@ actor JourneyService: JourneyServiceProtocol {
         scheduleResume(journeyId: journey.id, at: resumeAt)
       }
     case .transferred:
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       await transferJourneyToServer(journey)
     case .exited(let reason):
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       await completeJourney(journey, reason: reason)
     }
   }
@@ -3417,7 +3999,11 @@ actor JourneyService: JourneyServiceProtocol {
         persistJourney(state)
         return
       }
-      await discardLocalJourney(journey, terminalStatus: .transferred)
+      await discardLocalJourney(
+        journey,
+        terminalStatus: .transferred,
+        authority: .authoritativeOwnershipLoss
+      )
     } catch {
       LogWarning("JourneyService: failed to hand off journey \(journey.id): \(error)")
       persistJourney(await journey.snapshot())
@@ -3427,41 +4013,72 @@ actor JourneyService: JourneyServiceProtocol {
   @discardableResult
   private func discardLocalJourney(
     _ journey: Journey,
-    terminalStatus: JourneyStatus
+    terminalStatus: JourneyStatus,
+    authority: JourneyTerminalTransitionAuthority = .ordinary
   ) async -> Bool {
-    var committed = false
-    for _ in 0..<3 {
-      guard inMemoryJourneysById[journey.id] === journey else { return false }
-      let versioned = await journey.versionedSnapshot()
-      guard versioned.snapshot.status.isLive else { return false }
-      var terminal = versioned.snapshot
-      terminal.status = terminalStatus
-      terminal.updatedAt = dateProvider.now()
-      if await journey.replaceForTerminalTransition(
-        terminal,
-        ifRevisionEquals: versioned.revision,
-        authority: .ordinary
-      ) {
-        committed = true
-        break
-      }
-      if await journey.hasHostDismissalReservation() {
-        return false
-      }
-    }
-    guard committed else {
-      LogError("JourneyService: local discard conflicted repeatedly for \(journey.id)")
+    if authority == .ordinary,
+       await hasHostDismissalPriority(journey) {
       return false
+    }
+    guard inMemoryJourneysById[journey.id] === journey,
+          let commit = await journey.discardLocally(
+            terminalStatus: terminalStatus,
+            at: dateProvider.now(),
+            authority: authority
+          ),
+          inMemoryJourneysById[journey.id] === journey else { return false }
+
+    // Establish a durable terminal quarantine before unlinking the live
+    // object. If deletion then fails, a relaunch sees this non-live snapshot
+    // instead of resurrecting the stale live epoch.
+    let terminal = await journey.snapshot()
+    var terminalPersisted = false
+    do {
+      try journeyStore.saveJourney(terminal)
+      terminalPersisted = true
+    } catch {
+      LogError(
+        "JourneyService: failed to persist terminal quarantine for \(journey.id): \(error)"
+      )
     }
 
     timerScheduler.cancelTasks(journeyId: journey.id)
+    if let runner = experienceRunners[journey.id] {
+      await runner.retire()
+    }
     experienceRunners.removeValue(forKey: journey.id)
     removeScreenControlRuntime(journeyId: journey.id)
+    pendingScreenEvents = pendingScreenEvents.filter {
+      $0.value.journeyId != journey.id
+    }
     if presentationTraceStates[journey.id] == nil {
       runtimeDelegates.removeValue(forKey: journey.id)
     }
+    hostDismissalRetryAuthorizations.removeValue(forKey: journey.id)
     inMemoryJourneysById.removeValue(forKey: journey.id)
-    journeyStore.deleteJourney(id: journey.id)
+    let deleted = journeyStore.deleteJourney(id: journey.id)
+    if !deleted && !terminalPersisted {
+      LogError(
+        "JourneyService: could not durably quarantine discarded journey \(journey.id)"
+      )
+    }
+    if commit.revokedHostDismissalReservation,
+       let originEventId = commit.previous.getContext("_origin_event_id") as? String {
+      let state = commit.previous
+      // The server owns the epoch, so no device exit/completion fact is
+      // emitted. The host API contract is local, however: a dismissal already
+      // requested by the host must still resolve its pending trigger waiter.
+      await triggerBroker.emit(
+        eventId: originEventId,
+        update: .journey(JourneyUpdate(
+          journeyId: journey.id,
+          experienceId: journey.experienceId,
+          experienceVersion: journey.experienceVersion,
+          exitReason: .dismissed,
+          goalMet: state.convertedAt != nil
+        ))
+      )
+    }
     return true
   }
 
@@ -3529,7 +4146,10 @@ actor JourneyService: JourneyServiceProtocol {
     _ state: JourneySnapshot,
     for journey: Journey
   ) -> Bool {
-    guard inMemoryJourneysById[state.id] === journey else { return false }
+    guard inMemoryJourneysById[state.id] === journey,
+          state.status.isLive,
+          state.distinctId == journey.distinctId,
+          journey.distinctId == identityService.getDistinctId() else { return false }
     do {
       try journeyStore.saveJourney(state)
       return true
@@ -3548,7 +4168,9 @@ actor JourneyService: JourneyServiceProtocol {
     for journey: Journey
   ) -> Bool {
     guard inMemoryJourneysById[state.id] === journey,
-          state.status.isLive else { return false }
+          state.status.isLive,
+          state.distinctId == journey.distinctId,
+          journey.distinctId == identityService.getDistinctId() else { return false }
     do {
       try journeyStore.saveJourney(state)
       return true
@@ -3572,7 +4194,8 @@ actor JourneyService: JourneyServiceProtocol {
         pendingDeadlineAt: pendingDeadlineAt
       ),
       userProperties: nil,
-      userPropertiesSetOnce: nil
+      userPropertiesSetOnce: nil,
+      distinctIdOverride: journey.distinctId
     )
   }
 
@@ -3594,7 +4217,7 @@ actor JourneyService: JourneyServiceProtocol {
       ? .host
       : .ordinary
     if terminalAuthority == .ordinary,
-       await journey.hasHostDismissalReservation() {
+       await hasHostDismissalPriority(journey) {
       return
     }
     var state = await journey.snapshot()
@@ -3617,7 +4240,20 @@ actor JourneyService: JourneyServiceProtocol {
       authority: terminalAuthority
     ) else {
       if dismissedBy == .host {
+        // Authorize the exact admitted attempt before yielding to release its
+        // reservation. An identity change may interleave on that await; it
+        // must retain this retryable journey, while unrelated old journeys
+        // remain quarantined.
+        if inMemoryJourneysById[journey.id] === journey {
+          hostDismissalRetryAuthorizations[journey.id] = journey
+        }
         await journey.releaseHostDismissalReservation()
+        let retryState = await journey.snapshot()
+        if inMemoryJourneysById[journey.id] !== journey || !retryState.status.isLive {
+          if hostDismissalRetryAuthorizations[journey.id] === journey {
+            hostDismissalRetryAuthorizations.removeValue(forKey: journey.id)
+          }
+        }
       }
       return
     }
@@ -3633,30 +4269,47 @@ actor JourneyService: JourneyServiceProtocol {
       false
     }
 
+    var hostExitCaptured = true
     if dismissedBy == .host {
-      let exitedProperties = JourneyEvents.journeyExitedProperties(
-        journey: state,
-        reason: reason,
-        at: state.completedAt ?? dateProvider.now(),
-        dismissedBy: dismissedBy
-      )
-      let capture = await eventLog.captureSystemEvent(
-        JourneyEvents.journeyExited,
-        properties: exitedProperties,
-        eventId: "journey-exited:\(journey.id):\(state.epoch)",
-        distinctId: journey.distinctId
-      )
-      if capture == nil {
+      switch await capturePendingHostExit(state) {
+      case .captured:
+        hostExitCaptured = true
+      case .failed:
+        hostExitCaptured = false
         LogWarning("JourneyService: Failed to durably capture host journey exit")
+      case .ownershipLost:
+        // The server's ownership decision linearized before the stable exit
+        // commit. Its callback normally performs this teardown while capture
+        // is suspended; the fallback also covers restored tombstones whose
+        // durable fence outlived the originating process.
+        if inMemoryJourneysById[journey.id] === journey {
+          _ = await discardLocalJourney(
+            journey,
+            terminalStatus: .superseded,
+            authority: .authoritativeOwnershipLoss
+          )
+        } else {
+          journeyStore.deleteJourney(id: journey.id)
+        }
+        return
       }
+      // An authoritative ownership response may revoke the terminal host
+      // tombstone while capture is suspended. Its teardown and trigger update
+      // own the result; never continue completion accounting or emit twice.
+      guard inMemoryJourneysById[journey.id] === journey else { return }
       await postDismissNotification(for: journey, reason: .hostDismissed)
+      guard inMemoryJourneysById[journey.id] === journey else { return }
     }
 
     // The local terminal transition is already durable. Network abandonment
     // is deliberately attempted only after that commit, so a crash or retry
     // can never leave an active run with a locally abandoned response.
-    if let runner = experienceRunners[journey.id] {
+    let completingRunner = experienceRunners[journey.id]
+    if let runner = completingRunner {
       await runner.abandonResponseDraftsIfNeeded(force: committedResponseAbandonment)
+      if dismissedBy == .host {
+        guard ownsHostCompletion(journey, runner: runner) else { return }
+      }
     }
 
     if dismissedBy != .host {
@@ -3669,7 +4322,9 @@ actor JourneyService: JourneyServiceProtocol {
       do {
         _ = try await eventLog.trackWithResponse(
           JourneyEvents.journeyExited,
-          properties: exitedProperties
+          properties: exitedProperties,
+          flushStrategy: .eventLog,
+          distinctIdOverride: state.distinctId
         )
       } catch {
         LogWarning("JourneyService: Failed to deliver journey exit: \(error)")
@@ -3698,32 +4353,32 @@ actor JourneyService: JourneyServiceProtocol {
       }
     }
 
+    if dismissedBy == .host {
+      guard ownsHostCompletion(journey, runner: completingRunner) else { return }
+    }
     timerScheduler.cancelTasks(journeyId: journey.id)
+    await completingRunner?.retire()
+    if dismissedBy == .host {
+      guard ownsHostCompletion(journey, runner: completingRunner) else { return }
+    }
     experienceRunners.removeValue(forKey: journey.id)
     removeScreenControlRuntime(journeyId: journey.id)
+    pendingScreenEvents = pendingScreenEvents.filter {
+      $0.value.journeyId != journey.id
+    }
     if presentationTraceStates[journey.id] == nil {
       runtimeDelegates.removeValue(forKey: journey.id)
     }
+    hostDismissalRetryAuthorizations.removeValue(forKey: journey.id)
     inMemoryJourneysById.removeValue(forKey: journey.id)
 
-    journeyStore.deleteJourney(id: journey.id)
-
-    // Reentry accounting: only genuine completions (natural exit, goal met,
-    // user dismissal) count against oneTime/oncePerWindow policies. A journey
-    // killed by logout (.cancelled) or a load failure (.error) must not
-    // permanently burn a one-time experience.
-    switch reason {
-    case .cancelled, .error:
-      break
-    default:
-      let record = JourneyCompletionRecord(journey: state, now: dateProvider.now())
-      do {
-        try journeyStore.recordCompletion(record)
-      } catch {
-        // A missed record loosens reentry (may re-show) rather than
-        // permanently blocking — log loudly instead of silently swallowing.
-        LogError("Failed to record journey completion for reentry accounting: \(error)")
-      }
+    // Reentry accounting follows the durable terminal transition, not EventLog
+    // availability. Keep the host tombstone until both obligations succeed,
+    // but never reopen a one-time/once-per-window journey while capture waits
+    // for recovery.
+    let completionRecorded = recordCompletionIfNeeded(for: state)
+    if dismissedBy != .host || hostExitCaptured && completionRecorded {
+      journeyStore.deleteJourney(id: journey.id)
     }
 
     if let triggerCompletion, dismissedBy == .host {
@@ -3751,6 +4406,96 @@ actor JourneyService: JourneyServiceProtocol {
     waiters.forEach { $0.resume() }
   }
 
+  private func retryPendingHostExitCaptures(
+    in snapshots: [JourneySnapshot]? = nil
+  ) async {
+    let candidates = snapshots ?? journeyStore.loadActiveJourneys()
+    for snapshot in candidates where snapshot.pendingHostExitCapture {
+      guard !completingJourneyIds.contains(snapshot.id) else { continue }
+      guard isRecoverablePendingHostExit(snapshot) else {
+        LogError(
+          "JourneyService: retaining malformed pending host exit \(snapshot.id)"
+        )
+        continue
+      }
+      switch await capturePendingHostExit(snapshot) {
+      case .failed:
+        continue
+      case .ownershipLost:
+        journeyStore.deleteJourney(id: snapshot.id)
+        continue
+      case .captured:
+        break
+      }
+      let completionRecorded = recordCompletionIfNeeded(for: snapshot)
+      if completionRecorded {
+        journeyStore.deleteJourney(id: snapshot.id)
+      }
+    }
+  }
+
+  /// Completion accounting and the stable host exit form one recoverable
+  /// terminal checkpoint. The store is idempotent by journey id, so a replay
+  /// after either write is safe.
+  private func recordCompletionIfNeeded(for state: JourneySnapshot) -> Bool {
+    // Reentry accounting: only genuine completions (natural exit, goal met,
+    // user dismissal) count against oneTime/oncePerWindow policies. A journey
+    // killed by logout (.cancelled) or a load failure (.error) must not
+    // permanently burn a one-time experience.
+    switch state.exitReason {
+    case .cancelled, .error:
+      return true
+    default:
+      let record = JourneyCompletionRecord(journey: state, now: dateProvider.now())
+      do {
+        try journeyStore.recordCompletion(record)
+        return true
+      } catch {
+        // A missed record loosens reentry (may re-show) rather than
+        // permanently blocking — retain host tombstones for retry and log
+        // other exits loudly instead of silently swallowing the failure.
+        LogError("Failed to record journey completion for reentry accounting: \(error)")
+        return false
+      }
+    }
+  }
+
+  private func isRecoverablePendingHostExit(_ state: JourneySnapshot) -> Bool {
+    state.pendingHostExitCapture
+      && state.status == .completed
+      && state.exitReason == .dismissed
+      && state.completedAt != nil
+  }
+
+  private func capturePendingHostExit(
+    _ state: JourneySnapshot
+  ) async -> DurableOwnedTriggerCaptureResult {
+    guard isRecoverablePendingHostExit(state),
+          let completedAt = state.completedAt else {
+      LogError(
+        "JourneyService: retaining malformed pending host exit \(state.id)"
+      )
+      return .failed
+    }
+    let exitedProperties = JourneyEvents.journeyExitedProperties(
+      journey: state,
+      reason: .dismissed,
+      at: completedAt,
+      dismissedBy: .host
+    )
+    let eventId = "journey-exited:\(state.id):\(state.epoch)"
+    return await eventLog.captureOwnedJourneySystemEvent(
+      JourneyEvents.journeyExited,
+      properties: exitedProperties,
+      eventId: eventId,
+      distinctId: state.distinctId,
+      ownership: JourneyEventOwnership(
+        journeyId: state.id,
+        epoch: state.epoch
+      )
+    )
+  }
+
   /// Atomically commits terminal journey state and response abandonment in one
   /// snapshot CAS + persistence operation. Replays use the deterministic
   /// terminal transition receipt and therefore cannot advance the response
@@ -3762,7 +4507,7 @@ actor JourneyService: JourneyServiceProtocol {
   ) async -> JourneySnapshot? {
     for _ in 0..<3 {
       if authority == .ordinary,
-         await journey.hasHostDismissalReservation() {
+         await hasHostDismissalPriority(journey) {
         return nil
       }
       let versioned = await journey.versionedSnapshot()
@@ -3779,6 +4524,7 @@ actor JourneyService: JourneyServiceProtocol {
       } else {
         terminal.complete(reason: reason, at: now)
       }
+      terminal.pendingHostExitCapture = authority == .host
       terminal.executionState.lifecycleGeneration &+= 1
 
       let terminalTransitionId = "terminal:\(journey.id):\(state.epoch)"
@@ -3812,7 +4558,7 @@ actor JourneyService: JourneyServiceProtocol {
         authority: authority
       ) else {
         if authority == .ordinary,
-           await journey.hasHostDismissalReservation() {
+           await hasHostDismissalPriority(journey) {
           return nil
         }
         continue
@@ -3828,7 +4574,8 @@ actor JourneyService: JourneyServiceProtocol {
         // unrelated concurrent journey updates.
         let persisted = journeyStore.loadJourney(id: journey.id)
         if persisted?.status == terminal.status,
-           persisted?.completedAt == terminal.completedAt {
+           persisted?.completedAt == terminal.completedAt,
+           persisted?.pendingHostExitCapture == terminal.pendingHostExitCapture {
           return terminal
         }
         let terminalStatus = terminal.status
@@ -3842,6 +4589,7 @@ actor JourneyService: JourneyServiceProtocol {
           current.updatedAt = state.updatedAt
           current.responseSession = state.responseSession
           current.responseSessionReceipts = state.responseSessionReceipts
+          current.pendingHostExitCapture = state.pendingHostExitCapture
           current.executionState.lifecycleGeneration = state.executionState.lifecycleGeneration
         }
         LogError("JourneyService: terminal transition persistence failed for \(journey.id): \(error)")
@@ -3983,27 +4731,53 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func closeSourceJourneyBeforeScopedGateExperienceIfNeeded(
     journey: Journey?,
-    experience: Experience?
-  ) async {
-    guard let journey else { return }
+    runner: JourneyRunner?,
+    experience _: Experience?
+  ) async -> Bool? {
+    guard let journey else { return false }
+    guard let runner,
+          await ownsExecutableJourney(journey, runner: runner) else { return nil }
     let state = await journey.snapshot()
-    guard state.status.isLive else { return }
-    guard await experiencePresentationService.presentedJourneyId == journey.id else { return }
+    guard await ownsExecutableJourney(journey, runner: runner),
+          state.status.isLive else { return nil }
+    let presentedJourneyId = await experiencePresentationService.presentedJourneyId
+    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
+    guard presentedJourneyId == journey.id else { return false }
 
     let closeReason: CloseReason = state.convertedAt != nil ? .goalMet : .userDismissed
-    if let controller = await experienceRunners[journey.id]?.viewController {
+    let controller = await runner.viewController
+    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
+    if let controller {
       await controller.prepareForDismissal(reason: closeReason)
+      guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
       await handleRuntimeDismiss(
         journeyId: journey.id,
         reason: closeReason,
         controller: controller
       )
+      guard await ownsScopedCallbackContinuation(
+        journey,
+        runner: runner,
+        sourceCompleted: true
+      ) else { return nil }
       await experiencePresentationService.dismissCurrentExperience(reason: closeReason)
-      return
+      guard await ownsScopedCallbackContinuation(
+        journey,
+        runner: runner,
+        sourceCompleted: true
+      ) else { return nil }
+      return true
     }
 
     await experiencePresentationService.dismissCurrentExperience(reason: closeReason)
+    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
     await completeJourney(journey, reason: dismissalExitReason(for: closeReason))
+    guard await ownsScopedCallbackContinuation(
+      journey,
+      runner: runner,
+      sourceCompleted: true
+    ) else { return nil }
+    return true
   }
 
   private func handleScopedGatePlan(
@@ -4012,6 +4786,32 @@ actor JourneyService: JourneyServiceProtocol {
     sourceExperience: Experience? = nil
   ) async {
     guard let plan else { return }
+    let sourceRunner: JourneyRunner?
+    if let sourceJourney {
+      guard let runner = experienceRunners[sourceJourney.id],
+            await ownsExecutableJourney(sourceJourney, runner: runner) else { return }
+      sourceRunner = runner
+    } else {
+      sourceRunner = nil
+    }
+
+    func sourceRemainsAuthorized(completed: Bool = false) async -> Bool {
+      guard let sourceJourney else { return true }
+      guard let sourceRunner else { return false }
+      return await ownsScopedCallbackContinuation(
+        sourceJourney,
+        runner: sourceRunner,
+        sourceCompleted: completed
+      )
+    }
+
+    func closeSource() async -> Bool? {
+      await closeSourceJourneyBeforeScopedGateExperienceIfNeeded(
+        journey: sourceJourney,
+        runner: sourceRunner,
+        experience: sourceExperience
+      )
+    }
 
     switch plan.decision {
     case .allow, .deny:
@@ -4019,10 +4819,8 @@ actor JourneyService: JourneyServiceProtocol {
 
     case .showFlow:
       guard let experienceVersionId = plan.flowId else { return }
-      await closeSourceJourneyBeforeScopedGateExperienceIfNeeded(
-        journey: sourceJourney,
-        experience: sourceExperience
-      )
+      guard let sourceCompleted = await closeSource(),
+            await sourceRemainsAuthorized(completed: sourceCompleted) else { return }
       _ = try? await experiencePresentationService.presentExperience(experienceVersionId, from: nil, runtimeDelegate: nil)
 
     case .requireFeature:
@@ -4030,12 +4828,15 @@ actor JourneyService: JourneyServiceProtocol {
 
       if plan.policy == .cacheOnly {
         let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
+        guard await sourceRemainsAuthorized() else { return }
         if GatePlanEvaluation.hasAccess(cached, requiredBalance: plan.requiredBalance) {
           return
         }
         return
       } else {
-        if let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId),
+        let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
+        guard await sourceRemainsAuthorized() else { return }
+        if let cached,
            GatePlanEvaluation.hasAccess(cached, requiredBalance: plan.requiredBalance) {
           return
         }
@@ -4048,13 +4849,12 @@ actor JourneyService: JourneyServiceProtocol {
         ), GatePlanEvaluation.hasAccess(access, requiredBalance: plan.requiredBalance) {
           return
         }
+        guard await sourceRemainsAuthorized() else { return }
       }
 
       guard let experienceVersionId = plan.flowId else { return }
-      await closeSourceJourneyBeforeScopedGateExperienceIfNeeded(
-        journey: sourceJourney,
-        experience: sourceExperience
-      )
+      guard let sourceCompleted = await closeSource(),
+            await sourceRemainsAuthorized(completed: sourceCompleted) else { return }
       _ = try? await experiencePresentationService.presentExperience(experienceVersionId, from: nil, runtimeDelegate: nil)
     }
   }
@@ -4105,7 +4905,9 @@ actor JourneyService: JourneyServiceProtocol {
             journey: convertedState,
             at: at,
             sourceFactRef: sourceFactRef
-          )
+          ),
+          flushStrategy: .eventLog,
+          distinctIdOverride: convertedState.distinctId
         )
       } catch {
         LogWarning("JourneyService: Failed to deliver journey conversion: \(error)")
@@ -4323,14 +5125,62 @@ actor JourneyService: JourneyServiceProtocol {
         break
       }
     }
+    let pendingHostCompletionAt: Date?
+    switch experience.reentry {
+    case .everyTime:
+      pendingHostCompletionAt = nil
+    case .oneTime, .oncePerWindow:
+      let candidates = journeyStore.loadActiveJourneys().filter {
+        $0.distinctId == distinctId
+          && $0.experienceId == experience.id
+          && isRecoverablePendingHostExit($0)
+      }
+      var ownedCompletionDates: [Date] = []
+      for snapshot in candidates {
+        // A retained host tombstone suppresses reentry only while this device
+        // still might author its exit. EventLog unavailability retains that
+        // conservative suppression; only confirmed ownership loss may reopen
+        // enrollment and quarantine the stale snapshot.
+        let ownership = JourneyEventOwnership(
+          journeyId: snapshot.id,
+          epoch: snapshot.epoch
+        )
+        switch await eventLog.journeyEventOwnershipState(ownership) {
+        case .owned, .unavailable:
+          if let completedAt = snapshot.completedAt {
+            ownedCompletionDates.append(completedAt)
+          }
+        case .ownershipLost:
+          if let retained = inMemoryJourneysById[snapshot.id],
+             await discardLocalJourney(
+               retained,
+               terminalStatus: .superseded,
+               authority: .authoritativeOwnershipLoss
+             ) {
+            continue
+          }
+          if !journeyStore.deleteJourney(id: snapshot.id) {
+            LogError(
+              "JourneyService: failed to delete quarantined persisted journey \(snapshot.id)"
+            )
+          }
+        }
+      }
+      pendingHostCompletionAt = ownedCompletionDates.max()
+    }
     return EnrollmentPolicy.suppressionReason(
       reentry: experience.reentry,
       hasLiveJourney: hasLiveJourney,
       hasCompleted: {
-        journeyStore.hasCompletedExperience(distinctId: distinctId, experienceId: experience.id)
+        pendingHostCompletionAt != nil
+          || journeyStore.hasCompletedExperience(distinctId: distinctId, experienceId: experience.id)
       },
       lastCompletionAt: {
-        journeyStore.lastCompletionTime(distinctId: distinctId, experienceId: experience.id)
+        let recorded = journeyStore.lastCompletionTime(
+          distinctId: distinctId,
+          experienceId: experience.id
+        )
+        return [recorded, pendingHostCompletionAt].compactMap { $0 }.max()
       },
       timeIntervalSinceLastCompletion: {
         dateProvider.timeIntervalSince($0)

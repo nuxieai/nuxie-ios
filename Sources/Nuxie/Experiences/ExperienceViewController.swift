@@ -144,9 +144,10 @@ protocol ExperienceRuntimeDelegate: AnyObject {
         _ controller: ExperienceViewController
     ) async
 
+    @discardableResult
     func experienceViewControllerDidRequestHostDismiss(
         _ controller: ExperienceViewController
-    ) async
+    ) async -> Bool
 }
 
 protocol NotificationPermissionEventReceiver: AnyObject {
@@ -245,13 +246,15 @@ extension ExperienceRuntimeDelegate {
         screenId: String
     ) {}
 
+    @discardableResult
     func experienceViewControllerDidRequestHostDismiss(
         _ controller: ExperienceViewController
-    ) async {
+    ) async -> Bool {
         experienceViewControllerDidRequestDismiss(
             controller,
             reason: .hostDismissed
         )
+        return true
     }
 
     func experienceViewControllerWillRequestHostDismiss(
@@ -1984,6 +1987,10 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
 extension ExperienceViewController {
     func beginHostDismissal() {
         hostDismissalRequested = true
+    }
+
+    func cancelHostDismissal() {
+        hostDismissalRequested = false
     }
 
     func waitForInFlightCommerceBeforeHostDismissal() async {

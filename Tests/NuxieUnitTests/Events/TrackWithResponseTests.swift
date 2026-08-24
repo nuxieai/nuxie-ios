@@ -122,6 +122,29 @@ final class TrackWithResponseTests: AsyncSpec {
                     expect(lastCall?.properties?["session_id"] as? String).to(equal("session-123"))
                     expect(lastCall?.properties?["exit_reason"] as? String).to(equal("completed"))
                 }
+
+                it("uses the journey identity for both the event and enriched identity property") {
+                    mockIdentityService.setDistinctId("replacement-user")
+                    await mockNuxieApi.setTrackEventResponse(.success())
+
+                    _ = try await eventLog.trackWithResponse(
+                        JourneyEvents.journeyTransition,
+                        properties: ["journey_id": "journey-identity"],
+                        flushStrategy: .none,
+                        distinctIdOverride: "journey-user"
+                    )
+
+                    let sent = await mockNuxieApi.sentEvents.last
+                    expect(sent?.distinctId).to(equal("journey-user"))
+                    expect(sent?.properties["$distinct_id"] as? String)
+                        .to(equal("journey-user"))
+                    expect(mockEventStore.storedEvents.last?.distinctId)
+                        .to(equal("journey-user"))
+                    expect(
+                        mockEventStore.storedEvents.last?
+                            .getPropertiesDict()["$distinct_id"] as? String
+                    ).to(equal("journey-user"))
+                }
             }
 
             // MARK: - Queue Flush Behavior
@@ -280,17 +303,59 @@ final class TrackWithResponseTests: AsyncSpec {
             // MARK: - Error Handling
 
             context("error handling") {
-                it("throws error on network failure") {
+                it("does not replay a failed synchronous enrollment later") {
                     // Given
                     await mockNuxieApi.configureTrackEventFailure(error: URLError(.notConnectedToInternet))
 
                     // When/Then
                     await expect {
                         try await eventLog.trackWithResponse(
-                            "$journey_transition",
+                            JourneyEvents.journeyEnrolled,
                             properties: nil
                         )
                     }.to(throwError())
+
+                    guard let source = mockEventStore.storedEvents.first else {
+                        return fail("expected the failed enrollment in local history")
+                    }
+                    expect(mockEventStore.pendingIds).toNot(contain(source.id))
+                    expect(mockEventStore.deliveredIds).to(contain(source.id))
+
+                    await mockNuxieApi.reset()
+                    _ = await eventLog.flushEvents()
+                    let replayedEvents = await mockNuxieApi.sentEvents
+                    expect(replayedEvents).to(beEmpty())
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("keeps a failed synchronous enrollment reserved when its terminal ack fails") {
+                    mockEventStore.shouldFailMarkDelivered = true
+                    await mockNuxieApi.configureTrackEventFailure(
+                        error: URLError(.notConnectedToInternet)
+                    )
+
+                    await expect {
+                        try await eventLog.trackWithResponse(
+                            JourneyEvents.journeyEnrolled,
+                            properties: nil
+                        )
+                    }.to(throwError())
+
+                    guard let source = mockEventStore.storedEvents.first else {
+                        return fail("expected the enrollment history source")
+                    }
+                    expect(mockEventStore.pendingIds).to(contain(source.id))
+                    expect(mockEventStore.deliveredIds).toNot(contain(source.id))
+
+                    await mockNuxieApi.reset()
+                    _ = await eventLog.performFlush(forceSend: true)
+                    await expect { await mockNuxieApi.sentEvents }.to(beEmpty())
+
+                    mockEventStore.shouldFailMarkDelivered = false
+                    _ = await eventLog.performFlush(forceSend: true)
+                    expect(mockEventStore.pendingIds).toNot(contain(source.id))
+                    expect(mockEventStore.deliveredIds).to(contain(source.id))
+                    await expect { await mockNuxieApi.sentEvents }.to(beEmpty())
                 }
 
                 it("throws error for empty event name") {
@@ -316,6 +381,293 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // Then - API call should still succeed
                     expect(response.status).to(equal("ok"))
+                }
+
+                it("blocks relaunch restore until the exact response source makes its ownership fence durable") {
+                    let journeyId = "journey-fence-retry"
+                    let epoch = 4
+                    await mockNuxieApi.setTrackEventResponse(
+                        EventResponse(
+                            status: "ok",
+                            journeyClaim: .init(
+                                journeyId: journeyId,
+                                accepted: false,
+                                epoch: epoch,
+                                reason: "epoch_mismatch"
+                            )
+                        )
+                    )
+                    mockEventStore.shouldFailOwnershipFenceRecord = true
+
+                    await expect {
+                        try await eventLog.trackWithResponse(
+                            JourneyEvents.journeyTransition,
+                            properties: [
+                                "journey_id": journeyId,
+                                "epoch": epoch,
+                            ],
+                            flushStrategy: .none
+                        )
+                    }.to(throwError(NuxieError.eventRoutingFailed))
+
+                    let firstSends = await mockNuxieApi.sentEvents
+                    guard let source = mockEventStore.storedEvents.first,
+                          let firstSend = firstSends.first else {
+                        return fail("expected the durable source and its first direct send")
+                    }
+                    expect(firstSend.id).to(equal(source.id))
+                    expect(mockEventStore.pendingIds).to(contain(source.id))
+                    expect(mockEventStore.deliveredIds).toNot(contain(source.id))
+                    expect(mockEventStore.journeyOwnershipFences[journeyId]).to(beNil())
+                    expect(
+                        mockEventStore.unresolvedJourneyOwnershipResponses[source.id]
+                    ).to(contain(JourneyEventOwnership(
+                        journeyId: journeyId,
+                        epoch: epoch
+                    )))
+
+                    // A fresh EventLog has no process-local fence. The durable
+                    // unresolved marker must still fail closed until replay.
+                    await eventLog.close()
+                    eventLog = EventLog(
+                        identity: mockIdentityService,
+                        sessions: mockSessionService,
+                        dateProvider: MockDateProvider(),
+                        apiClient: mockNuxieApi,
+                        store: mockEventStore
+                    )
+                    try await eventLog.configure(configuration: testConfig)
+                    let unresolvedState = await eventLog.journeyEventOwnershipState(
+                        JourneyEventOwnership(journeyId: journeyId, epoch: epoch)
+                    )
+                    expect(unresolvedState).to(equal(.unavailable))
+
+                    let staleExitId = "journey-exited:\(journeyId):\(epoch)"
+                    let staleExit = await eventLog.captureOwnedJourneySystemEvent(
+                        JourneyEvents.journeyExited,
+                        properties: ["journey_id": journeyId, "epoch": epoch],
+                        eventId: staleExitId,
+                        distinctId: source.distinctId,
+                        ownership: JourneyEventOwnership(
+                            journeyId: journeyId,
+                            epoch: epoch
+                        )
+                    )
+                    guard case .failed = staleExit else {
+                        return fail(
+                            "an unresolved response must keep the host exit retryable"
+                        )
+                    }
+                    expect(mockEventStore.storedEvents.map(\.id))
+                        .toNot(contain(staleExitId))
+                    expect(mockEventStore.stableDroppedIds)
+                        .toNot(contain(staleExitId))
+
+                    // A poison response must not retire a source carrying an
+                    // unresolved ownership fence.
+                    await mockNuxieApi.reset()
+                    await mockNuxieApi.configureTrackEventFailure(
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 422,
+                            message: "invalid"
+                        )
+                    )
+                    let poisonDropped = await eventLog.flushEvents()
+                    expect(poisonDropped).to(beFalse())
+                    expect(mockEventStore.pendingIds).to(contain(source.id))
+                    expect(mockEventStore.deliveredIds).toNot(contain(source.id))
+                    expect(
+                        mockEventStore.unresolvedJourneyOwnershipResponses[source.id]
+                    ).toNot(beNil())
+
+                    // The successful retry deliberately omits the original
+                    // ownership signal. The durable source marker must replay
+                    // that signal into the fence before the source is acked.
+                    await mockNuxieApi.reset()
+                    await mockNuxieApi.setTrackEventResponse(.success())
+                    mockEventStore.shouldFailOwnershipFenceRecord = false
+                    let replayed = await eventLog.flushEvents()
+
+                    expect(replayed).to(beTrue())
+                    let sends = await mockNuxieApi.sentEvents
+                    expect(sends.map(\.id)).to(equal([source.id]))
+                    expect(sends.map { $0.properties["journey_id"] as? String })
+                        .to(equal([journeyId]))
+                    expect(sends.map(\.timestamp))
+                        .to(equal([source.timestamp]))
+                    expect(mockEventStore.journeyOwnershipFences[journeyId]).to(equal(epoch))
+                    expect(
+                        mockEventStore.unresolvedJourneyOwnershipResponses[source.id]
+                    ).to(beNil())
+                    expect(mockEventStore.pendingIds).toNot(contain(source.id))
+                    expect(mockEventStore.deliveredIds).to(contain(source.id))
+
+                    let staleEpochCanAuthor = await eventLog.canAuthorJourneyEvents(
+                        JourneyEventOwnership(journeyId: journeyId, epoch: epoch)
+                    )
+                    let newerEpochCanAuthor = await eventLog.canAuthorJourneyEvents(
+                        JourneyEventOwnership(journeyId: journeyId, epoch: epoch + 1)
+                    )
+                    expect(staleEpochCanAuthor).to(beFalse())
+                    expect(newerEpochCanAuthor).to(beTrue())
+                }
+
+                it("retries an unavailable ownership fence and completes the original direct source") {
+                    let journeyId = "journey-fence-in-process-retry"
+                    let epoch = 7
+                    await mockNuxieApi.setTrackEventResponse(
+                        EventResponse(
+                            status: "ok",
+                            journeyClaim: .init(
+                                journeyId: journeyId,
+                                accepted: false,
+                                epoch: epoch,
+                                reason: "epoch_mismatch"
+                            )
+                        )
+                    )
+                    mockEventStore.shouldFailOwnershipFenceRecord = true
+                    mockEventStore.shouldFailUnresolvedJourneyOwnershipResponseRecord = true
+
+                    await expect {
+                        try await eventLog.trackWithResponse(
+                            JourneyEvents.journeyTransition,
+                            properties: ["journey_id": journeyId, "epoch": epoch],
+                            flushStrategy: .none
+                        )
+                    }.to(throwError(NuxieError.eventRoutingFailed))
+
+                    guard let source = mockEventStore.storedEvents.first else {
+                        return fail("expected the persisted direct source")
+                    }
+                    mockEventStore.shouldFailOwnershipFenceRecord = false
+                    mockEventStore.shouldFailUnresolvedJourneyOwnershipResponseRecord = false
+
+                    await expect { mockEventStore.deliveredIds }
+                        .toEventually(contain(source.id), timeout: .seconds(2))
+
+                    expect(mockEventStore.pendingIds).toNot(contain(source.id))
+                    expect(mockEventStore.journeyOwnershipFences[journeyId]).to(equal(epoch))
+                    expect(mockEventStore.journeyOwnershipFenceWriteCount).to(equal(1))
+                    expect(mockEventStore.unresolvedJourneyOwnershipResponses[source.id]).to(beNil())
+                    await expect { await mockNuxieApi.trackEventCallCount }.to(equal(1))
+                    await expect { await mockNuxieApi.sendBatchCallCount }.to(equal(0))
+                }
+
+                it("returns a persistently unavailable ownership-fence source to durable delivery") {
+                    let journeyId = "journey-fence-retry-exhausted"
+                    let epoch = 8
+                    await mockNuxieApi.setTrackEventResponse(
+                        EventResponse(
+                            status: "ok",
+                            journeyClaim: .init(
+                                journeyId: journeyId,
+                                accepted: false,
+                                epoch: epoch,
+                                reason: "epoch_mismatch"
+                            )
+                        )
+                    )
+                    mockEventStore.shouldFailOwnershipFenceRecord = true
+                    mockEventStore.shouldFailUnresolvedJourneyOwnershipResponseRecord = true
+
+                    await expect {
+                        try await eventLog.trackWithResponse(
+                            JourneyEvents.journeyTransition,
+                            properties: ["journey_id": journeyId, "epoch": epoch],
+                            flushStrategy: .none
+                        )
+                    }.to(throwError(NuxieError.eventRoutingFailed))
+
+                    guard let source = mockEventStore.storedEvents.first else {
+                        return fail("expected the persisted direct source")
+                    }
+                    // Marker-first ordering: the unresolved marker is attempted on the
+                    // initial pass and on each bounded retry; the fence is never
+                    // attempted while the marker cannot be written.
+                    await expect { mockEventStore.unresolvedJourneyOwnershipResponseRecordCallCount }
+                        .toEventually(equal(4), timeout: .seconds(2))
+                    await expect { await eventLog.getQueuedEventCount() }
+                        .toEventually(equal(1), timeout: .seconds(2))
+
+                    expect(mockEventStore.journeyOwnershipFenceRecordCallCount).to(equal(0))
+                    expect(mockEventStore.pendingIds).to(contain(source.id))
+                    expect(mockEventStore.deliveredIds).toNot(contain(source.id))
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    expect(mockEventStore.unresolvedJourneyOwnershipResponseRecordCallCount).to(equal(4))
+                }
+
+                it("durably retires a terminal direct send once the store recovers") {
+                    mockEventStore.shouldFailMarkDelivered = true
+                    await mockNuxieApi.configureTrackEventFailure(
+                        error: URLError(.notConnectedToInternet)
+                    )
+
+                    await expect {
+                        try await eventLog.trackWithResponse(
+                            JourneyEvents.journeyEnrolled,
+                            properties: nil
+                        )
+                    }.to(throwError())
+                    guard let source = mockEventStore.storedEvents.first else {
+                        return fail("expected the persisted direct source")
+                    }
+                    expect(mockEventStore.deliveredIds).toNot(contain(source.id))
+
+                    // Store recovers; the bounded retirement retry must mark
+                    // the terminal source delivered without any flush or
+                    // relaunch (the acknowledgement outlives the caller).
+                    mockEventStore.shouldFailMarkDelivered = false
+                    await expect { mockEventStore.deliveredIds }
+                        .toEventually(contain(source.id), timeout: .seconds(2))
+                    expect(mockEventStore.pendingIds).toNot(contain(source.id))
+                }
+
+                it("cancels pending ownership-fence retries before closing the store") {
+                    let journeyId = "journey-fence-retry-close"
+                    let epoch = 9
+                    await mockNuxieApi.setTrackEventResponse(
+                        EventResponse(
+                            status: "ok",
+                            journeyClaim: .init(
+                                journeyId: journeyId,
+                                accepted: false,
+                                epoch: epoch,
+                                reason: "epoch_mismatch"
+                            )
+                        )
+                    )
+                    mockEventStore.shouldFailOwnershipFenceRecord = true
+                    mockEventStore.shouldFailUnresolvedJourneyOwnershipResponseRecord = true
+
+                    await expect {
+                        try await eventLog.trackWithResponse(
+                            JourneyEvents.journeyTransition,
+                            properties: ["journey_id": journeyId, "epoch": epoch],
+                            flushStrategy: .none
+                        )
+                    }.to(throwError(NuxieError.eventRoutingFailed))
+
+                    let writesBeforeClose = mockEventStore.journeyOwnershipFenceRecordCallCount
+                    await eventLog.close()
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+
+                    expect(mockEventStore.isClosed).to(beTrue())
+                    expect(mockEventStore.journeyOwnershipFenceRecordCallCount)
+                        .to(equal(writesBeforeClose))
+                }
+
+                it("fails closed when restored journey ownership cannot be read") {
+                    mockEventStore.shouldFailQuery = true
+
+                    let canAuthor = await eventLog.canAuthorJourneyEvents(
+                        JourneyEventOwnership(
+                            journeyId: "journey-ownership-query-failure",
+                            epoch: 1
+                        )
+                    )
+
+                    expect(canAuthor).to(beFalse())
                 }
             }
 
@@ -480,6 +832,56 @@ final class TrackWithResponseTests: AsyncSpec {
                     expect(mockEventStore.storedEvents).to(haveCount(1))
                     expect(mockEventStore.pendingIds)
                         .to(contain("purchase-completed:transaction-1"))
+                }
+
+                it("lets an authoritative ownership response fence a suspended exit capture") {
+                    mockEventStore.stableCaptureDelayNanoseconds = 300_000_000
+                    await mockNuxieApi.setTrackEventResponse(
+                        EventResponse(
+                            status: "ok",
+                            journeyOwnership: .init(
+                                journeyId: "journey-1",
+                                accepted: true,
+                                epoch: 4
+                            )
+                        )
+                    )
+
+                    let capture = Task {
+                        await eventLog.captureOwnedJourneySystemEvent(
+                            JourneyEvents.journeyExited,
+                            properties: ["journey_id": "journey-1"],
+                            eventId: "journey-exited:suspended-stale-owner",
+                            distinctId: "customer-a",
+                            ownership: JourneyEventOwnership(
+                                journeyId: "journey-1",
+                                epoch: 4
+                            )
+                        )
+                    }
+                    await expect { mockEventStore.stableCaptureCommitCallCount }
+                        .toEventually(equal(1))
+
+                    let response = Task {
+                        try await eventLog.trackWithResponse(
+                            JourneyEvents.journeyHandoff,
+                            properties: ["journey_id": "journey-1"],
+                            flushStrategy: .none
+                        )
+                    }
+
+                    guard case .ownershipLost = await capture.value else {
+                        _ = try await response.value
+                        return fail("the response fence must win before stable capture commits")
+                    }
+                    _ = try await response.value
+
+                    expect(mockEventStore.journeyOwnershipFences["journey-1"])
+                        == 4
+                    expect(mockEventStore.storedEvents.map(\.id))
+                        .toNot(contain("journey-exited:suspended-stale-owner"))
+                    expect(mockEventStore.pendingIds)
+                        .toNot(contain("journey-exited:suspended-stale-owner"))
                 }
 
                 it("applies beforeSend while preserving stable capture identity") {
@@ -658,6 +1060,41 @@ final class TrackWithResponseTests: AsyncSpec {
                     expect(replay?.routesLocally) == true
                     expect(replay?.event.properties["snapshot"] as? String) == "first"
                     expect(hookCalls.value) == 1
+                }
+
+                it("does not replay an existing owned capture after a durable ownership fence") {
+                    let ownership = JourneyEventOwnership(
+                        journeyId: "fenced-canonical-capture",
+                        epoch: 3
+                    )
+                    let eventId = "journey-exited:fenced-canonical-capture:3"
+                    let initial = await eventLog.captureOwnedJourneySystemEvent(
+                        JourneyEvents.journeyExited,
+                        properties: ["journey_id": ownership.journeyId],
+                        eventId: eventId,
+                        distinctId: "customer-a",
+                        ownership: ownership
+                    )
+                    guard case .captured = initial else {
+                        return fail("expected the initial host exit capture")
+                    }
+
+                    try! await mockEventStore.recordJourneyOwnershipLoss(
+                        ownership,
+                        recordedAt: Date()
+                    )
+                    let replay = await eventLog.captureOwnedJourneySystemEvent(
+                        JourneyEvents.journeyExited,
+                        properties: ["journey_id": ownership.journeyId],
+                        eventId: eventId,
+                        distinctId: "customer-a",
+                        ownership: ownership
+                    )
+
+                    guard case .ownershipLost = replay else {
+                        return fail("a durable ownership fence must win over a stable replay")
+                    }
+                    expect(mockEventStore.storedEvents.map(\.id)).to(equal([eventId]))
                 }
 
                 it("refuses stable system capture after close") {

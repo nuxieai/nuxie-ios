@@ -105,6 +105,23 @@ struct DurableTriggerCapture: Sendable {
   }
 }
 
+/// Result of committing a journey-authored stable event whose ownership can
+/// be revoked by an authoritative event response while capture is suspended.
+enum DurableOwnedTriggerCaptureResult: Sendable {
+  case captured(DurableTriggerCapture)
+  case ownershipLost
+  case failed
+}
+
+/// Durable ownership lookup result. `unavailable` is intentionally distinct
+/// from confirmed loss: callers must fail closed without deleting the only
+/// retry record when storage is transiently unreadable.
+enum JourneyEventOwnershipState: Equatable, Sendable {
+  case owned
+  case ownershipLost
+  case unavailable
+}
+
 protocol EventCapturing: AnyObject, Sendable {
   func track(
     _ event: String,
@@ -128,6 +145,16 @@ protocol EventTriggerTracking: AnyObject, Sendable {
     eventId: String,
     distinctId: String
   ) async -> DurableTriggerCapture?
+  func captureOwnedJourneySystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String,
+    ownership: JourneyEventOwnership
+  ) async -> DurableOwnedTriggerCaptureResult
+  func journeyEventOwnershipState(
+    _ ownership: JourneyEventOwnership
+  ) async -> JourneyEventOwnershipState
   func prepareTriggerProperties(
     _ properties: sending [String: Any]?,
     userProperties: sending [String: Any]?,
@@ -159,9 +186,26 @@ protocol EventTriggerTracking: AnyObject, Sendable {
     properties: sending [String: Any]?,
     flushStrategy: EventFlushStrategy
   ) async throws -> EventResponse
+  func trackWithResponse(
+    _ event: String,
+    properties: sending [String: Any]?,
+    flushStrategy: EventFlushStrategy,
+    distinctIdOverride: String?
+  ) async throws -> EventResponse
 }
 
 extension EventTriggerTracking {
+  /// Convenience admission check. Durable recovery code should inspect the
+  /// tri-state result directly so unavailability is not mistaken for loss.
+  func canAuthorJourneyEvents(
+    _ ownership: JourneyEventOwnership
+  ) async -> Bool {
+    if case .owned = await journeyEventOwnershipState(ownership) {
+      return true
+    }
+    return false
+  }
+
   func captureSystemEvent(
     _ event: String,
     properties: sending [String: Any]?,
@@ -178,6 +222,25 @@ extension EventTriggerTracking {
     ) else { return nil }
     return DurableTriggerCapture(event: tracked.0)
   }
+
+  /// Test adapters that do not own durable event storage retain their existing
+  /// capture behavior. EventLog overrides this with the ownership-fenced path.
+  func captureOwnedJourneySystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String,
+    ownership: JourneyEventOwnership
+  ) async -> DurableOwnedTriggerCaptureResult {
+    guard let capture = await captureSystemEvent(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId
+    ) else { return .failed }
+    return .captured(capture)
+  }
+
 }
 
 protocol EventHistoryReading: AnyObject, Sendable {
@@ -444,6 +507,19 @@ extension EventLogProtocol {
       flushStrategy: flushPendingEvents ? .eventLog : .none
     )
   }
+
+  func trackWithResponse(
+    _ event: String,
+    properties: sending [String: Any]?,
+    flushStrategy: EventFlushStrategy
+  ) async throws -> EventResponse {
+    try await trackWithResponse(
+      event,
+      properties: properties,
+      flushStrategy: flushStrategy,
+      distinctIdOverride: nil
+    )
+  }
 }
 
 /// The unified event log actor. Owns capture → enrich (session stamp, context,
@@ -476,6 +552,16 @@ actor EventLog: EventLogProtocol {
     (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
   private var journeyHandoffDeliveredHandler:
     (@Sendable (_ journeyId: String) async -> Void)?
+  /// Immediate process-local fence. The SQLite fence is authoritative across
+  /// relaunch; this mirror also blocks capture when persisting the response
+  /// fence itself fails or is still suspended.
+  private var journeyOwnershipFences: [String: Int] = [:]
+  /// Response-scoped ownership losses that have not yet reached the durable
+  /// fence. Keeping their source association prevents a retry response that
+  /// omits an already-returned signal from acknowledging or poison-dropping
+  /// that source while this process remains alive.
+  private var unresolvedJourneyOwnershipBySource:
+    [String: [JourneyEventOwnership]] = [:]
 
   // MARK: - Capture pipeline
 
@@ -521,6 +607,18 @@ actor EventLog: EventLogProtocol {
     let shouldHandleResponseSignals: Bool
   }
 
+  private enum OwnershipFenceCommitResult {
+    case durable
+    case retryable
+    case unavailable
+  }
+
+  /// Fence persistence is retried locally before exposing the durable source
+  /// to ordinary recovery. This is deliberately short: the pending source is
+  /// the durable retry record once these attempts are exhausted.
+  private static let ownershipFenceRetryAttempts = 3
+  private static let ownershipFenceRetryBaseDelayNanoseconds: UInt64 = 50_000_000
+
   private var deliveryConfig = DeliveryConfig()
   private var deliveryQueue: [NuxieEvent] = []
   private var isCurrentlyFlushing = false
@@ -530,6 +628,15 @@ actor EventLog: EventLogProtocol {
   private var isPaused = false
   private var flushTimerTask: Task<Void, Never>?
   private var activeDirectDeliveryIds: Set<String> = []
+  /// A persisted direct source remains reserved while an ownership fence is
+  /// temporarily unavailable. These tasks are cancelled and joined by close
+  /// before the shared store is closed.
+  private var ownershipFenceRetryTasks: [String: Task<Void, Never>] = [:]
+  /// Direct sources whose transport attempt failed terminally but whose
+  /// history-row acknowledgement has not yet succeeded. They remain reserved
+  /// from delivery-window refill so an ack failure cannot turn a synchronous
+  /// enrollment failure into a delayed journey decision in this process.
+  private var terminalDirectDeliveryIds: Set<String> = []
   private var isTriggerDeliveryHeld = false
   private var triggerDeliveryWaiters: [CheckedContinuation<Void, Never>] = []
   private var activeDurableCommitCount = 0
@@ -582,6 +689,8 @@ actor EventLog: EventLogProtocol {
     captureWorker?.cancel()
     routeWorker?.cancel()
     flushTimerTask?.cancel()
+    ownershipFenceRetryTasks.values.forEach { $0.cancel() }
+    terminalRetirementRetryTasks.values.forEach { $0.cancel() }
   }
 
   private func startWorkers(
@@ -757,6 +866,20 @@ actor EventLog: EventLogProtocol {
     properties: sending [String: Any]? = nil,
     flushStrategy: EventFlushStrategy
   ) async throws -> EventResponse {
+    try await trackWithResponse(
+      event,
+      properties: properties,
+      flushStrategy: flushStrategy,
+      distinctIdOverride: nil
+    )
+  }
+
+  func trackWithResponse(
+    _ event: String,
+    properties: sending [String: Any]? = nil,
+    flushStrategy: EventFlushStrategy,
+    distinctIdOverride: String?
+  ) async throws -> EventResponse {
     guard !event.isEmpty else {
       throw NuxieError.invalidConfiguration("Event name cannot be empty")
     }
@@ -778,42 +901,100 @@ actor EventLog: EventLogProtocol {
     }
 
     // Get current distinct ID
-    let distinctId = identityService.getDistinctId()
+    let distinctId = distinctIdOverride ?? identityService.getDistinctId()
 
     // Boxed so the same snapshot can cross into the API client while
     // remaining readable here (each load is a fresh disconnected region).
-    let finalProperties = UncheckedSendable(
-      await buildTriggerProperties(
-        properties,
-        userProperties: nil,
-        userPropertiesSetOnce: nil
-      ))
+    var scopedProperties = await buildTriggerProperties(
+      properties,
+      userProperties: nil,
+      userPropertiesSetOnce: nil
+    )
+    scopedProperties["sdk_version"] = SDKVersion.current
+    scopedProperties["platform"] = currentPlatform()
+    if scopedProperties["device_model"] == nil {
+      scopedProperties["device_model"] = deviceModelIdentifier()
+    }
+    if scopedProperties["os_version"] == nil {
+      scopedProperties["os_version"] = osVersionString()
+    }
+    scopedProperties["$distinct_id"] = distinctId
+    let finalProperties = UncheckedSendable(scopedProperties)
 
-    // Store event locally (for history)
     let historyTimestamp = dateProvider.now()
+    // The direct request and every recovery attempt share one stable identity.
+    // Reserve it before the store await so refill cannot put the same row on
+    // the delivery lane while this request owns its first send.
+    let localEvent = NuxieEvent(
+      name: event,
+      distinctId: distinctId,
+      properties: finalProperties.value,
+      timestamp: historyTimestamp
+    )
+    activeDirectDeliveryIds.insert(localEvent.id)
+    var wasPersisted = false
     do {
-      try await storeHistoryEvent(
-        name: event,
-        properties: finalProperties.value,
-        distinctId: distinctId,
-        timestamp: historyTimestamp
-      )
+      try await store.insertPending(makeStoredEvent(from: localEvent))
+      wasPersisted = true
+      try await performCleanupIfNeeded()
     } catch {
       LogWarning("Failed to store event locally: \(error)")
       await recordHistoryGap(at: historyTimestamp)
       // Continue - server tracking is more important for journey events
     }
 
-    // Send directly to API, then commit any server-born facts without re-uploading them.
-    let response = try await apiClient.trackEvent(
-      event: event,
-      distinctId: distinctId,
-      properties: finalProperties.value,
-      value: finalProperties.value["value"] as? Double,
-      entityId: finalProperties.value["entityId"] as? String
+    let response: EventResponse
+    do {
+      response = try await apiClient.trackEvent(localEvent)
+    } catch {
+      // Preserve the synchronous trackWithResponse contract: a transport
+      // failure is terminal for this attempt and must not create a delayed
+      // journey decision after its caller has handled the failure locally.
+      if wasPersisted {
+        await completeTerminalDirectDelivery(ids: [localEvent.id])
+      } else {
+        activeDirectDeliveryIds.remove(localEvent.id)
+      }
+      throw error
+    }
+
+    // If the response cannot be made durable, its pending source remains the
+    // retry record and the decision lane replays it directly with the same
+    // idempotency key.
+    installVolatileJourneyOwnershipLosses(in: response)
+    let ownershipFenceCommit = await persistJourneyOwnershipLosses(
+      in: response,
+      sourceEventId: localEvent.id
     )
     await commitServerFacts(response.facts ?? [], distinctId: distinctId)
-    await handleEventResponseSignals(response)
+
+    await acquireTriggerDelivery()
+    await handleJourneyOwnershipResponseSignals(response)
+    switch ownershipFenceCommit {
+    case .durable:
+      if wasPersisted {
+        await completeDirectDelivery(ids: [localEvent.id])
+      } else {
+        activeDirectDeliveryIds.remove(localEvent.id)
+      }
+    case .retryable:
+      activeDirectDeliveryIds.remove(localEvent.id)
+      if wasPersisted {
+        await enqueueForDelivery(localEvent, isPersisted: true)
+      }
+    case .unavailable:
+      if wasPersisted {
+        scheduleOwnershipFenceRetry(response: response, source: localEvent)
+      } else {
+        activeDirectDeliveryIds.remove(localEvent.id)
+      }
+    }
+    releaseTriggerDelivery()
+
+    await handleMailboxResponseSignal(response)
+    guard case .durable = ownershipFenceCommit else {
+      throw NuxieError.eventRoutingFailed
+    }
     return response
   }
 
@@ -869,12 +1050,13 @@ actor EventLog: EventLogProtocol {
 
     // Boxed so the same snapshot can cross into the API client while
     // remaining readable here (each load is a fresh disconnected region).
-    let finalProperties = UncheckedSendable(
-      await buildTriggerProperties(
-        properties,
-        userProperties: userProperties,
-        userPropertiesSetOnce: userPropertiesSetOnce
-      ))
+    var scopedProperties = await buildTriggerProperties(
+      properties,
+      userProperties: userProperties,
+      userPropertiesSetOnce: userPropertiesSetOnce
+    )
+    scopedProperties["$distinct_id"] = distinctId
+    let finalProperties = UncheckedSendable(scopedProperties)
 
     // The canonical local event exists before anything else observes it. Its
     // UUIDv7 id is the durable-delivery idempotency key if the row later
@@ -925,21 +1107,38 @@ actor EventLog: EventLogProtocol {
 
     do {
       let response = try await apiClient.trackEvent(localEvent)
+      installVolatileJourneyOwnershipLosses(in: response)
+      let ownershipFenceCommit = await persistJourneyOwnershipLosses(
+        in: response,
+        sourceEventId: localEvent.id
+      )
       await commitServerFacts(response.facts ?? [], distinctId: distinctId)
+      await handleJourneyOwnershipResponseSignals(response)
 
       if persistToHistory {
-        // The direct round trip delivered this event — ack the pending row
-        // so the batch path never re-sends it.
-        await completeDirectDelivery(ids: [localEvent.id])
+        switch ownershipFenceCommit {
+        case .durable:
+          // Never acknowledge an ownership-changing response before its fence
+          // is durable. Otherwise a relaunch could recover a stale host exit
+          // after the source decision row was already retired.
+          await completeDirectDelivery(ids: [localEvent.id])
+        case .retryable:
+          activeDirectDeliveryIds.remove(localEvent.id)
+          await enqueueForDelivery(localEvent, isPersisted: wasPersisted)
+        case .unavailable:
+          if wasPersisted {
+            scheduleOwnershipFenceRetry(response: response, source: localEvent)
+          } else {
+            activeDirectDeliveryIds.remove(localEvent.id)
+          }
+        }
       }
 
-      // Response handlers may synchronously track control events (for
-      // example, a mailbox refresh claiming a journey). The delivery and its
-      // durable ack are ordered now, so release before invoking reentrant
-      // callbacks.
+      // Mailbox refresh may synchronously track a claim, so release only after
+      // authoritative ownership callbacks have finished.
       ownsTriggerDelivery = false
       releaseTriggerDelivery()
-      await handleEventResponseSignals(response)
+      await handleMailboxResponseSignal(response)
 
       let enrichedEvent = NuxieEvent(
         id: response.eventId ?? localEvent.id,
@@ -984,34 +1183,130 @@ actor EventLog: EventLogProtocol {
     eventId: String,
     distinctId: String
   ) async -> DurableTriggerCapture? {
-    guard !event.isEmpty else { return nil }
-    guard !closeFlag.isClosed else { return nil }
+    switch await captureStableSystemEvent(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId,
+      ownership: nil
+    ) {
+    case .captured(let capture):
+      return capture
+    case .ownershipLost, .failed:
+      return nil
+    }
+  }
+
+  func captureOwnedJourneySystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String,
+    ownership: JourneyEventOwnership
+  ) async -> DurableOwnedTriggerCaptureResult {
+    await captureStableSystemEvent(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId,
+      ownership: ownership
+    )
+  }
+
+  func journeyEventOwnershipState(
+    _ ownership: JourneyEventOwnership
+  ) async -> JourneyEventOwnershipState {
+    guard !closeFlag.isClosed else { return .unavailable }
+    await ready.wait()
+    guard !closeFlag.isClosed else { return .unavailable }
+    guard !hasVolatileJourneyOwnershipLoss(ownership) else {
+      return .ownershipLost
+    }
+    do {
+      let persistentlyLost = try await store.hasJourneyOwnershipLoss(ownership)
+      if persistentlyLost || hasVolatileJourneyOwnershipLoss(ownership) {
+        return .ownershipLost
+      }
+      let unresolved = try await store.hasUnresolvedJourneyOwnershipResponse(
+        ownership
+      )
+      if hasVolatileJourneyOwnershipLoss(ownership) {
+        return .ownershipLost
+      }
+      if unresolved {
+        return .unavailable
+      }
+      return .owned
+    } catch {
+      LogError(
+        "EventLog: failed to verify ownership for journey \(ownership.journeyId); refusing restoration"
+      )
+      return .unavailable
+    }
+  }
+
+  private func captureStableSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String,
+    ownership: JourneyEventOwnership?
+  ) async -> DurableOwnedTriggerCaptureResult {
+    guard !event.isEmpty else { return .failed }
+    guard !closeFlag.isClosed else { return .failed }
     await acquireTriggerDelivery()
     defer { releaseTriggerDelivery() }
 
     await ready.wait()
-    guard !closeFlag.isClosed else { return nil }
+    guard !closeFlag.isClosed else { return .failed }
     activeDurableCommitCount += 1
     defer { durableCommitDidFinish() }
     let attemptedTimestamp = dateProvider.now()
     do {
+      if let ownership {
+        switch await journeyEventOwnershipState(ownership) {
+        case .owned:
+          break
+        case .ownershipLost:
+          return .ownershipLost
+        case .unavailable:
+          return .failed
+        }
+      }
       // Stable identity is policy-terminal. Replays return the canonical
-      // captured/drop outcome before enrichment or invoking a changed hook.
+      // captured/drop outcome before enrichment or invoking a changed hook,
+      // but only while this epoch is still owned.
       if let existing = try await store.queryStableCapture(id: eventId) {
-        return durableCapture(
+        guard let capture = durableCapture(
           from: existing,
           fallbackEvent: event,
           eventId: eventId,
           distinctId: distinctId
-        )
+        ) else { return .ownershipLost }
+        return .captured(capture)
+      }
+      if let ownership {
+        if hasVolatileJourneyOwnershipLoss(ownership) {
+          return .ownershipLost
+        }
+        // An unresolved response is not proof of ownership loss, so preserve
+        // the recovery record and fail closed instead of terminally dropping
+        // it. A storage error is equally non-authoritative.
+        let hasUnresolvedResponse =
+          try await store.hasUnresolvedJourneyOwnershipResponse(ownership)
+        guard !hasUnresolvedResponse else { return .failed }
+        if hasVolatileJourneyOwnershipLoss(ownership) {
+          return .ownershipLost
+        }
       }
 
-      let finalProperties = UncheckedSendable(
-        await buildTriggerProperties(
-          properties,
-          userProperties: nil,
-          userPropertiesSetOnce: nil
-        ))
+      var scopedProperties = await buildTriggerProperties(
+        properties,
+        userProperties: nil,
+        userPropertiesSetOnce: nil
+      )
+      scopedProperties["$distinct_id"] = distinctId
+      let finalProperties = UncheckedSendable(scopedProperties)
       let originalEvent = NuxieEvent(
         id: eventId,
         name: event,
@@ -1024,32 +1319,40 @@ actor EventLog: EventLogProtocol {
         transformedEvent = beforeSend(originalEvent).map { transformed in
           // Recovery owns identity. Hosts may redact properties or rename the
           // event without changing its scoped replay key or attribution.
-          NuxieEvent(
+          var transformedProperties = transformed.properties
+          transformedProperties["$distinct_id"] = distinctId
+          return NuxieEvent(
             id: eventId,
             name: transformed.name,
             distinctId: distinctId,
-            properties: transformed.properties,
+            properties: transformedProperties,
             timestamp: originalEvent.timestamp
           )
         }
       } else {
         transformedEvent = originalEvent
       }
-      guard !closeFlag.isClosed else { return nil }
+      guard !closeFlag.isClosed else { return .failed }
+      if let ownership,
+         hasVolatileJourneyOwnershipLoss(ownership) {
+        return .ownershipLost
+      }
       let outcome = try await store.commitStableCapture(
         eventId: eventId,
         event: transformedEvent.map(makeStoredEvent(from:)),
-        recordedAt: attemptedTimestamp
+        recordedAt: attemptedTimestamp,
+        ownership: ownership
       )
+      if case .ownershipLost = outcome { return .ownershipLost }
       if transformedEvent == nil {
         LogDebug("Event '\(event)' terminally dropped by beforeSend hook")
       }
-      let capture = durableCapture(
+      guard let capture = durableCapture(
         from: outcome,
         fallbackEvent: event,
         eventId: eventId,
         distinctId: distinctId
-      )
+      ) else { return .ownershipLost }
       if case .captured(_, isNew: true) = outcome {
         await enqueueForDelivery(capture.event, isPersisted: true)
       }
@@ -1060,11 +1363,11 @@ actor EventLog: EventLogProtocol {
         // not turn a committed capture/drop back into a retryable failure.
         LogWarning("EventLog: stable capture retention cleanup failed")
       }
-      return capture
+      return .captured(capture)
     } catch {
       LogError("EventLog: failed to durably capture system event")
       await recordHistoryGap(at: attemptedTimestamp)
-      return nil
+      return .failed
     }
   }
 
@@ -1073,7 +1376,7 @@ actor EventLog: EventLogProtocol {
     fallbackEvent: String,
     eventId: String,
     distinctId: String
-  ) -> DurableTriggerCapture {
+  ) -> DurableTriggerCapture? {
     switch outcome {
     case .captured(let storedEvent, _):
       return DurableTriggerCapture(event: NuxieEvent(
@@ -1092,6 +1395,8 @@ actor EventLog: EventLogProtocol {
         ),
         routesLocally: false
       )
+    case .ownershipLost:
+      return nil
     }
   }
 
@@ -1166,7 +1471,10 @@ actor EventLog: EventLogProtocol {
     let response = Task { [weak self] in
       let result = await delivery.value
       if result.shouldHandleResponseSignals {
-        await self?.handleEventResponseSignals(result.response)
+        // The delivery boundary has already been retired. Mailbox refresh may
+        // reenter trackForTrigger, so it must run after waiters on that older
+        // prepared delivery are free to advance.
+        await self?.handleMailboxResponseSignal(result.response)
       }
       await self?.preparedDeliveryDidFinish(taskID)
       return result.response
@@ -1241,9 +1549,33 @@ actor EventLog: EventLogProtocol {
     }
     do {
       let response = try await apiClient.trackEvent(event)
-      try Task.checkCancellation()
+      installVolatileJourneyOwnershipLosses(in: response)
+      let ownershipFenceCommit = await persistJourneyOwnershipLosses(
+        in: response,
+        sourceEventId: event.id
+      )
       await commitServerFacts(response.facts ?? [], distinctId: event.distinctId)
-      await completeDirectDelivery(ids: [event.id])
+
+      // Keep the authoritative callback on the prepared-delivery boundary,
+      // before acknowledgement and before waiters on that boundary resume.
+      // The volatile + durable fences already make any concurrently queued
+      // owned capture ineligible; acquiring the trigger lane here would form
+      // a cycle with trackForTrigger, which holds that lane while awaiting
+      // older prepared deliveries.
+      await handleJourneyOwnershipResponseSignals(response)
+      switch ownershipFenceCommit {
+      case .durable:
+        await completeDirectDelivery(ids: [event.id])
+      case .retryable:
+        activeDirectDeliveryIds.remove(event.id)
+        await enqueueForDelivery(event, isPersisted: wasPersisted)
+      case .unavailable:
+        if wasPersisted {
+          scheduleOwnershipFenceRetry(response: response, source: event)
+        } else {
+          activeDirectDeliveryIds.remove(event.id)
+        }
+      }
       return PreparedDeliveryResult(
         response: response,
         shouldHandleResponseSignals: true
@@ -1265,6 +1597,74 @@ actor EventLog: EventLogProtocol {
         shouldHandleResponseSignals: false
       )
     }
+  }
+
+  /// Retries a response-scoped ownership fence without replaying the source
+  /// over the network. The source stays reserved until the fence is durable
+  /// or the bounded local retry budget hands it back to durable delivery.
+  private func scheduleOwnershipFenceRetry(
+    response: EventResponse,
+    source: NuxieEvent
+  ) {
+    guard !closeFlag.isClosed,
+          ownershipFenceRetryTasks[source.id] == nil
+    else { return }
+
+    let sourceId = source.id
+    ownershipFenceRetryTasks[sourceId] = Task { [weak self] in
+      for attempt in 0..<Self.ownershipFenceRetryAttempts {
+        let delay = Self.ownershipFenceRetryBaseDelayNanoseconds << UInt64(attempt)
+        do {
+          try await Task.sleep(nanoseconds: delay)
+        } catch {
+          break
+        }
+        guard !Task.isCancelled, let self else { break }
+        if await self.retryOwnershipFencePersistence(response: response, source: source) {
+          await self.ownershipFenceRetryDidFinish(sourceId)
+          return
+        }
+      }
+
+      guard !Task.isCancelled, let self else { return }
+      await self.exhaustOwnershipFenceRetry(source)
+      await self.ownershipFenceRetryDidFinish(sourceId)
+    }
+  }
+
+  /// Returns whether the source reached a terminal retry transition.
+  private func retryOwnershipFencePersistence(
+    response: EventResponse,
+    source: NuxieEvent
+  ) async -> Bool {
+    guard !closeFlag.isClosed, !Task.isCancelled else { return true }
+
+    switch await persistJourneyOwnershipLosses(in: response, sourceEventId: source.id) {
+    case .durable:
+      guard !closeFlag.isClosed, !Task.isCancelled else { return true }
+      await completeDirectDelivery(ids: [source.id])
+      return true
+    case .retryable:
+      guard !closeFlag.isClosed, !Task.isCancelled else { return true }
+      activeDirectDeliveryIds.remove(source.id)
+      await enqueueForDelivery(source, isPersisted: true)
+      return true
+    case .unavailable:
+      return false
+    }
+  }
+
+  private func exhaustOwnershipFenceRetry(_ source: NuxieEvent) async {
+    guard !closeFlag.isClosed, !Task.isCancelled else { return }
+    activeDirectDeliveryIds.remove(source.id)
+    await enqueueForDelivery(source, isPersisted: true)
+    LogWarning(
+      "Ownership fence remained unavailable for direct source \(source.id); returning it to durable delivery"
+    )
+  }
+
+  private func ownershipFenceRetryDidFinish(_ sourceId: String) {
+    _ = ownershipFenceRetryTasks.removeValue(forKey: sourceId)
   }
 
   public func prepareTriggerProperties(
@@ -1375,10 +1775,191 @@ actor EventLog: EventLogProtocol {
     journeyHandoffDeliveredHandler = handler
   }
 
-  private func handleEventResponseSignals(_ response: EventResponse) async {
-    if response.mailboxPending == true, let mailboxPendingHandler {
-      await mailboxPendingHandler()
+  private func journeyOwnershipLosses(
+    in response: EventResponse
+  ) -> [JourneyEventOwnership] {
+    var highestEpochByJourneyId: [String: Int] = [:]
+    if let ownership = response.journeyClaim,
+       !ownership.accepted {
+      highestEpochByJourneyId[ownership.journeyId] = ownership.epoch
     }
+    if let ownership = response.journeyOwnership {
+      highestEpochByJourneyId[ownership.journeyId] = max(
+        highestEpochByJourneyId[ownership.journeyId] ?? Int.min,
+        ownership.epoch
+      )
+    }
+    return highestEpochByJourneyId.map {
+      JourneyEventOwnership(journeyId: $0.key, epoch: $0.value)
+    }
+  }
+
+  /// Install the process-local half of the fence synchronously at the
+  /// transport response boundary. No actor reentrancy is possible between
+  /// observing the server response and making stale capture ineligible.
+  private func installVolatileJourneyOwnershipLosses(
+    in response: EventResponse
+  ) {
+    installVolatileJourneyOwnershipLosses(
+      journeyOwnershipLosses(in: response)
+    )
+  }
+
+  private func installVolatileJourneyOwnershipLosses(
+    _ ownerships: [JourneyEventOwnership]
+  ) {
+    for ownership in ownerships {
+      journeyOwnershipFences[ownership.journeyId] = max(
+        journeyOwnershipFences[ownership.journeyId] ?? Int.min,
+        ownership.epoch
+      )
+    }
+  }
+
+  /// Make the response fence durable before its source is acknowledged.
+  /// Capture checks the already-installed process-local copy too, so a
+  /// transient SQLite failure cannot reopen the same-process race.
+  @discardableResult
+  private func persistJourneyOwnershipLosses(
+    in response: EventResponse,
+    sourceEventId: String
+  ) async -> OwnershipFenceCommitResult {
+    let responseLosses = journeyOwnershipLosses(in: response)
+    let processUnresolvedLosses =
+      unresolvedJourneyOwnershipBySource[sourceEventId] ?? []
+
+    let durableUnresolvedLosses: [JourneyEventOwnership]
+    do {
+      durableUnresolvedLosses =
+        try await store.queryUnresolvedJourneyOwnershipResponse(
+          sourceEventId: sourceEventId
+        )
+    } catch {
+      var highestEpochByJourneyId: [String: Int] = [:]
+      for ownership in responseLosses + processUnresolvedLosses {
+        highestEpochByJourneyId[ownership.journeyId] = max(
+          highestEpochByJourneyId[ownership.journeyId] ?? Int.min,
+          ownership.epoch
+        )
+      }
+      let unresolvedLosses = highestEpochByJourneyId.map {
+        JourneyEventOwnership(journeyId: $0.key, epoch: $0.value)
+      }
+      if !unresolvedLosses.isEmpty {
+        unresolvedJourneyOwnershipBySource[sourceEventId] = unresolvedLosses
+        installVolatileJourneyOwnershipLosses(unresolvedLosses)
+      }
+      LogError(
+        "EventLog: failed to query unresolved ownership response \(sourceEventId)"
+      )
+      return .unavailable
+    }
+
+    var highestEpochByJourneyId: [String: Int] = [:]
+    for ownership in responseLosses
+      + durableUnresolvedLosses
+      + processUnresolvedLosses
+    {
+      highestEpochByJourneyId[ownership.journeyId] = max(
+        highestEpochByJourneyId[ownership.journeyId] ?? Int.min,
+        ownership.epoch
+      )
+    }
+    let losses = highestEpochByJourneyId.map {
+      JourneyEventOwnership(journeyId: $0.key, epoch: $0.value)
+    }
+    guard !losses.isEmpty else { return .durable }
+    unresolvedJourneyOwnershipBySource[sourceEventId] = losses
+    installVolatileJourneyOwnershipLosses(losses)
+    let recordedAt = dateProvider.now()
+
+    // Crash-safe ordering: every loss is durably recorded as an unresolved
+    // marker BEFORE any fence is written. A crash at any point leaves either
+    // the full marker set or the fences (both idempotent upserts), so no loss
+    // can exist with neither a fence nor a marker; recovery replays markers
+    // into fences at startup, and the pending source remains the retry record
+    // of last resort.
+    for ownership in losses {
+      do {
+        try await store.recordUnresolvedJourneyOwnershipResponse(
+          sourceEventId: sourceEventId,
+          ownership: ownership,
+          recordedAt: recordedAt
+        )
+      } catch {
+        LogError(
+          "EventLog: failed to persist unresolved ownership response for journey \(ownership.journeyId)"
+        )
+        return .unavailable
+      }
+    }
+
+    var fencesFullyPersisted = true
+    for ownership in losses {
+      do {
+        try await store.recordJourneyOwnershipLoss(
+          ownership,
+          recordedAt: recordedAt
+        )
+      } catch {
+        fencesFullyPersisted = false
+        LogError(
+          "EventLog: failed to persist ownership fence for journey \(ownership.journeyId)"
+        )
+      }
+    }
+    guard fencesFullyPersisted else {
+      // Markers are durable, so the losses are recoverable; the bounded
+      // in-process retry (or startup recovery) re-runs this idempotently.
+      return .retryable
+    }
+
+    do {
+      try await store.clearUnresolvedJourneyOwnershipResponse(
+        sourceEventId: sourceEventId
+      )
+    } catch {
+      // The durable fence is authoritative; a stale unresolved marker is
+      // conservative and can be cleaned by another idempotent replay.
+      LogWarning(
+        "EventLog: ownership fence persisted but unresolved source marker could not be cleared"
+      )
+    }
+    unresolvedJourneyOwnershipBySource.removeValue(forKey: sourceEventId)
+    return .durable
+  }
+
+  /// A decision source may be retired without another response only when it
+  /// is not carrying an ownership signal whose fence remains unresolved.
+  /// Query failures fail closed and leave the source pending.
+  private func canRetireJourneyDecisionWithoutDelivery(
+    sourceEventId: String
+  ) async -> Bool {
+    guard unresolvedJourneyOwnershipBySource[sourceEventId] == nil else {
+      return false
+    }
+    do {
+      return try await store.queryUnresolvedJourneyOwnershipResponse(
+        sourceEventId: sourceEventId
+      ).isEmpty
+    } catch {
+      LogError(
+        "EventLog: failed to verify ownership response before retiring \(sourceEventId)"
+      )
+      return false
+    }
+  }
+
+  private func hasVolatileJourneyOwnershipLoss(
+    _ ownership: JourneyEventOwnership
+  ) -> Bool {
+    (journeyOwnershipFences[ownership.journeyId] ?? Int.min)
+      >= ownership.epoch
+  }
+
+  private func handleJourneyOwnershipResponseSignals(
+    _ response: EventResponse
+  ) async {
     if let ownership = response.journeyClaim,
        !ownership.accepted,
        let journeyOwnershipRejectedHandler {
@@ -1396,6 +1977,12 @@ actor EventLog: EventLogProtocol {
           ownership.epoch
         )
       }
+    }
+  }
+
+  private func handleMailboxResponseSignal(_ response: EventResponse) async {
+    if response.mailboxPending == true, let mailboxPendingHandler {
+      await mailboxPendingHandler()
     }
   }
 
@@ -1436,6 +2023,16 @@ actor EventLog: EventLogProtocol {
     preparedDeliveryBoundaryTasks.removeAll()
     preparedDeliveryTasks.removeAll()
     preparedDeliveryBoundaryTail = nil
+
+    // Ownership-fence retries are the only direct-delivery work that remains
+    // after the response boundary. Cancel and settle them while the store is
+    // open so they cannot write after shutdown.
+    let ownershipFenceRetries = Array(ownershipFenceRetryTasks.values)
+    ownershipFenceRetries.forEach { $0.cancel() }
+    for retry in ownershipFenceRetries {
+      _ = await retry.value
+    }
+    ownershipFenceRetryTasks.removeAll()
 
     // Stop accepting new commands and ask the workers to stop.
     captureContinuation.yield(.shutdown)
@@ -1573,7 +2170,8 @@ actor EventLog: EventLogProtocol {
       }
     }
 
-    let finalProperties = await enrich(propertiesWithSession)
+    var finalProperties = await enrich(propertiesWithSession)
+    finalProperties["$distinct_id"] = p.forcedDistinctId
 
     let nuxieEvent = NuxieEvent(
       name: p.name,
@@ -1587,7 +2185,15 @@ actor EventLog: EventLogProtocol {
         LogDebug("Event '\(nuxieEvent.name)' dropped by beforeSend hook")
         return nil
       }
-      return transformedEvent
+      var transformedProperties = transformedEvent.properties
+      transformedProperties["$distinct_id"] = p.forcedDistinctId
+      return NuxieEvent(
+        id: transformedEvent.id,
+        name: transformedEvent.name,
+        distinctId: p.forcedDistinctId,
+        properties: transformedProperties,
+        timestamp: transformedEvent.timestamp
+      )
     }
 
     return nuxieEvent
@@ -1674,8 +2280,11 @@ actor EventLog: EventLogProtocol {
       keeping: maxEventsStored,
       olderThan: cutoffDate
     )
+    let stableOutcomeCutoff = dateProvider.now().addingTimeInterval(
+      -Self.stableDropRetention
+    )
     let droppedDeletes = try await store.deleteStableDropsOlderThan(
-      dateProvider.now().addingTimeInterval(-Self.stableDropRetention)
+      stableOutcomeCutoff
     )
     LogInfo(
       "Retention cleanup: removed \(prune.countDeleted) over-cap + \(prune.ageDeleted) aged events + \(droppedDeletes) stable drops (had \(eventCount)); coverage starts \(prune.coverageStartingAt)"
@@ -1756,6 +2365,63 @@ actor EventLog: EventLogProtocol {
     await refillDeliveryWindow()
   }
 
+  private func completeTerminalDirectDelivery(ids: [String]) async {
+    if await markDelivered(ids: ids) {
+      activeDirectDeliveryIds.subtract(ids)
+      terminalDirectDeliveryIds.subtract(ids)
+      await refillDeliveryWindow()
+    } else {
+      terminalDirectDeliveryIds.formUnion(ids)
+      LogError(
+        "EventLog: retaining \(ids.count) terminal direct source reservation after acknowledgement failure"
+      )
+      // The in-memory reservation dies with the process, after which the
+      // still-pending rows would replay a terminally failed send on
+      // relaunch. Retry the durable retirement with the same bounded
+      // policy as ownership fences so the acknowledgement outlives this
+      // call whenever the store recovers.
+      scheduleTerminalRetirementRetry(ids: ids)
+    }
+  }
+
+  private var terminalRetirementRetryTasks: [String: Task<Void, Never>] = [:]
+
+  private func scheduleTerminalRetirementRetry(ids: [String]) {
+    let key = ids.sorted().joined(separator: "\u{1f}")
+    guard !closeFlag.isClosed,
+          terminalRetirementRetryTasks[key] == nil
+    else { return }
+    terminalRetirementRetryTasks[key] = Task { [weak self] in
+      for attempt in 0..<Self.ownershipFenceRetryAttempts {
+        let delay = Self.ownershipFenceRetryBaseDelayNanoseconds << UInt64(attempt)
+        do {
+          try await Task.sleep(nanoseconds: delay)
+        } catch {
+          break
+        }
+        guard !Task.isCancelled, let self else { break }
+        if await self.retryTerminalRetirement(ids: ids) {
+          break
+        }
+      }
+      guard let self else { return }
+      await self.terminalRetirementRetryDidFinish(key)
+    }
+  }
+
+  private func retryTerminalRetirement(ids: [String]) async -> Bool {
+    guard !closeFlag.isClosed else { return true }
+    guard await markDelivered(ids: ids) else { return false }
+    activeDirectDeliveryIds.subtract(ids)
+    terminalDirectDeliveryIds.subtract(ids)
+    await refillDeliveryWindow()
+    return true
+  }
+
+  private func terminalRetirementRetryDidFinish(_ key: String) {
+    terminalRetirementRetryTasks.removeValue(forKey: key)
+  }
+
   /// Remove rows from the working set only after the store ack attempt. This
   /// keeps the window full while the actor is reentrant, so a newly captured
   /// event cannot jump ahead of older durable rows. If the ack fails, refill
@@ -1779,6 +2445,14 @@ actor EventLog: EventLogProtocol {
 
     isRefillingDeliveryWindow = true
     defer { isRefillingDeliveryWindow = false }
+
+    if !terminalDirectDeliveryIds.isEmpty {
+      let terminalIds = Array(terminalDirectDeliveryIds)
+      if await markDelivered(ids: terminalIds) {
+        terminalDirectDeliveryIds.subtract(terminalIds)
+        activeDirectDeliveryIds.subtract(terminalIds)
+      }
+    }
 
     let capacity = max(1, deliveryConfig.maxQueueSize)
     repeat {
@@ -1892,6 +2566,12 @@ actor EventLog: EventLogProtocol {
     }
   }
 
+  /// Internal synchronization diagnostic used by deterministic ordering
+  /// regressions. This is not part of EventLogProtocol or the SDK surface.
+  func triggerDeliveryIsHeld() -> Bool {
+    isTriggerDeliveryHeld
+  }
+
   public func pauseEventQueue() {
     isPaused = true
     LogInfo("Delivery queue paused")
@@ -1981,7 +2661,10 @@ actor EventLog: EventLogProtocol {
 
     if let decision = deliveryQueue.first,
       isJourneyDecisionEvent(decision.name) {
-      if decision.name == JourneyEvents.journeyClaimed {
+      if decision.name == JourneyEvents.journeyClaimed,
+         await canRetireJourneyDecisionWithoutDelivery(
+           sourceEventId: decision.id
+         ) {
         let removed = await retireDelivered(ids: [decision.id])
         if removed {
           retryCount = 0
@@ -2048,9 +2731,27 @@ actor EventLog: EventLogProtocol {
   private func deliverJourneyDecision(_ event: NuxieEvent) async {
     do {
       let response = try await apiClient.trackEvent(event)
+      installVolatileJourneyOwnershipLosses(in: response)
+      let ownershipFenceCommit = await persistJourneyOwnershipLosses(
+        in: response,
+        sourceEventId: event.id
+      )
       await commitServerFacts(response.facts ?? [], distinctId: event.distinctId)
-      await handleEventResponseSignals(response)
-      let removed = await retireDelivered(ids: [event.id])
+
+      // The callback must precede acknowledgement, but must not reacquire the
+      // trigger lane. A prepared delivery can be flushing this decision while
+      // a later trackForTrigger owns that lane and waits for the prepared
+      // boundary; reacquiring here would make those two tasks wait forever.
+      // The response fence above already prevents concurrent journey-authored
+      // capture for the relinquished epoch.
+      await handleJourneyOwnershipResponseSignals(response)
+      let removed: Bool
+      if case .durable = ownershipFenceCommit {
+        removed = await retireDelivered(ids: [event.id])
+      } else {
+        removed = false
+      }
+      await handleMailboxResponseSignal(response)
       if removed {
         retryCount = 0
         nextRetryDate = nil
@@ -2063,7 +2764,10 @@ actor EventLog: EventLogProtocol {
         await flushIfOverThreshold()
       }
     } catch {
-      if isPermanentBatchFailure(error) {
+      if isPermanentBatchFailure(error),
+         await canRetireJourneyDecisionWithoutDelivery(
+           sourceEventId: event.id
+         ) {
         let removed = await retireDelivered(ids: [event.id])
         if removed {
           retryCount = 0

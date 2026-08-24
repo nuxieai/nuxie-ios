@@ -368,6 +368,141 @@ final class EventStorageTests: AsyncSpec {
                 await reopened.close()
             }
 
+            it("prevents stale-epoch stable capture after ownership loss across relaunch") {
+                let journeyId = "journey-owned-on-another-device"
+                try await internalEventStore.recordJourneyOwnershipLoss(
+                    JourneyEventOwnership(journeyId: journeyId, epoch: 7),
+                    recordedAt: Date(timeIntervalSince1970: 1_000)
+                )
+
+                await internalEventStore.close()
+                internalEventStore = SQLiteEventStore()
+                try await internalEventStore.initialize(
+                    path: URL(fileURLWithPath: tempDbPath)
+                )
+
+                let staleOwnershipPersisted = try await internalEventStore
+                    .hasJourneyOwnershipLoss(
+                        JourneyEventOwnership(journeyId: journeyId, epoch: 7)
+                    )
+                let newerOwnershipPersisted = try await internalEventStore
+                    .hasJourneyOwnershipLoss(
+                        JourneyEventOwnership(journeyId: journeyId, epoch: 8)
+                    )
+                expect(staleOwnershipPersisted).to(beTrue())
+                expect(newerOwnershipPersisted).to(beFalse())
+
+                let staleEvent = try StoredEvent(
+                    id: "journey-exited:stale-epoch",
+                    name: JourneyEvents.journeyExited,
+                    distinctId: "customer-a"
+                )
+                let stale = try await internalEventStore.commitStableCapture(
+                    eventId: staleEvent.id,
+                    event: staleEvent,
+                    recordedAt: Date(timeIntervalSince1970: 2_000),
+                    ownership: JourneyEventOwnership(
+                        journeyId: journeyId,
+                        epoch: 7
+                    )
+                )
+                guard case .ownershipLost = stale else {
+                    return fail("authoritative ownership loss must reject the stale exit")
+                }
+                let storedStale = try await internalEventStore.queryEvent(
+                    id: staleEvent.id
+                )
+                let stableStale = try await internalEventStore.queryStableCapture(
+                    id: staleEvent.id
+                )
+                expect(storedStale).to(beNil())
+                expect(stableStale).to(beNil())
+
+                let newerEvent = try StoredEvent(
+                    id: "journey-exited:newer-epoch",
+                    name: JourneyEvents.journeyExited,
+                    distinctId: "customer-a"
+                )
+                let newer = try await internalEventStore.commitStableCapture(
+                    eventId: newerEvent.id,
+                    event: newerEvent,
+                    recordedAt: Date(timeIntervalSince1970: 3_000),
+                    ownership: JourneyEventOwnership(
+                        journeyId: journeyId,
+                        epoch: 8
+                    )
+                )
+                guard case .captured(let canonical, isNew: true) = newer else {
+                    return fail("a newly owned epoch must remain eligible")
+                }
+                expect(canonical.id) == newerEvent.id
+            }
+
+            it("retains unresolved ownership response sources across relaunch") {
+                let sourceEventId = "ownership-response-source"
+                let ownership = JourneyEventOwnership(
+                    journeyId: "journey-awaiting-fence",
+                    epoch: 5
+                )
+                try await internalEventStore.recordUnresolvedJourneyOwnershipResponse(
+                    sourceEventId: sourceEventId,
+                    ownership: ownership,
+                    recordedAt: Date(timeIntervalSince1970: 1_000)
+                )
+
+                await internalEventStore.close()
+                internalEventStore = SQLiteEventStore()
+                try await internalEventStore.initialize(
+                    path: URL(fileURLWithPath: tempDbPath)
+                )
+
+                let matching = try await internalEventStore
+                    .hasUnresolvedJourneyOwnershipResponse(ownership)
+                let sourceOwnerships = try await internalEventStore
+                    .queryUnresolvedJourneyOwnershipResponse(
+                        sourceEventId: sourceEventId
+                    )
+                let newer = try await internalEventStore
+                    .hasUnresolvedJourneyOwnershipResponse(
+                        JourneyEventOwnership(
+                            journeyId: ownership.journeyId,
+                            epoch: ownership.epoch + 1
+                        )
+                    )
+                expect(matching).to(beTrue())
+                expect(sourceOwnerships).to(contain(ownership))
+                expect(newer).to(beFalse())
+
+                let blockedEvent = try StoredEvent(
+                    id: "journey-exited:unresolved-response",
+                    name: JourneyEvents.journeyExited,
+                    distinctId: "customer-a"
+                )
+                do {
+                    _ = try await internalEventStore.commitStableCapture(
+                        eventId: blockedEvent.id,
+                        event: blockedEvent,
+                        recordedAt: Date(timeIntervalSince1970: 2_000),
+                        ownership: ownership
+                    )
+                    return fail(
+                        "an unresolved response must block atomic stable capture"
+                    )
+                } catch {
+                    // Retryable storage refusal is the expected outcome.
+                }
+                let blockedOutcome = try await internalEventStore
+                    .queryStableCapture(id: blockedEvent.id)
+                expect(blockedOutcome).to(beNil())
+
+                try await internalEventStore.clearUnresolvedJourneyOwnershipResponse(
+                    sourceEventId: sourceEventId
+                )
+                let cleared = try await internalEventStore
+                    .hasUnresolvedJourneyOwnershipResponse(ownership)
+                expect(cleared).to(beFalse())
+            }
+
             it("inserts a stable pending event exactly once") {
                 let event = try StoredEvent(
                     id: "purchase-completed:transaction-1",
