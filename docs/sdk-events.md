@@ -37,7 +37,7 @@ device-authored `$journey_*` fact carries the epoch the device owns.
 | `$experience_artifact_load_succeeded` | `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash` |
 | `$experience_artifact_load_failed` | `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash`, optional `error_message` |
 
-The related `$customer_updated`, `$event_sent`, and `$delegate_called` rider
+The related `$customer_updated`, `$event_sent`, and `$app_action_requested` rider
 events carry `experience_id`. `$experiment_exposure` carries both
 `experience_id` and `experience_version`. Authored script events receive
 `journey_id`, `experience_id`, and `screen_id` from the runner.

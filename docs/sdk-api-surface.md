@@ -46,7 +46,7 @@ behavior only through the supported facade and delegate seams.
 | --- | --- |
 | `setup(with: NuxieConfiguration) throws` | Builds the composition root and starts the SDK. Must be called before anything else; throws on invalid configuration, including an empty API key. Calling twice is a warning no-op. |
 | `shutdown() async` | Drains queued identity transitions, shuts down journeys, closes the event log (workers drain deterministically), and drops the object graph. Normally unnecessary. |
-| `delegate: NuxieDelegate?` | Feature-access change callbacks. |
+| `delegate: NuxieDelegate?` | Main-actor feature-access and Run App Action callbacks. |
 | `isSetup: Bool` | Whether `setup(with:)` has completed and the facade has a live composition root. |
 | `version: String` | SDK version. |
 
@@ -71,6 +71,10 @@ Trigger updates use experience and feature-access vocabulary throughout.
 `.allowed` outcome has no source payload. `TriggerResult` remains
 `.noMatch`, `.allowed`, `.denied`, `.journeyCompleted`, or `.error`.
 `TriggerError.code` is a typed `TriggerError.Code`.
+
+Designer-authored Run App Action steps arrive through
+`NuxieDelegate.nuxie(_:didRequestAppAction:)`; see
+[Run App Action](run-app-action.md).
 
 Event names starting with `$` are reserved for the SDK ($identify,
 $app_opened, $journey_*, $experience_*, $purchase_*, $session_*). The full

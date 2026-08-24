@@ -116,6 +116,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       let core = NuxieCore(
         configuration: setupConfiguration,
         runtimeSettings: runtimeSettings,
+        appActionHandler: { [weak self] action in
+          self?.deliverAppAction(action)
+        },
         overrides: overrides
       )
 
@@ -214,6 +217,11 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     }
 
     LogInfo("Setup completed with API key: \(NuxieLogger.shared.logAPIKey(setupConfiguration.apiKey))")
+  }
+
+  @MainActor
+  func deliverAppAction(_ action: AppAction) {
+    delegate?.nuxie(self, didRequestAppAction: action)
   }
 
   /// Manually shut down the SDK and clean up resources

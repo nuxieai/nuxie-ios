@@ -60,6 +60,8 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(EventResponse.self)
     requireSendable(EventFlushStrategy.self)
     requireSendable(AnyCodable.self)
+    requireSendable(AppActionValue.self)
+    requireSendable(AppAction.self)
 
     // Features / entitlements
     requireSendable(FeatureAccess.self)
@@ -231,6 +233,10 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     func featureAccessDidChange(
       _ featureId: String, from oldValue: FeatureAccess?, to newValue: FeatureAccess
     ) {}
+
+    func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction) {
+      _ = action.experience
+    }
   }
 
   @MainActor

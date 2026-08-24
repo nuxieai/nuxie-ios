@@ -59,7 +59,9 @@ s:5Nuxie0A5EventV4nameSSvp	Var	name
 s:5Nuxie0A5EventV9timestamp10Foundation4DateVvp	Var	timestamp
 s:5Nuxie0A8DelegateP	TypeDecl	NuxieDelegate
 s:5Nuxie0A8DelegateP22featureAccessDidChange_4from2toySS_AA07FeatureD0VSgAHtF	Function	featureAccessDidChange(_:from:to:)
+s:5Nuxie0A8DelegateP5nuxie_19didRequestAppActionyAA0A3SDKC_AA0fG0VtF	Function	nuxie(_:didRequestAppAction:)
 s:5Nuxie0A8DelegatePAAE22featureAccessDidChange_4from2toySS_AA07FeatureD0VSgAHtF	Function	featureAccessDidChange(_:from:to:)
+s:5Nuxie0A8DelegatePAAE5nuxie_19didRequestAppActionyAA0A3SDKC_AA0fG0VtF	Function	nuxie(_:didRequestAppAction:)
 s:5Nuxie11EnvironmentO	TypeDecl	Environment
 s:5Nuxie11EnvironmentO10productionyA2CmF	Var	production
 s:5Nuxie11EnvironmentO11developmentyA2CmF	Var	development
@@ -186,6 +188,11 @@ s:5Nuxie13TriggerUpdateO13featureAccessyAcA07FeatureeC0OcACmF	Var	featureAccess
 s:5Nuxie13TriggerUpdateO5erroryAcA0B5ErrorVcACmF	Var	error
 s:5Nuxie13TriggerUpdateO7journeyyAcA07JourneyC0VcACmF	Var	journey
 s:5Nuxie13TriggerUpdateO8decisionyAcA0B8DecisionOcACmF	Var	decision
+s:5Nuxie14AppActionValueO	TypeDecl	AppActionValue
+s:5Nuxie14AppActionValueO3intyACSicACmF	Var	int
+s:5Nuxie14AppActionValueO4boolyACSbcACmF	Var	bool
+s:5Nuxie14AppActionValueO6doubleyACSdcACmF	Var	double
+s:5Nuxie14AppActionValueO6stringyACSScACmF	Var	string
 s:5Nuxie14PurchaseResultO	TypeDecl	PurchaseResult
 s:5Nuxie14PurchaseResultO2eeoiySbAC_ACtFZ	Function	==(_:_:)
 s:5Nuxie14PurchaseResultO6failedyACs5Error_pcACmF	Var	failed
@@ -250,3 +257,7 @@ s:5Nuxie8LogLevelO5debugyA2CmF	Var	debug
 s:5Nuxie8LogLevelO5erroryA2CmF	Var	error
 s:5Nuxie8LogLevelO7verboseyA2CmF	Var	verbose
 s:5Nuxie8LogLevelO7warningyA2CmF	Var	warning
+s:5Nuxie9AppActionV	TypeDecl	AppAction
+s:5Nuxie9AppActionV10experienceAA13ExperienceRefVvp	Var	experience
+s:5Nuxie9AppActionV4nameSSvp	Var	name
+s:5Nuxie9AppActionV7payloadSDySSAA0bC5ValueOGSgvp	Var	payload

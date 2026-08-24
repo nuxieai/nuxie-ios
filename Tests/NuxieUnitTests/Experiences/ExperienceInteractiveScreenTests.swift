@@ -9,6 +9,80 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    @MainActor
+    func testAppActionJourneyStepDeliversResolvedRequestThroughDelegate() async throws {
+        let sdk = NuxieSDK.shared
+        let recorder = AppActionDelegateRecorder()
+        sdk.delegate = recorder
+        defer { sdk.delegate = nil }
+        let retiredNotification = expectation(description: "retired notification is not posted")
+        retiredNotification.isInverted = true
+        let retiredNotificationName = Notification.Name(
+            ["com.nuxie.call", "Delegate"].joined()
+        )
+        let observer = NotificationCenter.default.addObserver(
+            forName: retiredNotificationName,
+            object: nil,
+            queue: .main
+        ) { _ in
+            retiredNotification.fulfill()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let mocks = MockFactory.shared
+        mocks.eventLog.reset()
+        let runtime = try makeJourneyRunner(
+            document: JourneyDocument(screens: [JourneyScreen(id: "screen_1")]),
+            appActionHandler: { action in
+                sdk.deliverAppAction(action)
+            }
+        )
+
+        await runtime.runner.handleAppAction(
+            AppActionStep(
+                nodeId: "action-1",
+                name: "export_finished",
+                payload: [
+                    "format": .string("pdf"),
+                    "count": .eventField("count"),
+                    "ratio": .eventField("ratio"),
+                    "enabled": .eventField("enabled"),
+                    "invalid": .eventField("invalid"),
+                ]
+            ),
+            context: JourneyRunner.TriggerContext(
+                screenId: "screen_1",
+                componentId: nil,
+                handlerId: nil,
+                instanceId: nil,
+                payload: [
+                    "count": NSNumber(value: 1),
+                    "ratio": NSNumber(value: 1.5),
+                    "enabled": NSNumber(value: true),
+                    "invalid": Double.infinity,
+                ]
+            )
+        )
+
+        let delivery = recorder.delivery
+        let action = try XCTUnwrap(delivery?.action)
+        XCTAssertTrue(delivery?.sdk === sdk)
+        XCTAssertEqual(action.name, "export_finished")
+        XCTAssertEqual(action.payload, [
+            "format": .string("pdf"),
+            "count": .int(1),
+            "ratio": .double(1.5),
+            "enabled": .bool(true),
+        ])
+        XCTAssertEqual(action.experience, ExperienceRef(
+            experienceId: "interactive-experience",
+            experienceVersion: "interactive-build",
+            journeyId: runtime.journey.id
+        ))
+        await fulfillment(of: [retiredNotification], timeout: 0.01)
+
+    }
+
     func testSignedDynamicPurchaseFollowsSelectedProductToPlacement() async throws {
         let fixtureRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -3621,7 +3695,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     private func makeJourneyRunner(
-        document: JourneyDocument
+        document: JourneyDocument,
+        appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in }
     ) throws -> (runner: JourneyRunner, journey: Journey) {
         let base = Experience(
             id: "interactive-experience",
@@ -3636,11 +3711,15 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             experienceType: nil,
             journey: document
         )
-        return try makeJourneyRunner(experience: base)
+        return try makeJourneyRunner(
+            experience: base,
+            appActionHandler: appActionHandler
+        )
     }
 
     private func makeJourneyRunner(
-        experience base: Experience
+        experience base: Experience,
+        appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in }
     ) throws -> (runner: JourneyRunner, journey: Journey) {
         let mocks = MockFactory.shared
         // The runner's identity fence only executes last-mile effects for the
@@ -3681,6 +3760,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 apiClient: mocks.nuxieApi,
                 dateProvider: mocks.dateProvider,
                 irRuntime: runtime,
+                appActionHandler: appActionHandler,
                 persistEntryActionClaim: { _ in true }
             ),
             journey
@@ -3774,6 +3854,15 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             }
         }
         throw CocoaError(.fileNoSuchFile)
+    }
+}
+
+@MainActor
+private final class AppActionDelegateRecorder: NuxieDelegate {
+    private(set) var delivery: (sdk: NuxieSDK, action: AppAction)?
+
+    func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction) {
+        delivery = (sdk, action)
     }
 }
 

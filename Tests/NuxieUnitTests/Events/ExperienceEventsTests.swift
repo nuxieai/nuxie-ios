@@ -75,7 +75,7 @@ final class ExperienceEventsTests: AsyncSpec {
                 expect(properties["artifact_build_id"] as? String).to(equal("build-1"))
             }
 
-            it("uses experience ids on customer, event, and delegate riders") {
+            it("uses experience ids on customer, event, and app-action riders") {
                 let customer = JourneyEvents.customerUpdatedProperties(
                     journey: journey,
                     screenId: "screen-1",
@@ -87,14 +87,14 @@ final class ExperienceEventsTests: AsyncSpec {
                     eventName: "answered",
                     eventProperties: [:]
                 )
-                let delegate = JourneyEvents.delegateCalledProperties(
+                let appAction = JourneyEvents.appActionRequestedProperties(
                     journey: journey,
                     screenId: "screen-1",
-                    message: "completed",
+                    name: "completed",
                     payload: nil
                 )
 
-                for properties in [customer, event, delegate] {
+                for properties in [customer, event, appAction] {
                     expect(properties["experience_id"] as? String)
                         .to(equal(journey.experienceId))
                 }
