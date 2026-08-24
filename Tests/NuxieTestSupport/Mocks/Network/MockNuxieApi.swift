@@ -270,13 +270,15 @@ public actor MockNuxieApi: NuxieApiProtocol {
 
     public func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
         trackEventCallCount += 1
-        lastTrackEventCall = TrackEventCall(
+        let call = TrackEventCall(
             event: event.name,
             distinctId: event.distinctId,
             properties: event.properties,
             value: (event.properties["value"] as? NSNumber)?.doubleValue,
             entityId: event.properties["entityId"] as? String
         )
+        lastTrackEventCall = call
+        trackEventCalls.append(call)
         sentEvents.append(event)
 
         if shouldFailTrackEvent {
