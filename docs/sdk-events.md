@@ -11,7 +11,7 @@ should not emit them directly.
 | `$journey_enrolled` | `journey_id`, `epoch`, `experience_id`, `experience_version`, `trigger_ref`, `plane`, `settings_snapshot` | Device |
 | `$journey_transition` | `journey_id`, `epoch`, optional `from_node`, `to_node`, `region`, `plane` | Device |
 | `$journey_milestone` | `journey_id`, `epoch`, `milestone_id` | Device |
-| `$journey_converted` | `journey_id`, `epoch`, `at`, `source_fact_ref` | Device evaluator or server down-fact |
+| `$journey_converted` | `journey_id`, `epoch`, `experience_id`, `experience_version`, `at`, `source_fact_ref` | Device evaluator or server down-fact |
 | `$journey_exited` | `journey_id`, `epoch`, `reason`, `at`, optional `dismissed_by` (`host` when `NuxieSDK.dismiss()` initiated the exit) | Device |
 | `$journey_effect_requested` | `journey_id`, `epoch`, `node_id`, deterministic `invocation_id`, `effect`, bounded `payload` | Device durable queue |
 | `$journey_effect_completed` | `journey_id`, `node_id`, `invocation_id`, `status`, optional `result` or `error` | Server down-fact |

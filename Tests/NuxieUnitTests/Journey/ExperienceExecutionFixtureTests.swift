@@ -120,6 +120,14 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 expect(response.facts?.map(\.id))
                     .to(equal(["fact-converted-1", "fact-converted-1"]))
                 expect(response.facts?.map(\.event)).to(equal([.converted, .converted]))
+                let converted = response.facts?.compactMap { fact -> JourneyConvertedProperties? in
+                    guard case .converted(let properties) = fact.properties else { return nil }
+                    return properties
+                }
+                expect(converted?.map(\.experienceId))
+                    .to(equal(["experience-1", "experience-1"]))
+                expect(converted?.map(\.experienceVersion))
+                    .to(equal(["flow-version-1", "flow-version-1"]))
 
                 let golden = try Self.loadObject("golden-journey/basic.json")
                 expect(golden["events"] as? [String]).to(equal([

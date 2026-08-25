@@ -449,6 +449,34 @@ struct JourneyDownFact: Codable, Equatable, Sendable {
     ) {
         self.init(id: id, event: event, timestamp: timestamp, properties: .converted(properties))
     }
+
+    private enum CodingKeys: String, CodingKey, Sendable {
+        case id
+        case event
+        case timestamp
+        case properties
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        event = try container.decode(Event.self, forKey: .event)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        switch event {
+        case .converted:
+            properties = .converted(
+                try container.decode(JourneyConvertedProperties.self, forKey: .properties)
+            )
+        case .effectCompleted:
+            properties = .effectCompleted(
+                try container.decode(JourneyEffectCompletedProperties.self, forKey: .properties)
+            )
+        case .superseded:
+            properties = .superseded(
+                try container.decode(JourneySupersededProperties.self, forKey: .properties)
+            )
+        }
+    }
 }
 
 /// Down-fact payload that marks a local journey as a non-accounting ghost.
@@ -486,20 +514,34 @@ struct JourneyEffectCompletedProperties: Codable, Equatable, Sendable {
 struct JourneyConvertedProperties: Codable, Equatable, Sendable {
     /// Run identifier receiving the conversion.
     public let journeyId: String
+    /// Experience definition that owns the converted journey.
+    public let experienceId: String
+    /// Immutable experience version executed by the converted journey.
+    public let experienceVersion: String
     /// Authoritative conversion time.
     public let at: Date
     /// Identifier of the source fact used for attribution.
     public let sourceFactRef: String
 
     /// Creates canonical converted-fact properties.
-    public init(journeyId: String, at: Date, sourceFactRef: String) {
+    public init(
+        journeyId: String,
+        experienceId: String,
+        experienceVersion: String,
+        at: Date,
+        sourceFactRef: String
+    ) {
         self.journeyId = journeyId
+        self.experienceId = experienceId
+        self.experienceVersion = experienceVersion
         self.at = at
         self.sourceFactRef = sourceFactRef
     }
 
     private enum CodingKeys: String, CodingKey, Sendable {
         case journeyId = "journey_id"
+        case experienceId = "experience_id"
+        case experienceVersion = "experience_version"
         case at
         case sourceFactRef = "source_fact_ref"
     }

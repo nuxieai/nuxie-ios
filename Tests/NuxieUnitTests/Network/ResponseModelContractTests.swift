@@ -117,6 +117,8 @@ final class ResponseModelContractTests: QuickSpec {
                         "timestamp": "2026-07-22T18:04:11Z",
                         "properties": {
                           "journey_id": "journey-1",
+                          "experience_id": "experience-1",
+                          "experience_version": "flow-version-1",
                           "at": "2026-07-22T18:04:10Z",
                           "source_fact_ref": "purchase-1"
                         }
@@ -134,7 +136,35 @@ final class ResponseModelContractTests: QuickSpec {
                     return
                 }
                 expect(properties.journeyId).to(equal("journey-1"))
+                expect(properties.experienceId).to(equal("experience-1"))
+                expect(properties.experienceVersion).to(equal("flow-version-1"))
                 expect(properties.sourceFactRef).to(equal("purchase-1"))
+            }
+
+            it("rejects converted down facts without required experience identity") {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let data = Data(
+                    """
+                    {
+                      "status": "ok",
+                      "facts": [{
+                        "id": "fact-converted-1",
+                        "event": "$journey_converted",
+                        "timestamp": "2026-07-22T18:04:11Z",
+                        "properties": {
+                          "journey_id": "journey-1",
+                          "at": "2026-07-22T18:04:10Z",
+                          "source_fact_ref": "purchase-1"
+                        }
+                      }]
+                    }
+                    """.utf8
+                )
+
+                expect {
+                    try decoder.decode(EventResponse.self, from: data)
+                }.to(throwError())
             }
 
             it("decodes mailbox offers, hints, claim acknowledgements, and supersede facts") {

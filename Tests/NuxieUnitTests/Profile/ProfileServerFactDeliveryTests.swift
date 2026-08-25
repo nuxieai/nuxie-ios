@@ -38,6 +38,8 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                     timestamp: Date(timeIntervalSince1970: 1_753_207_451),
                     properties: JourneyConvertedProperties(
                         journeyId: "journey-1",
+                        experienceId: "experience-1",
+                        experienceVersion: "flow-version-1",
                         at: Date(timeIntervalSince1970: 1_753_207_450),
                         sourceFactRef: "purchase-1"
                     )

@@ -80,6 +80,8 @@ final class ServerFactCommitTests: AsyncSpec {
                     timestamp: Date(timeIntervalSince1970: 1_753_207_451),
                     properties: JourneyConvertedProperties(
                         journeyId: "journey-1",
+                        experienceId: "experience-1",
+                        experienceVersion: "flow-version-1",
                         at: Date(timeIntervalSince1970: 1_753_207_450),
                         sourceFactRef: "purchase-1"
                     )
@@ -96,9 +98,17 @@ final class ServerFactCommitTests: AsyncSpec {
                 expect(committed.first?.origin).to(equal(.server))
                 expect(committed.first?.getPropertiesDict()["source_fact_ref"] as? String)
                     .to(equal("purchase-1"))
+                expect(committed.first?.getPropertiesDict()["experience_id"] as? String)
+                    .to(equal("experience-1"))
+                expect(committed.first?.getPropertiesDict()["experience_version"] as? String)
+                    .to(equal("flow-version-1"))
 
                 let handled = await journeyService.handledEvents.filter { $0.id == fact.id }
                 expect(handled).to(haveCount(1))
+                expect(handled.first?.properties["experience_id"] as? String)
+                    .to(equal("experience-1"))
+                expect(handled.first?.properties["experience_version"] as? String)
+                    .to(equal("flow-version-1"))
                 await expect { await eventLog.getQueuedEventCount() }.to(equal(0))
 
                 let sentNames = await api.sentEvents.map(\.name)
