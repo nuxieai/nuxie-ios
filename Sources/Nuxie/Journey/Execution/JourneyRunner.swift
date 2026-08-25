@@ -689,9 +689,21 @@ actor JourneyRunner {
             state.executionState.currentScreenId = screenId
         }
         guard await executionRemainsLive() else { return nil }
+        let state = await journey.snapshot()
+        let properties: [String: Any] = [
+            "screen_id": screenId,
+            "journey_id": state.id,
+            "experience_id": state.experienceId,
+            "experience_version": state.experienceVersion,
+        ]
         let event = makeSystemEvent(
             name: SystemEventNames.screenShown,
-            properties: ["screen_id": screenId]
+            properties: properties
+        )
+        eventLog.trackWithoutRouting(
+            SystemEventNames.screenShown,
+            properties: properties,
+            distinctIdOverride: journey.distinctId
         )
         let hasScreenRoute = experience.definition?.route(
             host: .screen(screenId),
@@ -725,9 +737,22 @@ actor JourneyRunner {
         method: String
     ) async -> RunOutcome? {
         guard await executionRemainsLive() else { return nil }
+        let state = await journey.snapshot()
+        let properties: [String: Any] = [
+            "screen_id": screenId,
+            "method": method,
+            "journey_id": state.id,
+            "experience_id": state.experienceId,
+            "experience_version": state.experienceVersion,
+        ]
         let event = makeSystemEvent(
             name: SystemEventNames.screenDismissed,
-            properties: ["screen_id": screenId, "method": method]
+            properties: properties
+        )
+        eventLog.trackWithoutRouting(
+            SystemEventNames.screenDismissed,
+            properties: properties,
+            distinctIdOverride: journey.distinctId
         )
         let outcome = await dispatchScreenLifecycleEvent(
             event,
@@ -948,14 +973,23 @@ actor JourneyRunner {
     }
 
     private func dispatchProductsUnavailableEvent() async -> RunOutcome? {
+        let state = await journey.snapshot()
+        let properties: [String: Any] = [
+            "experience_id": experience.id,
+            "experience_version": experience.versionId,
+            "journey_id": state.id,
+            "product_ids": Array(Set(experience.products.map(\.productId))).sorted(),
+        ]
         let event = NuxieEvent(
             name: SystemEventNames.productsUnavailable,
             distinctId: journey.distinctId,
-            properties: [
-                "experience_id": experience.id,
-                "experience_version_id": experience.versionId,
-            ],
+            properties: properties,
             timestamp: dateProvider.now()
+        )
+        eventLog.trackWithoutRouting(
+            SystemEventNames.productsUnavailable,
+            properties: properties,
+            distinctIdOverride: journey.distinctId
         )
         guard await acceptsEventTrigger(event) else {
             return .exited(.error)
@@ -3081,6 +3115,9 @@ actor JourneyRunner {
             eventLog.track(
                 JourneyEvents.experimentExposureError,
                 properties: [
+                    "journey_id": initialState.id,
+                    "experience_id": initialState.experienceId,
+                    "experience_version": initialState.experienceVersion,
                     "experiment_key": experimentKey,
                     "variant_key": assignedKey,
                     "reason": "variant_not_found"
@@ -3135,6 +3172,9 @@ actor JourneyRunner {
                 eventLog.track(
                     JourneyEvents.experimentExposureFallback,
                     properties: [
+                        "journey_id": exposureState.id,
+                        "experience_id": exposureState.experienceId,
+                        "experience_version": exposureState.experienceVersion,
                         "experiment_key": experimentKey,
                         "variant_key": variant.id,
                         "assignment_source": assignmentSource

@@ -1,6 +1,17 @@
 import Foundation
 import XCTest
-@testable import Nuxie
+
+@_spi(Testing) @testable import Nuxie
+#if SWIFT_PACKAGE
+@testable import NuxieTestSupport
+#endif
+
+private actor CatalogForwardingRecorder {
+    private var events: [DurableForwardingEvent] = []
+
+    func record(_ event: DurableForwardingEvent) { events.append(event) }
+    func snapshot() -> [DurableForwardingEvent] { events }
+}
 
 final class EventCatalogConformanceTests: XCTestCase {
     private struct CatalogProperty: Decodable {
@@ -26,9 +37,7 @@ final class EventCatalogConformanceTests: XCTestCase {
         ("JourneyEvents.experienceArtifactLoadSucceeded", JourneyEvents.experienceArtifactLoadSucceeded),
         ("JourneyEvents.experienceDismissed", JourneyEvents.experienceDismissed),
         ("JourneyEvents.experienceErrored", JourneyEvents.experienceErrored),
-        ("JourneyEvents.experiencePurchased", JourneyEvents.experiencePurchased),
         ("JourneyEvents.experienceShown", JourneyEvents.experienceShown),
-        ("JourneyEvents.experienceTimedOut", JourneyEvents.experienceTimedOut),
         ("JourneyEvents.experimentExposure", JourneyEvents.experimentExposure),
         ("JourneyEvents.experimentExposureError", JourneyEvents.experimentExposureError),
         ("JourneyEvents.experimentExposureFallback", JourneyEvents.experimentExposureFallback),
@@ -85,9 +94,7 @@ final class EventCatalogConformanceTests: XCTestCase {
         "$experience_artifact_load_succeeded": "hidden: successful artifact load is noise",
         "$experience_dismissed": "experienceDismissed",
         "$experience_errored": "experienceErrored",
-        "$experience_purchased": "hidden: scheduled for pre-GA deletion",
         "$experience_shown": "experienceShown",
-        "$experience_timed_out": "hidden: scheduled for pre-GA deletion",
         "$experiment_exposure": "experimentExposure",
         "$experiment_exposure_error": "experimentError",
         "$experiment_exposure_fallback": "hidden: default-variant diagnostic is not an exposure",
@@ -261,6 +268,114 @@ final class EventCatalogConformanceTests: XCTestCase {
         )
     }
 
+    func testCurationClassifiesEveryCatalogEventExactlyOnce() throws {
+        let catalog = try loadCatalog()
+        let forwarded = Set(catalog.compactMap { name, row in
+            row.forwarding.hasPrefix("hidden:") ? nil : name
+        })
+        let hidden = Set(catalog.compactMap { name, row in
+            row.forwarding.hasPrefix("hidden:") ? name : nil
+        })
+
+        XCTAssertTrue(ActivityCuration.curatedNames.isDisjoint(with: ActivityCuration.hiddenNames))
+        XCTAssertEqual(ActivityCuration.curatedNames, forwarded)
+        XCTAssertEqual(ActivityCuration.hiddenNames, hidden)
+        XCTAssertEqual(ActivityCuration.classifiedNames, Set(catalog.keys))
+    }
+
+    func testAdmissionTicketEventsDurablyCaptureAndCurateThroughTheirRealLanes() async throws {
+        let storageURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nuxie-admission-ticket-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: storageURL) }
+
+        let configuration = NuxieConfiguration(apiKey: "test-api-key")
+        configuration.testingOverrides.customStoragePath = storageURL
+        configuration.testingOverrides.flushAt = 10_000
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-1")
+        let log = EventLog(
+            identity: identity,
+            sessions: MockSessionService(),
+            dateProvider: MockDateProvider(),
+            apiClient: MockNuxieApiForQueue()
+        )
+        let recorder = CatalogForwardingRecorder()
+        await log.subscribeForwarding { event in await recorder.record(event) }
+        try await log.configure(configuration: configuration)
+
+        let experienceProperties: [String: Any] = [
+            "experience_id": "experience-1",
+            "experience_version": "version-1",
+            "journey_id": "journey-1",
+        ]
+        let captureLaneEvents: [(String, [String: Any])] = [
+            (SystemEventNames.screenShown, experienceProperties.merging([
+                "screen_id": "screen-1",
+            ]) { _, new in new }),
+            (SystemEventNames.screenDismissed, experienceProperties.merging([
+                "screen_id": "screen-1",
+            ]) { _, new in new }),
+            (SystemEventNames.productsUnavailable, experienceProperties.merging([
+                "product_ids": ["product-1", "product-2"],
+            ]) { _, new in new }),
+        ]
+        for event in captureLaneEvents {
+            log.trackWithoutRouting(
+                event.0,
+                properties: event.1,
+                distinctIdOverride: "customer-1"
+            )
+        }
+
+        let permissionEvents = [
+            SystemEventNames.notificationsDenied,
+            SystemEventNames.notificationsEnabled,
+            SystemEventNames.permissionDenied,
+            SystemEventNames.permissionGranted,
+            SystemEventNames.trackingAuthorized,
+            SystemEventNames.trackingDenied,
+        ]
+        for eventName in permissionEvents {
+            _ = try await log.trackForTrigger(eventName, properties: experienceProperties)
+        }
+
+        let featureProperties: [String: Any] = [
+            "feature_id": "feature-1",
+            "amount": 2.0,
+            "entity_id": "entity-1",
+        ]
+        let enrichedFeatureProperties = await log.prepareTriggerProperties(featureProperties)
+        await log.storePreparedEventInHistory(NuxieEvent(
+            id: "feature-use-1",
+            name: SystemEventNames.featureUsed,
+            distinctId: "customer-1",
+            properties: enrichedFeatureProperties
+        ))
+        await log.drain()
+
+        let expectedNames = captureLaneEvents.map(\.0)
+            + permissionEvents
+            + [SystemEventNames.featureUsed]
+        let durable = await recorder.snapshot()
+        XCTAssertEqual(durable.map(\.event.forwardingName), expectedNames)
+        XCTAssertEqual(
+            durable.compactMap {
+                ActivityCuration.activity(
+                    internalName: $0.event.forwardingName,
+                    properties: $0.event.properties
+                )?.wireName
+            }.count,
+            expectedNames.count,
+            "Every newly durable admission-ticket event must retain a curation case"
+        )
+        let storedNames = Set(await log.getRecentEvents(limit: 100).map(\.name))
+        XCTAssertTrue(Set(expectedNames).isSubset(of: storedNames))
+        await log.close()
+
+        try assertAdmissionTicketProducerCapturesRemainWired()
+    }
+
     private func loadCatalog() throws -> [String: CatalogRow] {
         let url = repositoryRoot.appendingPathComponent("fixtures/events/catalog.json")
         return try JSONDecoder().decode(
@@ -294,6 +409,130 @@ final class EventCatalogConformanceTests: XCTestCase {
         }
 
         return declarations
+    }
+
+    private func assertAdmissionTicketProducerCapturesRemainWired() throws {
+        let runner = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Sources/Nuxie/Journey/Execution/JourneyRunner.swift"
+            ),
+            encoding: .utf8
+        )
+        let runnerCaptures = [
+            ("    private func dispatchScreenChanged(", "SystemEventNames.screenShown"),
+            ("    func handleScreenDismissed(", "SystemEventNames.screenDismissed"),
+            ("    private func dispatchProductsUnavailableEvent(",
+             "SystemEventNames.productsUnavailable"),
+        ]
+        for (signature, event) in runnerCaptures {
+            let body = try functionBody(in: runner, startingWith: signature)
+            XCTAssertTrue(body.contains(event), "\(event) left its real producer")
+            XCTAssertEqual(
+                body.components(separatedBy: "eventLog.trackWithoutRouting(").count - 1,
+                1,
+                "\(event) no longer enters the processCapture lane"
+            )
+        }
+
+        let journeyService = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Sources/Nuxie/Journey/JourneyService.swift"
+            ),
+            encoding: .utf8
+        )
+        let scopedPermissionBody = try functionBody(
+            in: journeyService,
+            startingWith: "  func handleScopedPermissionEvent("
+        )
+        XCTAssertTrue(scopedPermissionBody.contains("name: eventName"))
+        XCTAssertTrue(scopedPermissionBody.contains("trackScopedEvent("))
+        XCTAssertTrue(scopedPermissionBody.contains("persistToHistory: true"))
+        XCTAssertTrue(scopedPermissionBody.contains("applyBeforeSend: true"))
+
+        let unsupportedPermissionBody = try functionBody(
+            in: journeyService,
+            startingWith: "  func handleUnsupportedScopedRequestPermission("
+        )
+        XCTAssertTrue(
+            unsupportedPermissionBody.contains("name: SystemEventNames.permissionDenied")
+        )
+        XCTAssertTrue(unsupportedPermissionBody.contains("trackScopedEvent("))
+        XCTAssertTrue(unsupportedPermissionBody.contains("persistToHistory: true"))
+        XCTAssertTrue(unsupportedPermissionBody.contains("applyBeforeSend: true"))
+
+        let controller = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Sources/Nuxie/Experiences/ExperienceViewController.swift"
+            ),
+            encoding: .utf8
+        )
+        let permissionProducers = [
+            ("    func performRequestNotifications(", [
+                "SystemEventNames.notificationsEnabled",
+                "SystemEventNames.notificationsDenied",
+                "dispatchNotificationPermissionEvent(",
+            ]),
+            ("    func performRequestPermission(", [
+                "SystemEventNames.permissionGranted",
+                "SystemEventNames.permissionDenied",
+                "dispatchRequestPermissionEvent(",
+            ]),
+            ("    func performRequestTracking(", [
+                "SystemEventNames.trackingAuthorized",
+                "SystemEventNames.trackingDenied",
+                "dispatchTrackingPermissionEvent(",
+            ]),
+        ]
+        for (signature, requiredCalls) in permissionProducers {
+            let body = try functionBody(in: controller, startingWith: signature)
+            for requiredCall in requiredCalls {
+                XCTAssertTrue(body.contains(requiredCall), "Missing \(requiredCall) in \(signature)")
+            }
+        }
+
+        let sdk = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("Sources/Nuxie/NuxieSDK.swift"),
+            encoding: .utf8
+        )
+        let acceptedFeatureBody = try functionBody(
+            in: sdk,
+            startingWith: "  private func captureAcceptedFeatureUse("
+        )
+        XCTAssertTrue(
+            acceptedFeatureBody.contains("name: SystemEventNames.featureUsed")
+        )
+        XCTAssertTrue(
+            acceptedFeatureBody.contains("await eventLog.storePreparedEventInHistory(prepared)"),
+            "Accepted feature use must remain durable"
+        )
+    }
+
+    private func functionBody(
+        in source: String,
+        startingWith signature: String
+    ) throws -> Substring {
+        let signatureRange = try XCTUnwrap(source.range(of: signature), signature)
+        let openBrace = try XCTUnwrap(
+            source[signatureRange.lowerBound...].firstIndex(of: "{"),
+            signature
+        )
+        var depth = 0
+        for index in source.indices[openBrace...] {
+            switch source[index] {
+            case "{":
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 { return source[openBrace...index] }
+            default:
+                break
+            }
+        }
+        throw NSError(
+            domain: "EventCatalogConformanceTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Unterminated function: \(signature)"]
+        )
     }
 
     private var repositoryRoot: URL {

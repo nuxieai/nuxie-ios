@@ -435,7 +435,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     name: "sqlite_event",
                     secondsBeforeNow: 1
                 )
-                try await store.insertHistory(target)
+                _ = try await store.insert(target, deliveryState: .delivered)
                 let queries = IREventQueriesAdapter(
                     eventLog: log,
                     distinctId: userId,
@@ -474,7 +474,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     try stored(id: "a-late", name: "a", secondsBeforeNow: 5),
                     try stored(id: "b", name: "b", secondsBeforeNow: 0),
                 ] {
-                    try await store.insertHistory(event)
+                    _ = try await store.insert(event, deliveryState: .delivered)
                 }
                 let queries = IREventQueriesAdapter(eventLog: log)
 

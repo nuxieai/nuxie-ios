@@ -43,7 +43,7 @@ emitter_window_radius=64
 
 # Review-mandated production emission calls. The generic capture/emit forms
 # include named SDK wrappers such as captureOnly and emitSystemEvent.
-emission_call_pattern='eventSink[.]emit[[:space:]]*[(]|eventLog[.]track[[:space:]]*[(]'
+emission_call_pattern='eventSink[.]emit[[:space:]]*[(]|eventLog[.]track(WithoutRouting)?[[:space:]]*[(]'
 emission_call_pattern+='|trackForTrigger[[:space:]]*[(]|trackWithResponse[[:space:]]*[(]'
 emission_call_pattern+='|trackScopedEvent[[:space:]]*[(]|captureStableSystemEvent[[:space:]]*[(]'
 emission_call_pattern+='|eventSink[.]capture[[:space:]]*[(]|[[:alnum:]_.]*captureOnly[[:space:]]*[(]'
@@ -56,7 +56,7 @@ emission_call_pattern+='|didEmitEvent'
 
 # Reverse coverage deliberately starts from production emission calls, rather
 # than constant references. This makes bare literals and indirect names visible.
-reverse_emission_call_pattern='[[:alnum:]_.]*[Ee]ventSink[.]emit[[:space:]]*[(]|eventLog[.]track[[:space:]]*[(]'
+reverse_emission_call_pattern='[[:alnum:]_.]*[Ee]ventSink[.]emit[[:space:]]*[(]|eventLog[.]track(WithoutRouting)?[[:space:]]*[(]'
 reverse_emission_call_pattern+='|trackForTrigger[[:space:]]*[(]|trackWithResponse[[:space:]]*[(]'
 reverse_emission_call_pattern+='|trackScopedEvent[[:space:]]*[(]|captureStableSystemEvent[[:space:]]*[(]'
 reverse_emission_call_pattern+='|eventSink[.]capture[[:space:]]*[(]|[[:alnum:]_.]*captureOnly[[:space:]]*[(]'
@@ -69,18 +69,15 @@ reverse_emission_call_pattern+='|emitEvent[[:space:]]*[(]'
 reverse_emission_call_pattern+='|[[:alnum:]_.]*trackEvent[[:space:]]*[(]'
 server_fact_builder_pattern='name:[[:space:]]*fact[.]event[.]rawValue'
 
-# These exact sites are intentionally not analytics emission calls: three are
-# server facts committed locally, three are local-only Journey events, and one
-# is the direct feature API call. Keep this allowlist short and explicit.
+# These exact sites are intentionally not ordinary analytics emission calls:
+# three are server facts committed locally and one is the direct feature API
+# call. Keep this allowlist short and explicit.
 is_allowlisted_catalog_site() {
   case "$1|$2" in
-    '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1744' \
-      | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1744' \
-      | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1744' \
-      | '$products_unavailable|Sources/Nuxie/Journey/Execution/JourneyRunner.swift:952' \
-      | '$screen_dismissed|Sources/Nuxie/Journey/Execution/JourneyRunner.swift:729' \
-      | '$screen_shown|Sources/Nuxie/Journey/Execution/JourneyRunner.swift:693' \
-      | '$feature_used|Sources/Nuxie/NuxieSDK.swift:1072')
+    '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1869' \
+      | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1869' \
+      | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1869' \
+      | '$feature_used|Sources/Nuxie/NuxieSDK.swift:1123')
       return 0
       ;;
     *)
@@ -93,7 +90,7 @@ is_allowlisted_catalog_site() {
 # catalog, so removing any one expected emitter entry fails closed.
 catalog_event_emitters_for_indirect_emission_site() {
   case "$1" in
-    'Sources/Nuxie/Journey/JourneyService.swift:2355')
+    'Sources/Nuxie/Journey/JourneyService.swift:2382')
       # The permission mapper stages exactly these six cataloged result names.
       printf '%s\t%s\n' \
         '$notifications_denied' "$1" \
@@ -131,16 +128,16 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$permission_denied' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:883' \
         '$permission_granted' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:883'
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:2455')
+    'Sources/Nuxie/Journey/JourneyService.swift:2439')
       # The scoped milestone stage is constructed from $journey_milestone.
       printf '%s\t%s\n' '$journey_milestone' "$1"
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:2878')
-      # The indirect scoped call forwards the fixed denial staged and cataloged at line 2857.
+    'Sources/Nuxie/Journey/JourneyService.swift:2919')
+      # The indirect scoped call forwards the fixed denial staged and cataloged at this site.
       printf '%s\t%s\n' \
-        '$permission_denied' 'Sources/Nuxie/Journey/JourneyService.swift:2857'
+        '$permission_denied' 'Sources/Nuxie/Journey/JourneyService.swift:2919'
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:1744')
+    'Sources/Nuxie/Events/EventLog.swift:1891')
       # JourneyDownFact.Event has exactly these three cataloged raw values.
       printf '%s\t%s\n' \
         '$journey_converted' "$1" \
@@ -164,33 +161,33 @@ catalog_event_emitters_for_indirect_emission_site() {
 # reserved SDK-authored names are checked instead.
 is_allowlisted_indirect_emission_site() {
   case "$1" in
-    'Sources/Nuxie/Events/EventLog.swift:938' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1118' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1558' \
-      | 'Sources/Nuxie/Events/EventLog.swift:2732')
+    'Sources/Nuxie/Events/EventLog.swift:1045' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1223' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1692' \
+      | 'Sources/Nuxie/Events/EventLog.swift:2931')
       # Delivery-path apiClient.trackEvent calls transport an already-built
       # NuxieEvent; the event name originated in a capture lane whose call
       # site is checked above, so these sites are transport, not emission.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:210')
+    'Sources/Nuxie/Events/EventLog.swift:246')
       # Protocol convenience forwards names; concrete SDK callers are checked at their call sites.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:229')
+    'Sources/Nuxie/Events/EventLog.swift:265')
       # The ownership convenience forwards names; its concrete producer is checked at the owned capture call site.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:473' \
-      | 'Sources/Nuxie/Events/EventLog.swift:487' \
-      | 'Sources/Nuxie/Events/EventLog.swift:499' \
-      | 'Sources/Nuxie/Events/EventLog.swift:849' \
-      | 'Sources/Nuxie/Events/EventLog.swift:861')
+    'Sources/Nuxie/Events/EventLog.swift:520' \
+      | 'Sources/Nuxie/Events/EventLog.swift:534' \
+      | 'Sources/Nuxie/Events/EventLog.swift:546' \
+      | 'Sources/Nuxie/Events/EventLog.swift:948' \
+      | 'Sources/Nuxie/Events/EventLog.swift:960')
       # EventLog overloads forward names; concrete SDK callers are checked at their call sites.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:1195' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1216')
+    'Sources/Nuxie/Events/EventLog.swift:1300' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1321')
       # Stable-capture wrappers forward names; their concrete scoped producers are cataloged.
       return 0
       ;;
@@ -209,19 +206,23 @@ is_allowlisted_indirect_emission_site() {
       # Runtime role adapters forward names; concrete event-sink capture and captureOnly calls are checked.
       return 0
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:1325')
+    'Sources/Nuxie/Journey/JourneyService.swift:1347')
       # Renderer-authored names are curated by the screen emission router before this call.
       return 0
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:2463')
-      # This history-only write reuses the milestone stage cataloged at the 2455 track call.
+    'Sources/Nuxie/Journey/JourneyService.swift:2495')
+      # This history-only write reuses the milestone stage cataloged at line 2433.
       return 0
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:5001')
+    'Sources/Nuxie/Journey/JourneyService.swift:2487')
+      # This direct scoped send reuses the milestone stage cataloged at line 2433.
+      return 0
+      ;;
+    'Sources/Nuxie/Journey/JourneyService.swift:5048')
       # The scoped helper forwards stages whose finite producers are checked at their call sites.
       return 0
       ;;
-    'Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3208')
+    'Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3248')
       # Authored send-event names are user-defined; the $event_sent rider below is cataloged.
       return 0
       ;;
@@ -235,6 +236,10 @@ is_allowlisted_indirect_emission_site() {
       ;;
     'Sources/Nuxie/Experiences/ExperienceScreenViewController.swift:763')
       # Runtime journey and host-command names are variable; reserved response names use the concrete calls above.
+      return 0
+      ;;
+    'Sources/Nuxie/NuxieSDK.swift:1194')
+      # Accepted feature usage is durably mirrored through the prepared-event history seam.
       return 0
       ;;
     *)
@@ -354,7 +359,7 @@ while IFS=$'\t' read -r event_name constant event_status emitter; do
 
   if [[ "$token_found" != true
       && "$constant" == "JourneyEvents.journeyMilestone"
-      && "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:2455" ]] \
+      && "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:2439" ]] \
       && rg -Fq -- 'name: JourneyEvents.journeyMilestone' \
         Sources/Nuxie/Journey/JourneyService.swift; then
     # The scoped path stages the exact milestone name before the generic

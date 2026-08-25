@@ -149,6 +149,14 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         await eventLog.subscribeCommitted { [weak journeyService] event in
           await journeyService?.handleEvent(event)
         }
+        await eventLog.subscribeForwarding(
+          when: { [weak self] in self?.delegate != nil }
+        ) { [weak self, weak journeyService] durable in
+          await self?.deliverForwardedActivity(
+            durable,
+            journeyService: journeyService
+          )
+        }
         do {
           try await eventLog.configure(configuration: setupConfiguration)
           LogDebug("Event system setup complete")
@@ -222,6 +230,38 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   @MainActor
   func deliverAppAction(_ action: AppAction) {
     delegate?.nuxie(self, didRequestAppAction: action)
+  }
+
+  private func deliverForwardedActivity(
+    _ durable: DurableForwardingEvent,
+    journeyService: JourneyServiceProtocol?
+  ) async {
+    // Keep curation and the public envelope unallocated when no observer is
+    // attached. A delegate attached later receives only subsequent activity.
+    guard delegate != nil else { return }
+    var properties = durable.event.properties
+    if durable.event.forwardingName == JourneyEvents.journeySuperseded,
+       properties["experience_id"] == nil,
+       let journeyId = properties["journey_id"] as? String,
+       let ref = await journeyService?.forwardingExperienceRef(for: journeyId) {
+      properties["experience_id"] = ref.experienceId
+      if let version = ref.experienceVersion {
+        properties["experience_version"] = version
+      }
+    }
+    guard let activity = ActivityCuration.activity(
+      internalName: durable.event.forwardingName,
+      properties: properties
+    ) else { return }
+    let info = NuxieActivityInfo(
+      id: durable.event.id,
+      timestamp: durable.event.timestamp,
+      receivedAt: durable.receivedAt,
+      activity: activity
+    )
+    await MainActor.run { [weak self] in
+      self?.delegate?.nuxieDidEmit(info)
+    }
   }
 
   /// Manually shut down the SDK and clean up resources
@@ -1057,6 +1097,17 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
           entityId: entityId,
           metadata: metadata?.mapValues(AnyCodable.init)
         ) {
+      if purchaseBackedResult.success {
+        await captureAcceptedFeatureUse(
+          featureId: featureId,
+          amount: amount,
+          entityId: entityId,
+          metadata: metadata,
+          eventId: nil,
+          distinctId: distinctId,
+          eventLog: core.eventLog
+        )
+      }
       return purchaseBackedResult
     }
 
@@ -1087,9 +1138,22 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       }
     }
 
+    let accepted = response.status == "ok" || response.status == "success"
+    if accepted {
+      await captureAcceptedFeatureUse(
+        featureId: featureId,
+        amount: amount,
+        entityId: entityId,
+        metadata: metadata,
+        eventId: response.eventId,
+        distinctId: distinctId,
+        eventLog: core.eventLog
+      )
+    }
+
     // Build result from response
     return FeatureUsageResult(
-      success: response.status == "ok" || response.status == "success",
+      success: accepted,
       featureId: featureId,
       amountUsed: amount,
       message: response.message,
@@ -1101,6 +1165,34 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         )
       }
     )
+  }
+
+  private func captureAcceptedFeatureUse(
+    featureId: String,
+    amount: Double,
+    entityId: String?,
+    metadata: [String: Any]?,
+    eventId: String?,
+    distinctId: String,
+    eventLog: EventLogProtocol
+  ) async {
+    var captureProperties: [String: Any] = [
+      "feature_id": featureId,
+      "amount": amount,
+    ]
+    if let entityId { captureProperties["entity_id"] = entityId }
+    if let metadata { captureProperties["metadata"] = metadata }
+    let capturePropertiesBox = UncheckedSendable(captureProperties)
+    let enriched = await eventLog.prepareTriggerProperties(capturePropertiesBox.value)
+    let exactEvent = NuxieEvent(
+      id: eventId ?? UUID.v7().uuidString,
+      name: SystemEventNames.featureUsed,
+      distinctId: distinctId,
+      properties: enriched
+    )
+    if let prepared = await eventLog.applyBeforeSend(to: exactEvent) {
+      await eventLog.storePreparedEventInHistory(prepared)
+    }
   }
 
 }

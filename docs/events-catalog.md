@@ -36,16 +36,14 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `$experience_shown` | active | platform | yes | governed | batch | `experienceShown` | An Experience becomes visible. |
 | `$experience_dismissed` | active | platform | yes | governed | batch | `experienceDismissed` | A visible Experience is dismissed. |
-| `$experience_purchased` | delete | platform | no | exempt | none | hidden: pre-GA deletion | Unused legacy purchase presentation event. |
-| `$experience_timed_out` | delete | platform | no | exempt | none | hidden: pre-GA deletion | Unused legacy presentation timeout event. |
 | `$experience_errored` | active | platform | yes | governed | batch | `experienceErrored` | Experience execution fails. |
 
 ## Screens
 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `$screen_shown` | active | platform | no | exempt | none | `screenShown` | A Journey screen becomes active. |
-| `$screen_dismissed` | active | platform | no | exempt | none | `screenDismissed` | A Journey screen is dismissed. |
+| `$screen_shown` | active | platform | yes | governed | batch | `screenShown` | A Journey screen becomes active. |
+| `$screen_dismissed` | active | platform | yes | governed | batch | `screenDismissed` | A Journey screen is dismissed. |
 
 ## Commerce
 
@@ -69,7 +67,7 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `$feature_used` | active | platform | no | exempt | `/i/event` | `featureUsed` | Authoritative metered Feature use is accepted. |
+| `$feature_used` | active | platform | yes | governed | `/i/event` | `featureUsed` | Authoritative metered Feature use is accepted and durably mirrored. |
 
 ## Experiments
 
@@ -83,14 +81,14 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `$notifications_enabled` | active | platform | no / yes | exempt / governed | `/i/event` | `permissionResolved` | Notification authorization resolves enabled. |
-| `$notifications_denied` | active | platform | no / yes | exempt / governed | `/i/event` | `permissionResolved` | Notification authorization resolves denied. |
-| `$permission_granted` | active | platform | no / yes | exempt / governed | `/i/event` | `permissionResolved` | An authored platform permission resolves granted or limited. |
-| `$permission_denied` | active | platform | no / yes | exempt / governed | `/i/event` | `permissionResolved` | An authored platform permission resolves denied, including the unsupported scoped path. |
-| `$tracking_authorized` | active | platform | no / yes | exempt / governed | `/i/event` | `permissionResolved` | Tracking authorization resolves authorized. |
-| `$tracking_denied` | active | platform | no / yes | exempt / governed | `/i/event` | `permissionResolved` | Tracking authorization resolves denied or unsupported. |
+| `$notifications_enabled` | active | platform | yes | governed | `/i/event` | `permissionResolved` | Notification authorization resolves enabled. |
+| `$notifications_denied` | active | platform | yes | governed | `/i/event` | `permissionResolved` | Notification authorization resolves denied. |
+| `$permission_granted` | active | platform | yes | governed | `/i/event` | `permissionResolved` | An authored platform permission resolves granted or limited. |
+| `$permission_denied` | active | platform | yes | governed | `/i/event` | `permissionResolved` | An authored platform permission resolves denied, including the unsupported scoped path. |
+| `$tracking_authorized` | active | platform | yes | governed | `/i/event` | `permissionResolved` | Tracking authorization resolves authorized. |
+| `$tracking_denied` | active | platform | yes | governed | `/i/event` | `permissionResolved` | Tracking authorization resolves denied or unsupported. |
 
-Scoped permission events use `trackForTrigger` with `persistToHistory: false` and skip `beforeSend`. The unscoped controller fallback uses `SystemEventSink.emit`, whose production adapter enters governed, persistent `trackForTrigger`; both paths use the `/i/event` response lane.
+Scoped and unscoped permission events use governed, persistent `trackForTrigger`; both paths use the `/i/event` response lane.
 
 ## Identity and riders
 
@@ -114,7 +112,7 @@ These controls persist through Journey response state rather than the event stor
 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `$products_unavailable` | active | platform | no | exempt | none | `productsUnavailable` | Required live store products cannot be resolved. |
+| `$products_unavailable` | active | platform | yes | governed | batch | `productsUnavailable` | Required live store products cannot be resolved. |
 | `$experience_artifact_load_succeeded` | active | platform | yes | governed | batch | hidden: successful load noise | A signed Experience artifact loads successfully. |
 | `$experience_artifact_load_failed` | active | platform | yes | governed | batch | `experienceLoadFailed` | A signed Experience artifact cannot be loaded or admitted. |
 
@@ -126,23 +124,17 @@ No uncataloged event name was found. The inline event-name strings in `ScreenEmi
 
 ### Forwarding spec table gaps
 
-None. Every one of the 50 catalog names is mentioned directly or by a grouped row in the revision 3 curation table.
+None. Every one of the 48 catalog names is mentioned directly or by a grouped row in the revision 3 curation table.
 
 Code reality does conflict with broader forwarding premises. `$journey_effect_requested` and `$journey_parked` use governed `processCapture` and queue batch delivery even though journey protocol facts are described as exempt. `$journey_transition` is normally exempt through `trackWithResponse`, but its response-snapshot-conflict diagnostic uses governed `processCapture`. `$journey_exited` is normally exempt through `trackWithResponse`, while host exits use governed stable capture. `$journey_converted` has both a platform-authored `trackWithResponse` emitter and a server down-fact emitter, while the curation table describes it as a server down-fact.
-
-### Events in fixtures but never emitted
-
-- `$experience_purchased` appears in `fixtures/events/experience-events.json`, has a constant and builder, but has no production emitter. It is marked `delete`.
-- `$experience_timed_out` appears in `fixtures/events/experience-events.json`, has a constant and builder, but has no production emitter. It is marked `delete`.
 
 ### Emitter property drift versus fixtures
 
 - On first or updated launches, `$app_opened` reuses the mutable lifecycle properties and therefore retains `install_date`, or `previous_version` and `update_date`, respectively.
 - `$journey_transition` has two property variants: canonical node transitions require `epoch`, `journey_id`, `plane`, `region`, and `to_node`; response-snapshot conflicts instead require `journey_id`, `error`, `node_id`, `expected_response_version`, and `actual_response_version`.
-- `$feature_used` is pinned in `fixtures/events/batch-item-encoding.json` with `value` and `entityId` in event properties. The current public path builds `feature_extId`, optional `setUsage`, and optional `metadata`, then passes amount and entity id as top-level `/i/event` request fields. It does not durably capture the event.
-- `$experience_purchased` and `$experience_timed_out` have fixture-pinned property lists but no emitter to verify them against.
+- `$feature_used` is pinned in `fixtures/events/batch-item-encoding.json` with `value` and `entityId` in event properties. The direct request retains that transport shape; after acceptance, durable history uses `feature_id`, `amount`, optional `entity_id`, and optional `metadata` for typed forwarding.
 
-Additional forwarding-shape gaps are code reality, not fixture drift. `$products_unavailable` omits product ids, screen events omit Experience and Journey identity, artifact-load events omit `experience_id`, experiment fallback and error events omit Experience and Journey identity, `$experience_dismissed` omits the available close reason, and `$purchase_synced` omits recoverable Experience and Journey context.
+Forwarding identity is captured at the producer. Products-unavailable includes product ids; screen, artifact-load, experiment diagnostic, and dismissal events include their available Experience context; dismissal includes the close reason; and purchase synchronization includes recoverable commercial context.
 
 ### Documentation and session notes
 

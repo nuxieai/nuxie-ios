@@ -157,6 +157,30 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             }
         }
     }
+
+    public func trackWithoutRouting(
+        _ event: String,
+        properties: [String: Any]?,
+        distinctIdOverride: String
+    ) {
+        let nuxieEvent = TestEventBuilder(name: event)
+            .withDistinctId(distinctIdOverride)
+            .withProperties(properties ?? [:])
+            .build()
+        let (observer, subscribers) = lock.withLock {
+            _trackedEvents.append((name: event, properties: properties))
+            return (_capturedEventObserver, _forwardingSubscribers)
+        }
+        observer?(nuxieEvent)
+        Task {
+            for subscriber in subscribers where subscriber.isEnabled() {
+                await subscriber.handler(DurableForwardingEvent(
+                    event: nuxieEvent,
+                    receivedAt: nuxieEvent.timestamp
+                ))
+            }
+        }
+    }
     
     @discardableResult
     public func route(_ event: NuxieEvent) async -> NuxieEvent? {
@@ -197,6 +221,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
 
     private var _committedSubscribers:
         [(filter: (@Sendable (NuxieEvent) -> Bool)?, handler: CommittedEventHandler)] = []
+    private var _forwardingSubscribers:
+        [(isEnabled: @Sendable () -> Bool, handler: ForwardingEventHandler)] = []
 
     public func subscribeCommitted(
         where filter: (@Sendable (NuxieEvent) -> Bool)?,
@@ -204,6 +230,15 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     ) async {
         lock.withLock {
             _committedSubscribers.append((filter: filter, handler: handler))
+        }
+    }
+
+    public func subscribeForwarding(
+        when isEnabled: @escaping @Sendable () -> Bool,
+        handler: @escaping ForwardingEventHandler
+    ) async {
+        lock.withLock {
+            _forwardingSubscribers.append((isEnabled: isEnabled, handler: handler))
         }
     }
     

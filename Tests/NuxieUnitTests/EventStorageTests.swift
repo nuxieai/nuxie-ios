@@ -23,7 +23,7 @@ final class EventStorageTests: AsyncSpec {
                 properties: properties,
                 distinctId: distinctId
             )
-            try await internalEventStore.insertHistory(event)
+            _ = try await internalEventStore.insert(event, deliveryState: .delivered)
         }
 
         func executeSQLite(_ sql: String, at path: String) throws {
@@ -115,6 +115,84 @@ final class EventStorageTests: AsyncSpec {
         }
         
         describe("history persistence") {
+            it("reports newly durable only for the first byte-equivalent insert") {
+                let timestamp = Date(timeIntervalSince1970: 1_000)
+                let original = try StoredEvent(
+                    id: "stable-id",
+                    name: "$app_opened",
+                    properties: ["source": "app_lifecycle"],
+                    timestamp: timestamp,
+                    distinctId: "customer-a"
+                )
+                let collision = try StoredEvent(
+                    id: original.id,
+                    name: "$app_backgrounded",
+                    properties: ["source": "app_lifecycle"],
+                    timestamp: timestamp,
+                    distinctId: "customer-a"
+                )
+
+                let newlyDurable = try await internalEventStore.insert(
+                    original,
+                    deliveryState: .pending
+                )
+                let replayNewlyDurable = try await internalEventStore.insert(
+                    original,
+                    deliveryState: .pending
+                )
+                let collisionNewlyDurable = try await internalEventStore.insert(
+                    collision,
+                    deliveryState: .pending
+                )
+
+                expect(newlyDurable) == true
+                expect(replayNewlyDurable) == false
+                expect(collisionNewlyDurable) == false
+                let canonical = try await internalEventStore.queryEvent(id: original.id)
+                expect(canonical?.name) == original.name
+                expect(canonical?.properties) == original.properties
+                expect(canonical?.timestamp) == original.timestamp
+                expect(canonical?.distinctId) == original.distinctId
+            }
+
+            it("retains server-origin ids beyond the ordinary pruning horizon") {
+                let oldTimestamp = Date(timeIntervalSince1970: 100)
+                let serverFact = try StoredEvent(
+                    id: "server-fact-id",
+                    name: JourneyEvents.journeyConverted,
+                    properties: [StoredEvent.originProperty: StoredEventOrigin.server.rawValue],
+                    timestamp: oldTimestamp,
+                    distinctId: "customer-a"
+                )
+                let deviceEvent = try StoredEvent(
+                    id: "device-event-id",
+                    name: SystemEventNames.appOpened,
+                    timestamp: oldTimestamp,
+                    distinctId: "customer-a"
+                )
+                _ = try await internalEventStore.insert(serverFact, deliveryState: .delivered)
+                _ = try await internalEventStore.insert(deviceEvent, deliveryState: .delivered)
+                _ = try await internalEventStore.readOrInitializeHistoryCoverage(
+                    startingAt: .distantPast
+                )
+
+                let result = try await internalEventStore.pruneHistory(
+                    keeping: 1,
+                    olderThan: Date(timeIntervalSince1970: 1_000)
+                )
+
+                expect(result.ageDeleted) == 1
+                let retainedServerFact = try await internalEventStore.queryEvent(id: serverFact.id)
+                let prunedDeviceEvent = try await internalEventStore.queryEvent(id: deviceEvent.id)
+                let redeliveryWasNew = try await internalEventStore.insert(
+                    serverFact,
+                    deliveryState: .delivered
+                )
+                expect(retainedServerFact).notTo(beNil())
+                expect(prunedDeviceEvent).to(beNil())
+                expect(redeliveryWasNew) == false
+            }
+
             it("should insert and query events correctly") {
                 let properties = ["feature": "premium", "value": 100] as [String: Any]
                 guard let event = try? StoredEvent(
@@ -129,7 +207,7 @@ final class EventStorageTests: AsyncSpec {
                 
                 // Insert event
                 do {
-                    try await internalEventStore.insertEvent(event)
+                    _ = try await internalEventStore.insert(event, deliveryState: .delivered)
                 } catch {
                     fail("Failed to insert event: \(error)")
                 }
@@ -171,7 +249,7 @@ final class EventStorageTests: AsyncSpec {
                         return
                     }
                     do {
-                        try await internalEventStore.insertEvent(event)
+                        _ = try await internalEventStore.insert(event, deliveryState: .delivered)
                     } catch {
                         fail("Failed to insert event: \(error)")
                     }
@@ -213,7 +291,7 @@ final class EventStorageTests: AsyncSpec {
                     return
                 }
                 do {
-                    try await internalEventStore.insertEvent(oldEvent)
+                    _ = try await internalEventStore.insert(oldEvent, deliveryState: .delivered)
                 } catch {
                     fail("Failed to insert old event: \(error)")
                 }
@@ -229,7 +307,7 @@ final class EventStorageTests: AsyncSpec {
                     return
                 }
                 do {
-                    try await internalEventStore.insertEvent(recentEvent)
+                    _ = try await internalEventStore.insert(recentEvent, deliveryState: .delivered)
                 } catch {
                     fail("Failed to insert recent event: \(error)")
                 }
@@ -297,8 +375,8 @@ final class EventStorageTests: AsyncSpec {
                     timestamp: Date(timeIntervalSince1970: 200),
                     distinctId: "user"
                 )
-                try await internalEventStore.insertPending(pending)
-                try await internalEventStore.insertHistory(delivered)
+                _ = try await internalEventStore.insert(pending, deliveryState: .pending)
+                _ = try await internalEventStore.insert(delivered, deliveryState: .delivered)
                 _ = try await internalEventStore.readOrInitializeHistoryCoverage(
                     startingAt: Date(timeIntervalSince1970: 50)
                 )
@@ -510,10 +588,8 @@ final class EventStorageTests: AsyncSpec {
                     distinctId: "customer-a"
                 )
 
-                let inserted = try await internalEventStore
-                    .insertPendingIfAbsent(event)
-                let replayInserted = try await internalEventStore
-                    .insertPendingIfAbsent(event)
+                let inserted = try await internalEventStore.insert(event, deliveryState: .pending)
+                let replayInserted = try await internalEventStore.insert(event, deliveryState: .pending)
 
                 expect(inserted) == true
                 expect(replayInserted) == false
@@ -547,17 +623,18 @@ final class EventStorageTests: AsyncSpec {
                     distinctId: "user123"
                 )
 
-                try await internalEventStore.insertPending(pendingB)
-                try await internalEventStore.insertHistory(delivered)
-                try await internalEventStore.insertPending(pendingA)
+                _ = try await internalEventStore.insert(pendingB, deliveryState: .pending)
+                _ = try await internalEventStore.insert(delivered, deliveryState: .delivered)
+                _ = try await internalEventStore.insert(pendingA, deliveryState: .pending)
 
                 let initialCount = try await internalEventStore.getPendingDeliveryCount()
                 let initialIds = try await internalEventStore.queryPendingDelivery(limit: 10).map(\.id)
                 expect(initialCount) == 2
                 expect(initialIds) == ["pending-a", "pending-b"]
 
-                let insertedDuplicate = try await internalEventStore.insertPendingIfAbsent(
-                    pendingA
+                let insertedDuplicate = try await internalEventStore.insert(
+                    pendingA,
+                    deliveryState: .pending
                 )
                 let countAfterDuplicate = try await internalEventStore.getPendingDeliveryCount()
                 expect(insertedDuplicate) == false
@@ -605,7 +682,7 @@ final class EventStorageTests: AsyncSpec {
                     timestamp: Date(timeIntervalSince1970: 100),
                     distinctId: "user"
                 )
-                try await internalEventStore.insertHistory(existing)
+                _ = try await internalEventStore.insert(existing, deliveryState: .delivered)
                 let databasePath = await internalEventStore.dbPath!
                 await internalEventStore.close()
                 try executeSQLite("DROP TABLE event_history_metadata;", at: databasePath)
@@ -639,12 +716,12 @@ final class EventStorageTests: AsyncSpec {
                 let initial = Date(timeIntervalSince1970: 100)
                 _ = try await internalEventStore.readOrInitializeHistoryCoverage(startingAt: initial)
                 for second in [101, 102, 103] {
-                    try await internalEventStore.insertHistory(try StoredEvent(
+                    _ = try await internalEventStore.insert(try StoredEvent(
                         id: "delivered-\(second)",
                         name: "event",
                         timestamp: Date(timeIntervalSince1970: TimeInterval(second)),
                         distinctId: "user"
-                    ))
+                    ), deliveryState: .delivered)
                 }
                 let oldPending = try StoredEvent(
                     id: "old-pending",
@@ -652,7 +729,7 @@ final class EventStorageTests: AsyncSpec {
                     timestamp: Date(timeIntervalSince1970: 90),
                     distinctId: "user"
                 )
-                try await internalEventStore.insertPending(oldPending)
+                _ = try await internalEventStore.insert(oldPending, deliveryState: .pending)
 
                 let countPrune = try await internalEventStore.pruneHistory(
                     keeping: 3,
@@ -673,12 +750,12 @@ final class EventStorageTests: AsyncSpec {
                     countPrune.coverageStartingAt
                 ))
 
-                try await internalEventStore.insertHistory(try StoredEvent(
+                _ = try await internalEventStore.insert(try StoredEvent(
                     id: "aged",
                     name: "event",
                     timestamp: Date(timeIntervalSince1970: 150),
                     distinctId: "user"
-                ))
+                ), deliveryState: .delivered)
                 let agePrune = try await internalEventStore.pruneHistory(
                     keeping: 10,
                     olderThan: Date(timeIntervalSince1970: 200)
@@ -700,12 +777,12 @@ final class EventStorageTests: AsyncSpec {
             it("rolls event deletion back when the atomic coverage update fails") {
                 let initial = Date(timeIntervalSince1970: 10)
                 _ = try await internalEventStore.readOrInitializeHistoryCoverage(startingAt: initial)
-                try await internalEventStore.insertHistory(try StoredEvent(
+                _ = try await internalEventStore.insert(try StoredEvent(
                     id: "must-survive",
                     name: "event",
                     timestamp: Date(timeIntervalSince1970: 50),
                     distinctId: "user"
-                ))
+                ), deliveryState: .delivered)
                 let databasePath = await internalEventStore.dbPath!
                 try executeSQLite(
                     """

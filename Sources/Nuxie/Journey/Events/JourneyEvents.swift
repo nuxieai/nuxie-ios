@@ -33,10 +33,6 @@ final class JourneyEvents: Sendable {
     static let experienceShown = "$experience_shown"
     /// User-driven experience dismissal.
     static let experienceDismissed = "$experience_dismissed"
-    /// Purchase completed from an experience.
-    static let experiencePurchased = "$experience_purchased"
-    /// Experience presentation exceeded its time limit.
-    static let experienceTimedOut = "$experience_timed_out"
     /// Experience execution failed.
     static let experienceErrored = "$experience_errored"
     /// Published experience artifact loaded successfully.
@@ -127,6 +123,8 @@ final class JourneyEvents: Sendable {
         [
             "journey_id": journey.id,
             "epoch": journey.epoch,
+            "experience_id": journey.experienceId,
+            "experience_version": journey.experienceVersion,
             "milestone_id": milestoneId,
         ]
     }
@@ -155,6 +153,8 @@ final class JourneyEvents: Sendable {
         var properties: [String: Any] = [
             "journey_id": journey.id,
             "epoch": journey.epoch,
+            "experience_id": journey.experienceId,
+            "experience_version": journey.experienceVersion,
             "reason": dismissedBy == .host ? "dismissed" : reason.executionReason,
             "at": iso8601(at),
         ]
@@ -250,52 +250,14 @@ final class JourneyEvents: Sendable {
     /// - Returns: Canonical event properties.
     static func experienceDismissedProperties(
         experienceVersion: String,
-        journey: JourneySnapshot
-    ) -> [String: Any] {
-        return [
-            "journey_id": journey.id,
-            "experience_id": journey.experienceId,
-            "experience_version": experienceVersion
-        ]
-    }
-
-    /// Builds identity and optional product properties for a purchase.
-    ///
-    /// - Parameters:
-    ///   - experienceVersion: Exact published version that initiated the purchase.
-    ///   - journey: Journey that owns the presentation.
-    ///   - productId: Purchased product identifier, when known.
-    /// - Returns: Canonical event properties.
-    static func experiencePurchasedProperties(
-        experienceVersion: String,
         journey: JourneySnapshot,
-        productId: String?
-    ) -> [String: Any] {
-        var properties: [String: Any] = [
-            "journey_id": journey.id,
-            "experience_id": journey.experienceId,
-            "experience_version": experienceVersion
-        ]
-        if let productId {
-            properties["product_id"] = productId
-        }
-        return properties
-    }
-
-    /// Builds identity properties for an experience timeout.
-    ///
-    /// - Parameters:
-    ///   - experienceVersion: Exact published version that timed out.
-    ///   - journey: Journey that owns the presentation.
-    /// - Returns: Canonical event properties.
-    static func experienceTimedOutProperties(
-        experienceVersion: String,
-        journey: JourneySnapshot
+        reason: CloseReason
     ) -> [String: Any] {
         return [
             "journey_id": journey.id,
             "experience_id": journey.experienceId,
-            "experience_version": experienceVersion
+            "experience_version": experienceVersion,
+            "reason": dismissalReason(reason)
         ]
     }
 
@@ -331,12 +293,14 @@ final class JourneyEvents: Sendable {
     ///   - artifactContentHash: Verified artifact content hash.
     /// - Returns: Canonical event properties.
     static func experienceArtifactLoadSucceededProperties(
+        experienceId: String,
         experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
         artifactContentHash: String
     ) -> [String: Any] {
         return experienceArtifactLoadBaseProperties(
+            experienceId: experienceId,
             experienceVersion: experienceVersion,
             artifactBuildId: artifactBuildId,
             artifactSource: artifactSource,
@@ -354,6 +318,7 @@ final class JourneyEvents: Sendable {
     ///   - errorMessage: Diagnostic message, when available.
     /// - Returns: Canonical event properties.
     static func experienceArtifactLoadFailedProperties(
+        experienceId: String,
         experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
@@ -361,6 +326,7 @@ final class JourneyEvents: Sendable {
         errorMessage: String?
     ) -> [String: Any] {
         var properties = experienceArtifactLoadBaseProperties(
+            experienceId: experienceId,
             experienceVersion: experienceVersion,
             artifactBuildId: artifactBuildId,
             artifactSource: artifactSource,
@@ -373,17 +339,28 @@ final class JourneyEvents: Sendable {
     }
 
     private static func experienceArtifactLoadBaseProperties(
+        experienceId: String,
         experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
         artifactContentHash: String
     ) -> [String: Any] {
         return [
+            "experience_id": experienceId,
             "experience_version": experienceVersion,
             "artifact_build_id": artifactBuildId,
             "artifact_source": artifactSource,
             "artifact_content_hash": artifactContentHash,
         ]
+    }
+
+    private static func dismissalReason(_ reason: CloseReason) -> String {
+        switch reason {
+        case .userDismissed: return "user"
+        case .goalMet: return "goal_met"
+        case .hostDismissed: return "host"
+        case .error: return "error"
+        }
     }
 
     /// Builds journey and experience context for a customer update rider.

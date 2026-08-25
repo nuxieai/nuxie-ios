@@ -1,0 +1,33 @@
+{
+  "suite": "encodings/forwarded-activity",
+  "version": 1,
+  "vectors": [
+    { "case": "experienceShown", "wireName": "experience_shown", "propertyKeys": ["experience_id", "experience_version", "journey_id"] },
+    { "case": "experienceDismissed", "wireName": "experience_dismissed", "propertyKeys": ["experience_id", "experience_version", "journey_id", "reason"] },
+    { "case": "experienceErrored", "wireName": "experience_errored", "propertyKeys": ["experience_id", "experience_version", "journey_id", "message"] },
+    { "case": "journeyStarted", "wireName": "journey_started", "propertyKeys": ["experience_id", "experience_version", "journey_id"] },
+    { "case": "milestoneReached", "wireName": "milestone_reached", "propertyKeys": ["experience_id", "experience_version", "journey_id", "milestone_id"] },
+    { "case": "journeyConverted", "wireName": "journey_converted", "propertyKeys": ["experience_id", "experience_version", "journey_id"] },
+    { "case": "journeyEnded", "wireName": "journey_ended", "propertyKeys": ["exit_reason", "experience_id", "experience_version", "journey_id"] },
+    { "case": "purchaseCompleted", "wireName": "purchase_completed", "propertyKeys": ["display_price", "experience_id", "placement_id", "price", "product_id", "store_product_id", "test_store", "transaction_id"] },
+    { "case": "purchaseFailed", "wireName": "purchase_failed", "propertyKeys": ["message", "placement_id", "test_store"] },
+    { "case": "purchaseCancelled", "wireName": "purchase_cancelled", "propertyKeys": ["display_price", "experience_id", "placement_id", "price", "product_id", "store_product_id", "test_store", "transaction_id"] },
+    { "case": "purchasePending", "wireName": "purchase_pending", "propertyKeys": ["display_price", "experience_id", "placement_id", "price", "product_id", "store_product_id", "test_store", "transaction_id"] },
+    { "case": "restoreCompleted", "wireName": "restore_completed", "propertyKeys": [] },
+    { "case": "restoreFailed", "wireName": "restore_failed", "propertyKeys": ["message"] },
+    { "case": "restoreNoPurchases", "wireName": "restore_no_purchases", "propertyKeys": [] },
+    { "case": "purchaseSynced", "wireName": "purchase_synced", "propertyKeys": ["experience_id", "journey_id", "original_transaction_id", "product_id", "transaction_id"] },
+    { "case": "featureUsed", "wireName": "feature_used", "propertyKeys": ["amount", "entity_id", "feature_id"] },
+    { "case": "experimentExposure", "wireName": "experiment_exposure", "propertyKeys": ["experience_id", "experience_version", "experiment_key", "is_holdout", "journey_id", "variant_key"] },
+    { "case": "experimentError", "wireName": "experiment_error", "propertyKeys": ["experience_id", "experience_version", "experiment_key", "journey_id", "message"] },
+    { "case": "productsUnavailable", "wireName": "products_unavailable", "propertyKeys": ["experience_id", "experience_version", "journey_id", "product_ids"] },
+    { "case": "screenShown", "wireName": "screen_shown", "propertyKeys": ["experience_id", "experience_version", "journey_id", "screen_id"] },
+    { "case": "screenDismissed", "wireName": "screen_dismissed", "propertyKeys": ["experience_id", "experience_version", "journey_id", "screen_id"] },
+    { "case": "experienceLoadFailed", "wireName": "experience_load_failed", "propertyKeys": ["experience_id", "experience_version", "journey_id", "message"] },
+    { "case": "permissionResolved", "wireName": "permission_resolved", "propertyKeys": ["experience_id", "experience_version", "granted", "journey_id", "kind"] },
+    { "case": "appInstalled", "wireName": "app_installed", "propertyKeys": [] },
+    { "case": "appUpdated", "wireName": "app_updated", "propertyKeys": ["from_version", "to_version"] },
+    { "case": "appOpened", "wireName": "app_opened", "propertyKeys": [] },
+    { "case": "appBackgrounded", "wireName": "app_backgrounded", "propertyKeys": [] }
+  ]
+}

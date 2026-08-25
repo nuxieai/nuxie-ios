@@ -31,6 +31,12 @@ public protocol NuxieDelegate: AnyObject {
     ///   - newValue: New access state
     func featureAccessDidChange(_ featureId: String, from oldValue: FeatureAccess?, to newValue: FeatureAccess)
 
+    /// Called at most once after a curated Nuxie activity becomes durable.
+    /// Activities arrive on the main actor in durability order.
+    ///
+    /// - Parameter info: The typed activity and its analytics-ready flat view.
+    func nuxieDidEmit(_ info: NuxieActivityInfo)
+
     /// Called when an experience's Run App Action step asks the host app to act.
     func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction)
 }
@@ -39,5 +45,6 @@ public protocol NuxieDelegate: AnyObject {
 
 public extension NuxieDelegate {
     func featureAccessDidChange(_ featureId: String, from oldValue: FeatureAccess?, to newValue: FeatureAccess) {}
+    func nuxieDidEmit(_ info: NuxieActivityInfo) {}
     func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction) {}
 }

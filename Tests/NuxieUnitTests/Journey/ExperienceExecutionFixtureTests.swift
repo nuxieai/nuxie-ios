@@ -170,22 +170,8 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                         JourneyEvents.experienceDismissed,
                         JourneyEvents.experienceDismissedProperties(
                             experienceVersion: "flow-version-1",
-                            journey: journey
-                        )
-                    ),
-                    vector(
-                        JourneyEvents.experiencePurchased,
-                        JourneyEvents.experiencePurchasedProperties(
-                            experienceVersion: "flow-version-1",
                             journey: journey,
-                            productId: "product-1"
-                        )
-                    ),
-                    vector(
-                        JourneyEvents.experienceTimedOut,
-                        JourneyEvents.experienceTimedOutProperties(
-                            experienceVersion: "flow-version-1",
-                            journey: journey
+                            reason: .userDismissed
                         )
                     ),
                     vector(
@@ -199,6 +185,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     vector(
                         JourneyEvents.experienceArtifactLoadSucceeded,
                         JourneyEvents.experienceArtifactLoadSucceededProperties(
+                            experienceId: journey.experienceId,
                             experienceVersion: "flow-version-1",
                             artifactBuildId: "build-1",
                             artifactSource: "network",
@@ -208,6 +195,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     vector(
                         JourneyEvents.experienceArtifactLoadFailed,
                         JourneyEvents.experienceArtifactLoadFailedProperties(
+                            experienceId: journey.experienceId,
                             experienceVersion: "flow-version-1",
                             artifactBuildId: "build-1",
                             artifactSource: "network",

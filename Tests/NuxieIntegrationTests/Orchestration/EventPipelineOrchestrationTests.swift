@@ -6,6 +6,16 @@ import Nimble
 @testable import NuxieTestSupport
 #endif
 
+private actor OrchestrationForwardingRecorder {
+    private var names: [String] = []
+
+    func record(_ event: DurableForwardingEvent) {
+        names.append(event.event.forwardingName)
+    }
+
+    func snapshot() -> [String] { names }
+}
+
 /// Orchestration harness (cleanup plan, Phase 1).
 ///
 /// Unlike the unit suites — which mock EventLog itself and therefore can
@@ -134,6 +144,39 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 // correctness cannot depend on the network.
                 let stored = await eventLog.getRecentEvents(limit: 10)
                 expect(stored.map(\.name)).to(contain("offline_event"))
+            }
+
+            it("forwards a durable capture once and does not replay it after relaunch") {
+                let firstRecorder = OrchestrationForwardingRecorder()
+                await eventLog.subscribeForwarding { event in
+                    await firstRecorder.record(event)
+                }
+                eventLog.track(
+                    SystemEventNames.appOpened,
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                await eventLog.drain()
+                await expect { await firstRecorder.snapshot() }
+                    .to(equal([SystemEventNames.appOpened]))
+                await eventLog.close()
+
+                let replayRecorder = OrchestrationForwardingRecorder()
+                let relaunchService = EventLog(
+                    identity: identity,
+                    sessions: sessions,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                await relaunchService.subscribeForwarding { event in
+                    await replayRecorder.record(event)
+                }
+                try await relaunchService.configure(configuration: config)
+                _ = await relaunchService.flushEvents()
+                await relaunchService.drain()
+                await expect { await replayRecorder.snapshot() }.to(beEmpty())
+                await relaunchService.close()
             }
         }
     }

@@ -286,13 +286,14 @@ final class EventLogDeliveryTests: AsyncSpec {
                 it("drains more than 1,000 durable pending events through a bounded delivery window") {
                     let expectedIds = (0..<1_005).map { "pending_\($0)" }
                     for (index, id) in expectedIds.enumerated() {
-                        try await mockStore.insertPending(
+                        _ = try await mockStore.insert(
                             StoredEvent(
                                 id: id,
                                 name: "pending_event_\(index)",
                                 timestamp: Date(timeIntervalSince1970: TimeInterval(index)),
                                 distinctId: "user123"
-                            )
+                            ),
+                            deliveryState: .pending
                         )
                     }
 
@@ -328,8 +329,8 @@ final class EventLogDeliveryTests: AsyncSpec {
                         timestamp: Date(timeIntervalSince1970: 2),
                         distinctId: "user123"
                     )
-                    try await mockStore.insertPending(oldest)
-                    try await mockStore.insertPending(older)
+                    _ = try await mockStore.insert(oldest, deliveryState: .pending)
+                    _ = try await mockStore.insert(older, deliveryState: .pending)
 
                     log = try await makeLog(
                         flushAt: 100,
@@ -963,7 +964,7 @@ final class EventLogDeliveryTests: AsyncSpec {
                         timestamp: Date(timeIntervalSince1970: 1),
                         distinctId: "user123"
                     )
-                    try await mockStore.insertPending(event)
+                    _ = try await mockStore.insert(event, deliveryState: .pending)
                     mockStore.shouldFailMarkDelivered = true
 
                     log = try await makeLog(
@@ -1132,7 +1133,7 @@ final class EventLogDeliveryTests: AsyncSpec {
                         timestamp: Date(timeIntervalSince1970: 1),
                         distinctId: "user123"
                     )
-                    try await mockStore.insertPending(event)
+                    _ = try await mockStore.insert(event, deliveryState: .pending)
                     mockStore.pendingDeliveryQueryDelay = 0.1
 
                     let flushTask = Task { await log.performFlush(forceSend: true) }

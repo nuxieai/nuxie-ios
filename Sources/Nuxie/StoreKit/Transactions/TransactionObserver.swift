@@ -1315,6 +1315,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     return false
                 }
 
+                let acceptedEvidence = storedEvidence()[transactionId]
                 syncedTransactionIds.insert(dedupeKey)
                 if let stored = storedEvidence()[transactionId],
                    retainEvidenceAfterSync
@@ -1330,12 +1331,22 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 }
 
                 if identityService.getDistinctId() == distinctId {
-                    eventSink.emit(SystemEventNames.purchaseSynced, properties: [
+                    var properties: [String: Any] = [
                         "transaction_id": transactionId,
                         "original_transaction_id": originalTransactionId ?? "",
                         "product_id": productId ?? "",
                         "customer_id": response.customerId ?? ""
-                    ])
+                    ]
+                    if let context = acceptedEvidence?.commercialContext {
+                        properties["experience_id"] = context.experienceId
+                        properties["experience_version"] =
+                            context.release.identity.experienceVersionId
+                        properties["placement_id"] = context.placementId
+                    }
+                    eventSink.emit(
+                        SystemEventNames.purchaseSynced,
+                        properties: properties
+                    )
                 }
 
                 return true
@@ -1527,14 +1538,21 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     throw NuxieNetworkError.invalidResponse
                 }
 
+                var purchaseSyncedProperties: [String: Any] = [
+                    "transaction_id": evidence.transactionId,
+                    "original_transaction_id": evidence.originalTransactionId,
+                    "product_id": evidence.productId,
+                    "customer_id": response.customerId
+                ]
+                if let context = evidence.commercialContext {
+                    purchaseSyncedProperties["experience_id"] = context.experienceId
+                    purchaseSyncedProperties["experience_version"] =
+                        context.release.identity.experienceVersionId
+                    purchaseSyncedProperties["placement_id"] = context.placementId
+                }
                 let purchaseSynced = await eventSink.capture(
                     SystemEventNames.purchaseSynced,
-                    properties: [
-                        "transaction_id": evidence.transactionId,
-                        "original_transaction_id": evidence.originalTransactionId,
-                        "product_id": evidence.productId,
-                        "customer_id": response.customerId
-                    ],
+                    properties: purchaseSyncedProperties,
                     eventId: purchaseSyncedEventId(evidence: evidence),
                     distinctId: distinctId
                 )

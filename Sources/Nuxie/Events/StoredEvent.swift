@@ -114,6 +114,17 @@ struct StoredEvent: Codable, Sendable {
     func getPropertiesDictForIR() throws -> [String: Any] {
         try getProperties().mapValues { $0.value }
     }
+
+    /// Canonical replay identity. Session is deliberately excluded because it
+    /// is a query index derived from properties, not part of the event bytes.
+    func isByteEquivalent(to other: StoredEvent) -> Bool {
+        id == other.id
+            && name == other.name
+            && properties == other.properties
+            && Int64(timestamp.timeIntervalSince1970 * 1_000)
+                == Int64(other.timestamp.timeIntervalSince1970 * 1_000)
+            && distinctId == other.distinctId
+    }
 }
 
 /// Error types for event storage operations

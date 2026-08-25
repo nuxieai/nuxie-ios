@@ -62,6 +62,12 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(AnyCodable.self)
     requireSendable(AppActionValue.self)
     requireSendable(AppAction.self)
+    requireSendable(NuxieActivityInfo.self)
+    requireSendable(NuxieActivityValue.self)
+    requireSendable(NuxieActivity.self)
+    requireSendable(DismissReason.self)
+    requireSendable(PurchaseInfo.self)
+    requireSendable(PermissionKind.self)
 
     // Features / entitlements
     requireSendable(FeatureAccess.self)
@@ -236,6 +242,15 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
 
     func nuxie(_ sdk: NuxieSDK, didRequestAppAction action: AppAction) {
       _ = action.experience
+    }
+
+    func nuxieDidEmit(_ info: NuxieActivityInfo) {
+      _ = info.id
+      _ = info.timestamp
+      _ = info.receivedAt
+      _ = info.activity
+      _ = info.name
+      _ = info.properties
     }
   }
 

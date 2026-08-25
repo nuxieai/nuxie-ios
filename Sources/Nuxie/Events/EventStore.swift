@@ -11,6 +11,11 @@ enum StableEventCaptureOutcome: Sendable {
   case ownershipLost
 }
 
+enum EventDeliveryState: Int32, Sendable {
+  case pending = 0
+  case delivered = 2
+}
+
 /// The device ownership that must still be current when an SDK-authored
 /// journey fact is durably committed.
 struct JourneyEventOwnership: Hashable, Sendable {
@@ -31,21 +36,12 @@ protocol EventStoreProtocol: Sendable {
   func reset() async
   func close() async
 
-  /// Insert a history-only row (already delivered by a direct-send path, or
-  /// deliberately excluded from batch delivery).
-  func insertHistory(_ event: StoredEvent) async throws
-
-  /// Insert a history-only row unless its stable id already exists.
-  /// Returns whether the row was newly committed.
-  func insertHistoryIfAbsent(_ event: StoredEvent) async throws -> Bool
-
-  /// Insert the canonical captured record (stored row == wire payload)
-  /// marked pending network delivery.
-  func insertPending(_ event: StoredEvent) async throws
-
-  /// Insert a pending row unless its stable id already exists.
-  /// Returns whether the row was newly committed.
-  func insertPendingIfAbsent(_ event: StoredEvent) async throws -> Bool
+  /// Insert the canonical captured record unless its stable id already
+  /// exists. Returns true only when this call made the row durable.
+  func insert(
+    _ event: StoredEvent,
+    deliveryState: EventDeliveryState
+  ) async throws -> Bool
 
   /// Read or atomically establish the terminal outcome for a stable event ID.
   /// A dropped outcome is deliberately separate from event history/delivery.
@@ -168,13 +164,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     );
     """
 
-  /// delivery_state values. Rows default to .delivered so history written by
-  /// direct-delivery paths never re-sends.
-  public enum DeliveryState: Int32, Sendable {
-    case pending = 0
-    case delivered = 2
-  }
-
   private let createIndexSQL = [
     "CREATE INDEX IF NOT EXISTS idx_events_delivery ON events(delivery_state, timestamp);",
     "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);",
@@ -220,16 +209,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     """
 
   private let insertEventSQL = """
-    INSERT INTO events (id, name, properties, timestamp, user_id, session_id, delivery_state)
-    VALUES (?, ?, ?, ?, ?, ?, ?);
-    """
-
-  private let insertEventIfAbsentSQL = """
-    INSERT OR IGNORE INTO events (id, name, properties, timestamp, user_id, session_id)
-    VALUES (?, ?, ?, ?, ?, ?);
-    """
-
-  private let insertPendingEventIfAbsentSQL = """
     INSERT OR IGNORE INTO events (id, name, properties, timestamp, user_id, session_id, delivery_state)
     VALUES (?, ?, ?, ?, ?, ?, ?);
     """
@@ -960,11 +939,14 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Event Operations
 
-  /// Insert a new event into the database
-  /// - Parameter event: Event to store
-  /// - Throws: EventStorageError if insert fails
-  public func insertEvent(_ event: StoredEvent, deliveryState: DeliveryState = .delivered) throws {
-    LogDebug("SQLiteEventStore.insertEvent - id: \(event.id), name: \(event.name)")
+  /// Insert a new event into the database, or validate an existing stable id.
+  /// The ignored path compares the canonical stored bytes so a legitimate
+  /// replay remains benign while a conflicting reuse is diagnosed.
+  public func insert(
+    _ event: StoredEvent,
+    deliveryState: EventDeliveryState
+  ) throws -> Bool {
+    LogDebug("SQLiteEventStore.insert - id: \(event.id), name: \(event.name)")
     
     guard let db = db else {
       LogError("Database not initialized!")
@@ -1012,89 +994,27 @@ actor SQLiteEventStore: EventStoreProtocol {
         NSError(domain: "SQLite", code: 4, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
     }
     
-    LogDebug("Successfully inserted event into database: \(event.name)")
-  }
-
-  /// Insert an event unless its stable id has already been committed.
-  func insertEventIfAbsent(
-    _ event: StoredEvent,
-    sql: String? = nil
-  ) throws -> Bool {
-    guard let db = db else {
-      throw EventStorageError.databaseNotInitialized
+    let newlyDurable = sqlite3_changes(db) == 1
+    guard !newlyDurable else {
+      LogDebug("Successfully inserted event into database: \(event.name)")
+      return true
     }
 
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-
-    if sqlite3_prepare_v2(
-      db,
-      sql ?? insertEventIfAbsentSQL,
-      -1,
-      &statement,
-      nil
-    ) != SQLITE_OK {
-      let errorMessage = String(cString: sqlite3_errmsg(db))
-      throw EventStorageError.insertFailed(
-        NSError(domain: "SQLite", code: 3, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
-    }
-
-    sqlite3_bind_text(statement, 1, event.id, -1, SQLITE_TRANSIENT)
-    sqlite3_bind_text(statement, 2, event.name, -1, SQLITE_TRANSIENT)
-    _ = event.properties.withUnsafeBytes { bytes in
-      sqlite3_bind_blob(statement, 3, bytes.baseAddress, Int32(bytes.count), SQLITE_TRANSIENT)
-    }
-    sqlite3_bind_int64(statement, 4, Int64(event.timestamp.timeIntervalSince1970 * 1000))
-    sqlite3_bind_text(statement, 5, event.distinctId, -1, SQLITE_TRANSIENT)
-    if let sessionId = event.sessionId {
-      sqlite3_bind_text(statement, 6, sessionId, -1, SQLITE_TRANSIENT)
-    } else {
-      sqlite3_bind_null(statement, 6)
-    }
-
-    guard sqlite3_step(statement) == SQLITE_DONE else {
-      let errorMessage = String(cString: sqlite3_errmsg(db))
-      throw EventStorageError.insertFailed(
-        NSError(domain: "SQLite", code: 4, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
-    }
-
-    return sqlite3_changes(db) == 1
-  }
-
-  func insertPendingEventIfAbsent(_ event: StoredEvent) throws -> Bool {
-    guard let db = db else {
-      throw EventStorageError.databaseNotInitialized
-    }
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-    guard sqlite3_prepare_v2(db, insertPendingEventIfAbsentSQL, -1, &statement, nil) == SQLITE_OK else {
-      throw EventStorageError.insertFailed(
-        NSError(domain: "SQLite", code: 3, userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))])
+    guard let stored = try queryEvent(id: event.id) else {
+      throw EventStorageError.queryFailed(
+        NSError(
+          domain: "SQLite",
+          code: 48,
+          userInfo: [NSLocalizedDescriptionKey: "Ignored event row disappeared"]
+        )
       )
     }
-    sqlite3_bind_text(statement, 1, event.id, -1, SQLITE_TRANSIENT)
-    sqlite3_bind_text(statement, 2, event.name, -1, SQLITE_TRANSIENT)
-    _ = event.properties.withUnsafeBytes { bytes in
-      sqlite3_bind_blob(statement, 3, bytes.baseAddress, Int32(bytes.count), SQLITE_TRANSIENT)
-    }
-    sqlite3_bind_int64(statement, 4, Int64(event.timestamp.timeIntervalSince1970 * 1000))
-    sqlite3_bind_text(statement, 5, event.distinctId, -1, SQLITE_TRANSIENT)
-    if let sessionId = event.sessionId {
-      sqlite3_bind_text(statement, 6, sessionId, -1, SQLITE_TRANSIENT)
-    } else {
-      sqlite3_bind_null(statement, 6)
-    }
-    sqlite3_bind_int(statement, 7, DeliveryState.pending.rawValue)
-    guard sqlite3_step(statement) == SQLITE_DONE else {
-      throw EventStorageError.insertFailed(
-        NSError(domain: "SQLite", code: 4, userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))])
+    if !stored.isByteEquivalent(to: event) {
+      LogError(
+        "Event id collision for \(event.id): stored '\(stored.name)', attempted '\(event.name)'"
       )
     }
-    return sqlite3_changes(db) == 1
-  }
-
-  public func insertHistoryIfAbsent(_ event: StoredEvent) async throws -> Bool {
-    try insertEventIfAbsent(event)
+    return false
   }
 
   public func queryStableCapture(
@@ -1166,7 +1086,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       )
     }
     if let event {
-      let inserted = try insertPendingEventIfAbsent(event)
+      let inserted = try insert(event, deliveryState: .pending)
       guard let canonical = try queryEvent(id: eventId) else {
         throw EventStorageError.queryFailed(
           NSError(
@@ -1764,14 +1684,22 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   private func deleteAgedDeliveredEvents(olderThanMs: Int64) throws -> Int {
     guard let db else { throw EventStorageError.databaseNotInitialized }
-    let sql = "DELETE FROM events WHERE timestamp < ? AND delivery_state = ?;"
+    let sql = """
+      DELETE FROM events
+      WHERE timestamp < ?
+        AND delivery_state = ?
+        AND COALESCE(
+          json_extract(CAST(properties AS TEXT), '$.\"$nuxie_event_origin\"'),
+          'device'
+        ) != 'server';
+      """
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
     guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
       throw coverageDeleteError(code: 38)
     }
     sqlite3_bind_int64(statement, 1, olderThanMs)
-    sqlite3_bind_int(statement, 2, DeliveryState.delivered.rawValue)
+    sqlite3_bind_int(statement, 2, EventDeliveryState.delivered.rawValue)
     guard sqlite3_step(statement) == SQLITE_DONE else {
       throw coverageDeleteError(code: 39)
     }
@@ -1788,6 +1716,10 @@ actor SQLiteEventStore: EventStoreProtocol {
       SELECT MAX(timestamp) FROM (
         SELECT timestamp FROM events
         WHERE delivery_state = ?
+          AND COALESCE(
+            json_extract(CAST(properties AS TEXT), '$.\"$nuxie_event_origin\"'),
+            'device'
+          ) != 'server'
         ORDER BY timestamp ASC, id ASC
         LIMIT ?
       );
@@ -1797,7 +1729,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     guard sqlite3_prepare_v2(db, boundarySQL, -1, &boundaryStatement, nil) == SQLITE_OK else {
       throw coverageQueryError(code: 40)
     }
-    sqlite3_bind_int(boundaryStatement, 1, DeliveryState.delivered.rawValue)
+    sqlite3_bind_int(boundaryStatement, 1, EventDeliveryState.delivered.rawValue)
     sqlite3_bind_int64(boundaryStatement, 2, Int64(limit))
     guard sqlite3_step(boundaryStatement) == SQLITE_ROW else {
       throw coverageQueryError(code: 41)
@@ -1809,6 +1741,10 @@ actor SQLiteEventStore: EventStoreProtocol {
       DELETE FROM events WHERE id IN (
         SELECT id FROM events
         WHERE delivery_state = ?
+          AND COALESCE(
+            json_extract(CAST(properties AS TEXT), '$.\"$nuxie_event_origin\"'),
+            'device'
+          ) != 'server'
         ORDER BY timestamp ASC, id ASC
         LIMIT ?
       );
@@ -1818,7 +1754,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     guard sqlite3_prepare_v2(db, deleteSQL, -1, &deleteStatement, nil) == SQLITE_OK else {
       throw coverageDeleteError(code: 42)
     }
-    sqlite3_bind_int(deleteStatement, 1, DeliveryState.delivered.rawValue)
+    sqlite3_bind_int(deleteStatement, 1, EventDeliveryState.delivered.rawValue)
     sqlite3_bind_int64(deleteStatement, 2, Int64(limit))
     guard sqlite3_step(deleteStatement) == SQLITE_DONE else {
       throw coverageDeleteError(code: 43)
@@ -2319,7 +2255,7 @@ actor SQLiteEventStore: EventStoreProtocol {
         NSError(domain: "SQLite", code: 20, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
     }
 
-    sqlite3_bind_int(statement, 1, DeliveryState.pending.rawValue)
+    sqlite3_bind_int(statement, 1, EventDeliveryState.pending.rawValue)
     sqlite3_bind_int64(statement, 2, Int64(limit))
 
     var events: [StoredEvent] = []
@@ -2363,7 +2299,7 @@ actor SQLiteEventStore: EventStoreProtocol {
         NSError(domain: "SQLite", code: 25, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
     }
 
-    sqlite3_bind_int(statement, 1, DeliveryState.pending.rawValue)
+    sqlite3_bind_int(statement, 1, EventDeliveryState.pending.rawValue)
     guard sqlite3_step(statement) == SQLITE_ROW else {
       let errorMessage = String(cString: sqlite3_errmsg(db))
       throw EventStorageError.queryFailed(
@@ -2382,7 +2318,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
-    let sql = "UPDATE events SET delivery_state = \(DeliveryState.delivered.rawValue) WHERE id IN (\(placeholders));"
+    let sql = "UPDATE events SET delivery_state = \(EventDeliveryState.delivered.rawValue) WHERE id IN (\(placeholders));"
 
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
@@ -2517,21 +2453,5 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     return events
-  }
-}
-
-// MARK: - EventStoreProtocol delivery-state entry points
-
-extension SQLiteEventStore {
-  public func insertHistory(_ event: StoredEvent) throws {
-    try insertEvent(event, deliveryState: .delivered)
-  }
-
-  public func insertPending(_ event: StoredEvent) throws {
-    try insertEvent(event, deliveryState: .pending)
-  }
-
-  public func insertPendingIfAbsent(_ event: StoredEvent) throws -> Bool {
-    try insertPendingEventIfAbsent(event)
   }
 }

@@ -88,8 +88,14 @@ final class ServerFactCommitTests: AsyncSpec {
                 )
                 await api.setTrackEventResponse(EventResponse(status: "ok", facts: [fact]))
 
-                _ = try await eventLog.trackWithResponse("purchase", properties: nil)
-                _ = try await eventLog.trackWithResponse("purchase", properties: nil)
+                _ = try await eventLog.trackWithResponse(
+                    JourneyEvents.journeyTransition,
+                    properties: nil
+                )
+                _ = try await eventLog.trackWithResponse(
+                    JourneyEvents.journeyTransition,
+                    properties: nil
+                )
                 await eventLog.drain()
 
                 let committed = eventStore.storedEvents.filter { $0.id == fact.id }
@@ -112,7 +118,10 @@ final class ServerFactCommitTests: AsyncSpec {
                 await expect { await eventLog.getQueuedEventCount() }.to(equal(0))
 
                 let sentNames = await api.sentEvents.map(\.name)
-                expect(sentNames).to(equal(["purchase", "purchase"]))
+                expect(sentNames).to(equal([
+                    JourneyEvents.journeyTransition,
+                    JourneyEvents.journeyTransition,
+                ]))
             }
 
             it("commits effect completions through the same subscriber lane") {
