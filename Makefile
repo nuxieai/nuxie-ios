@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -73,6 +73,7 @@ help:
 	@echo "  check-local-runtime-xcframework - Structurally validate an explicitly selected local runtime"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
 	@echo "  check-public-api    - Reject accidental changes to the supported SDK facade"
+	@echo "  check-event-catalog - Validate event catalog emitters against SDK sources"
 	@echo "  check-product-neutrality - Reject Editor-product-specific SDK support"
 	@echo "  test-product-neutrality - Prove the product-neutrality guard fails closed"
 	@echo "  check-runtime-module-boundary - Enforce SDK -> Swift runtime -> FFI layering"
@@ -101,12 +102,17 @@ check-storekit-test-toolchain:
 install-deps:
 	@echo "Installing XcodeGen..."
 	@brew install xcodegen || echo "Homebrew not found. Please install XcodeGen manually: https://github.com/yonaskolb/XcodeGen"
+	@echo "Installing jq (event catalog gate)..."
+	@command -v jq >/dev/null 2>&1 || brew install jq || echo "Homebrew not found. Please install jq manually: https://jqlang.github.io/jq/"
 
 check-privacy-manifest:
 	@scripts/validate-privacy-manifest.py Sources/Nuxie/PrivacyInfo.xcprivacy
 
 check-public-api:
 	@scripts/check-public-api.sh
+
+check-event-catalog:
+	@scripts/check-event-catalog.sh
 
 check-product-neutrality:
 	@scripts/check-product-neutrality.sh
@@ -297,7 +303,7 @@ test-flow-runtime-ui: test-experience-runtime-ui
 
 # The holistic gate: iOS unit + focused native-runtime + integration
 # (orchestration + conformance-fixture runners live in these schemes) + macOS unit.
-test-all: check-sdk-guidance check-provider-adapters
+test-all: check-sdk-guidance check-provider-adapters check-event-catalog
 	@$(MAKE) test-unit
 	@$(MAKE) test-native-runtime
 	@$(MAKE) test-integration

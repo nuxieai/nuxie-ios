@@ -121,9 +121,10 @@ compiles for macOS.
   the baseline.
 - **`$`-prefixed events are internal** ($identify, $app_opened, $journey_*,
   $experience_*, $purchase_*). User events never start with `$`. The canonical
-  catalog (names, properties, delivery guarantees) is `docs/sdk-events.md`;
-  emit only through the constants in `JourneyEvents`/`SystemEventNames` —
-  never bare `$...` string literals.
+  machine contract is `fixtures/events/catalog.json`; its derived human view is
+  `docs/events-catalog.md`, while `docs/sdk-events.md` contains supplementary
+  behavioral guidance. Emit only through the constants in
+  `JourneyEvents`/`SystemEventNames` — never bare `$...` string literals.
 - **Batch delivery idempotency**: wire batch items carry the event's UUIDv7 id
   as `idempotency_key` (see fixtures/events/batch-item-encoding.json).
 - **Committed-events ordering**: `EventLog` announces an event to subscribers

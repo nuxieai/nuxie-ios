@@ -62,6 +62,7 @@
     {
       "event": "$experiment_exposure",
       "properties": [
+        "assignment_source",
         "experience_id",
         "experience_version",
         "experiment_key",

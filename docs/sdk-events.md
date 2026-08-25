@@ -1,52 +1,27 @@
-# SDK execution events
+# SDK execution event guidance
+
+The canonical machine-readable event contract is
+[`fixtures/events/catalog.json`](../fixtures/events/catalog.json). Its derived
+human-readable view is [`docs/events-catalog.md`](events-catalog.md). This page
+contains supplementary behavioral guidance rather than an event catalog.
 
 Nuxie iOS emits the Experience Execution journey event family through the
-normal event pipeline. These names and properties are reserved; applications
-should not emit them directly.
+normal event pipeline. These names are reserved; applications should not emit
+them directly.
 
-## Journey events
-
-| Event | Properties | Producer |
-| --- | --- | --- |
-| `$journey_enrolled` | `journey_id`, `epoch`, `experience_id`, `experience_version`, `trigger_ref`, `plane`, `settings_snapshot` | Device |
-| `$journey_transition` | `journey_id`, `epoch`, optional `from_node`, `to_node`, `region`, `plane` | Device |
-| `$journey_milestone` | `journey_id`, `epoch`, `milestone_id` | Device |
-| `$journey_converted` | `journey_id`, `epoch`, `experience_id`, `experience_version`, `at`, `source_fact_ref` | Device evaluator or server down-fact |
-| `$journey_exited` | `journey_id`, `epoch`, `reason`, `at`, optional `dismissed_by` (`host` when `NuxieSDK.dismiss()` initiated the exit) | Device |
-| `$journey_effect_requested` | `journey_id`, `epoch`, `node_id`, deterministic `invocation_id`, `effect`, bounded `payload` | Device durable queue |
-| `$journey_effect_completed` | `journey_id`, `node_id`, `invocation_id`, `status`, optional `result` or `error` | Server down-fact |
-| `$journey_claimed` | `journey_id`, offered `epoch`, stable `claimant` | Device decision lane |
-| `$journey_handoff` | `journey_id`, `epoch`, `direction`, versioned `envelope` | Device decision lane |
-| `$journey_parked` | `journey_id`, `epoch`, versioned `checkpoint`, optional `pending_deadline_at`, `reason` (`background` or `wait`) | Device durable decision queue |
-| `$journey_superseded` | `journey_id`, optional `winner_journey_id` | Server down-fact |
+## Journey and experience behavior
 
 `settings_snapshot` freezes the goal, conversion anchor and time, optional
 goal-window end, and `end_on_goal` policy used for that run. The ownership
 epoch changes only when ownership moves between server and device. Every
 device-authored `$journey_*` fact carries the epoch the device owns.
 
-## Experience presentation events
-
-| Event | Properties |
-| --- | --- |
-| `$experience_shown` | `journey_id`, `experience_id`, `experience_version` |
-| `$experience_dismissed` | `journey_id`, `experience_id`, `experience_version` |
-| `$experience_purchased` | `journey_id`, `experience_id`, `experience_version`, optional `product_id` |
-| `$experience_timed_out` | `journey_id`, `experience_id`, `experience_version` |
-| `$experience_errored` | `journey_id`, `experience_id`, `experience_version`, optional `error_message` |
-| `$experience_artifact_load_succeeded` | `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash` |
-| `$experience_artifact_load_failed` | `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash`, optional `error_message` |
-
 The related `$customer_updated`, `$event_sent`, and `$app_action_requested` rider
 events carry `experience_id`. `$experiment_exposure` carries both
 `experience_id` and `experience_version`. Authored script events receive
 `journey_id`, `experience_id`, and `screen_id` from the runner.
 
-## Commerce events
-
-| Event | Properties | Producer |
-| --- | --- | --- |
-| `$purchase_synced` | `transaction_id`, `original_transaction_id`, `product_id`, `customer_id` | Store transaction sync or atomic purchase-backed feature use |
+## Commerce behavior
 
 For an atomic purchase-backed feature use, transport errors and non-2xx
 responses retain the scoped receipt evidence, emit no `$purchase_synced`, and

@@ -248,7 +248,8 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                             experimentKey: "experiment-1",
                             variantKey: "variant-1",
                             experienceVersion: "flow-version-1",
-                            isHoldout: false
+                            isHoldout: false,
+                            assignmentSource: "server"
                         )
                     ),
                 ]

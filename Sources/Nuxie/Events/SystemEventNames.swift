@@ -7,8 +7,9 @@ import Foundation
 /// Naming convention: `$<domain>_<past_tense_verb>` with snake_case
 /// property keys. All `$`-event emissions must reference these constants
 /// (or `JourneyEvents`) — no bare string literals at emitter sites.
-/// The full catalog (when each fires, properties, delivery guarantees)
-/// lives in `docs/sdk-events.md`.
+/// The canonical machine catalog (when each fires, properties, delivery
+/// guarantees) is `fixtures/events/catalog.json`; its human-readable view is
+/// `docs/events-catalog.md`.
 enum SystemEventNames {
     // Identity
     static let identify = "$identify"
