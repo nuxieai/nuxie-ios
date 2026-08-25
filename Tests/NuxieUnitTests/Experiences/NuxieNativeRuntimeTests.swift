@@ -688,15 +688,47 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             )
         ])
         XCTAssertEqual(empty.appliedCount, 1)
+        let emptySnapshot = try await runtime.snapshot()
+        XCTAssertEqual(
+            emptySnapshot.values.first {
+                $0.name == "selectedProductId"
+            }?.value,
+            .bytes(Data())
+        )
         let emptyRender = try await renderPixels(runtime, width: 320, height: 160)
         XCTAssertEqual(emptyRender.outcome.disposition, .presented)
+        XCTAssertGreaterThan(emptyRender.outcome.drawCalls, 0)
         XCTAssertNotEqual(emptyRender.pixels, initialRender.pixels)
-        XCTAssertGreaterThan(
-            emptyRender.inkPixelCount,
-            0,
-            "The literal prefix and suffix must remain when the bound run is empty"
+        let removedRunDifference = changedPixelExtent(
+            between: initialRender.pixels,
+            and: emptyRender.pixels,
+            width: 320
         )
-        XCTAssertLessThan(emptyRender.inkPixelCount, initialRender.inkPixelCount)
+        XCTAssertGreaterThan(
+            removedRunDifference.pixelCount,
+            0,
+            "Removing the bound run must change the rendered line"
+        )
+
+        let restored = try await runtime.mutateViewModel([
+            .setString(
+                instance: root,
+                path: "paywall/selectedProductId",
+                value: Data("before".utf8)
+            )
+        ])
+        XCTAssertEqual(restored.appliedCount, 1)
+        let restoredRender = try await renderPixels(runtime, width: 320, height: 160)
+        let restoredDifference = changedPixelExtent(
+            between: restoredRender.pixels,
+            and: initialRender.pixels,
+            width: 320
+        )
+        XCTAssertLessThan(
+            restoredDifference.pixelCount,
+            removedRunDifference.pixelCount / 2,
+            "Restoring the bound run must at least halve the visual distance to the original line"
+        )
 
         let longLocalizedValue =
             "votre période d’essai gratuite de quatre-vingt-dix jours avec toutes les fonctionnalités"
@@ -720,10 +752,19 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertGreaterThan(rendered.outcome.drawCalls, 0)
         XCTAssertNotEqual(rendered.pixels, initialRender.pixels)
         XCTAssertNotEqual(rendered.pixels, emptyRender.pixels)
-        XCTAssertGreaterThan(rendered.inkPixelCount, initialRender.inkPixelCount)
+        let longRunDifference = changedPixelExtent(
+            between: rendered.pixels,
+            and: emptyRender.pixels,
+            width: 320
+        )
         XCTAssertGreaterThan(
-            rendered.inkRowCount,
-            initialRender.inkRowCount,
+            longRunDifference.pixelCount,
+            removedRunDifference.pixelCount,
+            "A long localized value must affect more of the rendered line"
+        )
+        XCTAssertGreaterThan(
+            longRunDifference.rowSpan,
+            removedRunDifference.rowSpan,
             "A long localized value must wrap onto additional rendered rows"
         )
     }
@@ -830,9 +871,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         height: Int
     ) async throws -> (
         outcome: NuxieNativeRendererOutcome,
-        pixels: Data,
-        inkPixelCount: Int,
-        inkRowCount: Int
+        pixels: Data
     ) {
         let device = try await runtime.metalDevice().value
         let layer = CAMetalLayer()
@@ -895,19 +934,38 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         for row in 0..<height {
             pixels.append(source + row * bytesPerRow, count: width * bytesPerPixel)
         }
-        let background = Array(pixels.prefix(bytesPerPixel))
-        var inkPixelCount = 0
-        var inkRows = Set<Int>()
-        pixels.withUnsafeBytes { rawBuffer in
-            let bytes = rawBuffer.bindMemory(to: UInt8.self)
-            for offset in stride(from: 0, to: bytes.count, by: bytesPerPixel) {
-                if !bytes[offset..<(offset + bytesPerPixel)].elementsEqual(background) {
-                    inkPixelCount += 1
-                    inkRows.insert(offset / (width * bytesPerPixel))
+        return (outcome, pixels)
+    }
+
+    private func changedPixelExtent(
+        between first: Data,
+        and second: Data,
+        width: Int
+    ) -> (pixelCount: Int, rowSpan: Int) {
+        precondition(first.count == second.count)
+        let bytesPerPixel = 4
+        var pixelCount = 0
+        var minimumY = first.count / (width * bytesPerPixel)
+        var maximumY = -1
+        first.withUnsafeBytes { firstBuffer in
+            second.withUnsafeBytes { secondBuffer in
+                let firstBytes = firstBuffer.bindMemory(to: UInt8.self)
+                let secondBytes = secondBuffer.bindMemory(to: UInt8.self)
+                for offset in stride(from: 0, to: firstBytes.count, by: bytesPerPixel) {
+                    guard !firstBytes[offset..<(offset + bytesPerPixel)]
+                        .elementsEqual(secondBytes[offset..<(offset + bytesPerPixel)]) else {
+                        continue
+                    }
+                    let pixelIndex = offset / bytesPerPixel
+                    let y = pixelIndex / width
+                    pixelCount += 1
+                    minimumY = min(minimumY, y)
+                    maximumY = max(maximumY, y)
                 }
             }
         }
-        return (outcome, pixels, inkPixelCount, inkRows.count)
+        let rowSpan = maximumY >= minimumY ? maximumY - minimumY + 1 : 0
+        return (pixelCount, rowSpan)
     }
 
     private func makeLayer(
