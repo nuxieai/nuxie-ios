@@ -91,13 +91,21 @@ for arch in arm64 x86_64; do
     lipo "${macos}" -thin "${arch}" -output "${thin}"
     libraries+=("${thin}")
 done
+
+# Validate the declarations that an Apple consumer actually sees. The
+# committed generated header describes every platform extension behind
+# mutually exclusive feature guards, so scanning its raw text would treat
+# Android-only declarations as part of the Apple link contract.
+public_headers="${temporary}/public-headers-apple.h"
+xcrun --sdk iphoneos clang \
+    -E -P -x c \
+    -target arm64-apple-ios15.0 \
+    -I"${device_headers}" \
+    "${device_headers}/nux_product_extension.h" \
+    -o "${public_headers}"
+
 for library in "${libraries[@]}"; do
     symbols="${temporary}/$(basename "${library}").symbols"
-    public_headers="${temporary}/public-headers.h"
-    cat \
-        "${device_headers}/nux_capi.generated.h" \
-        "${device_headers}/nux_product_extension.h" \
-        > "${public_headers}"
     "${nm_tool}" -gjU "${library}" > "${symbols}"
     python3 "${script_dir}/apple_runtime_contract.py" \
         symbols \

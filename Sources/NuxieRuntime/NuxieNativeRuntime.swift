@@ -1322,8 +1322,8 @@ private enum NuxieNativeAppleAssetImporter {
         let callbackContext = NuxieNativeAppleAssetImportContext(
             externalAssets: externalAssets
         )
-        var hooks = NuxAppleAssetHooks()
-        hooks.struct_size = UInt32(MemoryLayout<NuxAppleAssetHooks>.size)
+        var hooks = NuxAssetHooks()
+        hooks.struct_size = UInt32(MemoryLayout<NuxAssetHooks>.size)
         hooks.context = Unmanaged.passUnretained(callbackContext).toOpaque()
         hooks.lookup_external_asset = lookupNativeExternalAsset
         hooks.decode_image = decodeNativeImage
@@ -1341,7 +1341,7 @@ private enum NuxieNativeAppleAssetImporter {
                 withUnsafePointer(to: &host) { hostPointer in
                     withUnsafePointer(to: &hooks) { hooksPointer in
                         config.host_commands = hostPointer
-                        config.apple_assets = hooksPointer
+                        config.asset_hooks = hooksPointer
                         config.expected_assets = assetsPointer.baseAddress
                         config.expected_asset_count = assetsPointer.count
                         return bytes.withUnsafeBytes { rawBytes in
