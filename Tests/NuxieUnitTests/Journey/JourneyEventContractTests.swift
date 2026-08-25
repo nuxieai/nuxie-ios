@@ -206,6 +206,8 @@ final class JourneyEventContractTests: QuickSpec {
                 expect(converted as NSDictionary).to(equal([
                     "journey_id": "journey-1",
                     "epoch": 7,
+                    "experience_id": "experience-1",
+                    "experience_version": "flow-version-1",
                     "at": Self.iso8601(at),
                     "source_fact_ref": "fact-1",
                 ] as NSDictionary))
