@@ -8,6 +8,8 @@
         "timestamp": "2026-07-22T18:04:11Z",
         "properties": {
           "journey_id": "journey-1",
+          "experience_id": "experience-1",
+          "experience_version": "flow-version-1",
           "at": "2026-07-22T18:04:10Z",
           "source_fact_ref": "purchase-1"
         }
@@ -18,6 +20,8 @@
         "timestamp": "2026-07-22T18:04:11Z",
         "properties": {
           "journey_id": "journey-1",
+          "experience_id": "experience-1",
+          "experience_version": "flow-version-1",
           "at": "2026-07-22T18:04:10Z",
           "source_fact_ref": "purchase-1"
         }

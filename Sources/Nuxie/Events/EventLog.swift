@@ -1711,6 +1711,8 @@ actor EventLog: EventLogProtocol {
       case .converted(let converted):
         properties = [
           "journey_id": converted.journeyId,
+          "experience_id": converted.experienceId,
+          "experience_version": converted.experienceVersion,
           "at": formatter.string(from: converted.at),
           "source_fact_ref": converted.sourceFactRef,
         ]
