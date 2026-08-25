@@ -27,7 +27,7 @@ Thank you for your interest in contributing to the Nuxie iOS SDK! We welcome con
 git clone https://github.com/your-fork/nuxie-ios.git
 cd nuxie-ios
 
-# Install dependencies (XcodeGen)
+# Install dependencies (XcodeGen, jq)
 make install-deps
 
 # Download and verify the pinned runtime XCFramework

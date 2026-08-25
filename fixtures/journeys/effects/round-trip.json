@@ -21,6 +21,7 @@
     "event": "$journey_effect_requested",
     "properties": {
       "journey_id": "journey-effect-fixture",
+      "epoch": 0,
       "node_id": "send-email",
       "invocation_id": "4562c1f4554117aa95ba73ac687f05873cfdf75e8ac4bc36f3476a99248d087d",
       "effect": {
@@ -42,6 +43,7 @@
     "timestamp": "2026-07-24T12:00:00Z",
     "properties": {
       "journey_id": "journey-effect-fixture",
+      "epoch": 0,
       "node_id": "send-email",
       "invocation_id": "4562c1f4554117aa95ba73ac687f05873cfdf75e8ac4bc36f3476a99248d087d",
       "status": "ok",

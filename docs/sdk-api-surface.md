@@ -77,9 +77,10 @@ Designer-authored Run App Action steps arrive through
 [Run App Action](run-app-action.md).
 
 Event names starting with `$` are reserved for the SDK ($identify,
-$app_opened, $journey_*, $experience_*, $purchase_*, $session_*). The full
-catalog — when each internal event fires, its properties, and delivery
-guarantees — is `docs/sdk-events.md`.
+$app_opened, $journey_*, $experience_*, $purchase_*). The canonical machine
+catalog, covering when each internal event fires, its properties, and delivery
+guarantees, is `fixtures/events/catalog.json`; its human-readable view is
+`docs/events-catalog.md`.
 
 The local event database is not a lifetime analytics store. Delivered history
 is retention-bounded, and authored lifetime conditions that require an exact
