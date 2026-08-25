@@ -139,6 +139,8 @@ final class JourneyEvents: Sendable {
         [
             "journey_id": journey.id,
             "epoch": journey.epoch,
+            "experience_id": journey.experienceId,
+            "experience_version": journey.experienceVersion,
             "at": iso8601(at),
             "source_fact_ref": sourceFactRef,
         ]
