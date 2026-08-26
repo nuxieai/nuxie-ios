@@ -678,7 +678,8 @@ actor TransactionService {
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
-                "reason": "already_owned"
+                "reason": "already_owned",
+                "test_store": usesTestStore,
             ])
             return PurchaseSyncResult()
 
@@ -690,7 +691,8 @@ actor TransactionService {
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
-                "reason": "subscription_change_required"
+                "reason": "subscription_change_required",
+                "test_store": usesTestStore,
             ])
             throw error
 
@@ -710,7 +712,8 @@ actor TransactionService {
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
-                "error": error.localizedDescription
+                "error": error.localizedDescription,
+                "test_store": usesTestStore,
             ])
             throw StoreKitError.purchaseFailed(error)
             

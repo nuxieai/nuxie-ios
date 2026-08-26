@@ -2,6 +2,7 @@ import Foundation
 
 enum JourneyDismissalSource: String, Sendable {
     case host
+    case user
 }
 
 /// Canonical Experiences event contracts.

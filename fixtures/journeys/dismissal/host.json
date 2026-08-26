@@ -20,14 +20,16 @@
       }
     },
     {
-      "name": "ordinary dismissal preserves the existing reason contract",
+      "name": "user dismissal preserves the wire reason and adds attribution",
       "reason": "dismissed",
+      "dismissedBy": "user",
       "expected": {
         "journey_id": "journey-dismissal-1",
         "experience_id": "experience-1",
         "experience_version": "flow-version-1",
         "epoch": 3,
         "reason": "cancelled",
+        "dismissed_by": "user",
         "at": "2026-08-23T00:00:00.000Z"
       }
     }

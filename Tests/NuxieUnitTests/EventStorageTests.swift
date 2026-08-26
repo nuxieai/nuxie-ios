@@ -155,6 +155,38 @@ final class EventStorageTests: AsyncSpec {
                 expect(canonical?.distinctId) == original.distinctId
             }
 
+            it("treats reordered JSON object keys as the same stable event") {
+                let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+                let first = StoredEvent(
+                    id: "canonical-json-id",
+                    name: SystemEventNames.appOpened,
+                    properties: Data(#"{"alpha":1,"beta":{"x":true,"y":2}}"#.utf8),
+                    timestamp: timestamp,
+                    distinctId: "customer-a",
+                    sessionId: nil
+                )
+                let reordered = StoredEvent(
+                    id: first.id,
+                    name: first.name,
+                    properties: Data(#"{"beta":{"y":2,"x":true},"alpha":1}"#.utf8),
+                    timestamp: timestamp,
+                    distinctId: first.distinctId,
+                    sessionId: nil
+                )
+
+                expect(first.isByteEquivalent(to: reordered)).to(beTrue())
+                let firstInserted = try await internalEventStore.insert(
+                    first,
+                    deliveryState: .delivered
+                )
+                let reorderedInserted = try await internalEventStore.insert(
+                    reordered,
+                    deliveryState: .delivered
+                )
+                expect(firstInserted).to(beTrue())
+                expect(reorderedInserted).to(beFalse())
+            }
+
             it("retains server-origin ids beyond the ordinary pruning horizon") {
                 let oldTimestamp = Date(timeIntervalSince1970: 100)
                 let serverFact = try StoredEvent(
@@ -170,7 +202,11 @@ final class EventStorageTests: AsyncSpec {
                     timestamp: oldTimestamp,
                     distinctId: "customer-a"
                 )
-                _ = try await internalEventStore.insert(serverFact, deliveryState: .delivered)
+                _ = try await internalEventStore.insert(
+                    serverFact,
+                    deliveryState: .delivered,
+                    origin: .server
+                )
                 _ = try await internalEventStore.insert(deviceEvent, deliveryState: .delivered)
                 _ = try await internalEventStore.readOrInitializeHistoryCoverage(
                     startingAt: .distantPast
@@ -191,6 +227,60 @@ final class EventStorageTests: AsyncSpec {
                 expect(retainedServerFact).notTo(beNil())
                 expect(prunedDeviceEvent).to(beNil())
                 expect(redeliveryWasNew) == false
+            }
+
+            it("prunes malformed device properties and advances coverage") {
+                let oldTimestamp = Date(timeIntervalSince1970: 100)
+                let corrupt = try StoredEvent(
+                    id: "corrupt-device-row",
+                    name: "corrupt",
+                    timestamp: oldTimestamp,
+                    distinctId: "customer-a"
+                )
+                _ = try await internalEventStore.insert(corrupt, deliveryState: .delivered)
+                _ = try await internalEventStore.readOrInitializeHistoryCoverage(
+                    startingAt: .distantPast
+                )
+                let databasePath = await internalEventStore.dbPath!
+                try executeSQLite(
+                    "UPDATE events SET properties = X'FF' WHERE id = 'corrupt-device-row';",
+                    at: databasePath
+                )
+
+                let result = try await internalEventStore.pruneHistory(
+                    keeping: 10,
+                    olderThan: Date(timeIntervalSince1970: 200)
+                )
+
+                expect(result.ageDeleted).to(equal(1))
+                expect(result.coverageStartingAt).to(equal(Date(timeIntervalSince1970: 200)))
+                let corruptRow = try await internalEventStore.queryEvent(id: corrupt.id)
+                expect(corruptRow).to(beNil())
+            }
+
+            it("prunes a device event that claims server origin in its properties") {
+                let spoofed = try StoredEvent(
+                    id: "spoofed-server-origin",
+                    name: SystemEventNames.appOpened,
+                    properties: [
+                        StoredEvent.originProperty: StoredEventOrigin.server.rawValue,
+                    ],
+                    timestamp: Date(timeIntervalSince1970: 100),
+                    distinctId: "customer-a"
+                )
+                _ = try await internalEventStore.insert(spoofed, deliveryState: .delivered)
+                _ = try await internalEventStore.readOrInitializeHistoryCoverage(
+                    startingAt: .distantPast
+                )
+
+                let result = try await internalEventStore.pruneHistory(
+                    keeping: 10,
+                    olderThan: Date(timeIntervalSince1970: 200)
+                )
+
+                expect(result.ageDeleted).to(equal(1))
+                let spoofedRow = try await internalEventStore.queryEvent(id: spoofed.id)
+                expect(spoofedRow).to(beNil())
             }
 
             it("should insert and query events correctly") {

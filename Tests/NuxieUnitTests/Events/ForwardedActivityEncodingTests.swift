@@ -44,6 +44,7 @@ final class ForwardedActivityEncodingTests: XCTestCase {
       properties: [
         "placement_id": "placement-1",
         "error": "Product resolution failed",
+        "test_store": true,
       ]
     ))
 
@@ -53,9 +54,58 @@ final class ForwardedActivityEncodingTests: XCTestCase {
     XCTAssertNil(info.productId)
     XCTAssertNil(info.storeProductId)
     XCTAssertEqual(info.placementId, "placement-1")
+    XCTAssertTrue(info.isTestStore)
     XCTAssertEqual(message, "Product resolution failed")
     XCTAssertNil(activity.wireProperties["product_id"])
     XCTAssertNil(activity.wireProperties["store_product_id"])
+  }
+
+  func testPendingAndCancelledPurchasesPreserveTestStoreStatus() throws {
+    let properties: [String: Any] = [
+      "placement_id": "placement-1",
+      "product_id": "product-1",
+      "store_product_id": "com.example.product",
+      "test_store": true,
+    ]
+    let pending = try XCTUnwrap(ActivityCuration.activity(
+      internalName: SystemEventNames.purchasePending,
+      properties: properties
+    ))
+    let cancelled = try XCTUnwrap(ActivityCuration.activity(
+      internalName: SystemEventNames.purchaseCancelled,
+      properties: properties
+    ))
+
+    guard case .purchasePending(let pendingInfo) = pending,
+          case .purchaseCancelled(let cancelledInfo) = cancelled else {
+      return XCTFail("Expected pending and cancelled purchase activities")
+    }
+    XCTAssertTrue(pendingInfo.isTestStore)
+    XCTAssertTrue(cancelledInfo.isTestStore)
+  }
+
+  func testJourneyUserDismissalAndGenuineCancellationRemainDistinct() throws {
+    let base: [String: Any] = [
+      "experience_id": "experience-1",
+      "experience_version": "version-1",
+      "journey_id": "journey-1",
+      "reason": "cancelled",
+    ]
+    let userDismissed = try XCTUnwrap(ActivityCuration.activity(
+      internalName: JourneyEvents.journeyExited,
+      properties: base.merging(["dismissed_by": "user"]) { _, new in new }
+    ))
+    let cancelled = try XCTUnwrap(ActivityCuration.activity(
+      internalName: JourneyEvents.journeyExited,
+      properties: base
+    ))
+
+    guard case .journeyEnded(_, let dismissedReason) = userDismissed,
+          case .journeyEnded(_, let cancelledReason) = cancelled else {
+      return XCTFail("Expected journeyEnded activities")
+    }
+    XCTAssertEqual(dismissedReason, .dismissed)
+    XCTAssertEqual(cancelledReason, .cancelled)
   }
 
   private static let ref = ExperienceRef(

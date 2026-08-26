@@ -2026,15 +2026,17 @@ extension ExperienceViewController {
         let transactionService = self.transactionService
 
         beginCommerceOperation {
-            guard let storeProduct = self.products.first(where: {
+            let resolvedStoreProduct = self.products.first(where: {
                 $0.placementId == placementId
-            }),
-            storeProduct.appStoreProduct != nil || storeProduct.isTestStoreProduct else {
+            })
+            guard let storeProduct = resolvedStoreProduct,
+                  storeProduct.appStoreProduct != nil || storeProduct.isTestStoreProduct else {
                 self.emitSystemEvent(
                     SystemEventNames.purchaseFailed,
                     properties: [
                         "placement_id": placementId,
-                        "error": "Resolved StoreKit product not found"
+                        "error": "Resolved StoreKit product not found",
+                        "test_store": resolvedStoreProduct?.isTestStoreProduct ?? false,
                     ]
                 )
                 return
@@ -2050,7 +2052,8 @@ extension ExperienceViewController {
                     properties: [
                         "placement_id": placementId,
                         "product_id": storeProduct.productId,
-                        "store_product_id": storeProduct.storeProductId
+                        "store_product_id": storeProduct.storeProductId,
+                        "test_store": storeProduct.isTestStoreProduct,
                     ]
                 )
             } catch StoreKitError.purchasePending {
@@ -2063,7 +2066,8 @@ extension ExperienceViewController {
                     properties: [
                         "placement_id": placementId,
                         "product_id": storeProduct.productId,
-                        "store_product_id": storeProduct.storeProductId
+                        "store_product_id": storeProduct.storeProductId,
+                        "test_store": storeProduct.isTestStoreProduct,
                     ]
                 )
             } catch StoreKitError.productTermsChanged {
@@ -2091,7 +2095,8 @@ extension ExperienceViewController {
                             "placement_id": placementId,
                             "product_id": storeProduct.productId,
                             "store_product_id": storeProduct.storeProductId,
-                            "reason": "product_terms_changed"
+                            "reason": "product_terms_changed",
+                            "test_store": storeProduct.isTestStoreProduct,
                         ]
                     )
                     self.performDismiss(reason: .error(error))
@@ -2113,7 +2118,8 @@ extension ExperienceViewController {
                         "placement_id": placementId,
                         "product_id": storeProduct.productId,
                         "store_product_id": storeProduct.storeProductId,
-                        "error": error.localizedDescription
+                        "error": error.localizedDescription,
+                        "test_store": storeProduct.isTestStoreProduct,
                     ]
                 )
             }

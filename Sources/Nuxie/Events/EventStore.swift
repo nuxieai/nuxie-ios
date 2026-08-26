@@ -29,6 +29,16 @@ struct EventHistoryPruneResult: Equatable, Sendable {
   let coverageStartingAt: Date
 }
 
+struct EventStoreInsertCommit: Sendable {
+  let newlyDurable: Bool
+  let commitSequence: UInt64?
+}
+
+struct StableEventCaptureCommit: Sendable {
+  let outcome: StableEventCaptureOutcome
+  let commitSequence: UInt64?
+}
+
 /// Persistence surface the event log writes through. One implementation
 /// (SQLite) in production; mocks in tests.
 protocol EventStoreProtocol: Sendable {
@@ -37,11 +47,14 @@ protocol EventStoreProtocol: Sendable {
   func close() async
 
   /// Insert the canonical captured record unless its stable id already
-  /// exists. Returns true only when this call made the row durable.
+  /// exists. When requested, the store assigns a sequence under the same
+  /// serialization that determines commit order.
   func insert(
     _ event: StoredEvent,
-    deliveryState: EventDeliveryState
-  ) async throws -> Bool
+    deliveryState: EventDeliveryState,
+    origin: StoredEventOrigin,
+    assigningCommitSequence: Bool
+  ) async throws -> EventStoreInsertCommit
 
   /// Read or atomically establish the terminal outcome for a stable event ID.
   /// A dropped outcome is deliberately separate from event history/delivery.
@@ -50,8 +63,9 @@ protocol EventStoreProtocol: Sendable {
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,
-    ownership: JourneyEventOwnership?
-  ) async throws -> StableEventCaptureOutcome
+    ownership: JourneyEventOwnership?,
+    assigningCommitSequence: Bool
+  ) async throws -> StableEventCaptureCommit
   /// Persist authoritative server evidence that this device no longer owns
   /// `journeyId` at `authoritativeEpoch` or any earlier epoch.
   func recordJourneyOwnershipLoss(
@@ -121,6 +135,19 @@ protocol EventStoreProtocol: Sendable {
 }
 
 extension EventStoreProtocol {
+  func insert(
+    _ event: StoredEvent,
+    deliveryState: EventDeliveryState,
+    origin: StoredEventOrigin = .device
+  ) async throws -> Bool {
+    try await insert(
+      event,
+      deliveryState: deliveryState,
+      origin: origin,
+      assigningCommitSequence: false
+    ).newlyDurable
+  }
+
   /// Preserve the existing generic stable-capture interface. Only
   /// journey-authored captures opt into the ownership fence.
   func commitStableCapture(
@@ -132,8 +159,24 @@ extension EventStoreProtocol {
       eventId: eventId,
       event: event,
       recordedAt: recordedAt,
-      ownership: nil
-    )
+      ownership: nil,
+      assigningCommitSequence: false
+    ).outcome
+  }
+
+  func commitStableCapture(
+    eventId: String,
+    event: StoredEvent?,
+    recordedAt: Date,
+    ownership: JourneyEventOwnership?
+  ) async throws -> StableEventCaptureOutcome {
+    try await commitStableCapture(
+      eventId: eventId,
+      event: event,
+      recordedAt: recordedAt,
+      ownership: ownership,
+      assigningCommitSequence: false
+    ).outcome
   }
 }
 
@@ -149,6 +192,7 @@ actor SQLiteEventStore: EventStoreProtocol {
   // from deinit, which has exclusive access to the last reference.
   private nonisolated(unsafe) var db: OpaquePointer?
   private(set) var dbPath: String?
+  private var nextCommitSequence: UInt64 = 0
 
   // MARK: - SQL Statements
 
@@ -160,7 +204,8 @@ actor SQLiteEventStore: EventStoreProtocol {
         timestamp INTEGER NOT NULL,
         user_id TEXT NOT NULL,
         session_id TEXT,
-        delivery_state INTEGER NOT NULL DEFAULT 2
+        delivery_state INTEGER NOT NULL DEFAULT 2,
+        origin TEXT NOT NULL DEFAULT 'device'
     );
     """
 
@@ -209,8 +254,9 @@ actor SQLiteEventStore: EventStoreProtocol {
     """
 
   private let insertEventSQL = """
-    INSERT OR IGNORE INTO events (id, name, properties, timestamp, user_id, session_id, delivery_state)
-    VALUES (?, ?, ?, ?, ?, ?, ?);
+    INSERT OR IGNORE INTO events (
+      id, name, properties, timestamp, user_id, session_id, delivery_state, origin
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
     """
 
   private let queryEventsSQL = """
@@ -577,8 +623,20 @@ actor SQLiteEventStore: EventStoreProtocol {
   }
 
   private func verifyEventsTable(targetVersion: Int32) throws {
-    _ = try verifyEventsBaseTable(targetVersion: targetVersion)
+    let columns = try verifyEventsBaseTable(targetVersion: targetVersion)
     try verifyDeliveryStateColumn(targetVersion: targetVersion)
+    guard let origin = columns["origin"],
+          origin.type.caseInsensitiveCompare("TEXT") == .orderedSame,
+          origin.isNotNull,
+          origin.defaultValue == "'device'"
+    else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify events.origin",
+        code: SQLITE_SCHEMA,
+        message: "events.origin must be TEXT NOT NULL DEFAULT 'device'"
+      )
+    }
   }
 
   @discardableResult
@@ -593,7 +651,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let columns = try tableColumns(named: "events", targetVersion: targetVersion)
-    guard columns.count == 7,
+    guard columns.count == 8,
           let id = columns["id"],
           id.type.caseInsensitiveCompare("TEXT") == .orderedSame,
           id.primaryKeyPosition == 1,
@@ -612,7 +670,8 @@ actor SQLiteEventStore: EventStoreProtocol {
           userId.isNotNull,
           let sessionId = columns["session_id"],
           sessionId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
-          !sessionId.isNotNull
+          !sessionId.isNotNull,
+          columns["origin"] != nil
     else {
       throw schemaError(
         targetVersion: targetVersion,
@@ -620,7 +679,8 @@ actor SQLiteEventStore: EventStoreProtocol {
         code: SQLITE_SCHEMA,
         message: "events must exactly define id TEXT PRIMARY KEY, name TEXT NOT NULL, "
           + "properties BLOB NOT NULL, timestamp INTEGER NOT NULL, user_id TEXT NOT NULL, "
-          + "nullable session_id TEXT, and delivery_state INTEGER NOT NULL DEFAULT 2"
+          + "nullable session_id TEXT, delivery_state INTEGER NOT NULL DEFAULT 2, "
+          + "and origin TEXT NOT NULL DEFAULT 'device'"
       )
     }
     return columns
@@ -935,6 +995,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       try? FileManager.default.removeItem(atPath: dbPath)
       self.dbPath = nil
     }
+    nextCommitSequence = 0
   }
 
   // MARK: - Event Operations
@@ -944,8 +1005,10 @@ actor SQLiteEventStore: EventStoreProtocol {
   /// replay remains benign while a conflicting reuse is diagnosed.
   public func insert(
     _ event: StoredEvent,
-    deliveryState: EventDeliveryState
-  ) throws -> Bool {
+    deliveryState: EventDeliveryState,
+    origin: StoredEventOrigin,
+    assigningCommitSequence: Bool
+  ) throws -> EventStoreInsertCommit {
     LogDebug("SQLiteEventStore.insert - id: \(event.id), name: \(event.name)")
     
     guard let db = db else {
@@ -985,6 +1048,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     sqlite3_bind_int(statement, 7, deliveryState.rawValue)
+    sqlite3_bind_text(statement, 8, origin.rawValue, -1, SQLITE_TRANSIENT)
 
     // Execute
     if sqlite3_step(statement) != SQLITE_DONE {
@@ -995,26 +1059,28 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
     
     let newlyDurable = sqlite3_changes(db) == 1
-    guard !newlyDurable else {
+    if newlyDurable {
       LogDebug("Successfully inserted event into database: \(event.name)")
-      return true
-    }
-
-    guard let stored = try queryEvent(id: event.id) else {
-      throw EventStorageError.queryFailed(
-        NSError(
-          domain: "SQLite",
-          code: 48,
-          userInfo: [NSLocalizedDescriptionKey: "Ignored event row disappeared"]
+    } else {
+      guard let stored = try queryEvent(id: event.id) else {
+        throw EventStorageError.queryFailed(
+          NSError(
+            domain: "SQLite",
+            code: 48,
+            userInfo: [NSLocalizedDescriptionKey: "Ignored event row disappeared"]
+          )
         )
-      )
+      }
+      if !stored.isByteEquivalent(to: event) {
+        LogError(
+          "Event id collision for \(event.id): stored '\(stored.name)', attempted '\(event.name)'"
+        )
+      }
     }
-    if !stored.isByteEquivalent(to: event) {
-      LogError(
-        "Event id collision for \(event.id): stored '\(stored.name)', attempted '\(event.name)'"
-      )
-    }
-    return false
+    return EventStoreInsertCommit(
+      newlyDurable: newlyDurable,
+      commitSequence: takeCommitSequence(if: assigningCommitSequence)
+    )
   }
 
   public func queryStableCapture(
@@ -1064,13 +1130,20 @@ actor SQLiteEventStore: EventStoreProtocol {
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,
-    ownership: JourneyEventOwnership?
-  ) throws -> StableEventCaptureOutcome {
+    ownership: JourneyEventOwnership?,
+    assigningCommitSequence: Bool
+  ) throws -> StableEventCaptureCommit {
     if let existing = try queryStableCapture(id: eventId) {
-      return existing
+      return StableEventCaptureCommit(
+        outcome: existing,
+        commitSequence: takeCommitSequence(if: assigningCommitSequence)
+      )
     }
     if let ownership, try hasJourneyOwnershipLoss(ownership) {
-      return .ownershipLost
+      return StableEventCaptureCommit(
+        outcome: .ownershipLost,
+        commitSequence: takeCommitSequence(if: assigningCommitSequence)
+      )
     }
     if let ownership,
        try hasUnresolvedJourneyOwnershipResponse(ownership) {
@@ -1086,7 +1159,12 @@ actor SQLiteEventStore: EventStoreProtocol {
       )
     }
     if let event {
-      let inserted = try insert(event, deliveryState: .pending)
+      let inserted = try insert(
+        event,
+        deliveryState: .pending,
+        origin: .device,
+        assigningCommitSequence: false
+      )
       guard let canonical = try queryEvent(id: eventId) else {
         throw EventStorageError.queryFailed(
           NSError(
@@ -1096,7 +1174,10 @@ actor SQLiteEventStore: EventStoreProtocol {
           )
         )
       }
-      return .captured(canonical, isNew: inserted)
+      return StableEventCaptureCommit(
+        outcome: .captured(canonical, isNew: inserted.newlyDurable),
+        commitSequence: takeCommitSequence(if: assigningCommitSequence)
+      )
     }
 
     guard let db else { throw EventStorageError.databaseNotInitialized }
@@ -1132,7 +1213,16 @@ actor SQLiteEventStore: EventStoreProtocol {
         )
       )
     }
-    return .dropped
+    return StableEventCaptureCommit(
+      outcome: .dropped,
+      commitSequence: takeCommitSequence(if: assigningCommitSequence)
+    )
+  }
+
+  private func takeCommitSequence(if requested: Bool) -> UInt64? {
+    guard requested else { return nil }
+    defer { nextCommitSequence &+= 1 }
+    return nextCommitSequence
   }
 
   public func recordJourneyOwnershipLoss(
@@ -1688,10 +1778,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       DELETE FROM events
       WHERE timestamp < ?
         AND delivery_state = ?
-        AND COALESCE(
-          json_extract(CAST(properties AS TEXT), '$.\"$nuxie_event_origin\"'),
-          'device'
-        ) != 'server';
+        AND origin != 'server';
       """
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
@@ -1716,10 +1803,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       SELECT MAX(timestamp) FROM (
         SELECT timestamp FROM events
         WHERE delivery_state = ?
-          AND COALESCE(
-            json_extract(CAST(properties AS TEXT), '$.\"$nuxie_event_origin\"'),
-            'device'
-          ) != 'server'
+          AND origin != 'server'
         ORDER BY timestamp ASC, id ASC
         LIMIT ?
       );
@@ -1741,10 +1825,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       DELETE FROM events WHERE id IN (
         SELECT id FROM events
         WHERE delivery_state = ?
-          AND COALESCE(
-            json_extract(CAST(properties AS TEXT), '$.\"$nuxie_event_origin\"'),
-            'device'
-          ) != 'server'
+          AND origin != 'server'
         ORDER BY timestamp ASC, id ASC
         LIMIT ?
       );

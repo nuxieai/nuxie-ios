@@ -20,6 +20,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
 
     // Storage (lock-guarded)
     private var _storedEvents: [StoredEvent] = []
+    private var _originsByEventId: [String: StoredEventOrigin] = [:]
     private var _pendingIds: Set<String> = []
     private var _deliveredIds: [String] = []
     private var _stableDroppedAt: [String: Date] = [:]
@@ -29,10 +30,18 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         [String: Set<JourneyEventOwnership>] = [:]
     private var _isInitialized = false
     private var _isClosed = false
+    private var _nextCommitSequence: UInt64 = 0
 
     public var storedEvents: [StoredEvent] {
         get { lock.withLock { _storedEvents } }
-        set { lock.withLock { _storedEvents = newValue } }
+        set {
+            lock.withLock {
+                _storedEvents = newValue
+                _originsByEventId = Dictionary(
+                    uniqueKeysWithValues: newValue.map { ($0.id, .device) }
+                )
+            }
+        }
     }
     /// Ids currently marked pending delivery (pending inserts minus markDelivered).
     public var pendingIds: Set<String> {
@@ -75,6 +84,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _shouldFailUnresolvedJourneyOwnershipResponseRecord = false
     private var _pendingDeliveryQueryDelay: TimeInterval = 0
     private var _pendingInsertDelayNanoseconds: UInt64 = 0
+    private var _suspendedInsertIds: Set<String> = []
+    private var _suspendedInsertContinuations: [String: CheckedContinuation<Void, Never>] = [:]
     private var _stableCaptureDelayNanoseconds: UInt64 = 0
     private var _stableCaptureCommitCallCount = 0
 
@@ -119,6 +130,20 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public var pendingInsertDelayNanoseconds: UInt64 {
         get { lock.withLock { _pendingInsertDelayNanoseconds } }
         set { lock.withLock { _pendingInsertDelayNanoseconds = newValue } }
+    }
+
+    /// Deterministically holds a selected insert before its durable commit.
+    /// Tests use this to interleave EventLog lanes without timing assumptions.
+    public func suspendInsert(id: String) {
+        lock.withLock { _suspendedInsertIds.insert(id) }
+    }
+
+    public func resumeInsert(id: String) {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            _suspendedInsertIds.remove(id)
+            return _suspendedInsertContinuations.removeValue(forKey: id)
+        }
+        continuation?.resume()
     }
     public var stableCaptureDelayNanoseconds: UInt64 {
         get { lock.withLock { _stableCaptureDelayNanoseconds } }
@@ -192,8 +217,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
 
     public func reset() async {
-        lock.withLock {
+        let suspended = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            let suspended = Array(_suspendedInsertContinuations.values)
             _storedEvents.removeAll()
+            _originsByEventId.removeAll()
             _pendingIds.removeAll()
             _stableDroppedAt.removeAll()
             _historyCoverageStart = nil
@@ -202,14 +229,21 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
+            _suspendedInsertIds.removeAll()
+            _suspendedInsertContinuations.removeAll()
+            _nextCommitSequence = 0
             _shouldFailOwnershipFenceRecord = false
+            return suspended
         }
+        suspended.forEach { $0.resume() }
     }
 
     public func insert(
         _ event: StoredEvent,
-        deliveryState: EventDeliveryState
-    ) async throws -> Bool {
+        deliveryState: EventDeliveryState,
+        origin: StoredEventOrigin,
+        assigningCommitSequence: Bool
+    ) async throws -> EventStoreInsertCommit {
         let delayNanoseconds = try lock.withLock {
             _storeEventCallCount += 1
             if _shouldFailStore {
@@ -220,6 +254,17 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         if delayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
+        let shouldSuspend = lock.withLock { _suspendedInsertIds.contains(event.id) }
+        if shouldSuspend {
+            await withCheckedContinuation { continuation in
+                let resumeImmediately = lock.withLock { () -> Bool in
+                    guard _suspendedInsertIds.contains(event.id) else { return true }
+                    _suspendedInsertContinuations[event.id] = continuation
+                    return false
+                }
+                if resumeImmediately { continuation.resume() }
+            }
+        }
         return lock.withLock {
             if let existing = _storedEvents.first(where: { $0.id == event.id }) {
                 if !existing.isByteEquivalent(to: event) {
@@ -227,13 +272,20 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                         "Event id collision for \(event.id): stored '\(existing.name)', attempted '\(event.name)'"
                     )
                 }
-                return false
+                return EventStoreInsertCommit(
+                    newlyDurable: false,
+                    commitSequence: takeCommitSequence(if: assigningCommitSequence)
+                )
             }
             _storedEvents.append(event)
+            _originsByEventId[event.id] = origin
             if deliveryState == .pending {
                 _pendingIds.insert(event.id)
             }
-            return true
+            return EventStoreInsertCommit(
+                newlyDurable: true,
+                commitSequence: takeCommitSequence(if: assigningCommitSequence)
+            )
         }
     }
 
@@ -253,8 +305,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         eventId: String,
         event: StoredEvent?,
         recordedAt: Date,
-        ownership: JourneyEventOwnership?
-    ) async throws -> StableEventCaptureOutcome {
+        ownership: JourneyEventOwnership?,
+        assigningCommitSequence: Bool
+    ) async throws -> StableEventCaptureCommit {
         let delayNanoseconds = lock.withLock {
             _stableCaptureCommitCallCount += 1
             return _stableCaptureDelayNanoseconds
@@ -266,13 +319,24 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _storeEventCallCount += 1
             if _shouldFailStore { throw mockError(2, "Mock store error") }
             if let existing = _storedEvents.first(where: { $0.id == eventId }) {
-                return .captured(existing, isNew: false)
+                return StableEventCaptureCommit(
+                    outcome: .captured(existing, isNew: false),
+                    commitSequence: takeCommitSequence(if: assigningCommitSequence)
+                )
             }
-            if _stableDroppedAt[eventId] != nil { return .dropped }
+            if _stableDroppedAt[eventId] != nil {
+                return StableEventCaptureCommit(
+                    outcome: .dropped,
+                    commitSequence: takeCommitSequence(if: assigningCommitSequence)
+                )
+            }
             if let ownership,
                (_journeyOwnershipFences[ownership.journeyId] ?? Int.min)
                 >= ownership.epoch {
-                return .ownershipLost
+                return StableEventCaptureCommit(
+                    outcome: .ownershipLost,
+                    commitSequence: takeCommitSequence(if: assigningCommitSequence)
+                )
             }
             if let ownership,
                _unresolvedJourneyOwnershipResponses.values
@@ -288,12 +352,25 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             }
             guard let event else {
                 _stableDroppedAt[eventId] = recordedAt
-                return .dropped
+                return StableEventCaptureCommit(
+                    outcome: .dropped,
+                    commitSequence: takeCommitSequence(if: assigningCommitSequence)
+                )
             }
             _storedEvents.append(event)
+            _originsByEventId[eventId] = .device
             _pendingIds.insert(eventId)
-            return .captured(event, isNew: true)
+            return StableEventCaptureCommit(
+                outcome: .captured(event, isNew: true),
+                commitSequence: takeCommitSequence(if: assigningCommitSequence)
+            )
         }
+    }
+
+    private func takeCommitSequence(if requested: Bool) -> UInt64? {
+        guard requested else { return nil }
+        defer { _nextCommitSequence &+= 1 }
+        return _nextCommitSequence
     }
 
     public func recordJourneyOwnershipLoss(
@@ -476,15 +553,19 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 .filter {
                     $0.timestamp < olderThan
                         && !_pendingIds.contains($0.id)
-                        && $0.origin != .server
+                        && _originsByEventId[$0.id, default: .device] != .server
                 }
                 .map(\.id))
             _storedEvents.removeAll { agedIds.contains($0.id) }
+            agedIds.forEach { _originsByEventId.removeValue(forKey: $0) }
             if !agedIds.isEmpty { coverage = max(coverage, Self.coverageDate(olderThan)) }
 
             let overCap = max(0, _storedEvents.count - keeping)
             let countCandidates = _storedEvents
-                .filter { !_pendingIds.contains($0.id) && $0.origin != .server }
+                .filter {
+                    !_pendingIds.contains($0.id)
+                        && _originsByEventId[$0.id, default: .device] != .server
+                }
                 .sorted {
                     if $0.timestamp == $1.timestamp { return $0.id < $1.id }
                     return $0.timestamp < $1.timestamp
@@ -498,6 +579,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 )
             }
             _storedEvents.removeAll { countIds.contains($0.id) }
+            countIds.forEach { _originsByEventId.removeValue(forKey: $0) }
             _pendingIds.subtract(countIds)
             _historyCoverageStart = coverage
             return EventHistoryPruneResult(
@@ -643,8 +725,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     // MARK: - Test Helpers
 
     public func resetMock() {
-        lock.withLock {
+        let suspended = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            let suspended = Array(_suspendedInsertContinuations.values)
             _storedEvents.removeAll()
+            _originsByEventId.removeAll()
             _pendingIds.removeAll()
             _deliveredIds.removeAll()
             _stableDroppedAt.removeAll()
@@ -654,6 +738,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
+            _suspendedInsertIds.removeAll()
+            _suspendedInsertContinuations.removeAll()
+            _nextCommitSequence = 0
             _initializeFailure = .none
             _shouldFailStore = false
             _shouldFailQuery = false
@@ -669,7 +756,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _journeyOwnershipFenceRecordCallCount = 0
             _journeyOwnershipFenceWriteCount = 0
             _currentSessionId = UUID.v7().uuidString
+            return suspended
         }
+        suspended.forEach { $0.resume() }
     }
 
     public func setSessionId(_ sessionId: String) {
@@ -691,6 +780,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 distinctId: distinctId
             )
             _storedEvents.append(event)
+            _originsByEventId[event.id] = .device
         }
     }
 }
