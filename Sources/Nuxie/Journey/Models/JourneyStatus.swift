@@ -75,6 +75,9 @@ public enum JourneyExitReason: String, Codable, Sendable {
     /// Unrecoverable error occurred
     case error = "error"
 
+    /// A server-authoritative owner superseded this run.
+    case superseded = "superseded"
+
     var executionReason: String {
         switch self {
         case .completed:
@@ -89,9 +92,13 @@ public enum JourneyExitReason: String, Codable, Sendable {
             return "time_limit"
         case .error:
             return "error"
+        case .superseded:
+            return "superseded"
         }
     }
 }
+
+extension JourneyExitReason: Equatable {}
 
 extension JourneyExitReason {
     /// Maps an exit action's reason string onto the exit-reason enum;
@@ -110,6 +117,8 @@ extension JourneyExitReason {
             return .error
         case "cancelled":
             return .cancelled
+        case "superseded":
+            return .superseded
         default:
             return .completed
         }

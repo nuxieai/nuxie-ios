@@ -176,11 +176,13 @@ final class EventLogTests: AsyncSpec {
                     try await log.configure(configuration: testConfig)
 
                     _ = try await log.trackWithResponse(
-                        "app_launched",
+                        JourneyEvents.journeyTransition,
                         properties: ["version": "1.0.0"]
                     )
 
-                    let stored = mockStore.storedEvents.first { $0.name == "app_launched" }
+                    let stored = mockStore.storedEvents.first {
+                        $0.name == JourneyEvents.journeyTransition
+                    }
                     expect(stored).toNot(beNil())
                     let props = stored?.getPropertiesDict() ?? [:]
                     expect(props["version"] as? String).to(equal("1.0.0"))

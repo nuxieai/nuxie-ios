@@ -724,8 +724,7 @@ final class ScreenEmissionRouter: Sendable {
         "$journey_converted", "$journey_exited", "$journey_effect_requested",
         "$journey_effect_completed", "$journey_claimed", "$journey_handoff",
         "$journey_parked", "$journey_superseded", "$experience_shown",
-        "$experience_dismissed", "$experience_purchased", "$experience_timed_out",
-        "$experience_errored", "$experience_artifact_load_succeeded",
+        "$experience_dismissed", "$experience_errored", "$experience_artifact_load_succeeded",
         "$experience_artifact_load_failed", "$experiment_exposure",
         "$experiment_exposure_fallback", "$experiment_exposure_error",
     ]

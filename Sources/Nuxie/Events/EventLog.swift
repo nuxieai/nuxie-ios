@@ -57,6 +57,7 @@ private struct TrackPayload: @unchecked Sendable {
   let name: String
   let properties: [String: Any]
   let forcedDistinctId: String  // snapshot at call site
+  let routeToSubscribers: Bool
 }
 
 private enum CaptureCommand: Sendable {
@@ -72,6 +73,27 @@ private enum RouteCommand: Sendable {
   case shutdown
 }
 
+private enum ForwardingResolution: Sendable {
+  case event(DurableForwardingEvent)
+  case skipped
+}
+
+private enum ForwardingCommand: Sendable {
+  case resolved(sequence: UInt64, ForwardingResolution)
+  case barrier(CheckedContinuation<Void, Never>)
+  case shutdown
+}
+
+private struct ForwardingAdmission: Sendable {
+  let sequence: UInt64
+  let receivedAt: Date
+}
+
+struct DurableForwardingEvent: Sendable {
+  let event: NuxieEvent
+  let receivedAt: Date
+}
+
 enum EventFlushStrategy: Equatable, Sendable {
   case none
   case eventLog
@@ -81,6 +103,12 @@ enum EventFlushStrategy: Equatable, Sendable {
 /// A committed-event subscriber callback. Invoked in commit order, after the
 /// event is persisted (pending delivery) and staged for the network.
 typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
+typealias ForwardingEventHandler = @Sendable (DurableForwardingEvent) async -> Void
+
+private struct ForwardingSubscriber: Sendable {
+  let isEnabled: @Sendable () -> Bool
+  let handler: ForwardingEventHandler
+}
 
 /// An exact, durably committed trigger event plus its independently running
 /// server round trip. Callers can route the committed event locally without
@@ -128,6 +156,14 @@ protocol EventCapturing: AnyObject, Sendable {
     properties: [String: Any]?,
     userProperties: [String: Any]?,
     userPropertiesSetOnce: [String: Any]?
+  )
+
+  /// Capture and deliver an internal mirrored event without feeding it back
+  /// through the ordinary journey-routing subscriber.
+  func trackWithoutRouting(
+    _ event: String,
+    properties: [String: Any]?,
+    distinctIdOverride: String
   )
   func track(
     _ event: String,
@@ -319,6 +355,13 @@ protocol EventLogProtocol:
     handler: @escaping CommittedEventHandler
   ) async
 
+  /// Subscribe only to rows made newly durable by this process. This stream
+  /// does not replay retained history and is independent from journey routing.
+  func subscribeForwarding(
+    when isEnabled: @escaping @Sendable () -> Bool,
+    handler: @escaping ForwardingEventHandler
+  ) async
+
   func onAppDidEnterBackground() async
   func onAppBecameActive() async
 
@@ -430,6 +473,10 @@ protocol EventLogProtocol:
 extension EventLogProtocol {
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
+  }
+
+  func subscribeForwarding(handler: @escaping ForwardingEventHandler) async {
+    await subscribeForwarding(when: { true }, handler: handler)
   }
 
   func getEventsForUser(
@@ -552,6 +599,12 @@ actor EventLog: EventLogProtocol {
   private var captureWorker: Task<Void, Never>?
   private nonisolated let routeContinuation: AsyncStream<RouteCommand>.Continuation
   private var routeWorker: Task<Void, Never>?
+  private nonisolated let forwardingContinuation:
+    AsyncStream<ForwardingCommand>.Continuation
+  private var forwardingWorker: Task<Void, Never>?
+  private var nextForwardingSequence: UInt64 = 0
+  private var nextForwardingSequenceToDeliver: UInt64 = 0
+  private var pendingForwardingResolutions: [UInt64: ForwardingResolution] = [:]
 
   // MARK: - Dependencies
 
@@ -573,6 +626,7 @@ actor EventLog: EventLogProtocol {
     let handler: CommittedEventHandler
   }
   private var subscribers: [Subscriber] = []
+  private var forwardingSubscribers: [ForwardingSubscriber] = []
 
   // MARK: - Delivery (durable queue + bounded in-memory window)
 
@@ -663,14 +717,26 @@ actor EventLog: EventLogProtocol {
     let routeStream = AsyncStream<RouteCommand> { routeCont = $0 }
     self.routeContinuation = routeCont
 
-    Task { await self.startWorkers(captureStream: captureStream, routeStream: routeStream) }
+    var forwardingCont: AsyncStream<ForwardingCommand>.Continuation!
+    let forwardingStream = AsyncStream<ForwardingCommand> { forwardingCont = $0 }
+    self.forwardingContinuation = forwardingCont
+
+    Task {
+      await self.startWorkers(
+        captureStream: captureStream,
+        routeStream: routeStream,
+        forwardingStream: forwardingStream
+      )
+    }
   }
 
   deinit {
     captureContinuation.finish()
     routeContinuation.finish()
+    forwardingContinuation.finish()
     captureWorker?.cancel()
     routeWorker?.cancel()
+    forwardingWorker?.cancel()
     flushTimerTask?.cancel()
     ownershipFenceRetryTasks.values.forEach { $0.cancel() }
     terminalRetirementRetryTasks.values.forEach { $0.cancel() }
@@ -678,7 +744,8 @@ actor EventLog: EventLogProtocol {
 
   private func startWorkers(
     captureStream: AsyncStream<CaptureCommand>,
-    routeStream: AsyncStream<RouteCommand>
+    routeStream: AsyncStream<RouteCommand>,
+    forwardingStream: AsyncStream<ForwardingCommand>
   ) {
     captureWorker = Task { [weak self] in
       for await cmd in captureStream {
@@ -692,6 +759,13 @@ actor EventLog: EventLogProtocol {
         guard let self else { return }
         await self.processRoute(cmd)
         if case .shutdown = cmd { return }
+      }
+    }
+    forwardingWorker = Task { [weak self] in
+      for await command in forwardingStream {
+        guard let self else { return }
+        await self.processForwarding(command)
+        if case .shutdown = command { return }
       }
     }
   }
@@ -772,6 +846,16 @@ actor EventLog: EventLogProtocol {
     subscribers.append(Subscriber(filter: filter, handler: handler))
   }
 
+  public func subscribeForwarding(
+    when isEnabled: @escaping @Sendable () -> Bool,
+    handler: @escaping ForwardingEventHandler
+  ) {
+    forwardingSubscribers.append(ForwardingSubscriber(
+      isEnabled: isEnabled,
+      handler: handler
+    ))
+  }
+
   // MARK: - Lifecycle
 
   public func onAppDidEnterBackground() async {
@@ -836,10 +920,25 @@ actor EventLog: EventLogProtocol {
     let payload = TrackPayload(
       name: event,
       properties: custom,
-      forcedDistinctId: distinctIdOverride
+      forcedDistinctId: distinctIdOverride,
+      routeToSubscribers: true
     )
 
     captureContinuation.yield(.track(payload))
+  }
+
+  public nonisolated func trackWithoutRouting(
+    _ event: String,
+    properties: [String: Any]?,
+    distinctIdOverride: String
+  ) {
+    guard !closeFlag.isClosed, !event.isEmpty else { return }
+    captureContinuation.yield(.track(TrackPayload(
+      name: event,
+      properties: properties ?? [:],
+      forcedDistinctId: distinctIdOverride,
+      routeToSubscribers: false
+    )))
   }
 
   public func trackWithResponse(
@@ -875,6 +974,10 @@ actor EventLog: EventLogProtocol {
     guard !event.isEmpty else {
       throw NuxieError.invalidConfiguration("Event name cannot be empty")
     }
+    assert(
+      event.hasPrefix("$"),
+      "trackWithResponse is reserved for platform-authored journey facts"
+    )
 
     // Wait for initialization
     await ready.wait()
@@ -924,7 +1027,11 @@ actor EventLog: EventLogProtocol {
     activeDirectDeliveryIds.insert(localEvent.id)
     var wasPersisted = false
     do {
-      try await store.insertPending(makeStoredEvent(from: localEvent))
+      _ = try await persist(
+        localEvent,
+        deliveryState: .pending,
+        receivedAt: localEvent.timestamp
+      )
       wasPersisted = true
       try await performCleanupIfNeeded()
     } catch {
@@ -1068,6 +1175,7 @@ actor EventLog: EventLogProtocol {
       localEvent = NuxieEvent(
         id: originalEvent.id,
         name: transformed.name,
+        forwardingName: originalEvent.forwardingName,
         distinctId: distinctId,
         properties: transformedProperties,
         timestamp: originalEvent.timestamp
@@ -1083,14 +1191,11 @@ actor EventLog: EventLogProtocol {
       // direct request rather than the batch lane.
       activeDirectDeliveryIds.insert(localEvent.id)
       do {
-        let stored = try StoredEvent(
-          id: localEvent.id,
-          name: localEvent.name,
-          properties: localEvent.properties,
-          timestamp: localEvent.timestamp,
-          distinctId: localEvent.distinctId
+        _ = try await persist(
+          localEvent,
+          deliveryState: .pending,
+          receivedAt: localEvent.timestamp
         )
-        try await store.insertPending(stored)
         wasPersisted = true
         try await performCleanupIfNeeded()
       } catch {
@@ -1331,6 +1436,7 @@ actor EventLog: EventLogProtocol {
           return NuxieEvent(
             id: eventId,
             name: transformed.name,
+            forwardingName: originalEvent.forwardingName,
             distinctId: distinctId,
             properties: transformedProperties,
             timestamp: originalEvent.timestamp
@@ -1344,16 +1450,40 @@ actor EventLog: EventLogProtocol {
          hasVolatileJourneyOwnershipLoss(ownership) {
         return .ownershipLost
       }
-      let outcome = try await store.commitStableCapture(
-        eventId: eventId,
-        event: transformedEvent.map(makeStoredEvent(from:)),
-        recordedAt: attemptedTimestamp,
-        ownership: ownership
-      )
-      if case .ownershipLost = outcome { return .ownershipLost }
+      let forwardingAdmission = forwardingAdmission(receivedAt: attemptedTimestamp)
+      let outcome: StableEventCaptureOutcome
+      do {
+        outcome = try await store.commitStableCapture(
+          eventId: eventId,
+          event: transformedEvent.map(makeStoredEvent(from:)),
+          recordedAt: attemptedTimestamp,
+          ownership: ownership
+        )
+      } catch {
+        resolveForwarding(forwardingAdmission, event: nil)
+        throw error
+      }
+      if case .ownershipLost = outcome {
+        resolveForwarding(forwardingAdmission, event: nil)
+        return .ownershipLost
+      }
       if transformedEvent == nil {
         LogDebug("Event '\(event)' terminally dropped by beforeSend hook")
       }
+      let newlyDurableEvent: NuxieEvent?
+      if case .captured(let stored, isNew: true) = outcome {
+        newlyDurableEvent = NuxieEvent(
+            id: stored.id,
+            name: stored.name,
+            forwardingName: event,
+            distinctId: stored.distinctId,
+            properties: stored.getPropertiesDict(),
+            timestamp: stored.timestamp
+        )
+      } else {
+        newlyDurableEvent = nil
+      }
+      resolveForwarding(forwardingAdmission, event: newlyDurableEvent)
       guard let capture = durableCapture(
         from: outcome,
         fallbackEvent: event,
@@ -1436,7 +1566,11 @@ actor EventLog: EventLogProtocol {
     activeDirectDeliveryIds.insert(event.id)
     var wasPersisted = false
     do {
-      _ = try await store.insertPendingIfAbsent(makeStoredEvent(from: event))
+      _ = try await persist(
+        event,
+        deliveryState: .pending,
+        receivedAt: event.timestamp
+      )
       wasPersisted = true
       try await performCleanupIfNeeded()
     } catch {
@@ -1683,14 +1817,26 @@ actor EventLog: EventLogProtocol {
 
   public func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent? {
     guard let beforeSend = configuration?.beforeSend else { return event }
-    return beforeSend(event)
+    guard let transformed = beforeSend(event) else { return nil }
+    return NuxieEvent(
+      id: transformed.id,
+      name: transformed.name,
+      forwardingName: event.forwardingName,
+      distinctId: transformed.distinctId,
+      properties: transformed.properties,
+      timestamp: transformed.timestamp
+    )
   }
 
   public func storePreparedEventInHistory(_ event: NuxieEvent) async {
     await ready.wait()
 
     do {
-      try await store.insertHistory(makeStoredEvent(from: event))
+      _ = try await persist(
+        event,
+        deliveryState: .delivered,
+        receivedAt: event.timestamp
+      )
       try await performCleanupIfNeeded()
     } catch {
       LogWarning("Failed to store prepared event locally: \(error)")
@@ -1704,6 +1850,7 @@ actor EventLog: EventLogProtocol {
 
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let receivedAt = dateProvider.now()
 
     for fact in facts {
       var properties: [String: Any]
@@ -1748,7 +1895,11 @@ actor EventLog: EventLogProtocol {
       )
 
       do {
-        let inserted = try await store.insertHistoryIfAbsent(makeStoredEvent(from: event))
+        let inserted = try await persist(
+          event,
+          deliveryState: .delivered,
+          receivedAt: receivedAt
+        )
         if inserted {
           try await performCleanupIfNeeded()
           routeContinuation.yield(.event(event))
@@ -2042,6 +2193,8 @@ actor EventLog: EventLogProtocol {
     captureContinuation.finish()
     routeContinuation.yield(.shutdown)
     routeContinuation.finish()
+    forwardingContinuation.yield(.shutdown)
+    forwardingContinuation.finish()
 
     flushTimerTask?.cancel()
     flushTimerTask = nil
@@ -2051,6 +2204,7 @@ actor EventLog: EventLogProtocol {
     // shared collaborators while a worker is still mid-command.
     await captureWorker?.value
     await routeWorker?.value
+    await forwardingWorker?.value
 
     await store.close()
     LogInfo("EventLog closed")
@@ -2066,7 +2220,7 @@ actor EventLog: EventLogProtocol {
       // buffer in the stream until the store opens.
       await ready.wait()
       guard let finalEvent = await buildEvent(from: payload) else { return }
-      await commit(finalEvent)
+      await commit(finalEvent, routeToSubscribers: payload.routeToSubscribers)
 
     case .flush(let cont):
       guard await ready.isOpen() else {
@@ -2106,21 +2260,93 @@ actor EventLog: EventLogProtocol {
     }
   }
 
+  private func processForwarding(_ command: ForwardingCommand) async {
+    switch command {
+    case .resolved(let sequence, let resolution):
+      pendingForwardingResolutions[sequence] = resolution
+      while let next = pendingForwardingResolutions.removeValue(
+        forKey: nextForwardingSequenceToDeliver
+      ) {
+        nextForwardingSequenceToDeliver &+= 1
+        guard case .event(let event) = next else { continue }
+        for subscriber in forwardingSubscribers where subscriber.isEnabled() {
+          await subscriber.handler(event)
+        }
+      }
+    case .barrier(let continuation):
+      continuation.resume()
+    case .shutdown:
+      LogDebug("[EventLog.forwarding] shutdown received")
+    }
+  }
+
+  /// The single ordinary persistence choke point. Every successful first
+  /// insert is announced to the forwarding-only stream from this method.
+  @discardableResult
+  private func persist(
+    _ event: NuxieEvent,
+    deliveryState: EventDeliveryState,
+    receivedAt: Date
+  ) async throws -> Bool {
+    let admission = forwardingAdmission(receivedAt: receivedAt)
+    let newlyDurable: Bool
+    do {
+      newlyDurable = try await store.insert(
+        makeStoredEvent(from: event),
+        deliveryState: deliveryState
+      )
+    } catch {
+      resolveForwarding(admission, event: nil)
+      throw error
+    }
+    resolveForwarding(admission, event: newlyDurable ? event : nil)
+    return newlyDurable
+  }
+
+  private func forwardingAdmission(receivedAt: Date) -> ForwardingAdmission? {
+    guard forwardingSubscribers.contains(where: { $0.isEnabled() }) else {
+      return nil
+    }
+    return ForwardingAdmission(
+      sequence: reserveForwardingSequence(),
+      receivedAt: receivedAt
+    )
+  }
+
+  private func reserveForwardingSequence() -> UInt64 {
+    defer { nextForwardingSequence &+= 1 }
+    return nextForwardingSequence
+  }
+
+  private func resolveForwarding(
+    _ admission: ForwardingAdmission?,
+    event: NuxieEvent?
+  ) {
+    guard let admission else { return }
+    let resolution = event.map {
+      ForwardingResolution.event(DurableForwardingEvent(
+        event: $0,
+        receivedAt: admission.receivedAt
+      ))
+    } ?? .skipped
+    forwardingContinuation.yield(.resolved(
+      sequence: admission.sequence,
+      resolution
+    ))
+  }
+
   /// Persist the canonical captured record (stored row == wire payload,
   /// marked pending), stage it for network delivery, then announce it to
   /// committed-event subscribers in order.
-  private func commit(_ event: NuxieEvent) async {
+  private func commit(_ event: NuxieEvent, routeToSubscribers: Bool) async {
     extractUserProperties(from: event)
     var wasPersisted = false
     do {
-      let stored = try StoredEvent(
-        id: event.id,
-        name: event.name,
-        properties: event.properties,
-        timestamp: event.timestamp,
-        distinctId: event.distinctId
+      _ = try await persist(
+        event,
+        deliveryState: .pending,
+        receivedAt: event.timestamp
       )
-      try await store.insertPending(stored)
       wasPersisted = true
       try await performCleanupIfNeeded()
     } catch {
@@ -2133,7 +2359,9 @@ actor EventLog: EventLogProtocol {
     // can flush this hit.
     await enqueueForDelivery(event, isPersisted: wasPersisted)
 
-    routeContinuation.yield(.event(event))
+    if routeToSubscribers {
+      routeContinuation.yield(.event(event))
+    }
   }
 
   /// Extract and update user properties from event
@@ -2193,6 +2421,7 @@ actor EventLog: EventLogProtocol {
       return NuxieEvent(
         id: transformedEvent.id,
         name: transformedEvent.name,
+        forwardingName: nuxieEvent.forwardingName,
         distinctId: p.forcedDistinctId,
         properties: transformedProperties,
         timestamp: transformedEvent.timestamp
@@ -2224,36 +2453,6 @@ actor EventLog: EventLogProtocol {
       return sanitized.value
     }
     return await contextBuilder.buildEnrichedProperties(customProperties: sanitized.value)
-  }
-
-  // MARK: - History persistence
-
-  /// Store a direct-delivery history row (delivered — these paths send the
-  /// event themselves) with legacy device metadata.
-  private func storeHistoryEvent(
-    name: String,
-    properties: [String: Any],
-    distinctId: String,
-    timestamp: Date
-  ) async throws {
-    var enrichedProperties = properties
-    enrichedProperties["sdk_version"] = SDKVersion.current
-    enrichedProperties["platform"] = currentPlatform()
-    if enrichedProperties["device_model"] == nil {
-      enrichedProperties["device_model"] = deviceModelIdentifier()
-    }
-    if enrichedProperties["os_version"] == nil {
-      enrichedProperties["os_version"] = osVersionString()
-    }
-
-    let event = try StoredEvent(
-      name: name,
-      properties: enrichedProperties,
-      timestamp: timestamp,
-      distinctId: distinctId
-    )
-    try await store.insertHistory(event)
-    try await performCleanupIfNeeded()
   }
 
   /// Cleanup runs at most once per `cleanupCheckInterval` inserts — a
@@ -3007,6 +3206,7 @@ actor EventLog: EventLogProtocol {
 
     await drainCaptureWorker()
     await drainRouteWorker()
+    await drainForwardingWorker()
     await drainCaptureWorker()
   }
 
@@ -3025,6 +3225,14 @@ actor EventLog: EventLogProtocol {
     await withCheckedContinuation { cont in
       if case .terminated = routeContinuation.yield(.barrier(cont)) {
         cont.resume()
+      }
+    }
+  }
+
+  private func drainForwardingWorker() async {
+    await withCheckedContinuation { continuation in
+      if case .terminated = forwardingContinuation.yield(.barrier(continuation)) {
+        continuation.resume()
       }
     }
   }

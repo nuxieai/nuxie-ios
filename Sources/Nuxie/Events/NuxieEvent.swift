@@ -9,6 +9,10 @@ public struct NuxieEvent: @unchecked Sendable {
     
     /// Event name (e.g., "subscription_viewed", "paywall_shown")
     public let name: String
+
+    /// Capture-time name used only for forwarding classification. A
+    /// beforeSend rename changes `name` but does not change this value.
+    let forwardingName: String
     
     /// User identifier (distinct ID)
     public let distinctId: String
@@ -35,6 +39,23 @@ public struct NuxieEvent: @unchecked Sendable {
     ) {
         self.id = id
         self.name = name
+        self.forwardingName = name
+        self.distinctId = distinctId
+        self.properties = properties
+        self.timestamp = timestamp
+    }
+
+    init(
+        id: String,
+        name: String,
+        forwardingName: String,
+        distinctId: String,
+        properties: [String: Any],
+        timestamp: Date
+    ) {
+        self.id = id
+        self.name = name
+        self.forwardingName = forwardingName
         self.distinctId = distinctId
         self.properties = properties
         self.timestamp = timestamp

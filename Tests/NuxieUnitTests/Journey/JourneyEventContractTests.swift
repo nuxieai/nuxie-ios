@@ -195,6 +195,8 @@ final class JourneyEventContractTests: QuickSpec {
                 expect(milestone as NSDictionary).to(equal([
                     "journey_id": "journey-1",
                     "epoch": 7,
+                    "experience_id": "experience-1",
+                    "experience_version": "flow-version-1",
                     "milestone_id": "activated",
                 ] as NSDictionary))
 
@@ -220,6 +222,8 @@ final class JourneyEventContractTests: QuickSpec {
                 expect(exited as NSDictionary).to(equal([
                     "journey_id": "journey-1",
                     "epoch": 7,
+                    "experience_id": "experience-1",
+                    "experience_version": "flow-version-1",
                     "reason": "converted_exit",
                     "at": Self.iso8601(at),
                 ] as NSDictionary))
@@ -245,6 +249,8 @@ final class JourneyEventContractTests: QuickSpec {
                 expect(exited as NSDictionary).to(equal([
                     "journey_id": "journey-host-dismissed",
                     "epoch": 3,
+                    "experience_id": "experience-1",
+                    "experience_version": "flow-version-1",
                     "reason": "dismissed",
                     "at": Self.iso8601(at),
                     "dismissed_by": "host",

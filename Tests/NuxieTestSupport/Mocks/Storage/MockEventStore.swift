@@ -34,7 +34,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         get { lock.withLock { _storedEvents } }
         set { lock.withLock { _storedEvents = newValue } }
     }
-    /// Ids currently marked pending delivery (insertPending minus markDelivered)
+    /// Ids currently marked pending delivery (pending inserts minus markDelivered).
     public var pendingIds: Set<String> {
         get { lock.withLock { _pendingIds } }
         set { lock.withLock { _pendingIds = newValue } }
@@ -206,26 +206,33 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
-    public func insertHistory(_ event: StoredEvent) async throws {
-        try lock.withLock {
+    public func insert(
+        _ event: StoredEvent,
+        deliveryState: EventDeliveryState
+    ) async throws -> Bool {
+        let delayNanoseconds = try lock.withLock {
             _storeEventCallCount += 1
             if _shouldFailStore {
                 throw mockError(2, "Mock store error")
             }
-            _storedEvents.append(event)
+            return _pendingInsertDelayNanoseconds
         }
-    }
-
-    public func insertHistoryIfAbsent(_ event: StoredEvent) async throws -> Bool {
-        try lock.withLock {
-            _storeEventCallCount += 1
-            if _shouldFailStore {
-                throw mockError(2, "Mock store error")
-            }
-            guard !_storedEvents.contains(where: { $0.id == event.id }) else {
+        if delayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+        return lock.withLock {
+            if let existing = _storedEvents.first(where: { $0.id == event.id }) {
+                if !existing.isByteEquivalent(to: event) {
+                    LogError(
+                        "Event id collision for \(event.id): stored '\(existing.name)', attempted '\(event.name)'"
+                    )
+                }
                 return false
             }
             _storedEvents.append(event)
+            if deliveryState == .pending {
+                _pendingIds.insert(event.id)
+            }
             return true
         }
     }
@@ -376,44 +383,6 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
-    public func insertPending(_ event: StoredEvent) async throws {
-        let delayNanoseconds = try lock.withLock {
-            _storeEventCallCount += 1
-            if _shouldFailStore {
-                throw mockError(2, "Mock store error")
-            }
-            return _pendingInsertDelayNanoseconds
-        }
-        if delayNanoseconds > 0 {
-            try await Task.sleep(nanoseconds: delayNanoseconds)
-        }
-        lock.withLock {
-            _storedEvents.append(event)
-            _pendingIds.insert(event.id)
-        }
-    }
-
-    public func insertPendingIfAbsent(_ event: StoredEvent) async throws -> Bool {
-        let delayNanoseconds = try lock.withLock {
-            _storeEventCallCount += 1
-            if _shouldFailStore {
-                throw mockError(2, "Mock store error")
-            }
-            return _pendingInsertDelayNanoseconds
-        }
-        if delayNanoseconds > 0 {
-            try await Task.sleep(nanoseconds: delayNanoseconds)
-        }
-        return lock.withLock {
-            guard !_storedEvents.contains(where: { $0.id == event.id }) else {
-                return false
-            }
-            _storedEvents.append(event)
-            _pendingIds.insert(event.id)
-            return true
-        }
-    }
-
     public func queryEvent(id: String) async throws -> StoredEvent? {
         try lock.withLock {
             if _shouldFailQuery {
@@ -504,14 +473,18 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             }
 
             let agedIds = Set(_storedEvents
-                .filter { $0.timestamp < olderThan && !_pendingIds.contains($0.id) }
+                .filter {
+                    $0.timestamp < olderThan
+                        && !_pendingIds.contains($0.id)
+                        && $0.origin != .server
+                }
                 .map(\.id))
             _storedEvents.removeAll { agedIds.contains($0.id) }
             if !agedIds.isEmpty { coverage = max(coverage, Self.coverageDate(olderThan)) }
 
             let overCap = max(0, _storedEvents.count - keeping)
             let countCandidates = _storedEvents
-                .filter { !_pendingIds.contains($0.id) }
+                .filter { !_pendingIds.contains($0.id) && $0.origin != .server }
                 .sorted {
                     if $0.timestamp == $1.timestamp { return $0.id < $1.id }
                     return $0.timestamp < $1.timestamp

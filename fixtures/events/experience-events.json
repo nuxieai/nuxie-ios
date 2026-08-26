@@ -8,15 +8,7 @@
     },
     {
       "event": "$experience_dismissed",
-      "properties": ["experience_id", "experience_version", "journey_id"]
-    },
-    {
-      "event": "$experience_purchased",
-      "properties": ["experience_id", "experience_version", "journey_id", "product_id"]
-    },
-    {
-      "event": "$experience_timed_out",
-      "properties": ["experience_id", "experience_version", "journey_id"]
+      "properties": ["experience_id", "experience_version", "journey_id", "reason"]
     },
     {
       "event": "$experience_errored",
@@ -28,6 +20,7 @@
         "artifact_build_id",
         "artifact_content_hash",
         "artifact_source",
+        "experience_id",
         "experience_version"
       ]
     },
@@ -38,6 +31,7 @@
         "artifact_content_hash",
         "artifact_source",
         "error_message",
+        "experience_id",
         "experience_version"
       ]
     },

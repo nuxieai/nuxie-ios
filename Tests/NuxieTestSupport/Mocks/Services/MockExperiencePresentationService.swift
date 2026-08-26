@@ -245,7 +245,8 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
                     JourneyEvents.experienceDismissed,
                     properties: JourneyEvents.experienceDismissedProperties(
                         experienceVersion: lastPresentation.experienceVersionId,
-                        journey: state
+                        journey: state,
+                        reason: reason
                     ),
                     userProperties: nil,
                     userPropertiesSetOnce: nil,

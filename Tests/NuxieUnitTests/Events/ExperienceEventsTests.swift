@@ -28,14 +28,14 @@ final class ExperienceEventsTests: AsyncSpec {
                 expect(properties["experience_version"] as? String).to(equal("flow-abc"))
             }
 
-            it("experiencePurchasedProperties includes product id when provided") {
-                let properties = JourneyEvents.experiencePurchasedProperties(
+            it("experienceDismissedProperties includes the mapped close reason") {
+                let properties = JourneyEvents.experienceDismissedProperties(
                     experienceVersion: "flow-abc",
                     journey: journey,
-                    productId: "product-123"
+                    reason: .goalMet
                 )
 
-                expect(properties["product_id"] as? String).to(equal("product-123"))
+                expect(properties["reason"] as? String).to(equal("goal_met"))
             }
 
             it("experienceErroredProperties includes error message when provided") {
@@ -50,6 +50,7 @@ final class ExperienceEventsTests: AsyncSpec {
 
             it("experienceArtifactLoadSucceededProperties includes artifact metadata") {
                 let properties = JourneyEvents.experienceArtifactLoadSucceededProperties(
+                    experienceId: journey.experienceId,
                     experienceVersion: "flow-abc",
                     artifactBuildId: "build-1",
                     artifactSource: "cached_artifact",
@@ -64,6 +65,7 @@ final class ExperienceEventsTests: AsyncSpec {
 
             it("experienceArtifactLoadFailedProperties includes error message when provided") {
                 let properties = JourneyEvents.experienceArtifactLoadFailedProperties(
+                    experienceId: journey.experienceId,
                     experienceVersion: "flow-abc",
                     artifactBuildId: "build-1",
                     artifactSource: "downloaded_artifact",

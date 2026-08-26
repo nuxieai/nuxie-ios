@@ -44,6 +44,10 @@ protocol JourneyServiceProtocol: AnyObject, Sendable {
 
   func getActiveJourneys(for distinctId: String) async -> [Journey]
 
+  /// Resolve identity already held by a live or ghost journey for forwarding
+  /// a server fact whose wire payload carries only the journey id.
+  func forwardingExperienceRef(for journeyId: String) async -> ExperienceRef?
+
   func checkExpiredTimers() async
 
   func initialize() async
@@ -70,6 +74,8 @@ protocol PresentationAttemptJourneyRouting: JourneyServiceProtocol {
 
 extension JourneyServiceProtocol {
   func retryRestoredPresentations() async {}
+
+  func forwardingExperienceRef(for journeyId: String) async -> ExperienceRef? { nil }
 
   func handleCapturedEventForTrigger(
     _ event: NuxieEvent
@@ -1018,6 +1024,22 @@ actor JourneyService: JourneyServiceProtocol {
       if (await journey.snapshot()).status.isLive { result.append(journey) }
     }
     return result
+  }
+
+  func forwardingExperienceRef(for journeyId: String) async -> ExperienceRef? {
+    let state: JourneySnapshot
+    if let journey = inMemoryJourneysById[journeyId] {
+      state = await journey.snapshot()
+    } else if let stored = journeyStore.loadJourney(id: journeyId) {
+      state = stored
+    } else {
+      return nil
+    }
+    return ExperienceRef(
+      experienceId: state.experienceId,
+      experienceVersion: state.experienceVersion,
+      journeyId: state.id
+    )
   }
 
   public func checkExpiredTimers() async {
@@ -2320,9 +2342,14 @@ actor JourneyService: JourneyServiceProtocol {
           journey.distinctId == distinctId,
           await ownsExecutableJourney(journey, runner: runner) else { return }
     let scopedDistinctId = journey.distinctId
+    let sourceState = await journey.snapshot()
+    var scopedProperties = properties
+    scopedProperties["journey_id"] = sourceState.id
+    scopedProperties["experience_id"] = sourceState.experienceId
+    scopedProperties["experience_version"] = sourceState.experienceVersion
 
     // Boxed to hand the write-once payload through the staging pipeline.
-    let propertiesBox = UncheckedSendable(properties)
+    let propertiesBox = UncheckedSendable(scopedProperties)
     let stage = await stageScopedEvent(
       name: eventName,
       properties: propertiesBox.value,
@@ -2352,7 +2379,12 @@ actor JourneyService: JourneyServiceProtocol {
     await completeDeferredDismissIfReady(journeyId: journeyId)
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
-    let (trackedEvent, response) = await trackScopedEvent(stage, properties: properties)
+    let (trackedEvent, response) = await trackScopedEvent(
+      stage,
+      properties: scopedProperties,
+      persistToHistory: true,
+      applyBeforeSend: true
+    )
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     let scopedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: scopedDistinctId)
@@ -2853,9 +2885,17 @@ actor JourneyService: JourneyServiceProtocol {
           let runner = experienceRunners[journeyId],
           journey.distinctId == distinctId,
           await ownsExecutableJourney(journey, runner: runner) else { return }
+    let sourceState = await journey.snapshot()
+    let unsupportedProperties: [String: Any] = [
+      "journey_id": journeyId,
+      "experience_id": sourceState.experienceId,
+      "experience_version": sourceState.experienceVersion,
+      "type": permissionType,
+    ]
+    let stagePropertiesBox = UncheckedSendable(unsupportedProperties)
     let stage = await stageScopedEvent(
       name: SystemEventNames.permissionDenied,
-      properties: ["journey_id": journeyId, "type": permissionType],
+      properties: stagePropertiesBox.value,
       distinctId: distinctId
     )
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
@@ -2875,7 +2915,13 @@ actor JourneyService: JourneyServiceProtocol {
     await completeDeferredDismissIfReady(journeyId: journeyId)
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
-    let (_, response) = await trackScopedEvent(stage, properties: stage.enrichedProperties)
+    let trackingPropertiesBox = UncheckedSendable(unsupportedProperties)
+    let (_, response) = await trackScopedEvent(
+      stage,
+      properties: trackingPropertiesBox.value,
+      persistToHistory: true,
+      applyBeforeSend: true
+    )
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     await handleScopedGatePlan(
@@ -4995,7 +5041,8 @@ actor JourneyService: JourneyServiceProtocol {
   private func trackScopedEvent(
     _ stage: ScopedEventStage,
     properties: sending [String: Any],
-    persistToHistory: Bool = false
+    persistToHistory: Bool = false,
+    applyBeforeSend: Bool = false
   ) async -> (tracked: NuxieEvent, response: EventResponse?) {
     do {
       let tracked = try await eventLog.trackForTrigger(
@@ -5003,7 +5050,7 @@ actor JourneyService: JourneyServiceProtocol {
         properties: properties,
         persistToHistory: persistToHistory,
         distinctIdOverride: stage.localEvent.distinctId,
-        applyBeforeSend: false
+        applyBeforeSend: applyBeforeSend
       )
       return (tracked.0, tracked.1)
     } catch {
