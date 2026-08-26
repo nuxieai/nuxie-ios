@@ -1431,14 +1431,16 @@ struct ExperienceInteractivePreparationHandle: Sendable {
 /// import. Scripted files use a fresh import for each renderer session because
 /// their script VM is bound to that session's renderer factory domain.
 actor ExperienceInteractivePreparation {
-    private static let scriptedInteractionStateMachineName =
-        "Generated Nuxie Pressable Interaction"
+    private static let generatedInteractionStateMachineNames = [
+        "Generated Nuxie Pressable Interaction",
+        "Generated Nuxie Interaction",
+    ]
 
     private let payload: AuthenticatedRuntimePayload
     private let primaryPreparedFile: NuxieNativePreparedFile
     private let importMode: NuxieNativeImportMode
     private let requiresDistinctRendererDomains: Bool
-    private let scriptedInteractionArtboardNames: Set<String>
+    private let generatedInteractionStateMachineByArtboard: [String: String]
     private let imageIDsByName: [String: UInt64]
     private let inspectionCount: Int
     private var primaryPreparedFileClaimed = false
@@ -1450,7 +1452,7 @@ actor ExperienceInteractivePreparation {
         preparedFile: NuxieNativePreparedFile,
         importMode: NuxieNativeImportMode,
         requiresDistinctRendererDomains: Bool,
-        scriptedInteractionArtboardNames: Set<String>,
+        generatedInteractionStateMachineByArtboard: [String: String],
         imageIDsByName: [String: UInt64],
         inspectionCount: Int
     ) {
@@ -1458,7 +1460,8 @@ actor ExperienceInteractivePreparation {
         primaryPreparedFile = preparedFile
         self.importMode = importMode
         self.requiresDistinctRendererDomains = requiresDistinctRendererDomains
-        self.scriptedInteractionArtboardNames = scriptedInteractionArtboardNames
+        self.generatedInteractionStateMachineByArtboard =
+            generatedInteractionStateMachineByArtboard
         self.imageIDsByName = imageIDsByName
         self.inspectionCount = inspectionCount
     }
@@ -1494,11 +1497,11 @@ actor ExperienceInteractivePreparation {
             importMode: importMode
         )
         let preparedArtboards = try await preparedFile.artboards()
-        let scriptedInteractionArtboardNames = Set(
-            preparedArtboards.compactMap { artboard in
-                artboard.stateMachines.contains(Self.scriptedInteractionStateMachineName)
-                    ? artboard.name
-                    : nil
+        let generatedInteractionStateMachineByArtboard = Dictionary(
+            uniqueKeysWithValues: preparedArtboards.compactMap { artboard in
+                Self.generatedInteractionStateMachineNames.first(where: {
+                    artboard.stateMachines.contains($0)
+                }).map { (artboard.name, $0) }
             }
         )
         return ExperienceInteractivePreparation(
@@ -1506,7 +1509,8 @@ actor ExperienceInteractivePreparation {
             preparedFile: preparedFile,
             importMode: importMode,
             requiresDistinctRendererDomains: catalog.contains { $0.kind == .script },
-            scriptedInteractionArtboardNames: scriptedInteractionArtboardNames,
+            generatedInteractionStateMachineByArtboard:
+                generatedInteractionStateMachineByArtboard,
             imageIDsByName: imageIDsByName,
             inspectionCount: inspectionCount
         )
@@ -1524,11 +1528,18 @@ actor ExperienceInteractivePreparation {
         let resolvedArtboardName = payload.renderPlan.screens.first {
             $0.screenId == resolvedScreenID
         }?.artboardName
-        let resolvedPlayer: ExperienceInteractivePlayerSelection =
-            player == .defaultScene
-                && resolvedArtboardName.map(scriptedInteractionArtboardNames.contains) == true
-                ? .defaultSceneWithInputStateMachine(Self.scriptedInteractionStateMachineName)
-                : player
+        let generatedInteractionStateMachineName = resolvedArtboardName.flatMap {
+            generatedInteractionStateMachineByArtboard[$0]
+        }
+        let resolvedPlayer: ExperienceInteractivePlayerSelection
+        if player == .defaultScene,
+           let generatedInteractionStateMachineName {
+            resolvedPlayer = .defaultSceneWithInputStateMachine(
+                generatedInteractionStateMachineName
+            )
+        } else {
+            resolvedPlayer = player
+        }
         let screen = try await ExperienceInteractiveScreen.openPrepared(
             payload: payload,
             preparedFile: preparedFile,
