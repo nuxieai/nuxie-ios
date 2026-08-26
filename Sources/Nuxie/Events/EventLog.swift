@@ -323,6 +323,10 @@ protocol JourneyEventAccess:
   JourneyRunnerEventAccess,
   EventHistoryReading
 {
+  /// Cancel in-flight prepared response deliveries so shutdown can join
+  /// response wrappers that await their values.
+  func cancelPreparedResponseDeliveries() async
+
   func setJourneyOwnershipRejectedHandler(
     _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
   ) async
@@ -442,6 +446,10 @@ protocol EventLogProtocol:
 
   /// Close the event log and its underlying storage
   func close() async
+
+  /// Cancel in-flight prepared response deliveries without closing the log,
+  /// so shutdown can join response wrappers that await their values.
+  func cancelPreparedResponseDeliveries() async
 
   /// Wait until all previously enqueued commands (capture + committed routing)
   /// are processed. Useful in tests for determinism.
@@ -817,8 +825,8 @@ actor EventLog: EventLogProtocol {
     // persisted but never delivered. The store acks them after delivery.
     await refillDeliveryWindow()
 
-    // Only start the periodic flush timer outside tests.
-    if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+    // Tests opt out explicitly; attaching XCTest never changes this default.
+    if snapshot?.internalConfiguration.suppressBackgroundWork != true {
       startFlushTimer()
     }
 
@@ -2163,6 +2171,13 @@ actor EventLog: EventLogProtocol {
 
   // MARK: - Close
 
+  public func cancelPreparedResponseDeliveries() async {
+    let boundaries = Array(preparedDeliveryBoundaryTasks.values)
+    let deliveries = Array(preparedDeliveryTasks.values)
+    boundaries.forEach { $0.cancel() }
+    deliveries.forEach { $0.cancel() }
+  }
+
   public func close() async {
     guard closeFlag.close() else { return }
 
@@ -2206,8 +2221,8 @@ actor EventLog: EventLogProtocol {
     forwardingContinuation.yield(.shutdown)
     forwardingContinuation.finish()
 
-    flushTimerTask?.cancel()
-    flushTimerTask = nil
+    // Join the periodic worker before closing its dependencies.
+    await stopFlushTimer()
 
     // Deterministic teardown: wait for both workers to finish their queued
     // commands and exit. Without this, a test (or re-setup) can tear down
@@ -3184,6 +3199,13 @@ actor EventLog: EventLogProtocol {
         await self?.handleTimerFlush()
       }
     }
+  }
+
+  private func stopFlushTimer() async {
+    let task = flushTimerTask
+    flushTimerTask = nil
+    task?.cancel()
+    await task?.value
   }
 
   /// Internal for tests.

@@ -234,7 +234,9 @@ final class EventLogDeliveryTests: AsyncSpec {
                 maxQueueSize: Int = 1000,
                 maxBatchSize: Int = 50,
                 maxRetries: Int = 3,
-                baseRetryDelay: TimeInterval = 5
+                baseRetryDelay: TimeInterval = 5,
+                flushInterval: TimeInterval = 30,
+                suppressBackgroundWork: Bool = true
             ) async throws -> EventLog {
                 let config = NuxieConfiguration(apiKey: "test-api-key")
                 config.testingOverrides.flushAt = flushAt
@@ -242,6 +244,8 @@ final class EventLogDeliveryTests: AsyncSpec {
                 config.testingOverrides.eventBatchSize = maxBatchSize
                 config.testingOverrides.retryCount = maxRetries
                 config.testingOverrides.retryDelay = baseRetryDelay
+                config.testingOverrides.flushInterval = flushInterval
+                config.testingOverrides.suppressBackgroundWork = suppressBackgroundWork
                 let newLog = EventLog(
                     identity: MockIdentityService(),
                     sessions: MockSessionService(),
@@ -281,6 +285,31 @@ final class EventLogDeliveryTests: AsyncSpec {
                         baseRetryDelay: 10
                     )
                     await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("starts periodic flushing by default when XCTest is attached") {
+                    log = try await makeLog(
+                        flushAt: 100,
+                        flushInterval: 0.01,
+                        suppressBackgroundWork: false
+                    )
+                    log.track("periodic-flush-under-xctest")
+
+                    await expect { await mockApi.sendBatchCallCount }
+                        .toEventually(equal(1))
+                }
+
+                it("suppresses periodic flushing only through the explicit override") {
+                    log = try await makeLog(
+                        flushAt: 100,
+                        flushInterval: 0.01,
+                        suppressBackgroundWork: true
+                    )
+                    log.track("explicitly-suppressed-periodic-flush")
+
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    let sendCount = await mockApi.sendBatchCallCount
+                    expect(sendCount) == 0
                 }
 
                 it("drains more than 1,000 durable pending events through a bounded delivery window") {

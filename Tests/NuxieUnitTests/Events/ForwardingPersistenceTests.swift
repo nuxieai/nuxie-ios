@@ -207,6 +207,7 @@ final class ForwardingPersistenceTests: XCTestCase {
     let configuration = NuxieConfiguration(apiKey: "test-api-key")
     configuration.testingOverrides.customStoragePath = storageURL
     configuration.testingOverrides.flushAt = 100
+    configuration.testingOverrides.suppressBackgroundWork = true
     var overrides = NuxieCoreOverrides()
     overrides.api = MockNuxieApi()
     try sdk.setup(with: configuration, overrides: overrides)

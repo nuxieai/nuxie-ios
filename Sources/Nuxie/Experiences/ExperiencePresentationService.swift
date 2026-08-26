@@ -37,6 +37,7 @@ protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
     @MainActor func dismissCurrentExperience() async
     @MainActor func dismissCurrentExperience(reason: CloseReason) async
     @MainActor func dismissCurrentExperienceFromHost() async
+    @MainActor func shutdownCurrentExperience() async
     
     /// Check if a experience is currently presented
     @MainActor var isExperiencePresented: Bool { get }
@@ -92,6 +93,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     private var currentRuntimeDelegateTraceToken: ExperiencePresentationTraceToken?
     private var currentPresentationID: UUID?
     private var presentationAttemptGeneration: UInt64 = 0
+    private var presentationShutdownGeneration: UInt64 = 0
     private var presentationCleanupTask: Task<Void, Never>?
     private var hostDismissalOwnership: HostDismissalOwnership?
     private var hostDismissalOwnershipWaiters: [CheckedContinuation<Void, Never>] = []
@@ -99,6 +101,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     private var activePresentationOperations: [UUID: PresentationOperationState] = [:]
     private var presentationOperationWaiters:
         [UUID: [CheckedContinuation<Void, Never>]] = [:]
+    private var allPresentationOperationWaiters: [CheckedContinuation<Void, Never>] = []
     
     // MARK: - Grace Period
     
@@ -189,8 +192,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         colorSchemeMode: ExperienceColorSchemeMode,
         commit: JourneyPendingPresentation
     ) async throws -> ExperienceViewController {
-        guard commit.experienceVersionId == experienceVersionId,
-              await experienceService.validatesPresentationCommit(commit) else {
+        guard commit.experienceVersionId == experienceVersionId else {
             throw ExperiencePresentationError.presentationSuperseded
         }
         return try await presentExperience(
@@ -211,12 +213,29 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         initialScreenID: String?,
         expectedCommit: JourneyPendingPresentation?
     ) async throws -> ExperienceViewController {
-        await waitForHostDismissalOwnershipIfNeeded()
         let presentationOperationID = beginPresentationOperation()
         defer { finishPresentationOperation(presentationOperationID) }
-        LogInfo("ExperiencePresentationService: Presenting experience \(experienceVersionId)")
+        let shutdownGeneration = presentationShutdownGeneration
+        await waitForHostDismissalOwnershipIfNeeded()
+        try Task.checkCancellation()
+        guard presentationShutdownGeneration == shutdownGeneration else {
+            throw CancellationError()
+        }
+        // Validate the commit BEFORE advancing the attempt generation: an
+        // invalid request must not supersede a valid suspended presentation.
+        // The operation stays registered above either way, so shutdown still
+        // joins this call.
+        if let expectedCommit {
+            guard await experienceService.validatesPresentationCommit(expectedCommit) else {
+                throw ExperiencePresentationError.presentationSuperseded
+            }
+            guard presentationShutdownGeneration == shutdownGeneration else {
+                throw CancellationError()
+            }
+        }
         presentationAttemptGeneration &+= 1
         let attemptGeneration = presentationAttemptGeneration
+        LogInfo("ExperiencePresentationService: Presenting experience \(experienceVersionId)")
         
         // Check if we're within the grace period
         if let gracePeriodEnd = gracePeriodEndTime {
@@ -267,6 +286,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
            await !experienceService.validatesPresentationCommit(expectedCommit) {
             throw ExperiencePresentationError.presentationSuperseded
         }
+        try requireCurrentPresentationAttempt(attemptGeneration)
         let resolvedInitialScreenID = initialScreenID
             ?? (experienceViewController.experience.behaviorPresentationScreens.count == 1
                 ? experienceViewController.experience.behaviorPresentationScreens.keys.first
@@ -397,7 +417,17 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
 
         if let journey = journey {
             await journey.markExperienceShown(at: dateProvider.now())
+            try await requireOwnedPresentation(
+                presentationID,
+                attemptGeneration: attemptGeneration,
+                fallbackWindow: window
+            )
             let state = await journey.snapshot()
+            try await requireOwnedPresentation(
+                presentationID,
+                attemptGeneration: attemptGeneration,
+                fallbackWindow: window
+            )
             eventLog.track(
                 JourneyEvents.experienceShown,
                 properties: JourneyEvents.experienceShownProperties(
@@ -408,6 +438,11 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 userPropertiesSetOnce: nil
             )
             if let originEventId = await journey.getContext("_origin_event_id")?.value as? String {
+                try await requireOwnedPresentation(
+                    presentationID,
+                    attemptGeneration: attemptGeneration,
+                    fallbackWindow: window
+                )
                 let ref = ExperienceRef(
                     experienceId: journey.experienceId,
                     experienceVersion: journey.experienceVersion,
@@ -432,6 +467,12 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             LogDebug("ExperiencePresentationService: No experience to dismiss")
             return
         }
+        let presentationOperationID = beginPresentationOperation()
+        associatePresentationOperation(
+            presentationOperationID,
+            with: presentationID
+        )
+        defer { finishPresentationOperation(presentationOperationID) }
         await waitForHostDismissalOwnershipIfNeeded()
         guard currentPresentationID == presentationID else { return }
         presentationAttemptGeneration &+= 1
@@ -450,6 +491,12 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             LogDebug("ExperiencePresentationService: No experience to dismiss")
             return
         }
+        let presentationOperationID = beginPresentationOperation()
+        associatePresentationOperation(
+            presentationOperationID,
+            with: presentationID
+        )
+        defer { finishPresentationOperation(presentationOperationID) }
         await waitForHostDismissalOwnershipIfNeeded()
         guard currentPresentationID == presentationID else { return }
         presentationAttemptGeneration &+= 1
@@ -461,6 +508,27 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             reason: reason,
             dismissWindow: true
         )
+    }
+
+    func shutdownCurrentExperience() async {
+        await waitForHostDismissalAttemptIfNeeded()
+        presentationShutdownGeneration &+= 1
+        presentationAttemptGeneration &+= 1
+        if let ownedPresentationID = hostDismissalOwnership?.presentationID {
+            currentExperienceViewController?.cancelHostDismissal()
+            finishHostDismissalOwnership(presentationID: ownedPresentationID)
+        }
+        if let presentationID = currentPresentationID {
+            await finishPresentation(
+                id: presentationID,
+                reason: nil,
+                dismissWindow: true
+            )
+        } else {
+            await presentationCleanupTask?.value
+        }
+        await waitForAllPresentationOperationsToFinish()
+        await presentationCleanupTask?.value
     }
 
     func dismissCurrentExperienceFromHost() async {
@@ -560,6 +628,12 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             await waitForHostDismissalOwnershipIfNeeded()
             return
         }
+        let presentationOperationID = beginPresentationOperation()
+        associatePresentationOperation(
+            presentationOperationID,
+            with: presentationID
+        )
+        defer { finishPresentationOperation(presentationOperationID) }
         await finishPresentation(
             id: presentationID,
             reason: reason,
@@ -714,6 +788,18 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             resumePresentationOperationWaitersIfReady(
                 presentationID: presentationID
             )
+        }
+        if activePresentationOperations.isEmpty {
+            let waiters = allPresentationOperationWaiters
+            allPresentationOperationWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    private func waitForAllPresentationOperationsToFinish() async {
+        guard !activePresentationOperations.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            allPresentationOperationWaiters.append(continuation)
         }
     }
 

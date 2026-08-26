@@ -37,6 +37,7 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                 // Create configuration with migration enabled (default)
                 config = NuxieConfiguration(apiKey: "test-key-\(testId)")
                 config.testingOverrides.customStoragePath = URL(fileURLWithPath: dbPath)
+                config.testingOverrides.suppressBackgroundWork = true
                 config.environment = .development
                 config.beforeSend = { event in
                     switch event.name {

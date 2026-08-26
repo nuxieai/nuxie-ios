@@ -99,6 +99,7 @@ private final class ExperienceRuntimeReferenceViewController: UIViewController {
             let child = try ExperienceReleaseFixtureHost.makeViewController(
                 fixtureBaseURL: fixtureURL,
                 cacheRootURL: cacheRoot,
+                presentationDiagnosticsEnabled: true,
                 statusObserver: { [weak self] status in
                     self?.setStatus(
                         status == "ready" ? "presented:\(fixtureName)" : "\(status):\(fixtureName)"

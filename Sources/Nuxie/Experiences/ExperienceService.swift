@@ -181,6 +181,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let productService: ProductService
     private let systemEventSink: SystemEventSink
+    private let presentationDiagnosticsEnabled: Bool
     private var memoryPressureObserver: NSObjectProtocol?
 
     @MainActor private var storedViewControllerCache: ExperienceViewControllerCache?
@@ -194,6 +195,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
             transactionServiceProvider: transactionServiceProvider,
             productService: productService,
             systemEventSink: systemEventSink,
+            presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
             artifactLoader: { experience, traceContext, initialScreenID in
                 try await experienceLoader.presentationArtifact(
                     for: experience,
@@ -216,6 +218,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         systemEventSink: SystemEventSink,
         releaseStore: ExperienceReleaseAcquisitionStore,
+        presentationDiagnosticsEnabled: Bool = false,
         warmLoadsInitiallySuspended: Bool = false,
         testStoreEnabled: Bool = false
     ) {
@@ -223,6 +226,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         self.transactionServiceProvider = transactionServiceProvider
         self.productService = productService
         self.systemEventSink = systemEventSink
+        self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         experienceLoader = ExperienceLoader(
             productService: productService,
             introEligibilityTokenProvider: introEligibilityTokenProvider,

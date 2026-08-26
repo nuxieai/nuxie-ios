@@ -3,7 +3,6 @@ import XCTest
 final class ExperienceRuntimeReferenceSmokeTests: XCTestCase {
     func testSignedPackagePresentsThroughCustomerSDK() throws {
         let app = XCUIApplication()
-        app.launchArguments.append("--nuxie-presentation-diagnostics")
         app.launch()
 
         XCTAssertTrue(app.otherElements["nuxie-experience-surface"].waitForExistence(timeout: 15))

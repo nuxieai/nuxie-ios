@@ -62,6 +62,13 @@ public struct NuxieTestingOverrides: Sendable {
     /// Overrides the URL session used by SDK network clients.
     public var urlSession: URLSession?
 
+    /// Suppresses SDK-owned periodic and startup work for deterministic tests.
+    /// The production default is false, including when XCTest is attached.
+    public var suppressBackgroundWork = false
+
+    /// Enables accessibility diagnostics used by presentation qualification hosts.
+    public var presentationDiagnosticsEnabled = false
+
     /// Creates an empty overlay that preserves every production default.
     public init() {}
 }
@@ -79,6 +86,8 @@ struct NuxieInternalConfiguration: Sendable {
     let customStoragePath: URL?
     let featureCacheTTL: TimeInterval
     let urlSession: URLSession?
+    let suppressBackgroundWork: Bool
+    let presentationDiagnosticsEnabled: Bool
 
     init(testingOverrides: NuxieTestingOverrides = .init()) {
         apiEndpointOverride = testingOverrides.apiEndpoint
@@ -91,6 +100,8 @@ struct NuxieInternalConfiguration: Sendable {
         customStoragePath = testingOverrides.customStoragePath
         featureCacheTTL = testingOverrides.featureCacheTTL ?? 5 * 60
         urlSession = testingOverrides.urlSession
+        suppressBackgroundWork = testingOverrides.suppressBackgroundWork
+        presentationDiagnosticsEnabled = testingOverrides.presentationDiagnosticsEnabled
     }
 }
 

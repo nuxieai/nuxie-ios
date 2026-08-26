@@ -126,9 +126,7 @@ final class ExperienceScreenViewController: UIViewController {
         continuation: AsyncStream<Void>.Continuation
     )] = [:]
     private var didReportFirstPresentation = false
-    private let presentationDiagnosticsEnabled = ProcessInfo.processInfo.arguments.contains(
-        "--nuxie-presentation-diagnostics"
-    )
+    private let presentationDiagnosticsEnabled: Bool
 
     /// Terminal failures after a successful mount are surfaced here. A queued
     /// SDK mutation can be rejected without poisoning the presentation lane.
@@ -148,11 +146,13 @@ final class ExperienceScreenViewController: UIViewController {
         artifact: LoadedExperienceArtifact,
         screen: NativeExperienceScreen,
         reduceMotion: Bool,
+        presentationDiagnosticsEnabled: Bool = false,
         delegate: ExperienceScreenViewControllerDelegate?
     ) {
         self.experience = experience
         self.artifact = artifact
         self.screen = screen
+        self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         lifecycleState = ExperienceScreenLifecycleState(reduceMotion: reduceMotion)
         self.delegate = delegate
         super.init(nibName: nil, bundle: nil)
@@ -184,7 +184,7 @@ final class ExperienceScreenViewController: UIViewController {
             surfaceView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        installFixtureScreenBadgeIfNeeded()
+        // Fixture hosts own any qualification-only badge overlays.
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -920,41 +920,6 @@ final class ExperienceScreenViewController: UIViewController {
     private static func pixelDimension(_ value: Double) -> UInt32 {
         guard value.isFinite, value > 0 else { return 1 }
         return UInt32(min(value.rounded(.up), Double(UInt32.max)))
-    }
-
-    private func installFixtureScreenBadgeIfNeeded() {
-        guard ProcessInfo.processInfo.arguments.contains(
-            "--nuxie-show-screen-debug-badges"
-        ) else { return }
-
-        let badge = UILabel()
-        badge.translatesAutoresizingMaskIntoConstraints = false
-        badge.accessibilityIdentifier = "nuxie-screen-debug-badge-\(screenId)"
-        badge.text = "LIVE SCREEN: \(screenId)"
-        badge.textAlignment = .center
-        badge.textColor = .white
-        badge.font = .systemFont(ofSize: 18, weight: .bold)
-        badge.backgroundColor = screenId == "screen_1" ? .systemIndigo : .systemGreen
-        badge.layer.cornerRadius = 14
-        badge.layer.masksToBounds = true
-        badge.isAccessibilityElement = true
-        badge.accessibilityLabel = "Live screen \(screenId)"
-        view.addSubview(badge)
-        NSLayoutConstraint.activate([
-            badge.leadingAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.leadingAnchor,
-                constant: 44
-            ),
-            badge.trailingAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.trailingAnchor,
-                constant: -44
-            ),
-            badge.bottomAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.bottomAnchor,
-                constant: -104
-            ),
-            badge.heightAnchor.constraint(equalToConstant: 52),
-        ])
     }
 
     deinit {

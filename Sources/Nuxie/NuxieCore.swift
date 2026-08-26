@@ -33,13 +33,18 @@ struct NuxieCoreOverrides {
   var localeProvider: LocaleIdentifierProviding?
   var purchaseSettings: PurchaseSettingsProviding?
   var presentationTrace: ExperiencePresentationTraceRecording?
+  /// Explicit test-host control. Nil preserves the legacy qualification-host
+  /// behavior for callers that install a presentation trace recorder.
+  var presentationDiagnosticsEnabled: Bool?
   /// Qualification-only correlation installed before lifecycle restoration
   /// begins so a relaunched presentation remains attributable to the current
   /// user-observed retry attempt.
   var restoredPresentationAttempt: ExperiencePresentationAttempt?
   var experienceWarmLoadsInitiallySuspended = false
 
-  init() {}
+  init(presentationDiagnosticsEnabled: Bool? = nil) {
+    self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
+  }
 }
 
 /// Composition root (cleanup Phase 4c). `NuxieSDK.setup` builds exactly one
@@ -175,6 +180,10 @@ final class NuxieCore: @unchecked Sendable {
       transactionServiceProvider: { builtTransactionService.get() },
       systemEventSink: systemEvents,
       releaseStore: releaseStore,
+      presentationDiagnosticsEnabled:
+        internalConfiguration.presentationDiagnosticsEnabled
+          || (overrides.presentationDiagnosticsEnabled
+            ?? (overrides.presentationTrace != nil)),
       warmLoadsInitiallySuspended: overrides.experienceWarmLoadsInitiallySuspended,
       testStoreEnabled: configuration.testStoreEnabled
     )

@@ -661,7 +661,11 @@ internal actor ProfileService: ProfileServiceProtocol {
         _ handler: (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     ) async {
         journeyMailboxHandler = handler
-        await installMailboxPendingHandler()
+        if handler == nil {
+            await eventLog.setMailboxPendingHandler(nil)
+        } else {
+            await installMailboxPendingHandler()
+        }
     }
 
     private func refreshMailboxImmediately() async {

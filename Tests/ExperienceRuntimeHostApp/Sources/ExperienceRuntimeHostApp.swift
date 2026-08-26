@@ -37,6 +37,7 @@ private struct ExperienceRuntimeHostConfiguration {
     let initialScreenID: String?
     let initialNavigationStack: [String]
     let hideNavigation: Bool
+    let presentationDiagnosticsEnabled: Bool
 
     static func current() -> Self {
         let availableFixtureNames = loadFixtureIndex().fixtures.map(\.id)
@@ -61,7 +62,10 @@ private struct ExperienceRuntimeHostConfiguration {
             initialScreenID: argument(named: "--nuxie-initial-screen"),
             initialNavigationStack: argument(named: "--nuxie-initial-navigation-stack")
                 .map { $0.split(separator: ",").map(String.init) } ?? [],
-            hideNavigation: ProcessInfo.processInfo.arguments.contains("--nuxie-hide-navigation")
+            hideNavigation: ProcessInfo.processInfo.arguments.contains("--nuxie-hide-navigation"),
+            presentationDiagnosticsEnabled: ProcessInfo.processInfo.arguments.contains(
+                "--nuxie-presentation-diagnostics"
+            )
         )
     }
 
@@ -247,6 +251,7 @@ private final class ExperienceRuntimeHostRootViewController: UIViewController {
                 cacheRootURL: cacheRoot,
                 initialScreenID: configuration.initialScreenID,
                 initialNavigationStack: configuration.initialNavigationStack,
+                presentationDiagnosticsEnabled: configuration.presentationDiagnosticsEnabled,
                 statusObserver: { [weak self] status in
                     self?.setProbe(self?.statusLabel, value: "\(status):\(self?.fixtureName ?? "")")
                 }

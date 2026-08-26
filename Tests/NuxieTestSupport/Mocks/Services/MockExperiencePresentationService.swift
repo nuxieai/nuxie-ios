@@ -223,6 +223,11 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
     }
 
     @MainActor
+    func shutdownCurrentExperience() async {
+        await dismissCurrentExperience()
+    }
+
+    @MainActor
     func dismissCurrentExperience(reason: CloseReason) async {
         let (lastPresentation, eventLog): ((experienceVersionId: String, journey: Journey?)?, EventLogProtocol?) = lock.withLock {
             _dismissCurrentExperienceCallCount += 1

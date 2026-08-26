@@ -61,12 +61,12 @@ class MockExperienceViewController: ExperienceViewController {
             transactionObserver: MockTransactionObserver(),
             pendingPurchaseStore: InMemoryPendingPurchaseStore(),
             dateProvider: MockFactory.shared.dateProvider,
-            // Prefer the live SDK configuration so purchase flows observe the
-            // configured purchase delegate, mirroring production wiring.
-            settings: NuxieRuntimeSettings(
-                configuration: NuxieSDK.shared.configuration
-                    ?? NuxieConfiguration(apiKey: "test-api-key")
-            ),
+            // Prefer the live synchronized settings so purchase flows observe
+            // the configured purchase delegate, mirroring production wiring.
+            settings: NuxieSDK.shared.core?.runtimeSettings
+                ?? NuxieRuntimeSettings(
+                    configuration: NuxieConfiguration(apiKey: "test-api-key")
+                ),
             eventSink: systemEventSink
         )
         super.init(

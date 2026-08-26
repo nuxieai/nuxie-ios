@@ -38,6 +38,31 @@ private actor LifecycleTeardownProbe {
     }
 }
 
+private actor LifecycleBarrier {
+    private var entered = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func pause() async {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { enteredWaiters.append($0) }
+    }
+
+    func release() {
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 final class SerializedSDKLifecycleTests: XCTestCase {
     func testConcurrentInstallBuildsAndPublishesExactlyOneGraph() async {
         let lifecycle = SerializedSDKLifecycle<LifecycleTestGraph>()
@@ -56,6 +81,18 @@ final class SerializedSDKLifecycleTests: XCTestCase {
         }
 
         await fulfillment(of: [buildStarted])
+
+        let operationChecked = expectation(
+            description: "operation admission was checked while setup was starting"
+        )
+        let operationDuringStart = Task.detached {
+            let operation = lifecycle.beginOperation()
+            operationChecked.fulfill()
+            return operation
+        }
+        await fulfillment(of: [operationChecked], timeout: 0.25)
+        let admittedOperation = await operationDuringStart.value
+        XCTAssertNil(admittedOperation)
 
         let secondInstall = Task.detached {
             lifecycle.install {
@@ -103,6 +140,52 @@ final class SerializedSDKLifecycleTests: XCTestCase {
         XCTAssertEqual(lifecycle.snapshot()?.graph.id, 2)
     }
 
+    func testShutdownDuringStartingWaitsForPublicationThenStopsThatGraph() async {
+        let lifecycle = SerializedSDKLifecycle<LifecycleTestGraph>()
+        let probe = LifecycleTeardownProbe()
+        let postStartBarrier = LifecycleBarrier()
+        let buildStarted = expectation(description: "graph construction started")
+        let releaseBuild = DispatchSemaphore(value: 0)
+
+        let setup = Task.detached {
+            lifecycle.install {
+                buildStarted.fulfill()
+                releaseBuild.wait()
+                return LifecycleTestGraph(id: 1)
+            }
+        }
+        await fulfillment(of: [buildStarted])
+
+        let shutdown = Task {
+            await lifecycle.shutdown(afterWaitingForStart: {
+                await postStartBarrier.pause()
+            }) { graph in
+                await probe.tearDown(graph)
+            }
+        }
+        XCTAssertFalse(lifecycle.isRunning)
+
+        releaseBuild.signal()
+        await postStartBarrier.waitUntilEntered()
+        XCTAssertFalse(lifecycle.isRunning)
+        XCTAssertNil(
+            lifecycle.beginOperation(),
+            "a pending stop must close admission in the publication transition"
+        )
+        await postStartBarrier.release()
+        await probe.waitUntilStarted()
+        XCTAssertFalse(lifecycle.isRunning)
+
+        await probe.release()
+        let installed = await setup.value
+        XCTAssertTrue(installed)
+        await shutdown.value
+
+        let teardownCalls = await probe.recordedCalls()
+        XCTAssertEqual(teardownCalls, [1])
+        XCTAssertFalse(lifecycle.isRunning)
+    }
+
     func testShutdownRejectsNewOperationsAndWaitsForAdmittedOperation() async throws {
         let lifecycle = SerializedSDKLifecycle<LifecycleTestGraph>()
         let probe = LifecycleTeardownProbe()
@@ -130,5 +213,51 @@ final class SerializedSDKLifecycleTests: XCTestCase {
 
         let teardownCalls = await probe.recordedCalls()
         XCTAssertEqual(teardownCalls, [1])
+    }
+}
+extension SerializedSDKLifecycleTests {
+    func testDuplicateInstallAfterRunningReturnsFalseWithoutCrashing() throws {
+        let lifecycle = SerializedSDKLifecycle<LifecycleTestGraph>()
+        XCTAssertTrue(lifecycle.install { LifecycleTestGraph(id: 1) })
+        // The immediate-false path must not construct a consumed semaphore
+        // (libdispatch aborts on deallocation with current < original).
+        for _ in 0..<3 {
+            XCTAssertFalse(lifecycle.install { LifecycleTestGraph(id: 2) })
+        }
+        XCTAssertNotNil(lifecycle.snapshot())
+    }
+
+    func testLosingConcurrentInstallBlocksUntilPublication() throws {
+        let lifecycle = SerializedSDKLifecycle<LifecycleTestGraph>()
+        let buildEntered = DispatchSemaphore(value: 0)
+        let releaseBuild = DispatchSemaphore(value: 0)
+        let loserDone = DispatchSemaphore(value: 0)
+        let winner = Thread {
+            _ = lifecycle.install {
+                buildEntered.signal()
+                releaseBuild.wait()
+                return LifecycleTestGraph(id: 1)
+            }
+        }
+        winner.start()
+        buildEntered.wait()
+
+        var loserObservedGraph = false
+        let loser = Thread {
+            let owns = lifecycle.install { LifecycleTestGraph(id: 2) }
+            // The losing installer returns only after the winner published.
+            loserObservedGraph = !owns && lifecycle.snapshot() != nil
+            loserDone.signal()
+        }
+        loser.start()
+        // Give the loser time to reach the wait; it must NOT complete yet.
+        XCTAssertEqual(
+            loserDone.wait(timeout: .now() + 0.3),
+            .timedOut,
+            "losing install returned before the winning graph published"
+        )
+        releaseBuild.signal()
+        XCTAssertEqual(loserDone.wait(timeout: .now() + 2), .success)
+        XCTAssertTrue(loserObservedGraph)
     }
 }
