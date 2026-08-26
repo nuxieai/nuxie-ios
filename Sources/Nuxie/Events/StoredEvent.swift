@@ -120,10 +120,22 @@ struct StoredEvent: Codable, Sendable {
     func isByteEquivalent(to other: StoredEvent) -> Bool {
         id == other.id
             && name == other.name
-            && properties == other.properties
+            && canonicalPropertiesForComparison() == other.canonicalPropertiesForComparison()
             && Int64(timestamp.timeIntervalSince1970 * 1_000)
                 == Int64(other.timestamp.timeIntervalSince1970 * 1_000)
             && distinctId == other.distinctId
+    }
+
+    /// Duplicate identity compares canonical JSON only; persistence and wire
+    /// encoders retain their existing formatting contracts.
+    private func canonicalPropertiesForComparison() -> Data {
+        guard let decoded = try? JSONDecoder().decode(
+            [String: AnyCodable].self,
+            from: properties
+        ) else { return properties }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return (try? encoder.encode(decoded)) ?? properties
     }
 }
 

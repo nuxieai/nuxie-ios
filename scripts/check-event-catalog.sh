@@ -12,7 +12,7 @@ fi
 
 if ! command -v rg >/dev/null 2>&1; then
   rg() {
-    local arg fixed=0 quiet=0 lines=0 skip_next=0
+    local arg fixed=0 quiet=0 lines=0 skip_next=0 multiline=0
     local -a positional=()
     for arg in "$@"; do
       if [[ "$skip_next" -eq 1 ]]; then
@@ -21,6 +21,7 @@ if ! command -v rg >/dev/null 2>&1; then
       fi
       case "$arg" in
         -Fq) fixed=1; quiet=1 ;;
+        -Uq) multiline=1; quiet=1 ;;
         -n) lines=1 ;;
         --no-heading) ;;
         --glob) skip_next=1 ;;
@@ -28,6 +29,18 @@ if ! command -v rg >/dev/null 2>&1; then
         *) positional+=("$arg") ;;
       esac
     done
+    if [[ "$multiline" -eq 1 ]]; then
+      # Stock grep has no multiline mode; perl ships with macOS and gives
+      # quiet whole-file matching for the checker's -Uq call shapes.
+      local pattern="${positional[0]}"
+      local file
+      for file in "${positional[@]:1}"; do
+        if PATTERN="$pattern" perl -0777 -ne 'exit 0 if $_ =~ $ENV{PATTERN}; exit 1' "$file"; then
+          return 0
+        fi
+      done
+      return 1
+    fi
     local -a grep_cmd=(grep -r --include='*.swift')
     if [[ "$fixed" -eq 1 ]]; then grep_cmd+=(-F); else grep_cmd+=(-E); fi
     if [[ "$quiet" -eq 1 ]]; then grep_cmd+=(-q); fi
@@ -38,6 +51,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 catalog="$repo_root/fixtures/events/catalog.json"
+catalog_markdown="$repo_root/docs/events-catalog.md"
 status=0
 emitter_window_radius=64
 
@@ -74,9 +88,9 @@ server_fact_builder_pattern='name:[[:space:]]*fact[.]event[.]rawValue'
 # call. Keep this allowlist short and explicit.
 is_allowlisted_catalog_site() {
   case "$1|$2" in
-    '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1869' \
-      | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1869' \
-      | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1869' \
+    '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1900' \
+      | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1900' \
+      | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1900' \
       | '$feature_used|Sources/Nuxie/NuxieSDK.swift:1123')
       return 0
       ;;
@@ -90,7 +104,7 @@ is_allowlisted_catalog_site() {
 # catalog, so removing any one expected emitter entry fails closed.
 catalog_event_emitters_for_indirect_emission_site() {
   case "$1" in
-    'Sources/Nuxie/Journey/JourneyService.swift:2382')
+    'Sources/Nuxie/Journey/JourneyService.swift:2386')
       # The permission mapper stages exactly these six cataloged result names.
       printf '%s\t%s\n' \
         '$notifications_denied' "$1" \
@@ -128,16 +142,16 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$permission_denied' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:883' \
         '$permission_granted' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:883'
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:2439')
+    'Sources/Nuxie/Journey/JourneyService.swift:2443')
       # The scoped milestone stage is constructed from $journey_milestone.
       printf '%s\t%s\n' '$journey_milestone' "$1"
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:2919')
+    'Sources/Nuxie/Journey/JourneyService.swift:2923')
       # The indirect scoped call forwards the fixed denial staged and cataloged at this site.
       printf '%s\t%s\n' \
-        '$permission_denied' 'Sources/Nuxie/Journey/JourneyService.swift:2919'
+        '$permission_denied' 'Sources/Nuxie/Journey/JourneyService.swift:2923'
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:1891')
+    'Sources/Nuxie/Events/EventLog.swift:1900')
       # JourneyDownFact.Event has exactly these three cataloged raw values.
       printf '%s\t%s\n' \
         '$journey_converted' "$1" \
@@ -161,33 +175,33 @@ catalog_event_emitters_for_indirect_emission_site() {
 # reserved SDK-authored names are checked instead.
 is_allowlisted_indirect_emission_site() {
   case "$1" in
-    'Sources/Nuxie/Events/EventLog.swift:1045' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1223' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1692' \
-      | 'Sources/Nuxie/Events/EventLog.swift:2931')
+    'Sources/Nuxie/Events/EventLog.swift:1043' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1221' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1697' \
+      | 'Sources/Nuxie/Events/EventLog.swift:2943')
       # Delivery-path apiClient.trackEvent calls transport an already-built
       # NuxieEvent; the event name originated in a capture lane whose call
       # site is checked above, so these sites are transport, not emission.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:246')
+    'Sources/Nuxie/Events/EventLog.swift:245')
       # Protocol convenience forwards names; concrete SDK callers are checked at their call sites.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:265')
+    'Sources/Nuxie/Events/EventLog.swift:264')
       # The ownership convenience forwards names; its concrete producer is checked at the owned capture call site.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:520' \
-      | 'Sources/Nuxie/Events/EventLog.swift:534' \
-      | 'Sources/Nuxie/Events/EventLog.swift:546' \
-      | 'Sources/Nuxie/Events/EventLog.swift:948' \
-      | 'Sources/Nuxie/Events/EventLog.swift:960')
+    'Sources/Nuxie/Events/EventLog.swift:519' \
+      | 'Sources/Nuxie/Events/EventLog.swift:533' \
+      | 'Sources/Nuxie/Events/EventLog.swift:545' \
+      | 'Sources/Nuxie/Events/EventLog.swift:946' \
+      | 'Sources/Nuxie/Events/EventLog.swift:958')
       # EventLog overloads forward names; concrete SDK callers are checked at their call sites.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:1300' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1321')
+    'Sources/Nuxie/Events/EventLog.swift:1298' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1319')
       # Stable-capture wrappers forward names; their concrete scoped producers are cataloged.
       return 0
       ;;
@@ -210,15 +224,15 @@ is_allowlisted_indirect_emission_site() {
       # Renderer-authored names are curated by the screen emission router before this call.
       return 0
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:2495')
-      # This history-only write reuses the milestone stage cataloged at line 2433.
+    'Sources/Nuxie/Journey/JourneyService.swift:2499')
+      # This history-only write reuses the milestone stage cataloged at line 2443.
       return 0
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:2487')
-      # This direct scoped send reuses the milestone stage cataloged at line 2433.
+    'Sources/Nuxie/Journey/JourneyService.swift:2491')
+      # This direct scoped send reuses the milestone stage cataloged at line 2443.
       return 0
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:5048')
+    'Sources/Nuxie/Journey/JourneyService.swift:5064')
       # The scoped helper forwards stages whose finite producers are checked at their call sites.
       return 0
       ;;
@@ -250,6 +264,380 @@ is_allowlisted_indirect_emission_site() {
 
 cd "$repo_root"
 jq empty "$catalog"
+
+# Every path-bearing field is part of the machine contract. Arrays describe
+# multiple production lanes in matching order; scalars broadcast to all lanes.
+while IFS=$'\t' read -r event_name reason; do
+  echo "Catalog event $event_name has invalid semantic fields: $reason" >&2
+  status=1
+done < <(
+  jq -r '
+    def strings: type == "string" or
+      (type == "array" and length > 0 and all(.[]; type == "string"));
+    def bools: type == "boolean" or
+      (type == "array" and length > 0 and all(.[]; type == "boolean"));
+    to_entries[]
+    | .key as $event
+    | .value as $row
+    | ($row.lane | if type == "array" then length else 1 end) as $lane_count
+    | if (($row.lane | strings) and ($row.beforeSend | strings)
+        and ($row.endpoint | strings) and ($row.persists | bools)
+        and ($row.wire | bools)
+        and (($row.beforeSend | type) != "array" or ($row.beforeSend | length) == $lane_count)
+        and (($row.endpoint | type) != "array" or ($row.endpoint | length) == $lane_count)
+        and (($row.persists | type) != "array" or ($row.persists | length) == $lane_count)
+        and (($row.wire | type) != "array" or ($row.wire | length) == $lane_count))
+      then empty
+      else [$event, "semantic fields must have valid scalar/array types and arrays must align with lane count"] | @tsv
+      end
+  ' "$catalog"
+)
+
+# Independent source-site routing map. Each catalog emitter must appear here,
+# and its production lane set must exactly match the catalog lane field.
+# This deliberately duplicates the mechanically visible routing choice so a
+# coordinated lane+tuple catalog edit cannot validate itself.
+production_lane_rows=$'$app_action_requested\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3695
+$app_backgrounded\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:63
+$app_installed\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:47
+$app_opened\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:58
+$app_opened\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:73
+$app_updated\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:53
+$customer_updated\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3389
+$event_sent\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3259
+$event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:2631
+$event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:3588
+$event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:3745
+$experience_artifact_load_failed\tprocessCapture\tSources/Nuxie/Experiences/ExperienceViewModel.swift:370
+$experience_artifact_load_succeeded\tprocessCapture\tSources/Nuxie/Experiences/ExperienceViewModel.swift:352
+$experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:778
+$experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:790
+$experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:402
+$experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3157
+$experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3116
+$experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3173
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1123
+$identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:652
+$journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:840
+$journey_converted\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:4965
+$journey_converted\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1900
+$journey_effect_completed\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1900
+$journey_effect_requested\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:4083
+$journey_enrolled\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:562
+$journey_exited\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:4379
+$journey_exited\tcaptureStableSystemEvent\tSources/Nuxie/Journey/JourneyService.swift:4543
+$journey_handoff\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:4037
+$journey_milestone\ttrackWithResponse\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3351
+$journey_milestone\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:2443
+$journey_parked\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4245
+$journey_superseded\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1900
+$journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1213
+$journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1265
+$journey_transition\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:1742
+$journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:2599
+$notifications_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:2386
+$notifications_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:883
+$notifications_enabled\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:2386
+$notifications_enabled\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:883
+$permission_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:2386
+$permission_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:2923
+$permission_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:883
+$permission_granted\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:2386
+$permission_granted\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:883
+$products_unavailable\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:990
+$purchase_cancelled\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2051
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:583
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:606
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:615
+$purchase_completed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:621
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:681
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:713
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1818
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1825
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2035
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2093
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2116
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:677
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:690
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:711
+$purchase_pending\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2065
+$purchase_synced\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1347
+$purchase_synced\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1554
+$response_set\tnone\tSources/Nuxie/Experiences/ExperienceScreenViewController.swift:752
+$response_set\tnone\tSources/Nuxie/Experiences/ExperienceScreenViewController.swift:552
+$response_set\tnone\tSources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:426
+$response_unset\tnone\tSources/Nuxie/Experiences/ExperienceScreenViewController.swift:757
+$response_unset\tnone\tSources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:429
+$restore_completed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:1130
+$restore_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:1139
+$restore_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2139
+$restore_no_purchases\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:1150
+$screen_dismissed\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:753
+$screen_shown\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:704
+$tracking_authorized\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:2386
+$tracking_authorized\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:883
+$tracking_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:2386
+$tracking_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:883'
+
+lane_source_pattern() {
+  case "$1" in
+    processCapture)
+      printf '%s' 'eventLog[.]track[(]|trackWithoutRouting[(]'
+      ;;
+    trackForTrigger)
+      printf '%s' '(trackForTrigger|trackScopedEvent|eventSink[.]emit|emitSystemEvent)[(]'
+      ;;
+    trackWithResponse)
+      printf '%s' 'trackWithResponse[(]'
+      ;;
+    captureStableSystemEvent)
+      printf '%s' '(eventSink[.]capture|captureOnly|captureOwnedJourneySystemEvent)[(]'
+      ;;
+    storePreparedEventInHistory)
+      printf '%s' 'storePreparedEventInHistory[(]'
+      ;;
+    commitServerFacts)
+      printf '%s' 'name:[[:space:]]*fact[.]event[.]rawValue'
+      ;;
+    none)
+      printf '%s' '(emitEvent|ExperienceRendererEvent|ScreenEmission)[(]'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+direct_before_send_policy() {
+  case "$1|$2" in
+    '$journey_claimed|Sources/Nuxie/Journey/JourneyService.swift:840' \
+      | '$journey_handoff|Sources/Nuxie/Journey/JourneyService.swift:4037' \
+      | '$journey_milestone|Sources/Nuxie/Journey/JourneyService.swift:2443')
+      printf '%s' exempt
+      ;;
+    '$notifications_denied|Sources/Nuxie/Journey/JourneyService.swift:2386' \
+      | '$notifications_enabled|Sources/Nuxie/Journey/JourneyService.swift:2386' \
+      | '$permission_denied|Sources/Nuxie/Journey/JourneyService.swift:2386' \
+      | '$permission_denied|Sources/Nuxie/Journey/JourneyService.swift:2923' \
+      | '$permission_granted|Sources/Nuxie/Journey/JourneyService.swift:2386' \
+      | '$tracking_authorized|Sources/Nuxie/Journey/JourneyService.swift:2386' \
+      | '$tracking_denied|Sources/Nuxie/Journey/JourneyService.swift:2386')
+      printf '%s' governed
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+while IFS=$'\t' read -r event_name production_lane emitter; do
+  if ! jq -e --arg event_name "$event_name" --arg emitter "$emitter" '
+      any(.[$event_name].emitters[]; . == $emitter)
+    ' "$catalog" >/dev/null; then
+    echo "Production lane map has stale or missing emitter $event_name: $emitter" >&2
+    status=1
+  fi
+
+  # Permission names at this controller site are selected before crossing a
+  # callback boundary; their trackForTrigger behavior is pinned in the Swift
+  # conformance table because it is not locally inferable from the source row.
+  if [[ "$emitter" == "Sources/Nuxie/Experiences/ExperienceViewController.swift:883" ]]; then
+    continue
+  fi
+
+  source_path="${emitter%:*}"
+  source_line="${emitter##*:}"
+  source_radius=5
+  if [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:2443" ]]; then
+    # The milestone name is staged here and reaches trackScopedEvent later in
+    # the same function after local journey evaluation.
+    source_radius=64
+  elif [[ "$emitter" == "Sources/Nuxie/NuxieSDK.swift:1123" ]]; then
+    # The accepted /i/event response is converted into the exact prepared
+    # history event at the end of the same useFeature operation.
+    source_radius=80
+  elif [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:840" \
+      || "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:4037" ]]; then
+    source_radius=8
+  elif [[ "$emitter" == Sources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:* ]]; then
+    source_radius=10
+  fi
+  first_line=$((source_line > source_radius ? source_line - source_radius : 1))
+  last_line=$((source_line + source_radius))
+  expected_pattern="$(lane_source_pattern "$production_lane")"
+  if ! sed -n "${first_line},${last_line}p" "$source_path" \
+      | grep -Eq "$expected_pattern"; then
+    echo "Production site $emitter for $event_name does not exhibit mapped lane $production_lane" >&2
+    status=1
+  fi
+
+  if [[ "$production_lane" == "trackForTrigger" ]] \
+      && before_send="$(direct_before_send_policy "$event_name" "$emitter")"; then
+    if ! jq -e --arg event_name "$event_name" --arg policy "$before_send" '
+        def many: if type == "array" then . else [.] end;
+        .[$event_name] as $row
+        | ($row.lane | many) as $lanes
+        | ($row.beforeSend | many) as $policies
+        | any(range(0; $lanes | length);
+            $lanes[.] == "trackForTrigger"
+              and (($policies | length) == 1 or $policies[.] == $policy)
+              and (($policies | length) != 1 or $policies[0] == $policy))
+      ' "$catalog" >/dev/null; then
+      echo "Catalog beforeSend for $event_name disagrees with direct source policy $before_send" >&2
+      status=1
+    fi
+
+    if [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:2443" ]]; then
+      if ! grep -Fq 'trackScopedEvent(stage, properties: properties)' \
+          <<< "$(sed -n "${first_line},${last_line}p" "$source_path")" \
+          || ! rg -Uq 'private func trackScopedEvent[(][[:space:][:print:]]*applyBeforeSend: Bool = false' \
+            Sources/Nuxie/Journey/JourneyService.swift; then
+        echo "Production site $emitter no longer proves beforeSend-exempt scoped tracking" >&2
+        status=1
+      fi
+    else
+      policy_literal=true
+      if [[ "$before_send" == "exempt" ]]; then policy_literal=false; fi
+      if ! sed -n "${first_line},${last_line}p" "$source_path" \
+          | grep -Eq "applyBeforeSend:[[:space:]]*$policy_literal"; then
+        echo "Production site $emitter no longer proves beforeSend-$before_send tracking" >&2
+        status=1
+      fi
+    fi
+  fi
+done <<< "$production_lane_rows"
+
+while IFS=$'\t' read -r event_name emitter; do
+  if ! awk -F $'\t' -v event="$event_name" -v site="$emitter" '
+      $1 == event && $3 == site { found = 1 }
+      END { exit !found }
+    ' <<< "$production_lane_rows"; then
+    echo "Catalog emitter has no production lane mapping $event_name: $emitter" >&2
+    status=1
+  fi
+done < <(jq -r 'to_entries[] | .key as $event | .value.emitters[] | [$event, .] | @tsv' "$catalog")
+
+catalog_lane_pairs="$(jq -r '
+  def many: if type == "array" then . else [.] end;
+  to_entries[]
+  | select(.value.status != "delete" and .value.status != "retired")
+  | .key as $event | .value.lane | many[] | [$event, .] | @tsv
+' "$catalog" | sort -u)"
+production_lane_pairs="$(awk -F $'\t' '{ print $1 "\t" $2 }' \
+  <<< "$production_lane_rows" | sort -u)"
+if [[ "$catalog_lane_pairs" != "$production_lane_pairs" ]]; then
+  echo "Catalog lanes differ from the independent production source-site map:" >&2
+  diff -u <(printf '%s\n' "$production_lane_pairs") \
+    <(printf '%s\n' "$catalog_lane_pairs") >&2 || true
+  status=1
+fi
+
+# These tuples are derived from the production choke points in EventLog and
+# JourneyService. Keeping the validation here makes a metadata-only catalog
+# edit fail even when its event name and emitter site remain unchanged.
+while IFS=$'\t' read -r event_name lane before_send endpoint persists wire; do
+  expected=''
+  case "$lane" in
+    processCapture|captureStableSystemEvent)
+      expected=$'governed\tbatch\ttrue\ttrue'
+      ;;
+    commitServerFacts)
+      expected=$'exempt\tnone\ttrue\tfalse'
+      ;;
+    none)
+      expected=$'exempt\tnone\tfalse\tfalse'
+      ;;
+    trackWithResponse)
+      expected=$'exempt\t/i/event response lane\ttrue\ttrue'
+      ;;
+    trackForTrigger)
+      if [[ "$before_send" != "governed" && "$before_send" != "exempt" ]]; then
+        expected=$'governed or exempt\t/i/event response lane\ttrue\ttrue'
+      else
+        expected="$before_send"$'\t/i/event response lane\ttrue\ttrue'
+      fi
+      ;;
+    storePreparedEventInHistory)
+      expected=$'governed\t/i/event response lane\ttrue\ttrue'
+      ;;
+    *)
+      echo "Catalog event $event_name uses unknown production lane '$lane'" >&2
+      status=1
+      continue
+      ;;
+  esac
+  actual="$before_send"$'\t'"$endpoint"$'\t'"$persists"$'\t'"$wire"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "Catalog event $event_name lane $lane has semantic tuple [$actual], expected [$expected]" >&2
+    status=1
+  fi
+done < <(
+  jq -r '
+    def many: if type == "array" then . else [.] end;
+    to_entries[]
+    | .key as $event
+    | .value as $row
+    | ($row.lane | many) as $lanes
+    | range(0; $lanes | length) as $i
+    | def at($value): if ($value | type) == "array" then $value[$i] else $value end;
+    [$event, $lanes[$i], at($row.beforeSend), at($row.endpoint),
+       (at($row.persists) | tostring), (at($row.wire) | tostring)]
+    | @tsv
+  ' "$catalog"
+)
+
+canonical_markdown_values() {
+  local kind="$1"
+  local value="$2"
+  value="${value//\`/}"
+  if [[ "$kind" == "beforeSend" ]]; then
+    sed -E 's/[[:space:]]+\/[[:space:]]+/\n/g' <<< "$value"
+  else
+    sed -E 's/[[:space:]]+or[[:space:]]+/\n/g' <<< "$value"
+  fi \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    | sed '/^$/d' \
+    | sort -u \
+    | paste -sd '|' -
+}
+
+# The Markdown table is a checked projection for beforeSend and endpoint
+# (labelled Wire there), not an independently editable summary.
+while IFS=$'\t' read -r event_name expected_before expected_endpoint; do
+  markdown_row="$(awk -F'|' -v target="\`$event_name\`" '
+    {
+      name = $2
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      if (name == target) { print; exit }
+    }
+  ' "$catalog_markdown")"
+  if [[ -z "$markdown_row" ]]; then
+    echo "Markdown event catalog is missing $event_name" >&2
+    status=1
+    continue
+  fi
+  IFS='|' read -r _ _ _ _ _ markdown_before markdown_endpoint _ _ <<< "$markdown_row"
+  actual_before="$(canonical_markdown_values beforeSend "$markdown_before")"
+  actual_endpoint="$(canonical_markdown_values endpoint "$markdown_endpoint")"
+  if [[ "$actual_before" != "$expected_before" ]]; then
+    echo "Markdown beforeSend for $event_name is '$actual_before', catalog requires '$expected_before'" >&2
+    status=1
+  fi
+  if [[ "$actual_endpoint" != "$expected_endpoint" ]]; then
+    echo "Markdown endpoint for $event_name is '$actual_endpoint', catalog requires '$expected_endpoint'" >&2
+    status=1
+  fi
+done < <(
+  jq -r '
+    def many: if type == "array" then . else [.] end;
+    def canonical: many | unique | sort | join("|");
+    to_entries[]
+    | [.key,
+       (.value.beforeSend | canonical),
+       (.value.endpoint | many | map(if . == "/i/event response lane" then "/i/event" else . end) | unique | sort | join("|"))]
+    | @tsv
+  ' "$catalog"
+)
 
 # The status vocabulary is closed; the status-dependent checks below only
 # recognize these four values, so an unknown status must fail rather than
@@ -359,7 +747,7 @@ while IFS=$'\t' read -r event_name constant event_status emitter; do
 
   if [[ "$token_found" != true
       && "$constant" == "JourneyEvents.journeyMilestone"
-      && "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:2439" ]] \
+      && "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:2443" ]] \
       && rg -Fq -- 'name: JourneyEvents.journeyMilestone' \
         Sources/Nuxie/Journey/JourneyService.swift; then
     # The scoped path stages the exact milestone name before the generic

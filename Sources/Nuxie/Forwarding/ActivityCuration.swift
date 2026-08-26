@@ -86,9 +86,16 @@ enum ActivityCuration {
       return .journeyConverted(ref, journeyId: journeyId)
     case JourneyEvents.journeyExited:
       guard let ref = experienceRef(properties),
-            let rawReason = string(properties, "reason"),
-            let reason = journeyExitReason(rawReason)
+            let rawReason = string(properties, "reason")
       else { return missing(internalName) }
+      let reason: JourneyExitReason
+      if rawReason == "cancelled", string(properties, "dismissed_by") == "user" {
+        reason = .dismissed
+      } else if let mapped = journeyExitReason(rawReason) {
+        reason = mapped
+      } else {
+        return missing(internalName)
+      }
       return .journeyEnded(ref, exitReason: reason)
     case JourneyEvents.journeySuperseded:
       guard let ref = experienceRef(properties) else { return missing(internalName) }

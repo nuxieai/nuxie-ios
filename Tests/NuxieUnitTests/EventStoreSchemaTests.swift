@@ -30,7 +30,23 @@ final class EventStoreSchemaTests: XCTestCase {
         defer { sqlite3_close(database) }
 
         XCTAssertEqual(try userVersion(in: database), 1)
-        XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM pragma_table_info('events');", in: database), 7)
+        XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM pragma_table_info('events');", in: database), 8)
+        XCTAssertEqual(
+            try scalarInt(
+                "SELECT \"notnull\" FROM pragma_table_info('events') WHERE name = 'origin';",
+                in: database
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try scalarInt(
+                "SELECT COUNT(*) FROM pragma_table_info('events') "
+                    + "WHERE name = 'origin' AND type = 'TEXT' "
+                    + "AND dflt_value = '''device''';",
+                in: database
+            ),
+            1
+        )
         XCTAssertEqual(
             try scalarInt(
                 "SELECT \"notnull\" FROM pragma_table_info('events') WHERE name = 'user_id';",
@@ -251,7 +267,8 @@ final class EventStoreSchemaTests: XCTestCase {
               timestamp INTEGER NOT NULL,
               user_id TEXT \(userIDIsRequired ? "NOT NULL" : ""),
               session_id TEXT,
-              delivery_state INTEGER NOT NULL DEFAULT 2
+              delivery_state INTEGER NOT NULL DEFAULT 2,
+              origin TEXT NOT NULL DEFAULT 'device'
             );
             CREATE TABLE stable_event_drops (
               event_id TEXT PRIMARY KEY,

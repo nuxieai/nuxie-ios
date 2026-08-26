@@ -29,6 +29,7 @@
     ]
   },
   "expected": {
+    "publicTimestamp": "2026-07-22T18:04:10Z",
     "storedIds": ["fact-converted-1"],
     "uploadedIds": [],
     "subscriberIds": ["fact-converted-1"]

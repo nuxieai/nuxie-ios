@@ -2249,7 +2249,11 @@ actor JourneyService: JourneyServiceProtocol {
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
     if (await journey.snapshot()).status.isLive,
        await ownsExecutableJourney(journey, runner: runner) {
-      await completeJourney(journey, reason: dismissalExitReason(for: reason))
+      await completeJourney(
+        journey,
+        reason: dismissalExitReason(for: reason),
+        dismissedBy: dismissalSource(for: reason)
+      )
     }
   }
 
@@ -2937,13 +2941,21 @@ actor JourneyService: JourneyServiceProtocol {
     JourneyDismissalMapping.exitReason(for: reason)
   }
 
+  private func dismissalSource(for reason: CloseReason) -> JourneyDismissalSource? {
+    reason == .userDismissed ? .user : nil
+  }
+
   private func completeDeferredDismissIfReady(journeyId: String) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId],
           await ownsExecutableJourney(journey, runner: runner),
           let reason = await runner.consumeDeferredDismissReasonIfReady(),
           await ownsExecutableJourney(journey, runner: runner) else { return }
-    await completeJourney(journey, reason: dismissalExitReason(for: reason))
+    await completeJourney(
+      journey,
+      reason: dismissalExitReason(for: reason),
+      dismissedBy: dismissalSource(for: reason)
+    )
   }
 
   private func processSourceScopedGoalJourneyEvent(
@@ -4817,7 +4829,11 @@ actor JourneyService: JourneyServiceProtocol {
 
     await experiencePresentationService.dismissCurrentExperience(reason: closeReason)
     guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
-    await completeJourney(journey, reason: dismissalExitReason(for: closeReason))
+    await completeJourney(
+      journey,
+      reason: dismissalExitReason(for: closeReason),
+      dismissedBy: dismissalSource(for: closeReason)
+    )
     guard await ownsScopedCallbackContinuation(
       journey,
       runner: runner,

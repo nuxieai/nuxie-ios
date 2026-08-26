@@ -14,6 +14,19 @@ private actor CatalogForwardingRecorder {
 }
 
 final class EventCatalogConformanceTests: XCTestCase {
+    private struct OneOrMany<Value: Decodable>: Decodable {
+        let values: [Value]
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let value = try? container.decode(Value.self) {
+                values = [value]
+            } else {
+                values = try container.decode([Value].self)
+            }
+        }
+    }
+
     private struct CatalogProperty: Decodable {
         let type: String
         let required: Bool
@@ -21,6 +34,11 @@ final class EventCatalogConformanceTests: XCTestCase {
     }
 
     private struct CatalogRow: Decodable {
+        let lane: OneOrMany<String>
+        let beforeSend: OneOrMany<String>
+        let endpoint: OneOrMany<String>
+        let persists: OneOrMany<Bool>
+        let wire: OneOrMany<Bool>
         let constant: String?
         let status: String
         let properties: [String: CatalogProperty]
@@ -28,6 +46,67 @@ final class EventCatalogConformanceTests: XCTestCase {
         let fixtures: [String]?
         let forwarding: String
     }
+
+    private struct ExpectedSemantics: Equatable {
+        let lane: [String]
+        let beforeSend: [String]
+        let endpoint: [String]
+        let persists: [Bool]
+        let wire: [Bool]
+    }
+
+    // Independent per-event pin for fields that cannot always be inferred
+    // from a generic source call (for example trackForTrigger's policy flag).
+    private static let expectedSemanticRows = #"""
+$app_action_requested	processCapture	governed	batch	true	true
+$app_backgrounded	trackForTrigger	governed	/i/event response lane	true	true
+$app_installed	trackForTrigger	governed	/i/event response lane	true	true
+$app_opened	trackForTrigger	governed	/i/event response lane	true	true
+$app_updated	trackForTrigger	governed	/i/event response lane	true	true
+$customer_updated	processCapture	governed	batch	true	true
+$event_sent	processCapture	governed	batch	true	true
+$experience_artifact_load_failed	processCapture	governed	batch	true	true
+$experience_artifact_load_succeeded	processCapture	governed	batch	true	true
+$experience_dismissed	processCapture	governed	batch	true	true
+$experience_errored	processCapture	governed	batch	true	true
+$experience_shown	processCapture	governed	batch	true	true
+$experiment_exposure	processCapture	governed	batch	true	true
+$experiment_exposure_error	processCapture	governed	batch	true	true
+$experiment_exposure_fallback	processCapture	governed	batch	true	true
+$feature_used	storePreparedEventInHistory	governed	/i/event response lane	true	true
+$identify	processCapture	governed	batch	true	true
+$journey_claimed	trackForTrigger	exempt	/i/event response lane	true	true
+$journey_converted	trackWithResponse|commitServerFacts	exempt	/i/event response lane|none	true	true|false
+$journey_effect_completed	commitServerFacts	exempt	none	true	false
+$journey_effect_requested	processCapture	governed	batch	true	true
+$journey_enrolled	trackWithResponse	exempt	/i/event response lane	true	true
+$journey_exited	trackWithResponse|captureStableSystemEvent	exempt|governed	/i/event response lane|batch	true	true
+$journey_handoff	trackForTrigger	exempt	/i/event response lane	true	true
+$journey_milestone	trackWithResponse|trackForTrigger	exempt|exempt	/i/event response lane|/i/event response lane	true|true	true|true
+$journey_parked	processCapture	governed	batch	true	true
+$journey_started	none	exempt	none	false	false
+$journey_superseded	commitServerFacts	exempt	none	true	false
+$journey_transition	trackWithResponse|processCapture	exempt|governed	/i/event response lane|batch	true	true
+$notifications_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
+$notifications_enabled	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
+$permission_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
+$permission_granted	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
+$products_unavailable	processCapture	governed	batch	true	true
+$purchase_cancelled	trackForTrigger	governed	/i/event response lane	true	true
+$purchase_completed	captureStableSystemEvent|trackForTrigger	governed|governed	batch|/i/event response lane	true|true	true|true
+$purchase_failed	trackForTrigger	governed	/i/event response lane	true	true
+$purchase_pending	trackForTrigger	governed	/i/event response lane	true	true
+$purchase_synced	captureStableSystemEvent|trackForTrigger	governed|governed	batch|/i/event response lane	true|true	true|true
+$response_set	none	exempt	none	false	false
+$response_unset	none	exempt	none	false	false
+$restore_completed	trackForTrigger	governed	/i/event response lane	true	true
+$restore_failed	trackForTrigger	governed	/i/event response lane	true	true
+$restore_no_purchases	trackForTrigger	governed	/i/event response lane	true	true
+$screen_dismissed	processCapture	governed	batch	true	true
+$screen_shown	processCapture	governed	batch	true	true
+$tracking_authorized	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
+$tracking_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
+"""#
 
     private static let declaredConstants: [(path: String, value: String)] = [
         ("JourneyEvents.appActionRequested", JourneyEvents.appActionRequested),
@@ -184,6 +263,23 @@ final class EventCatalogConformanceTests: XCTestCase {
                 row.emitters.isEmpty,
                 "Event \(eventName) with status \(row.status) has no production emitter"
             )
+        }
+    }
+
+    func testEveryCatalogPathKeepsItsPinnedProductionSemantics() throws {
+        let catalog = try loadCatalog()
+        let expected = try Self.parseExpectedSemantics()
+        XCTAssertEqual(Set(catalog.keys), Set(expected.keys))
+
+        for (eventName, row) in catalog {
+            let actual = ExpectedSemantics(
+                lane: row.lane.values,
+                beforeSend: row.beforeSend.values,
+                endpoint: row.endpoint.values,
+                persists: row.persists.values,
+                wire: row.wire.values
+            )
+            XCTAssertEqual(actual, expected[eventName], eventName)
         }
     }
 
@@ -382,6 +478,46 @@ final class EventCatalogConformanceTests: XCTestCase {
             [String: CatalogRow].self,
             from: Data(contentsOf: url)
         )
+    }
+
+    private static func parseExpectedSemantics() throws -> [String: ExpectedSemantics] {
+        var result: [String: ExpectedSemantics] = [:]
+        for line in expectedSemanticRows.split(separator: "\n") {
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count == 6 else {
+                throw NSError(
+                    domain: "EventCatalogConformanceTests",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Malformed semantic pin: \(line)"]
+                )
+            }
+            func strings(_ field: Substring) -> [String] {
+                field.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            }
+            func booleans(_ field: Substring) throws -> [Bool] {
+                try strings(field).map { value in
+                    switch value {
+                    case "true": true
+                    case "false": false
+                    default:
+                        throw NSError(
+                            domain: "EventCatalogConformanceTests",
+                            code: 3,
+                            userInfo: [NSLocalizedDescriptionKey: "Invalid boolean pin: \(value)"]
+                        )
+                    }
+                }
+            }
+            let eventName = String(fields[0])
+            result[eventName] = ExpectedSemantics(
+                lane: strings(fields[1]),
+                beforeSend: strings(fields[2]),
+                endpoint: strings(fields[3]),
+                persists: try booleans(fields[4]),
+                wire: try booleans(fields[5])
+            )
+        }
+        return result
     }
 
     private func loadSourceDeclarations() throws -> [String: String] {

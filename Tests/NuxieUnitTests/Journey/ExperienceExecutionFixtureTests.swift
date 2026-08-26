@@ -128,6 +128,16 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     .to(equal(["experience-1", "experience-1"]))
                 expect(converted?.map(\.experienceVersion))
                     .to(equal(["flow-version-1", "flow-version-1"]))
+                let expected = try Self.required(
+                    downFactFixture["expected"] as? [String: Any],
+                    "expected"
+                )
+                let expectedPublicTimestamp = try Self.required(
+                    expected["publicTimestamp"] as? String,
+                    "expected.publicTimestamp"
+                )
+                expect(converted?.first?.at)
+                    .to(equal(ISO8601DateFormatter().date(from: expectedPublicTimestamp)))
 
                 let golden = try Self.loadObject("golden-journey/basic.json")
                 expect(golden["events"] as? [String]).to(equal([

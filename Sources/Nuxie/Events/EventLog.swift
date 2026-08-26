@@ -85,7 +85,6 @@ private enum ForwardingCommand: Sendable {
 }
 
 private struct ForwardingAdmission: Sendable {
-  let sequence: UInt64
   let receivedAt: Date
 }
 
@@ -602,7 +601,6 @@ actor EventLog: EventLogProtocol {
   private nonisolated let forwardingContinuation:
     AsyncStream<ForwardingCommand>.Continuation
   private var forwardingWorker: Task<Void, Never>?
-  private var nextForwardingSequence: UInt64 = 0
   private var nextForwardingSequenceToDeliver: UInt64 = 0
   private var pendingForwardingResolutions: [UInt64: ForwardingResolution] = [:]
 
@@ -1451,20 +1449,23 @@ actor EventLog: EventLogProtocol {
         return .ownershipLost
       }
       let forwardingAdmission = forwardingAdmission(receivedAt: attemptedTimestamp)
-      let outcome: StableEventCaptureOutcome
-      do {
-        outcome = try await store.commitStableCapture(
-          eventId: eventId,
-          event: transformedEvent.map(makeStoredEvent(from:)),
-          recordedAt: attemptedTimestamp,
-          ownership: ownership
-        )
-      } catch {
-        resolveForwarding(forwardingAdmission, event: nil)
-        throw error
+      let commit = try await store.commitStableCapture(
+        eventId: eventId,
+        event: transformedEvent.map(makeStoredEvent(from:)),
+        recordedAt: attemptedTimestamp,
+        ownership: ownership,
+        assigningCommitSequence: true
+      )
+      let outcome = commit.outcome
+      guard let commitSequence = commit.commitSequence else {
+        throw EventStorageError.insertFailed(NSError(
+          domain: "Nuxie.EventLog",
+          code: 49,
+          userInfo: [NSLocalizedDescriptionKey: "Stable event commit omitted its sequence"]
+        ))
       }
       if case .ownershipLost = outcome {
-        resolveForwarding(forwardingAdmission, event: nil)
+        resolveForwarding(commitSequence, admission: forwardingAdmission, event: nil)
         return .ownershipLost
       }
       if transformedEvent == nil {
@@ -1483,7 +1484,11 @@ actor EventLog: EventLogProtocol {
       } else {
         newlyDurableEvent = nil
       }
-      resolveForwarding(forwardingAdmission, event: newlyDurableEvent)
+      resolveForwarding(
+        commitSequence,
+        admission: forwardingAdmission,
+        event: newlyDurableEvent
+      )
       guard let capture = durableCapture(
         from: outcome,
         fallbackEvent: event,
@@ -1854,8 +1859,10 @@ actor EventLog: EventLogProtocol {
 
     for fact in facts {
       var properties: [String: Any]
+      let eventTimestamp: Date
       switch fact.properties {
       case .converted(let converted):
+        eventTimestamp = converted.at
         properties = [
           "journey_id": converted.journeyId,
           "experience_id": converted.experienceId,
@@ -1864,6 +1871,7 @@ actor EventLog: EventLogProtocol {
           "source_fact_ref": converted.sourceFactRef,
         ]
       case .effectCompleted(let completed):
+        eventTimestamp = fact.timestamp
         properties = [
           "journey_id": completed.journeyId,
           "node_id": completed.nodeId,
@@ -1877,6 +1885,7 @@ actor EventLog: EventLogProtocol {
           properties["error"] = error.value
         }
       case .superseded(let superseded):
+        eventTimestamp = fact.timestamp
         properties = [
           "journey_id": superseded.journeyId,
         ]
@@ -1891,14 +1900,15 @@ actor EventLog: EventLogProtocol {
         name: fact.event.rawValue,
         distinctId: distinctId,
         properties: properties,
-        timestamp: fact.timestamp
+        timestamp: eventTimestamp
       )
 
       do {
         let inserted = try await persist(
           event,
           deliveryState: .delivered,
-          receivedAt: receivedAt
+          receivedAt: receivedAt,
+          origin: .server
         )
         if inserted {
           try await performCleanupIfNeeded()
@@ -2286,51 +2296,53 @@ actor EventLog: EventLogProtocol {
   private func persist(
     _ event: NuxieEvent,
     deliveryState: EventDeliveryState,
-    receivedAt: Date
+    receivedAt: Date,
+    origin: StoredEventOrigin = .device
   ) async throws -> Bool {
     let admission = forwardingAdmission(receivedAt: receivedAt)
-    let newlyDurable: Bool
-    do {
-      newlyDurable = try await store.insert(
-        makeStoredEvent(from: event),
-        deliveryState: deliveryState
-      )
-    } catch {
-      resolveForwarding(admission, event: nil)
-      throw error
+    let commit = try await store.insert(
+      makeStoredEvent(from: event),
+      deliveryState: deliveryState,
+      origin: origin,
+      assigningCommitSequence: true
+    )
+    guard let commitSequence = commit.commitSequence else {
+      throw EventStorageError.insertFailed(NSError(
+        domain: "Nuxie.EventLog",
+        code: 50,
+        userInfo: [NSLocalizedDescriptionKey: "Event commit omitted its sequence"]
+      ))
     }
-    resolveForwarding(admission, event: newlyDurable ? event : nil)
-    return newlyDurable
+    resolveForwarding(
+      commitSequence,
+      admission: admission,
+      event: commit.newlyDurable ? event : nil
+    )
+    return commit.newlyDurable
   }
 
   private func forwardingAdmission(receivedAt: Date) -> ForwardingAdmission? {
     guard forwardingSubscribers.contains(where: { $0.isEnabled() }) else {
       return nil
     }
-    return ForwardingAdmission(
-      sequence: reserveForwardingSequence(),
-      receivedAt: receivedAt
-    )
-  }
-
-  private func reserveForwardingSequence() -> UInt64 {
-    defer { nextForwardingSequence &+= 1 }
-    return nextForwardingSequence
+    return ForwardingAdmission(receivedAt: receivedAt)
   }
 
   private func resolveForwarding(
-    _ admission: ForwardingAdmission?,
+    _ commitSequence: UInt64,
+    admission: ForwardingAdmission?,
     event: NuxieEvent?
   ) {
-    guard let admission else { return }
-    let resolution = event.map {
-      ForwardingResolution.event(DurableForwardingEvent(
-        event: $0,
-        receivedAt: admission.receivedAt
-      ))
+    let resolution = admission.flatMap { admission in
+      event.map {
+        ForwardingResolution.event(DurableForwardingEvent(
+          event: $0,
+          receivedAt: admission.receivedAt
+        ))
+      }
     } ?? .skipped
     forwardingContinuation.yield(.resolved(
-      sequence: admission.sequence,
+      sequence: commitSequence,
       resolution
     ))
   }

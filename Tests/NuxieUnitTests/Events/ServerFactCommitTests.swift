@@ -101,6 +101,9 @@ final class ServerFactCommitTests: AsyncSpec {
                 let committed = eventStore.storedEvents.filter { $0.id == fact.id }
                 expect(committed).to(haveCount(1))
                 expect(committed.first?.name).to(equal("$journey_converted"))
+                expect(committed.first?.timestamp).to(equal(
+                    Date(timeIntervalSince1970: 1_753_207_450)
+                ))
                 expect(committed.first?.origin).to(equal(.server))
                 expect(committed.first?.getPropertiesDict()["source_fact_ref"] as? String)
                     .to(equal("purchase-1"))

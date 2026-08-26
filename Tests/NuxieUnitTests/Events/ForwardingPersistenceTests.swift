@@ -48,6 +48,42 @@ private final class PublicForwardingDelegate {
 extension PublicForwardingDelegate: NuxieDelegate {}
 
 final class ForwardingPersistenceTests: XCTestCase {
+  func testForwardingFollowsDurabilityOrderWhenPersistenceLanesInterleave() async throws {
+    let store = MockEventStore()
+    store.suspendInsert(id: "slow-first-admission")
+    let log = makeUnconfiguredLog(store: store)
+    let recorder = ForwardingRecorder()
+    await log.subscribeForwarding { event in await recorder.record(event) }
+    try await log.configure(configuration: NuxieConfiguration(apiKey: "test-api-key"))
+
+    let slowAdmission = Task {
+      await log.storePreparedEventInHistory(NuxieEvent(
+        id: "slow-first-admission",
+        name: SystemEventNames.appOpened,
+        distinctId: "customer-1",
+        timestamp: Date(timeIntervalSince1970: 1)
+      ))
+    }
+    try await waitForStoreCallCount(1, store: store)
+
+    let stableCapture = await log.captureSystemEvent(
+      SystemEventNames.appBackgrounded,
+      properties: nil,
+      eventId: "fast-second-admission",
+      distinctId: "customer-1"
+    )
+    XCTAssertEqual(stableCapture?.event.id, "fast-second-admission")
+    store.resumeInsert(id: "slow-first-admission")
+    await slowAdmission.value
+    await log.drain()
+
+    let durableIds = store.storedEvents.map(\.id)
+    let forwardedIds = await recorder.snapshot().map(\.event.id)
+    XCTAssertEqual(durableIds, ["fast-second-admission", "slow-first-admission"])
+    XCTAssertEqual(forwardedIds, durableIds)
+    await log.close()
+  }
+
   func testDisabledCaptureDoesNotBlockOrReplayAfterForwardingIsEnabled() async throws {
     let store = MockEventStore()
     store.pendingInsertDelayNanoseconds = 500_000_000
@@ -109,7 +145,7 @@ final class ForwardingPersistenceTests: XCTestCase {
     await log.close()
   }
 
-  func testServerFactUsesArrivalTimestampAsReceivedAt() async throws {
+  func testConvertedServerFactUsesConversionAtAsTimestampAndArrivalAsReceivedAt() async throws {
     let arrival = Date(timeIntervalSince1970: 456)
     let store = MockEventStore()
     let log = EventLog(
@@ -122,18 +158,19 @@ final class ForwardingPersistenceTests: XCTestCase {
     let recorder = ForwardingRecorder()
     await log.subscribeForwarding { event in await recorder.record(event) }
     try await log.configure(configuration: NuxieConfiguration(apiKey: "test-api-key"))
-    let authoredAt = Date(timeIntervalSince1970: 123)
+    let convertedAt = Date(timeIntervalSince1970: 123)
+    let envelopeAt = Date(timeIntervalSince1970: 124)
 
     await log.commitServerFacts([
       JourneyDownFact(
         id: "server-fact",
         event: .converted,
-        timestamp: authoredAt,
+        timestamp: envelopeAt,
         properties: JourneyConvertedProperties(
           journeyId: "journey-1",
           experienceId: "experience-1",
           experienceVersion: "version-1",
-          at: authoredAt,
+          at: convertedAt,
           sourceFactRef: "source-1"
         )
       ),
@@ -142,7 +179,7 @@ final class ForwardingPersistenceTests: XCTestCase {
 
     let forwardedSnapshot = await recorder.snapshot()
     let forwarded = try XCTUnwrap(forwardedSnapshot.first)
-    XCTAssertEqual(forwarded.event.timestamp, authoredAt)
+    XCTAssertEqual(forwarded.event.timestamp, convertedAt)
     XCTAssertEqual(forwarded.receivedAt, arrival)
     await log.close()
   }

@@ -107,6 +107,10 @@ private actor MockNuxieTestStore: NuxieTestStorePurchasing {
         restoreResponse = response
     }
 
+    func setPurchaseResponse(_ response: NuxieTestStorePurchaseResponse) {
+        purchaseResponse = response
+    }
+
     func purchase(
         product _: StoreProduct,
         distinctId: String
@@ -469,6 +473,31 @@ final class TransactionServiceTests: AsyncSpec {
                     expect(completion?["experience_id"] as? String)
                         == "experience-1"
                     expect(completion?["source"] as? String) == "purchase"
+                }
+
+                it("marks a failed Test Store outcome with its checkout environment") {
+                    mockTestStore = MockNuxieTestStore()
+                    await mockTestStore.setPurchaseResponse(
+                        NuxieTestStorePurchaseResponse(
+                            result: .failed(StoreKitError.purchaseFailed(nil))
+                        )
+                    )
+                    transactionService = makeTransactionService()
+                    settings.setPurchaseDelegate(nil)
+
+                    await expect {
+                        try await transactionService.purchase(mockProduct)
+                    }.to(throwError { error in
+                        guard let storeKitError = error as? Nuxie.StoreKitError,
+                              case .purchaseFailed = storeKitError else {
+                            return fail("Expected purchaseFailed, got \(error)")
+                        }
+                    })
+
+                    let failed = eventSink.events.first(where: {
+                        $0.name == SystemEventNames.purchaseFailed
+                    })?.properties
+                    expect(failed?["test_store"] as? Bool) == true
                 }
 
                 context("with purchase delegate configured") {
