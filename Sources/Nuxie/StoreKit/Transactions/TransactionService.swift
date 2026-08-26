@@ -39,6 +39,7 @@ enum PendingPurchaseOwnershipResolution: Sendable {
     case none
     case unique(PendingPurchaseRecord)
     case ambiguous
+    case unavailable
 }
 
 /// Service responsible for managing StoreKit transactions
@@ -87,6 +88,7 @@ actor TransactionService {
     /// Exact pre-checkout contexts, including deferred purchases. Durable,
     /// loaded lazily, scope-checked, and pruned by TTL.
     private var cachedPendingPurchases: [String: PendingPurchaseRecord]?
+    private var pendingPurchaseStateUnreadable = false
     /// Process-local authority for Journey routing. Durable recovery markers
     /// restore commercial facts after relaunch, but only a checkout still
     /// executing in this process may advance the paywall's Journey.
@@ -193,6 +195,7 @@ actor TransactionService {
         let matches = pendingPurchases().filter {
             $0.key.hasSuffix(suffix) && $0.value.state == .pending
         }
+        guard !pendingPurchaseStateUnreadable else { return .unavailable }
         switch matches.count {
         case 0:
             return .none
@@ -218,7 +221,21 @@ actor TransactionService {
 
     /// The current (TTL-pruned) marker set, loading from disk on first use.
     private func pendingPurchases() -> [String: PendingPurchaseRecord] {
-        let loaded = cachedPendingPurchases ?? pendingPurchaseStore.load()
+        let loaded: [String: PendingPurchaseRecord]
+        if let cachedPendingPurchases {
+            loaded = cachedPendingPurchases
+        } else {
+            switch pendingPurchaseStore.load() {
+            case .absent:
+                loaded = [:]
+            case .value(let entries):
+                loaded = entries
+            case .unreadable:
+                pendingPurchaseStateUnreadable = true
+                return [:]
+            }
+        }
+        pendingPurchaseStateUnreadable = false
         let now = dateProvider.now()
         let pruned = loaded.filter {
             guard $0.value.scope == purchaseStorageScope else { return false }
@@ -243,6 +260,7 @@ actor TransactionService {
 
     @discardableResult
     private func setPendingPurchases(_ entries: [String: PendingPurchaseRecord]) -> Bool {
+        guard !pendingPurchaseStateUnreadable else { return false }
         guard pendingPurchaseStore.save(entries) else { return false }
         cachedPendingPurchases = entries
         return true
@@ -260,12 +278,26 @@ actor TransactionService {
         }
     }
 
-    func purchaseAccountOwner(appAccountToken: UUID?) -> String? {
-        guard let appAccountToken else { return nil }
-        return accountOwnershipStore.owner(
-            for: appAccountToken,
-            scope: purchaseStorageScope
-        )
+    func pendingPurchaseStoreIsUnreadable() -> Bool {
+        if cachedPendingPurchases == nil { _ = pendingPurchases() }
+        return pendingPurchaseStateUnreadable
+    }
+
+    func purchaseAccountOwner(
+        appAccountToken: UUID?
+    ) -> StoreReadResult<String> {
+        guard let appAccountToken else { return .absent }
+        switch accountOwnershipStore.load() {
+        case .absent:
+            return .absent
+        case .unreadable:
+            return .unreadable
+        case .value(let entries):
+            let ownership = entries[appAccountToken.uuidString]
+            guard ownership?.scope == purchaseStorageScope,
+                  let distinctId = ownership?.distinctId else { return .absent }
+            return .value(distinctId)
+        }
     }
 
     func activePurchaseEvidenceAuthority(
@@ -277,25 +309,34 @@ actor TransactionService {
     func durablePurchaseEvidenceAuthority(
         appAccountToken: UUID?,
         productId: String
-    ) -> PurchaseEvidenceAuthority? {
+    ) -> StoreReadResult<PurchaseEvidenceAuthority> {
+        let entries: [String: StoredPurchaseAccountOwnership]
+        switch accountOwnershipStore.load() {
+        case .absent:
+            return .absent
+        case .unreadable:
+            return .unreadable
+        case .value(let loaded):
+            entries = loaded
+        }
         if let appAccountToken,
-           let tokenAuthority = accountOwnershipStore.evidenceAuthority(
-               for: appAccountToken,
-               productId: productId,
-               scope: purchaseStorageScope
-           ) {
-            return tokenAuthority
+           let ownership = entries[appAccountToken.uuidString],
+           ownership.scope == purchaseStorageScope,
+           let authority = ownership.productAuthorities[productId] {
+            return .value(authority)
         }
         guard let activeDistinctId = identityService?.getDistinctId() else {
-            return nil
+            return .absent
         }
-        return accountOwnershipStore.evidenceAuthority(
-            for: purchaseStorageScope.appAccountToken(
-                distinctId: activeDistinctId
-            ),
-            productId: productId,
-            scope: purchaseStorageScope
+        let token = purchaseStorageScope.appAccountToken(
+            distinctId: activeDistinctId
         )
+        guard let ownership = entries[token.uuidString],
+              ownership.scope == purchaseStorageScope,
+              let authority = ownership.productAuthorities[productId] else {
+            return .absent
+        }
+        return .value(authority)
     }
 
     @discardableResult
@@ -321,10 +362,12 @@ actor TransactionService {
         appAccountToken: UUID,
         productId: String
     ) -> Bool {
-        guard checkoutRecoveryRecord(
+        let recovery = checkoutRecoveryRecord(
             appAccountToken: appAccountToken,
             productId: productId
-        ) != nil else { return true }
+        )
+        guard !pendingPurchaseStateUnreadable else { return false }
+        guard recovery != nil else { return true }
         return consumeCheckoutRecovery(
             appAccountToken: appAccountToken,
             productId: productId
@@ -897,6 +940,7 @@ actor TransactionService {
         deadline: Date
     ) -> Bool {
         var entries = pendingPurchases()
+        guard !pendingPurchaseStateUnreadable else { return false }
         let key = pendingKey(
             productId: recovery.commercialContext.storeProductId,
             distinctId: recovery.distinctId

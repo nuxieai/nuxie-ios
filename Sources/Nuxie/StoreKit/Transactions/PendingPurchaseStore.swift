@@ -6,7 +6,7 @@ import Foundation
 /// can recover exact commercial attribution on a later launch.
 protocol PendingPurchaseStoreProtocol: Sendable {
     /// Load every persisted marker (scoped product key → record).
-    func load() -> [String: PendingPurchaseRecord]
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]>
 
     /// Persist the full marker set, replacing whatever was stored.
     @discardableResult
@@ -102,6 +102,7 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
 final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
 
     private let fileURL: URL
+    private let readFailureLogger = StoreReadFailureLogger()
 
     init(
         customStoragePath: URL? = nil,
@@ -122,24 +123,30 @@ final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
         }
     }
 
-    func load() -> [String: PendingPurchaseRecord] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [:] }
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]> {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return .absent
+        }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
-            return try decoder.decode([String: PendingPurchaseRecord].self, from: data)
+            let data = try Data(contentsOf: fileURL)
+            return .value(try decoder.decode(
+                [String: PendingPurchaseRecord].self,
+                from: data
+            ))
         } catch {
-            // A corrupt marker file loses pending markers (degrades to the
-            // pre-persistence behavior) rather than wedging every load.
-            LogError("PendingPurchaseStore: failed to decode \(fileURL.lastPathComponent): \(error)")
-            try? FileManager.default.removeItem(at: fileURL)
-            return [:]
+            if readFailureLogger.shouldLog() {
+                LogError("PendingPurchaseStore: markers are unreadable: \(error)")
+            }
+            return .unreadable
         }
     }
 
     @discardableResult
     func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
+        guard !load().isUnreadable else { return false }
         if entries.isEmpty {
             do {
                 try FileManager.default.removeItem(at: fileURL)
@@ -177,10 +184,10 @@ final class InMemoryPendingPurchaseStore: PendingPurchaseStoreProtocol, @uncheck
 
     init() {}
 
-    func load() -> [String: PendingPurchaseRecord] {
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]> {
         lock.lock()
         defer { lock.unlock() }
-        return entries
+        return .value(entries)
     }
 
     @discardableResult

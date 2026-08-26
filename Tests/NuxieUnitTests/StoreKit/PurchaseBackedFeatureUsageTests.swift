@@ -97,8 +97,53 @@ private actor PurchaseBackedUsageAPI: PurchaseSynchronizing, PurchaseBackedFeatu
     func recordedRequests() -> [PurchaseBackedFeatureUseRequest] { requests }
 }
 
+private final class OrdinaryReceiptSyncAPI {
+    private let responseCustomerId: String?
+    private let lock = NSLock()
+    private var requestCount = 0
+
+    init(responseCustomerId: String?) {
+        self.responseCustomerId = responseCustomerId
+    }
+
+    func syncTransaction(
+        transactionJwt _: String,
+        distinctId _: String
+    ) async throws -> PurchaseResponse {
+        lock.withLock { requestCount += 1 }
+        return PurchaseResponse(
+            success: true,
+            customerId: responseCustomerId,
+            features: [
+                PurchaseFeature(
+                    id: "feature-1",
+                    extId: "pro",
+                    type: .boolean,
+                    allowed: true,
+                    balance: nil,
+                    unlimited: false
+                ),
+            ],
+            error: nil
+        )
+    }
+
+    func recordedRequestCount() -> Int {
+        lock.withLock { requestCount }
+    }
+}
+
+extension OrdinaryReceiptSyncAPI: PurchaseSynchronizing, @unchecked Sendable {}
+
+private final class UnreadablePendingPurchaseStore: PendingPurchaseStoreProtocol, @unchecked Sendable {
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]> { .unreadable }
+    @discardableResult
+    func save(_ entries: [String: PendingPurchaseRecord]) -> Bool { false }
+}
+
 private actor PurchaseBackedFeatureRecorder: FeatureServiceProtocol {
     private var updates: [(FeatureCheckResult, String, String, String?)] = []
+    private var purchaseUpdateCount = 0
 
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess? { nil }
     func getAllCached() async -> [String: FeatureAccess] { [:] }
@@ -116,7 +161,11 @@ private actor PurchaseBackedFeatureRecorder: FeatureServiceProtocol {
     func clearCache() async {}
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
     func syncFeatureInfo() async {}
-    func updateFromPurchase(_ features: [PurchaseFeature], distinctId: String) async {}
+    func updateFromPurchase(_ features: [PurchaseFeature], distinctId: String) async {
+        _ = features
+        _ = distinctId
+        purchaseUpdateCount += 1
+    }
     func applyAuthoritativeUse(
         _ result: FeatureCheckResult,
         requestedFeatureId: String,
@@ -127,6 +176,7 @@ private actor PurchaseBackedFeatureRecorder: FeatureServiceProtocol {
     }
 
     func recordedUpdates() -> [(FeatureCheckResult, String, String, String?)] { updates }
+    func recordedPurchaseUpdateCount() -> Int { purchaseUpdateCount }
 }
 
 private final class PurchaseBackedEventSink: SystemEventSink, @unchecked Sendable {
@@ -407,7 +457,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertFalse(request.purchase.eventId.isEmpty)
         let updateCount = await features.recordedUpdates().count
         XCTAssertEqual(updateCount, 1)
-        XCTAssertNil(store.load()["transaction-1"])
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
     }
 
     func testFinalAtomicCreditReportsSuccessfulCommandAndPostUseAccess() async throws {
@@ -457,7 +507,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             result?.authoritativeAccess?.balance,
             contract.acceptance.postUseAccess.balanceAfterFinalFiniteUnit
         )
-        XCTAssertNil(store.load()["transaction-1"])
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
         XCTAssertEqual(
             events.events().map(\.0),
             Array(
@@ -573,7 +623,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         } catch is URLError {}
         if contract.retry.retainEvidenceOnFailure {
             XCTAssertEqual(
-                store.load()["transaction-1"]?.transactionJws,
+                store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.transactionJws,
                 "signed-transaction-1"
             )
         }
@@ -661,10 +711,10 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             XCTFail("Expected failed durable capture to fail the local command")
         } catch NuxieNetworkError.invalidResponse {}
         XCTAssertEqual(
-            store.load()["transaction-1"]?.transactionJws,
+            store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.transactionJws,
             "signed-transaction-1"
         )
-        XCTAssertNil(store.load()["transaction-1"]?.backendSyncedAt)
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.backendSyncedAt)
         XCTAssertTrue(events.events().isEmpty)
 
         _ = try await observer.useFeatureWithPendingPurchase(
@@ -675,7 +725,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             metadata: nil
         )
 
-        XCTAssertNil(store.load()["transaction-1"])
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
         let captures = events.captureAttempts()
         XCTAssertEqual(captures.count, 2)
         XCTAssertEqual(captures[0].eventId, captures[1].eventId)
@@ -733,8 +783,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             XCTAssertEqual(statusCode, 402)
         }
 
-        XCTAssertEqual(store.load()["transaction-1"]?.transactionJws, "signed-transaction-1")
-        XCTAssertNil(store.load()["transaction-1"]?.backendSyncedAt)
+        XCTAssertEqual(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.transactionJws, "signed-transaction-1")
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.backendSyncedAt)
         XCTAssertTrue(events.events().isEmpty)
         let updateCount = await features.recordedUpdates().count
         XCTAssertEqual(updateCount, 0)
@@ -904,7 +954,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertNil(result)
         let requests = await api.recordedRequests()
         XCTAssertTrue(requests.isEmpty)
-        XCTAssertEqual(store.load().count, 3)
+        XCTAssertEqual(store.load().valueTreatingAbsentAsEmpty([:])!.count, 3)
     }
 
     func testDelegateTransferredStoreKitEvidenceRemainsEligibleWhileTestStoreDoesNot() async throws {
@@ -985,8 +1035,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         let testRequests = await testApi.recordedRequests()
         XCTAssertEqual(providerRequests.count, 1)
         XCTAssertTrue(testRequests.isEmpty)
-        XCTAssertNil(providerStore.load()["provider"])
-        XCTAssertEqual(testStore.load()["test-store"]?.transactionJws, "signed-test-store")
+        XCTAssertNil(providerStore.load().valueTreatingAbsentAsEmpty([:])!["provider"])
+        XCTAssertEqual(testStore.load().valueTreatingAbsentAsEmpty([:])!["test-store"]?.transactionJws, "signed-test-store")
     }
 
     func testConcurrentUsesCannotBothConsumeTheSamePendingPurchase() async throws {
@@ -1103,7 +1153,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertNil(useResult)
         let usageCount = await api.recordedUsageRequestCount()
         XCTAssertEqual(usageCount, 0)
-        XCTAssertNil(store.load()["transaction-1"])
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
     }
 
     func testIdentityChangeWhileAwaitingReceiptSyncCancelsOrdinaryFallback() async throws {
@@ -1153,7 +1203,365 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         } catch is CancellationError {}
         let usageCount = await api.recordedUsageRequestCount()
         XCTAssertEqual(usageCount, 0)
-        XCTAssertNil(store.load()["transaction-1"])
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+    }
+
+    func testOrdinaryReceiptSyncRejectsWrongCustomerResponse() async {
+        await assertOrdinaryReceiptSyncRejects(
+            responseCustomerId: "customer-b"
+        )
+    }
+
+    func testOrdinaryReceiptSyncAcceptsMissingCustomerUntilBackendCanEchoDistinctId() async {
+        await assertOrdinaryReceiptSyncAccepts(responseCustomerId: nil)
+    }
+
+    func testOrdinaryReceiptSyncAcceptsBackendInternalCustomerId() async {
+        await assertOrdinaryReceiptSyncAccepts(
+            responseCustomerId: "e138a88e-2f67-5cee-a545-5136084333c5"
+        )
+    }
+
+    func testRevokedTransactionDeniesLocalAccessEvenWhenEvidenceIsUnreadable() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "revoke-corruption-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: root)
+        }
+        let directory = scope.storageDirectory(customStoragePath: root)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try Data("{ unreadable".utf8).write(
+            to: directory.appendingPathComponent("transaction-evidence.json")
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let api = PurchaseBackedUsageAPI(results: [])
+        let features = PurchaseBackedFeatureRecorder()
+        let events = PurchaseBackedEventSink()
+        let localAccess = InMemoryLocalPurchaseAccessStore()
+        _ = localAccess.save([
+            "txn-revoked": StoredLocalPurchaseAccess(
+                scope: scope,
+                transactionId: "txn-revoked",
+                originalTransactionId: "original-revoked",
+                productId: "store-product-1",
+                distinctId: "customer-a",
+                grants: [],
+                state: .active
+            ),
+        ])
+        let observer = TransactionObserver(
+            api: api,
+            features: features,
+            identity: identity,
+            settings: NuxieRuntimeSettings(
+                configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+            ),
+            eventSink: events,
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: TransactionEvidenceStore(
+                customStoragePath: root,
+                scope: scope
+            ),
+            localAccessStore: localAccess,
+            purchaseStorageScope: scope,
+            dateProvider: MockDateProvider(),
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        await observer.handleVerifiedTransaction(
+            VerifiedStoreTransactionUpdate(
+                transactionId: "txn-revoked",
+                originalTransactionId: "original-revoked",
+                productId: "store-product-1",
+                appAccountToken: nil,
+                isRevoked: true,
+                isUpgraded: false,
+                finish: {}
+            ),
+            jwsRepresentation: "revoked-jws",
+            source: .storeUpdates
+        )
+
+        let states = localAccess.load().readableValue?.values.map(\.state)
+        XCTAssertEqual(states, [.revoked])
+    }
+
+    func testRevokedTransactionDeniesLocalAccessWhenOnlyPendingStoreIsUnreadable() async throws {
+        // Readable evidence but a corrupt pending-purchases file must still
+        // apply the local revocation denial before any deferral.
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let api = PurchaseBackedUsageAPI(results: [])
+        let features = PurchaseBackedFeatureRecorder()
+        let events = PurchaseBackedEventSink()
+        let localAccess = InMemoryLocalPurchaseAccessStore()
+        _ = localAccess.save([
+            "txn-revoked": StoredLocalPurchaseAccess(
+                scope: scope,
+                transactionId: "txn-revoked",
+                originalTransactionId: "original-revoked",
+                productId: "store-product-1",
+                distinctId: "customer-a",
+                grants: [],
+                state: .active
+            ),
+        ])
+        let settings = NuxieRuntimeSettings(
+            configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+        )
+        let transactionService = TransactionService(
+            productService: MockProductService(),
+            transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: UnreadablePendingPurchaseStore(),
+            dateProvider: MockDateProvider(),
+            settings: settings,
+            eventSink: events,
+            purchaseStorageScope: scope,
+            identityService: identity,
+            featureService: features
+        )
+        let observer = TransactionObserver(
+            api: api,
+            features: features,
+            identity: identity,
+            settings: settings,
+            eventSink: events,
+            transactionServiceProvider: { transactionService },
+            evidenceStore: InMemoryTransactionEvidenceStore(),
+            localAccessStore: localAccess,
+            purchaseStorageScope: scope,
+            dateProvider: MockDateProvider(),
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        await observer.handleVerifiedTransaction(
+            VerifiedStoreTransactionUpdate(
+                transactionId: "txn-revoked",
+                originalTransactionId: "original-revoked",
+                productId: "store-product-1",
+                appAccountToken: nil,
+                isRevoked: true,
+                isUpgraded: false,
+                finish: {}
+            ),
+            jwsRepresentation: "revoked-jws",
+            source: .storeUpdates
+        )
+
+        let states = localAccess.load().readableValue?.values.map(\.state)
+        XCTAssertEqual(states, [.revoked])
+    }
+
+    func testUnreadableEvidenceThrowsFromPendingPurchaseUseInsteadOfFallingThrough() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "pending-use-corruption-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: root)
+        }
+        let directory = scope.storageDirectory(customStoragePath: root)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try Data("{ unreadable".utf8).write(
+            to: directory.appendingPathComponent("transaction-evidence.json")
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let api = PurchaseBackedUsageAPI(results: [])
+        let features = PurchaseBackedFeatureRecorder()
+        let events = PurchaseBackedEventSink()
+        let observer = TransactionObserver(
+            api: api,
+            features: features,
+            identity: identity,
+            settings: NuxieRuntimeSettings(
+                configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+            ),
+            eventSink: events,
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: TransactionEvidenceStore(
+                customStoragePath: root,
+                scope: scope
+            ),
+            localAccessStore: InMemoryLocalPurchaseAccessStore(),
+            purchaseStorageScope: scope,
+            dateProvider: MockDateProvider(),
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        do {
+            _ = try await observer.useFeatureWithPendingPurchase(
+                distinctId: "customer-a",
+                featureId: "feature-1",
+                amount: 1,
+                entityId: nil,
+                metadata: nil
+            )
+            XCTFail("Expected CommerceStoreError.evidenceUnreadable")
+        } catch let error as CommerceStoreError {
+            XCTAssertEqual(error, .evidenceUnreadable)
+        }
+    }
+
+    func testOrdinaryReceiptSyncDoesNotConsumeUnreadableEvidenceAsAbsent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ordinary-sync-corruption-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: root)
+        }
+        let directory = scope.storageDirectory(customStoragePath: root)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try Data("{ unreadable".utf8).write(
+            to: directory.appendingPathComponent("transaction-evidence.json")
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let api = OrdinaryReceiptSyncAPI(responseCustomerId: "customer-a")
+        let features = PurchaseBackedFeatureRecorder()
+        let events = PurchaseBackedEventSink()
+        let observer = TransactionObserver(
+            api: api,
+            features: features,
+            identity: identity,
+            settings: NuxieRuntimeSettings(
+                configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+            ),
+            eventSink: events,
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: TransactionEvidenceStore(
+                customStoragePath: root,
+                scope: scope
+            ),
+            localAccessStore: InMemoryLocalPurchaseAccessStore(),
+            purchaseStorageScope: scope,
+            dateProvider: MockDateProvider(),
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        let accepted = await observer.syncTransaction(
+            transactionJws: "signed-transaction-1",
+            transactionId: "transaction-1",
+            productId: "product-transaction-1",
+            originalTransactionId: "original-transaction-1"
+        )
+
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(api.recordedRequestCount(), 0)
+        let purchaseUpdateCount = await features.recordedPurchaseUpdateCount()
+        XCTAssertEqual(purchaseUpdateCount, 0)
+        XCTAssertTrue(events.events().isEmpty)
+    }
+
+    private func assertOrdinaryReceiptSyncRejects(
+        responseCustomerId: String?
+    ) async {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = InMemoryTransactionEvidenceStore()
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["pro"]
+            ),
+        ]))
+        let features = PurchaseBackedFeatureRecorder()
+        let events = PurchaseBackedEventSink()
+        let observer = TransactionObserver(
+            api: OrdinaryReceiptSyncAPI(responseCustomerId: responseCustomerId),
+            features: features,
+            identity: identity,
+            settings: NuxieRuntimeSettings(
+                configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+            ),
+            eventSink: events,
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: store,
+            localAccessStore: InMemoryLocalPurchaseAccessStore(),
+            purchaseStorageScope: scope,
+            dateProvider: MockDateProvider(
+                initialDate: Date(timeIntervalSince1970: 100)
+            ),
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        let accepted = await observer.syncTransaction(
+            transactionJws: "signed-transaction-1",
+            transactionId: "transaction-1",
+            productId: "product-transaction-1",
+            originalTransactionId: "original-transaction-1"
+        )
+
+        XCTAssertFalse(accepted)
+        let purchaseUpdateCount = await features.recordedPurchaseUpdateCount()
+        XCTAssertEqual(purchaseUpdateCount, 0)
+        XCTAssertTrue(events.events().isEmpty)
+        XCTAssertEqual(
+            store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.transactionJws,
+            "signed-transaction-1"
+        )
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.backendSyncedAt)
+    }
+
+    private func assertOrdinaryReceiptSyncAccepts(
+        responseCustomerId: String?
+    ) async {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = InMemoryTransactionEvidenceStore()
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["pro"]
+            ),
+        ]))
+        let features = PurchaseBackedFeatureRecorder()
+        let events = PurchaseBackedEventSink()
+        let observer = TransactionObserver(
+            api: OrdinaryReceiptSyncAPI(responseCustomerId: responseCustomerId),
+            features: features,
+            identity: identity,
+            settings: NuxieRuntimeSettings(
+                configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+            ),
+            eventSink: events,
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: store,
+            localAccessStore: InMemoryLocalPurchaseAccessStore(),
+            purchaseStorageScope: scope,
+            dateProvider: MockDateProvider(
+                initialDate: Date(timeIntervalSince1970: 100)
+            ),
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        let accepted = await observer.syncTransaction(
+            transactionJws: "signed-transaction-1",
+            transactionId: "transaction-1",
+            productId: "product-transaction-1",
+            originalTransactionId: "original-transaction-1"
+        )
+
+        XCTAssertTrue(accepted)
+        let purchaseUpdateCount = await features.recordedPurchaseUpdateCount()
+        XCTAssertEqual(purchaseUpdateCount, 1)
+        XCTAssertEqual(events.events().count, 1)
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
     }
 
     func testShutdownDrainsAcceptedUseBeforeClosingTheEvidenceStoreLifecycle() async throws {
@@ -1203,7 +1611,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             _ = try await use.value
             XCTFail("Expected teardown to cancel the stale lifecycle result")
         } catch is CancellationError {}
-        XCTAssertNil(store.load()["transaction-1"])
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
         XCTAssertEqual(events.captureAttempts().count, 1)
         XCTAssertEqual(events.events().count, 1)
     }
@@ -1247,7 +1655,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             _ = try await use.value
             XCTFail("Expected the stale customer request to be cancelled")
         } catch is CancellationError {}
-        XCTAssertNil(store.load()["transaction-1"])
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
         let updateCount = await features.recordedUpdates().count
         XCTAssertEqual(updateCount, 0)
         let captures = events.captureAttempts()
@@ -1292,7 +1700,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             metadata: nil
         )
 
-        let evidence = try XCTUnwrap(store.load()["transaction-1"])
+        let evidence = try XCTUnwrap(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
         XCTAssertEqual(evidence.transactionJws, "")
         XCTAssertNotNil(evidence.backendSyncedAt)
         XCTAssertTrue(evidence.finishRequired)

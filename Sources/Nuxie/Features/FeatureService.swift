@@ -871,7 +871,21 @@ internal actor FeatureService: FeatureServiceProtocol {
         let distinctId = identityService.getDistinctId()
         guard durableAccessHydratedDistinctId != distinctId else { return }
 
-        let accesses = localPurchaseAccessStore.load().values.filter {
+        let storedAccesses: [String: StoredLocalPurchaseAccess]
+        switch localPurchaseAccessStore.load() {
+        case .absent:
+            // No file is legitimate emptiness for a customer who never
+            // purchased; cache the hydration so feature reads stay reads.
+            durableAccessHydratedDistinctId = distinctId
+            return
+        case .unreadable:
+            // Leave hydration unset so a later call can retry once the file
+            // becomes readable; never treat unreadable as empty (A12).
+            return
+        case .value(let value):
+            storedAccesses = value
+        }
+        let accesses = storedAccesses.values.filter {
             $0.distinctId == distinctId
         }
         let activeFeatureIds = Set(

@@ -263,6 +263,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private var transactionSyncOperations: [String: TransactionSyncOperation] = [:]
     private var completedPurchaseEventTransactionIds: Set<String> = []
     private var evidenceByTransactionId: [String: StoredTransactionEvidence]?
+    private var evidenceStoreUnreadable = false
     /// Serializes the one purchase-backed Feature command that may consume a
     /// transaction's initial metered grant. Actor reentrancy otherwise lets a
     /// background receipt sync race the atomic command while its request is
@@ -757,10 +758,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         guard active != .unavailable else { return nil }
         switch source {
         case .storeUpdates:
-            let durable = await transactionService.durablePurchaseEvidenceAuthority(
+            let durableResult = await transactionService.durablePurchaseEvidenceAuthority(
                 appAccountToken: appAccountToken,
                 productId: productId
             )
+            let durable: PurchaseEvidenceAuthority?
+            switch durableResult {
+            case .absent:
+                durable = nil
+            case .value(let authority):
+                durable = authority
+            case .unreadable:
+                return nil
+            }
             return checkoutRecovery?.evidenceAuthority.durableProductAuthority
                 ?? durable
                 ?? active.resolvedAuthority
@@ -777,23 +787,40 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let transactionIdString = transaction.transactionId
         let isRevoked = transaction.isRevoked
         let stored = storedEvidence()[transactionIdString]
+        if isRevoked {
+            // The local denial must precede every unreadable-store deferral
+            // below (evidence, pending purchases, ownership): no storage
+            // failure may keep revoked paid access alive (A12). The main
+            // revocation branch repeats these removals idempotently before
+            // its evidence-dependent work.
+            await featureService.removeLocalPurchase(
+                transactionId: providerLocalAccessTransactionId(
+                    storeProductId: transaction.productId
+                ),
+                grants: []
+            )
+            await featureService.removeLocalPurchase(
+                transactionId: transactionIdString,
+                grants: []
+            )
+            await removeLocalAccess(
+                originalTransactionId: transaction.originalTransactionId
+            )
+        }
+        guard !evidenceStoreUnreadable else { return }
         let transactionService = transactionServiceProvider()
         let checkoutRecovery = await transactionService.checkoutRecoveryRecord(
             appAccountToken: transaction.appAccountToken,
             productId: transaction.productId
         )
+        guard !(await transactionService.pendingPurchaseStoreIsUnreadable()) else { return }
         guard let evidenceAuthority = await resolvedEvidenceAuthority(
             transactionService: transactionService,
             appAccountToken: transaction.appAccountToken,
             productId: transaction.productId,
             checkoutRecovery: checkoutRecovery,
             source: source
-        ) else {
-            LogDebug(
-                "TransactionObserver: Product authority unavailable; deferring \(transactionIdString)"
-            )
-            return
-        }
+        ) else { return }
         let policy = transactionProcessingPolicy(
             source: source,
             evidenceAuthority: evidenceAuthority,
@@ -809,9 +836,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         } else {
             nil
         }
-        let purchaseAccountOwner = await transactionService.purchaseAccountOwner(
+        let purchaseAccountOwnerResult = await transactionService.purchaseAccountOwner(
             appAccountToken: transaction.appAccountToken
-        ) ?? deterministicAccountOwner
+        )
+        guard !purchaseAccountOwnerResult.isUnreadable else { return }
+        let purchaseAccountOwner = purchaseAccountOwnerResult.readableValue
+            ?? deterministicAccountOwner
         // Signed connector authority owns its StoreKit updates. An unsigned
         // outcome-only delegate is deliberately different: exact checkout
         // context is bounded, but the deterministic Nuxie account token keeps
@@ -984,6 +1014,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     LogWarning(
                         "TransactionObserver: Deferred purchase owner is ambiguous; leaving transaction unfinished"
                     )
+                    return
+                case .unavailable:
                     return
                 }
             }
@@ -1227,7 +1259,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             )
         }
 
-        let distinctId = storedEvidence()[transactionId]?.distinctId
+        let durableEvidence = storedEvidence()[transactionId]
+        guard !evidenceStoreUnreadable else { return false }
+        let distinctId = durableEvidence?.distinctId
             ?? identityService.getDistinctId()
         let operationId = UUID()
         let task = Task { [weak self] in
@@ -1298,6 +1332,21 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             )
 
             if response.success {
+                // The current service returns its internal UUID rather than
+                // echoing distinctId. That representation is not comparable
+                // here, so validate only customer IDs the service echoes in
+                // the initiating representation until the wire contract is
+                // corrected.
+                if let responseCustomerId = response.customerId,
+                   responseCustomerId != distinctId,
+                   UUID(uuidString: responseCustomerId) == nil {
+                    LogError(
+                        "TransactionObserver: Invalid sync customer for \(transactionId)"
+                    )
+                    return false
+                }
+                let acceptedEvidence = storedEvidence()[transactionId]
+                guard !evidenceStoreUnreadable else { return false }
                 guard !isStopped,
                       lifecycleGeneration == requestLifecycleGeneration else {
                     return false
@@ -1314,8 +1363,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                       lifecycleGeneration == requestLifecycleGeneration else {
                     return false
                 }
-
-                let acceptedEvidence = storedEvidence()[transactionId]
                 syncedTransactionIds.insert(dedupeKey)
                 if let stored = storedEvidence()[transactionId],
                    retainEvidenceAfterSync
@@ -1327,7 +1374,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     )) else { return false }
                 } else if !retainEvidenceAfterSync,
                           storedEvidence()[transactionId]?.finishRequired != true {
-                    _ = removeEvidence(transactionId: transactionId)
+                    guard removeEvidence(transactionId: transactionId) else {
+                        return false
+                    }
                 }
 
                 if identityService.getDistinctId() == distinctId {
@@ -1335,7 +1384,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         "transaction_id": transactionId,
                         "original_transaction_id": originalTransactionId ?? "",
                         "product_id": productId ?? "",
-                        "customer_id": response.customerId ?? ""
+                        "customer_id": distinctId
                     ]
                     if let context = acceptedEvidence?.commercialContext {
                         properties["experience_id"] = context.experienceId
@@ -1476,7 +1525,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             guard identityService.getDistinctId() == distinctId else {
                 throw CancellationError()
             }
-            let candidates = storedEvidence().values
+            let evidenceById = storedEvidence()
+            if evidenceStoreUnreadable {
+                // An unreadable evidence file must not demote a protected
+                // purchase to the ordinary usage command; the caller retries
+                // once the store is readable again (A12).
+                throw CommerceStoreError.evidenceUnreadable
+            }
+            let candidates = evidenceById.values
                 .filter({ evidence in
                     evidence.distinctId == distinctId
                         && evidence.scope == purchaseStorageScope
@@ -1680,6 +1736,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             appAccountToken: appAccountToken,
             productId: evidence.productId
         )
+        guard !(await transactionService.pendingPurchaseStoreIsUnreadable()) else {
+            return .noMatch
+        }
         if recovery?.observedTransactionId == evidence.transactionId {
             return .recovered
         }
@@ -1692,9 +1751,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         ) else { return .noMatch }
         guard evidenceAuthority != .providerConnector,
               evidenceAuthority != .ambiguous else { return .noMatch }
-        let durableAccountOwner = await transactionService.purchaseAccountOwner(
+        let durableAccountOwnerResult = await transactionService.purchaseAccountOwner(
             appAccountToken: appAccountToken
         )
+        guard !durableAccountOwnerResult.isUnreadable else { return .noMatch }
+        let durableAccountOwner = durableAccountOwnerResult.readableValue
         let expectedDistinctId = attributedDistinctId
             ?? identityService.getDistinctId()
         let deterministicAccountOwner = appAccountToken
@@ -1876,7 +1937,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         guard !completedPurchaseEventTransactionIds.contains(transactionId) else {
             return false
         }
-        if let stored = storedEvidence()[transactionId] {
+        let stored = storedEvidence()[transactionId]
+        guard !evidenceStoreUnreadable else { return false }
+        if let stored {
             guard stored.completionDeliveredAt == nil else { return false }
         }
         completedPurchaseEventTransactionIds.insert(transactionId)
@@ -1884,7 +1947,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     func markPurchaseCompletionCaptured(transactionId: String) async -> Bool {
-        guard let stored = storedEvidence()[transactionId] else { return true }
+        let stored = storedEvidence()[transactionId]
+        guard !evidenceStoreUnreadable else { return false }
+        guard let stored else { return true }
         guard stored.completionDeliveredAt == nil else { return true }
         let delivered = StoredTransactionEvidence(
                 scope: stored.scope,
@@ -1922,14 +1987,38 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     private func storedEvidence() -> [String: StoredTransactionEvidence] {
         if let evidenceByTransactionId { return evidenceByTransactionId }
-        let loaded = evidenceStore.load().filter {
+        let allEntries: [String: StoredTransactionEvidence]
+        switch evidenceStore.load() {
+        case .absent:
+            allEntries = [:]
+        case .value(let entries):
+            allEntries = entries
+        case .unreadable:
+            evidenceStoreUnreadable = true
+            return [:]
+        }
+        evidenceStoreUnreadable = false
+        let loaded = allEntries.filter {
             $0.value.scope == purchaseStorageScope
         }
         let cutoff = dateProvider.date(
             byAddingTimeInterval: -Self.evidenceRetention,
             to: dateProvider.now()
         )
-        let retained = loaded.filter { $0.value.recordedAt > cutoff }
+        let expiredUnsyncedCount = loaded.values.filter {
+            $0.recordedAt <= cutoff && $0.backendSyncedAt == nil
+        }.count
+        if expiredUnsyncedCount > 0 {
+            LogWarning(
+                "TransactionObserver: Retaining \(expiredUnsyncedCount, privacy: .publicValue) old unsynced receipts"
+            )
+        }
+        // Acknowledged evidence is bounded by the retention horizon. Unsynced
+        // evidence is bounded by the small number of transactions still waiting
+        // for backend retry, which runs on every launch, so it must not expire.
+        let retained = loaded.filter {
+            $0.value.backendSyncedAt == nil || $0.value.recordedAt > cutoff
+        }
         if retained.count != loaded.count {
             guard evidenceStore.save(retained) else {
                 // Do not cache a pruned snapshot that was not durably written.
@@ -1945,6 +2034,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func persistEvidence(_ evidence: StoredTransactionEvidence) -> Bool {
         guard evidence.scope == purchaseStorageScope else { return false }
         var entries = storedEvidence()
+        guard !evidenceStoreUnreadable else { return false }
         entries[evidence.transactionId] = evidence
         guard evidenceStore.save(entries) else { return false }
         evidenceByTransactionId = entries
@@ -1954,6 +2044,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     @discardableResult
     func removeEvidence(transactionId: String) -> Bool {
         var entries = storedEvidence()
+        guard !evidenceStoreUnreadable else { return false }
         entries.removeValue(forKey: transactionId)
         guard evidenceStore.save(entries) else { return false }
         evidenceByTransactionId = entries
@@ -1961,7 +2052,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     private func storedLocalAccess() -> [String: StoredLocalPurchaseAccess] {
-        localAccessStore.load()
+        localAccessStore.load().readableValue ?? [:]
     }
 
     @discardableResult

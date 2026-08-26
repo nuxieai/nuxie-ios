@@ -92,9 +92,9 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                 )
 
                 store.save([evidence.transactionId: evidence])
-                expect(store.load()[evidence.transactionId]) == evidence
+                expect(store.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]) == evidence
                 store.save([:])
-                expect(store.load()).to(beEmpty())
+                expect(store.load().valueTreatingAbsentAsEmpty([:])!).to(beEmpty())
             }
 
             it("round trips local access independently from receipt evidence") {
@@ -119,9 +119,9 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                 )
 
                 expect(store.save([access.transactionId: access])).to(beTrue())
-                expect(store.load()[access.transactionId]) == access
+                expect(store.load().valueTreatingAbsentAsEmpty([:])![access.transactionId]) == access
                 expect(store.save([:])).to(beTrue())
-                expect(store.load()).to(beEmpty())
+                expect(store.load().valueTreatingAbsentAsEmpty([:])!).to(beEmpty())
             }
         }
     }
@@ -178,8 +178,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         )
 
         XCTAssertFalse(recorded)
-        XCTAssertTrue(evidenceStore.load().isEmpty)
-        XCTAssertTrue(accessStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertTrue(accessStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
     func testLocalAccessSurvivesEvidenceRetirementAndRelaunch() async {
@@ -245,8 +245,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             originalTransactionId: evidence.originalTransactionId
         )
         XCTAssertTrue(synced)
-        XCTAssertTrue(evidenceStore.load().isEmpty)
-        XCTAssertNotNil(accessStore.load()[evidence.transactionId])
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertNotNil(accessStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
 
         let relaunchedFeatures = FeatureService(
             api: mocks.nuxieApi,
@@ -337,7 +337,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         await observer.retryStoredEvidence()
 
         XCTAssertEqual(
-            accessStore.load()[evidence.transactionId]?.state,
+            accessStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.state,
             .revoked
         )
         let access = await features.getCached(
@@ -445,7 +445,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         await observer.retryStoredEvidence()
 
         XCTAssertEqual(
-            accessStore.load()[access.transactionId]?.state,
+            accessStore.load().valueTreatingAbsentAsEmpty([:])![access.transactionId]?.state,
             .revoked
         )
         let cached = await features.getCached(
@@ -496,7 +496,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         await observer.retryStoredEvidence()
 
         XCTAssertFalse(eventSink.names.contains(SystemEventNames.purchaseSynced))
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
     func testStoredRevocationAppliesServerStateButKeepsUnmatchedFinishOwnership() async {
@@ -562,7 +562,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             entityId: nil
         )
         XCTAssertEqual(access?.allowed, false)
-        let retained = evidenceStore.load()[evidence.transactionId]
+        let retained = evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]
         XCTAssertEqual(retained?.finishRequired, true)
         XCTAssertEqual(retained?.transactionJws, "")
         XCTAssertNotNil(retained?.backendSyncedAt)
@@ -619,9 +619,9 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             originalTransactionId: evidence.originalTransactionId
         )
         XCTAssertTrue(firstSync)
-        XCTAssertTrue(evidenceStore.load()[evidence.transactionId]?.finishRequired == true)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.finishRequired == true)
         await observer.markTransactionFinished(transactionId: evidence.transactionId)
-        XCTAssertNil(evidenceStore.load()[evidence.transactionId])
+        XCTAssertNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
 
         // Model the direct purchase callback persisting after the observer has
         // already completed the same transaction from Transaction.updates.
@@ -632,7 +632,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             finishRequired: true
         )
         XCTAssertTrue(lateRecord)
-        XCTAssertNotNil(evidenceStore.load()[evidence.transactionId])
+        XCTAssertNotNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
         let deduplicatedSync = await observer.syncTransaction(
             transactionJws: evidence.transactionJws,
             transactionId: evidence.transactionId,
@@ -640,6 +640,6 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             originalTransactionId: evidence.originalTransactionId
         )
         XCTAssertTrue(deduplicatedSync)
-        XCTAssertTrue(evidenceStore.load()[evidence.transactionId]?.finishRequired == true)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.finishRequired == true)
     }
 }

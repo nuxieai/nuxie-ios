@@ -105,6 +105,7 @@ final class FeatureServiceTests: AsyncSpec {
             var mockIdentityService: MockIdentityService!
             var featureCheck: FeatureCheckFake!
             var featureInfo: FeatureInfo!
+            var storageURLs: [URL] = []
 
             beforeEach {
                 mockFactory = MockFactory.shared
@@ -122,6 +123,91 @@ final class FeatureServiceTests: AsyncSpec {
                     cacheTTL: 5 * 60
                 )
                 mockIdentityService.setDistinctId("customer-123")
+            }
+
+            afterEach {
+                for storageURL in storageURLs {
+                    try? FileManager.default.removeItem(at: storageURL)
+                }
+                storageURLs.removeAll()
+            }
+
+            it("retries durable revocation hydration after unreadable local access") {
+                let featureId = "repaired_revocation"
+                let scope = PurchaseStorageScope.testFixture
+                let storageURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(
+                        "feature-access-corruption-\(UUID().uuidString)",
+                        isDirectory: true
+                    )
+                storageURLs.append(storageURL)
+                let store = LocalPurchaseAccessStore(
+                    customStoragePath: storageURL,
+                    scope: scope
+                )
+                let directory = scope.storageDirectory(
+                    customStoragePath: storageURL
+                )
+                let file = directory.appendingPathComponent(
+                    "local-purchase-access.json"
+                )
+                try Data("{ unreadable".utf8).write(to: file)
+                mockProfileService.setProfileResponse(
+                    Self.makeProfileResponse(
+                        feature: Feature(
+                            id: featureId,
+                            type: .boolean,
+                            balance: nil,
+                            unlimited: true,
+                            nextResetAt: nil,
+                            interval: nil,
+                            entities: nil
+                        )
+                    )
+                )
+                _ = try await mockProfileService.refetchProfile(
+                    distinctId: "customer-123"
+                )
+                let service = FeatureService(
+                    api: featureCheck,
+                    identity: mockIdentityService,
+                    profile: mockProfileService,
+                    dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(),
+                    cacheTTL: 5 * 60,
+                    localPurchaseAccessStore: store
+                )
+
+                let beforeRepair = await service.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(beforeRepair?.allowed).to(beTrue())
+
+                let revoked = StoredLocalPurchaseAccess(
+                    scope: scope,
+                    transactionId: "transaction-repaired-revocation",
+                    originalTransactionId: "original-repaired-revocation",
+                    productId: "product-repaired-revocation",
+                    distinctId: "customer-123",
+                    grants: [StoredLocalEntitlementGrant(
+                        featureId: featureId,
+                        featureExternalId: nil,
+                        allowanceType: "boolean",
+                        allowance: nil
+                    )],
+                    state: .revoked
+                )
+                let repaired = try JSONEncoder().encode([
+                    revoked.transactionId: revoked,
+                ])
+                try repaired.write(to: file, options: .atomic)
+
+                let afterRepair = await service.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(afterRepair?.allowed).to(beFalse())
             }
 
             it("keeps transitive credit units separate from requested feature access") {
@@ -843,7 +929,7 @@ final class FeatureServiceTests: AsyncSpec {
                     entityId: nil
                 )
                 expect(restored.allowed).to(beTrue())
-                expect(accessStore.load()).to(beEmpty())
+                expect(accessStore.load().valueTreatingAbsentAsEmpty([:])!).to(beEmpty())
 
                 let unrelatedAccess = StoredLocalPurchaseAccess(
                     transactionId: "unrelated-transaction",
@@ -860,7 +946,7 @@ final class FeatureServiceTests: AsyncSpec {
                 )
                 expect(accessStore.upsert(unrelatedAccess)).to(beTrue())
                 expect(
-                    accessStore.load()[revokedAccess.transactionId]
+                    accessStore.load().valueTreatingAbsentAsEmpty([:])![revokedAccess.transactionId]
                 ).to(beNil())
 
                 let relaunchedService = FeatureService(
@@ -921,7 +1007,7 @@ final class FeatureServiceTests: AsyncSpec {
                 ], distinctId: "customer-a")
 
                 expect(
-                    accessStore.load()[revokedAccess.transactionId]
+                    accessStore.load().valueTreatingAbsentAsEmpty([:])![revokedAccess.transactionId]
                 ).to(equal(revokedAccess))
                 let access = await service.getCached(
                     featureId: featureId,

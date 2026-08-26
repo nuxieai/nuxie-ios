@@ -92,7 +92,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
 }
 
 protocol TransactionEvidenceStoreProtocol: Sendable {
-    func load() -> [String: StoredTransactionEvidence]
+    func load() -> StoreReadResult<[String: StoredTransactionEvidence]>
     @discardableResult
     func save(_ entries: [String: StoredTransactionEvidence]) -> Bool
 }
@@ -102,6 +102,7 @@ protocol TransactionEvidenceStoreProtocol: Sendable {
 /// state. The file uses iOS data protection when available.
 final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
     private let fileURL: URL
+    private let readFailureLogger = StoreReadFailureLogger()
 
     init(
         customStoragePath: URL? = nil,
@@ -115,18 +116,29 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
         )
     }
 
-    func load() -> [String: StoredTransactionEvidence] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [:] }
+    func load() -> StoreReadResult<[String: StoredTransactionEvidence]> {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return .absent
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(
-            [String: StoredTransactionEvidence].self,
-            from: data
-        )) ?? [:]
+        do {
+            let data = try Data(contentsOf: fileURL)
+            return .value(try decoder.decode(
+                [String: StoredTransactionEvidence].self,
+                from: data
+            ))
+        } catch {
+            if readFailureLogger.shouldLog() {
+                LogError("TransactionEvidenceStore: evidence is unreadable: \(error)")
+            }
+            return .unreadable
+        }
     }
 
     @discardableResult
     func save(_ entries: [String: StoredTransactionEvidence]) -> Bool {
+        guard !load().isUnreadable else { return false }
         if entries.isEmpty {
             do {
                 try FileManager.default.removeItem(at: fileURL)
@@ -165,10 +177,10 @@ final class InMemoryTransactionEvidenceStore:
     private let lock = NSLock()
     private var entries: [String: StoredTransactionEvidence] = [:]
 
-    func load() -> [String: StoredTransactionEvidence] {
+    func load() -> StoreReadResult<[String: StoredTransactionEvidence]> {
         lock.lock()
         defer { lock.unlock() }
-        return entries
+        return .value(entries)
     }
 
     @discardableResult
