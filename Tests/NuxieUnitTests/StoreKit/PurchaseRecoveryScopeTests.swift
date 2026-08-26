@@ -384,8 +384,8 @@ private final class ControlledTransactionEvidenceStore:
         self.saveSucceeds = saveSucceeds
     }
 
-    func load() -> [String: StoredTransactionEvidence] {
-        lock.withLock { entries }
+    func load() -> StoreReadResult<[String: StoredTransactionEvidence]> {
+        lock.withLock { .value(entries) }
     }
 
     func save(_ entries: [String: StoredTransactionEvidence]) -> Bool {
@@ -640,8 +640,8 @@ private final class FailingPendingPurchaseStore:
         self.entries = entries
     }
 
-    func load() -> [String: PendingPurchaseRecord] {
-        lock.withLock { entries }
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]> {
+        lock.withLock { .value(entries) }
     }
 
     func save(_: [String: PendingPurchaseRecord]) -> Bool { false }
@@ -654,8 +654,8 @@ private final class RecoveryDeletionFailureStore:
     private let lock = NSLock()
     private var entries: [String: PendingPurchaseRecord] = [:]
 
-    func load() -> [String: PendingPurchaseRecord] {
-        lock.withLock { entries }
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]> {
+        lock.withLock { .value(entries) }
     }
 
     func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
@@ -993,7 +993,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         await harness.handle()
 
         XCTAssertTrue(harness.api.recordedCustomers.isEmpty, file: file, line: line)
-        XCTAssertTrue(harness.evidenceStore.load().isEmpty, file: file, line: line)
+        XCTAssertTrue(harness.evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty, file: file, line: line)
         XCTAssertTrue(harness.eventSink.events.isEmpty, file: file, line: line)
         let appliedTransactions = await harness.features.appliedTransactions()
         XCTAssertTrue(appliedTransactions.isEmpty, file: file, line: line)
@@ -1207,7 +1207,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
         XCTAssertEqual(result, .noMatch)
         XCTAssertTrue(api.recordedCustomers.isEmpty)
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 0)
     }
@@ -1229,7 +1229,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         await harness.handle()
 
         XCTAssertTrue(harness.api.recordedCustomers.isEmpty)
-        XCTAssertTrue(harness.evidenceStore.load().isEmpty)
+        XCTAssertTrue(harness.evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertEqual(
             harness.eventSink.events.map(\.name),
             [SystemEventNames.purchaseCompleted]
@@ -1254,7 +1254,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
 
         XCTAssertTrue(harness.api.recordedCustomers.isEmpty)
-        XCTAssertTrue(harness.evidenceStore.load().isEmpty)
+        XCTAssertTrue(harness.evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertTrue(harness.eventSink.events.isEmpty)
         let appliedTransactions = await harness.features.appliedTransactions()
         XCTAssertTrue(appliedTransactions.isEmpty)
@@ -1337,7 +1337,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink.events.map(\.name),
             [SystemEventNames.purchaseSynced]
         )
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
     func testNoCacheOfflineStartupRecoversOnceAfterProductAuthorityAdmission() async {
@@ -1606,7 +1606,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 0)
         XCTAssertTrue(eventSink.events.isEmpty)
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
 
         let token = scope.appAccountToken(distinctId: "customer-a")
         XCTAssertTrue(pendingStore.save(["customer-a::store-product-1":
@@ -1637,7 +1637,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertTrue(api.recordedCustomers.isEmpty)
         let retainedFinishCount = await finishes.count()
         XCTAssertEqual(retainedFinishCount, 0)
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
     func testLateNativeStoreUpdateKeepsDurableAuthorityAfterProviderRollout() async {
@@ -1726,7 +1726,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(harness.api.recordedCustomers, ["customer-a"])
         let finishCount = await harness.finishes.count()
         XCTAssertEqual(finishCount, 1)
-        let retainedCoordination = harness.pendingStore.load().values.first
+        let retainedCoordination = harness.pendingStore.load().valueTreatingAbsentAsEmpty([:])!.values.first
         XCTAssertEqual(
             retainedCoordination?.observedTransactionId,
             "outcome-only-update"
@@ -1737,7 +1737,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             [SystemEventNames.purchaseCompleted, SystemEventNames.purchaseSynced]
         )
         XCTAssertEqual(
-            harness.localAccessStore.load()["outcome-only-update"]?.grants
+            harness.localAccessStore.load().valueTreatingAbsentAsEmpty([:])!["outcome-only-update"]?.grants
                 .map(\.featureId),
             ["premium"]
         )
@@ -2022,7 +2022,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         // The commercial purchase succeeded. Capture failure must retain
         // recovery without surfacing a false failure that invites repurchase.
         _ = try await service.purchase(product)
-        let retained = try XCTUnwrap(pendingStore.load().values.first)
+        let retained = try XCTUnwrap(pendingStore.load().valueTreatingAbsentAsEmpty([:])!.values.first)
         XCTAssertNil(retained.completionReportedAt)
         XCTAssertFalse(retained.checkoutCompletionEventId.isEmpty)
         XCTAssertEqual(eventSink.routedAttemptCount, 1)
@@ -2131,7 +2131,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )]
 
         _ = try await service.purchase(product)
-        let retained = try XCTUnwrap(pendingStore.load().values.first)
+        let retained = try XCTUnwrap(pendingStore.load().valueTreatingAbsentAsEmpty([:])!.values.first)
         XCTAssertEqual(retained.state, .checkout)
         XCTAssertNil(retained.completionReportedAt)
         XCTAssertEqual(eventSink.routedAttemptCount, 1)
@@ -2169,7 +2169,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertTrue(api.recordedCustomers.isEmpty)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 0)
-        XCTAssertTrue(pendingStore.load().isEmpty)
+        XCTAssertTrue(pendingStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
     func testRelaunchAfterPreCallbackWindowUsesOnlyStableTokenOwnership() async throws {
@@ -2304,7 +2304,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             ]
         )
         XCTAssertEqual(
-            localAccessStore.load()["inside-window-transaction"]?
+            localAccessStore.load().valueTreatingAbsentAsEmpty([:])!["inside-window-transaction"]?
                 .grants.map(\.featureId),
             ["premium"]
         )
@@ -2374,11 +2374,11 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 SystemEventNames.purchaseSynced,
             ]
         )
-        XCTAssertNil(localAccessStore.load()["post-crash-transaction"])
+        XCTAssertNil(localAccessStore.load().valueTreatingAbsentAsEmpty([:])!["post-crash-transaction"])
         XCTAssertTrue(PendingPurchaseStore(
             customStoragePath: root,
             scope: scope
-        ).load().isEmpty)
+        ).load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
 
         purchase.cancel()
         timelyPurchase.cancel()
@@ -2396,13 +2396,13 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(harness.api.recordedCustomers, ["customer-a"])
         let finishCount = await harness.finishes.count()
         XCTAssertEqual(finishCount, 1)
-        XCTAssertTrue(harness.pendingStore.load().isEmpty)
+        XCTAssertTrue(harness.pendingStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertEqual(
             harness.eventSink.events.map(\.name),
             [SystemEventNames.purchaseSynced]
         )
         XCTAssertNil(
-            harness.localAccessStore.load()["outcome-only-update"]
+            harness.localAccessStore.load().valueTreatingAbsentAsEmpty([:])!["outcome-only-update"]
         )
     }
 
@@ -2529,7 +2529,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
 
         XCTAssertFalse(consumed)
-        XCTAssertEqual(store.load()["customer::store-product-1"], record)
+        XCTAssertEqual(store.load().valueTreatingAbsentAsEmpty([:])!["customer::store-product-1"], record)
     }
 
     func testDurablePurchaseArtifactsCannotCrossRuntimeScopes() throws {
@@ -2567,8 +2567,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
 
         XCTAssertTrue(liveStore.save([evidence.transactionId: evidence]))
-        XCTAssertEqual(liveStore.load()[evidence.transactionId], evidence)
-        XCTAssertTrue(testStore.load().isEmpty)
+        XCTAssertEqual(liveStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId], evidence)
+        XCTAssertTrue(testStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
 
         let liveAccess = LocalPurchaseAccessStore(
             customStoragePath: root,
@@ -2588,8 +2588,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             state: .active
         )
         XCTAssertTrue(liveAccess.save([access.transactionId: access]))
-        XCTAssertNotNil(liveAccess.load()[access.transactionId])
-        XCTAssertTrue(testAccess.load().isEmpty)
+        XCTAssertNotNil(liveAccess.load().valueTreatingAbsentAsEmpty([:])![access.transactionId])
+        XCTAssertTrue(testAccess.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
 
         let liveRecovery = PendingPurchaseStore(
             customStoragePath: root,
@@ -2609,8 +2609,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             state: .checkout
         )
         XCTAssertTrue(liveRecovery.save(["recovery": recovery]))
-        XCTAssertNotNil(liveRecovery.load()["recovery"])
-        XCTAssertTrue(testRecovery.load().isEmpty)
+        XCTAssertNotNil(liveRecovery.load().valueTreatingAbsentAsEmpty([:])!["recovery"])
+        XCTAssertTrue(testRecovery.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
 
         let liveOwnership = PurchaseAccountOwnershipStore(
             customStoragePath: root,
@@ -2738,18 +2738,18 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 1)
         XCTAssertEqual(api.recordedCustomers, ["customer-a"])
-        let retainedCoordination = recoveryStore.load().values.first
+        let retainedCoordination = recoveryStore.load().valueTreatingAbsentAsEmpty([:])!.values.first
         XCTAssertEqual(
             retainedCoordination?.observedTransactionId,
             evidence.transactionId
         )
         XCTAssertNil(retainedCoordination?.completionReportedAt)
         XCTAssertEqual(
-            evidenceStore.load()[evidence.transactionId]?.commercialContext,
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.commercialContext,
             commercialContext()
         )
         XCTAssertEqual(
-            accessStore.load()[evidence.transactionId]?.distinctId,
+            accessStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.distinctId,
             "customer-a"
         )
         let activeCustomerAccess = await features.getCached(
@@ -2834,7 +2834,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 0)
         XCTAssertEqual(
-            recoveryStore.load()["customer-a::store-product-1"],
+            recoveryStore.load().valueTreatingAbsentAsEmpty([:])!["customer-a::store-product-1"],
             recovery
         )
     }
@@ -2903,7 +2903,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
 
         XCTAssertTrue(didFinish)
-        XCTAssertTrue(store.load().isEmpty)
+        XCTAssertTrue(store.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 1)
     }
@@ -2972,7 +2972,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
 
         XCTAssertFalse(didFinish)
-        XCTAssertEqual(store.load()["customer-a::store-product-1"], recovery)
+        XCTAssertEqual(store.load().valueTreatingAbsentAsEmpty([:])!["customer-a::store-product-1"], recovery)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 0)
     }
@@ -3067,8 +3067,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertTrue(duplicate)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 1)
-        XCTAssertTrue(recoveryStore.load().isEmpty)
-        XCTAssertEqual(evidenceStore.load()[evidence.transactionId]?.finishRequired, false)
+        XCTAssertTrue(recoveryStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertEqual(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.finishRequired, false)
         XCTAssertEqual(api.recordedCustomers, ["customer-a", "customer-a"])
         let completions = eventSink.events.filter {
             $0.name == SystemEventNames.purchaseCompleted
@@ -3199,7 +3199,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertNotNil(TransactionEvidenceStore(
             customStoragePath: root,
             scope: scope
-        ).load()[evidence.transactionId])
+        ).load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
         XCTAssertEqual(
             firstEvents.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count,
             1
@@ -3214,38 +3214,40 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertTrue(TransactionEvidenceStore(
             customStoragePath: root,
             scope: scope
-        ).load().isEmpty)
+        ).load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertTrue(finalEvents.events.filter {
             $0.name == SystemEventNames.purchaseCompleted
         }.isEmpty)
     }
 
-    func testExpiredReceiptEvidenceIsPrunedWithoutCrossingScope() async {
+    func testNinetyOneDayOldUnsyncedConsumableRetriesBeforeBecomingPrunable() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("customer-a")
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let dateProvider = MockDateProvider(initialDate: now)
         let scope = PurchaseStorageScope(
             appIdentifierHash: "app-a",
             environment: "production",
             storeEnvironment: .appStore
         )
         let evidenceStore = InMemoryTransactionEvidenceStore()
-        let expired = StoredTransactionEvidence(
+        let unsynced = StoredTransactionEvidence(
             scope: scope,
-            transactionJws: "expired-jws",
-            transactionId: "expired",
+            transactionJws: "unsynced-consumable-jws",
+            transactionId: "unsynced-consumable",
             originalTransactionId: "original",
             productId: "product",
             distinctId: "customer-a",
-            recordedAt: Date(timeIntervalSince1970: 0),
+            recordedAt: now.addingTimeInterval(-91 * 24 * 3600),
             localEntitlementGrants: [],
             isRevoked: false
         )
-        XCTAssertTrue(evidenceStore.save([expired.transactionId: expired]))
+        XCTAssertTrue(evidenceStore.save([unsynced.transactionId: unsynced]))
         let features = FeatureService(
             api: mocks.nuxieApi,
             identity: mocks.identityService,
             profile: mocks.profileService,
-            dateProvider: mocks.dateProvider,
+            dateProvider: dateProvider,
             featureInfo: FeatureInfo(),
             cacheTTL: 300
         )
@@ -3262,23 +3264,31 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             purchaseStorageScope: scope,
             identityService: mocks.identityService
         )
-        let observer = TransactionObserver(
-            api: RecoverySyncAPI(succeeds: false),
-            features: features,
-            identity: mocks.identityService,
-            settings: settings,
-            eventSink: RecoveryEventSink(),
-            transactionServiceProvider: { service },
-            evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
-            purchaseStorageScope: scope,
-            dateProvider: mocks.dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
+        func makeObserver(api: RecoverySyncAPI) -> TransactionObserver {
+            TransactionObserver(
+                api: api,
+                features: features,
+                identity: mocks.identityService,
+                settings: settings,
+                eventSink: RecoveryEventSink(),
+                transactionServiceProvider: { service },
+                evidenceStore: evidenceStore,
+                localAccessStore: InMemoryLocalPurchaseAccessStore(),
+                purchaseStorageScope: scope,
+                dateProvider: dateProvider,
+                activeStoreOriginalTransactionIDs: { [] }
+            )
+        }
 
-        await observer.retryStoredEvidence()
+        let offlineAPI = RecoverySyncAPI(succeeds: false)
+        await makeObserver(api: offlineAPI).retryStoredEvidence()
+        XCTAssertNotNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![unsynced.transactionId])
+        XCTAssertEqual(offlineAPI.recordedCustomers, ["customer-a"])
 
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        let acknowledgedAPI = RecoverySyncAPI(succeeds: true)
+        await makeObserver(api: acknowledgedAPI).retryStoredEvidence()
+        XCTAssertEqual(acknowledgedAPI.recordedCustomers, ["customer-a"])
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
     func testCompletionIsClaimedOnlyAfterDurableEventCapture() async {
@@ -3345,20 +3355,20 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         }
 
         await makeObserver().retryStoredEvidence()
-        XCTAssertNil(evidenceStore.load()[evidence.transactionId]?
+        XCTAssertNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?
             .completionDeliveredAt)
         XCTAssertTrue(events.captures.isEmpty)
 
         events.setCaptureSucceeds(true)
         evidenceStore.setSaveSucceeds(false)
         await makeObserver().retryStoredEvidence()
-        XCTAssertNil(evidenceStore.load()[evidence.transactionId]?
+        XCTAssertNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?
             .completionDeliveredAt)
         XCTAssertEqual(events.captures.count, 1)
 
         evidenceStore.setSaveSucceeds(true)
         await makeObserver().retryStoredEvidence()
-        XCTAssertNotNil(evidenceStore.load()[evidence.transactionId]?
+        XCTAssertNotNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?
             .completionDeliveredAt)
         XCTAssertEqual(events.captures.count, 2)
         XCTAssertEqual(Set(events.captures.map(\.eventId)).count, 1)
@@ -3434,7 +3444,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             transactionId: evidence.transactionId
         )
 
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertEqual(eventStore.stableDroppedIds, Set([eventId]))
         XCTAssertTrue(eventStore.storedEvents.isEmpty)
         XCTAssertTrue(eventStore.pendingIds.isEmpty)
@@ -3502,7 +3512,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         await observer.retryStoredEvidence()
 
         XCTAssertEqual(api.recordedCustomers, ["customer-a"])
-        let retained = evidenceStore.load()[evidence.transactionId]
+        let retained = evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]
         XCTAssertNotNil(retained)
         XCTAssertEqual(retained?.transactionJws, "")
         XCTAssertNotNil(retained?.backendSyncedAt)
@@ -3560,7 +3570,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
         await observer.retryStoredEvidence()
 
-        let retained = evidenceStore.load()[evidence.transactionId]
+        let retained = evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]
         XCTAssertEqual(api.recordedCustomers, ["customer-a"])
         XCTAssertNotNil(retained)
         XCTAssertEqual(retained?.finishRequired, true)
@@ -3630,7 +3640,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let scanCount = await entitlementScans.count()
         XCTAssertEqual(recordedCustomers, ["customer-a"])
         XCTAssertEqual(scanCount, 2)
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
     func testConcurrentTransactionSyncsShareOneBackendSubmissionAndEvent() async {
@@ -3797,7 +3807,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
         XCTAssertTrue(wasCancelled)
         XCTAssertEqual(requests, 1)
-        XCTAssertNotNil(evidenceStore.load()[evidence.transactionId])
+        XCTAssertNotNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
     }
 
     func testDirectSyncResponseAfterStopCannotMutateRetainedEvidenceOrEvents() async {
@@ -3860,10 +3870,10 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
         XCTAssertFalse(staleResult)
         XCTAssertEqual(
-            evidenceStore.load()[evidence.transactionId]?.transactionJws,
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.transactionJws,
             "signed-jws"
         )
-        XCTAssertNil(evidenceStore.load()[evidence.transactionId]?.backendSyncedAt)
+        XCTAssertNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.backendSyncedAt)
         XCTAssertTrue(events.events.filter {
             $0.name == SystemEventNames.purchaseSynced
         }.isEmpty)
@@ -3882,7 +3892,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             activeStoreOriginalTransactionIDs: { [] }
         )
         await nextSetup.retryStoredEvidence()
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
     func testStopListeningJoinsDirectSyncThroughAnInFlightFeatureUpdate() async {
@@ -3999,7 +4009,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
         await makeObserver().retryStoredEvidence()
         await makeObserver().retryStoredEvidence()
-        let retained = evidenceStore.load()[evidence.transactionId]
+        let retained = evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]
         XCTAssertNotNil(retained?.backendSyncedAt)
         XCTAssertNil(retained?.completionDeliveredAt)
         XCTAssertEqual(retained?.transactionJws, "")
@@ -4010,7 +4020,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
         mocks.identityService.setDistinctId("customer-a")
         await makeObserver().retryStoredEvidence()
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertEqual(api.recordedCustomers, ["customer-a"])
         XCTAssertEqual(events.events.filter {
             $0.name == SystemEventNames.purchaseCompleted
@@ -4078,13 +4088,13 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             transactionId: evidence.transactionId
         )
         XCTAssertFalse(firstRemoval)
-        XCTAssertNotNil(evidenceStore.load()[evidence.transactionId])
+        XCTAssertNotNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
         evidenceStore.setSaveSucceeds(true)
         let secondRemoval = await observer.removeEvidence(
             transactionId: evidence.transactionId
         )
         XCTAssertTrue(secondRemoval)
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
     func testExpiredEvidencePruneRetriesDurableSave() async {
@@ -4104,7 +4114,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             distinctId: "customer-a",
             recordedAt: Date(timeIntervalSince1970: 0),
             localEntitlementGrants: [],
-            isRevoked: false
+            isRevoked: false,
+            backendSyncedAt: Date(timeIntervalSince1970: 1)
         )
         let evidenceStore = ControlledTransactionEvidenceStore(
             entries: [expired.transactionId: expired],
@@ -4146,12 +4157,12 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
 
         await observer.retryStoredEvidence()
-        XCTAssertNotNil(evidenceStore.load()[expired.transactionId])
+        XCTAssertNotNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![expired.transactionId])
         XCTAssertTrue(api.recordedCustomers.isEmpty)
 
         evidenceStore.setSaveSucceeds(true)
         await observer.retryStoredEvidence()
-        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertTrue(api.recordedCustomers.isEmpty)
     }
 }

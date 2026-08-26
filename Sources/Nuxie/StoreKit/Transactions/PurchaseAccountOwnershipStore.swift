@@ -20,6 +20,10 @@ struct StoredPurchaseAccountOwnership: Codable, Equatable, Sendable {
 }
 
 protocol PurchaseAccountOwnershipStoreProtocol: Sendable {
+    func load() -> StoreReadResult<
+        [String: StoredPurchaseAccountOwnership]
+    >
+
     func owner(
         for appAccountToken: UUID,
         scope: PurchaseStorageScope
@@ -44,6 +48,7 @@ final class PurchaseAccountOwnershipStore:
 {
     private let fileURL: URL
     private let lock = NSLock()
+    private let readFailureLogger = StoreReadFailureLogger()
 
     init(
         customStoragePath: URL? = nil,
@@ -62,7 +67,10 @@ final class PurchaseAccountOwnershipStore:
         scope: PurchaseStorageScope
     ) -> String? {
         lock.withLock {
-            let ownership = loadUnlocked()[appAccountToken.uuidString]
+            guard case .value(let entries) = loadResultUnlocked(
+                absentValue: [:]
+            ) else { return nil }
+            let ownership = entries[appAccountToken.uuidString]
             guard ownership?.scope == scope else { return nil }
             return ownership?.distinctId
         }
@@ -74,7 +82,10 @@ final class PurchaseAccountOwnershipStore:
         scope: PurchaseStorageScope
     ) -> PurchaseEvidenceAuthority? {
         lock.withLock {
-            let ownership = loadUnlocked()[appAccountToken.uuidString]
+            guard case .value(let entries) = loadResultUnlocked(
+                absentValue: [:]
+            ) else { return nil }
+            let ownership = entries[appAccountToken.uuidString]
             guard ownership?.scope == scope else { return nil }
             return ownership?.productAuthorities[productId]
         }
@@ -82,7 +93,9 @@ final class PurchaseAccountOwnershipStore:
 
     func upsert(_ ownership: StoredPurchaseAccountOwnership) -> Bool {
         lock.withLock {
-            var entries = loadUnlocked()
+            guard case .value(var entries) = loadResultUnlocked(
+                absentValue: [:]
+            ) else { return false }
             let key = ownership.appAccountToken.uuidString
             let retainedAuthorities = entries[key]?.scope == ownership.scope
                 ? entries[key]?.productAuthorities ?? [:]
@@ -100,17 +113,37 @@ final class PurchaseAccountOwnershipStore:
         }
     }
 
-    private func loadUnlocked() -> [String: StoredPurchaseAccountOwnership] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [:] }
-        return (try? JSONDecoder().decode(
-            [String: StoredPurchaseAccountOwnership].self,
-            from: data
-        )) ?? [:]
+    func load() -> StoreReadResult<[String: StoredPurchaseAccountOwnership]> {
+        lock.withLock { loadResultUnlocked() }
+    }
+
+    private func loadResultUnlocked(
+        absentValue: [String: StoredPurchaseAccountOwnership]? = nil
+    ) -> StoreReadResult<[String: StoredPurchaseAccountOwnership]> {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            if let absentValue { return .value(absentValue) }
+            return .absent
+        }
+        do {
+            let data = try Data(contentsOf: fileURL)
+            return .value(try JSONDecoder().decode(
+                [String: StoredPurchaseAccountOwnership].self,
+                from: data
+            ))
+        } catch {
+            if readFailureLogger.shouldLog() {
+                LogError(
+                    "PurchaseAccountOwnershipStore: ownership is unreadable: \(error)"
+                )
+            }
+            return .unreadable
+        }
     }
 
     private func saveUnlocked(
         _ entries: [String: StoredPurchaseAccountOwnership]
     ) -> Bool {
+        guard !loadResultUnlocked().isUnreadable else { return false }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(entries) else {
@@ -136,6 +169,10 @@ final class InMemoryPurchaseAccountOwnershipStore:
 {
     private let lock = NSLock()
     private var entries: [String: StoredPurchaseAccountOwnership] = [:]
+
+    func load() -> StoreReadResult<[String: StoredPurchaseAccountOwnership]> {
+        lock.withLock { .value(entries) }
+    }
 
     func owner(
         for appAccountToken: UUID,

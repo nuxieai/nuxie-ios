@@ -34,7 +34,7 @@ struct StoredLocalPurchaseAccess: Codable, Equatable, Sendable {
 }
 
 protocol LocalPurchaseAccessStoreProtocol: Sendable {
-    func load() -> [String: StoredLocalPurchaseAccess]
+    func load() -> StoreReadResult<[String: StoredLocalPurchaseAccess]>
     @discardableResult
     func save(_ entries: [String: StoredLocalPurchaseAccess]) -> Bool
     @discardableResult
@@ -61,6 +61,7 @@ protocol LocalPurchaseAccessStoreProtocol: Sendable {
 final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
     private let fileURL: URL
     private let lock = NSLock()
+    private let readFailureLogger = StoreReadFailureLogger()
 
     init(
         customStoragePath: URL? = nil,
@@ -74,8 +75,8 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
         )
     }
 
-    func load() -> [String: StoredLocalPurchaseAccess] {
-        lock.withLock { loadUnlocked() }
+    func load() -> StoreReadResult<[String: StoredLocalPurchaseAccess]> {
+        lock.withLock { loadResultUnlocked() }
     }
 
     @discardableResult
@@ -85,7 +86,9 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
 
     func upsert(_ access: StoredLocalPurchaseAccess) -> Bool {
         lock.withLock {
-            var entries = loadUnlocked()
+            guard case .value(var entries) = loadResultUnlocked(
+                absentValue: [:]
+            ) else { return false }
             entries[access.transactionId] = access
             return saveUnlocked(entries)
         }
@@ -119,7 +122,9 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
         featureIds: Set<String>
     ) -> Bool {
         lock.withLock {
-            var entries = loadUnlocked()
+            guard case .value(var entries) = loadResultUnlocked(
+                absentValue: [:]
+            ) else { return false }
             var changed = false
             let revoked = entries.filter {
                 $0.value.distinctId == distinctId && $0.value.state == .revoked
@@ -148,18 +153,35 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
         }
     }
 
-    private func loadUnlocked() -> [String: StoredLocalPurchaseAccess] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [:] }
-        return (try? JSONDecoder().decode(
-            [String: StoredLocalPurchaseAccess].self,
-            from: data
-        )) ?? [:]
+    private func loadResultUnlocked(
+        absentValue: [String: StoredLocalPurchaseAccess]? = nil
+    ) -> StoreReadResult<[String: StoredLocalPurchaseAccess]> {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            if let absentValue { return .value(absentValue) }
+            return .absent
+        }
+        do {
+            let data = try Data(contentsOf: fileURL)
+            return .value(try JSONDecoder().decode(
+                [String: StoredLocalPurchaseAccess].self,
+                from: data
+            ))
+        } catch {
+            if readFailureLogger.shouldLog() {
+                LogError(
+                    "LocalPurchaseAccessStore: access ledger is unreadable: \(error)"
+                )
+            }
+            return .unreadable
+        }
     }
 
     private func markRevokedUnlocked(
         where shouldRevoke: (StoredLocalPurchaseAccess) -> Bool
     ) -> [StoredLocalPurchaseAccess]? {
-        var entries = loadUnlocked()
+        guard case .value(var entries) = loadResultUnlocked(
+            absentValue: [:]
+        ) else { return nil }
         let matching = entries.values.filter(shouldRevoke)
         guard !matching.isEmpty else { return [] }
         let revoked = matching.map {
@@ -182,6 +204,7 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
     private func saveUnlocked(
         _ entries: [String: StoredLocalPurchaseAccess]
     ) -> Bool {
+        guard !loadResultUnlocked().isUnreadable else { return false }
         if entries.isEmpty {
             do {
                 try FileManager.default.removeItem(at: fileURL)
@@ -219,8 +242,8 @@ final class InMemoryLocalPurchaseAccessStore:
     private let lock = NSLock()
     private var entries: [String: StoredLocalPurchaseAccess] = [:]
 
-    func load() -> [String: StoredLocalPurchaseAccess] {
-        lock.withLock { entries }
+    func load() -> StoreReadResult<[String: StoredLocalPurchaseAccess]> {
+        lock.withLock { .value(entries) }
     }
 
     @discardableResult

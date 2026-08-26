@@ -564,11 +564,6 @@
     "lane": "processCapture",
     "persists": true,
     "properties": {
-      "experiment_key": {
-        "required": true,
-        "source": "ExperimentAction.experimentId",
-        "type": "String"
-      },
       "experience_id": {
         "required": true,
         "source": "JourneySnapshot.experienceId",
@@ -577,6 +572,11 @@
       "experience_version": {
         "required": true,
         "source": "JourneySnapshot.experienceVersion",
+        "type": "String"
+      },
+      "experiment_key": {
+        "required": true,
+        "source": "ExperimentAction.experimentId",
         "type": "String"
       },
       "journey_id": {
@@ -618,11 +618,6 @@
         "source": "ExperimentResolver fallback assignment source",
         "type": "String"
       },
-      "experiment_key": {
-        "required": true,
-        "source": "ExperimentAction.experimentId",
-        "type": "String"
-      },
       "experience_id": {
         "required": true,
         "source": "JourneySnapshot.experienceId",
@@ -631,6 +626,11 @@
       "experience_version": {
         "required": true,
         "source": "JourneySnapshot.experienceVersion",
+        "type": "String"
+      },
+      "experiment_key": {
+        "required": true,
+        "source": "ExperimentAction.experimentId",
         "type": "String"
       },
       "journey_id": {
@@ -1369,11 +1369,6 @@
       true
     ],
     "properties": {
-      "journey_id": {
-        "required": false,
-        "source": "requesting Journey when scoped",
-        "type": "String"
-      },
       "experience_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
@@ -1382,6 +1377,11 @@
       "experience_version": {
         "required": false,
         "source": "requesting Journey experience when scoped",
+        "type": "String"
+      },
+      "journey_id": {
+        "required": false,
+        "source": "requesting Journey when scoped",
         "type": "String"
       }
     },
@@ -1422,11 +1422,6 @@
       true
     ],
     "properties": {
-      "journey_id": {
-        "required": false,
-        "source": "requesting Journey when scoped",
-        "type": "String"
-      },
       "experience_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
@@ -1435,6 +1430,11 @@
       "experience_version": {
         "required": false,
         "source": "requesting Journey experience when scoped",
+        "type": "String"
+      },
+      "journey_id": {
+        "required": false,
+        "source": "requesting Journey when scoped",
         "type": "String"
       }
     },
@@ -1476,11 +1476,6 @@
       true
     ],
     "properties": {
-      "journey_id": {
-        "required": false,
-        "source": "requesting Journey when scoped",
-        "type": "String"
-      },
       "experience_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
@@ -1489,6 +1484,11 @@
       "experience_version": {
         "required": false,
         "source": "requesting Journey experience when scoped",
+        "type": "String"
+      },
+      "journey_id": {
+        "required": false,
+        "source": "requesting Journey when scoped",
         "type": "String"
       },
       "type": {
@@ -1534,11 +1534,6 @@
       true
     ],
     "properties": {
-      "journey_id": {
-        "required": false,
-        "source": "requesting Journey when scoped",
-        "type": "String"
-      },
       "experience_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
@@ -1547,6 +1542,11 @@
       "experience_version": {
         "required": false,
         "source": "requesting Journey experience when scoped",
+        "type": "String"
+      },
+      "journey_id": {
+        "required": false,
+        "source": "requesting Journey when scoped",
         "type": "String"
       },
       "type": {
@@ -1646,14 +1646,14 @@
     "constant": "SystemEventNames.purchaseCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:583",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:606",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:615",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:621",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:681",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:713",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1818",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1825"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1879",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1886",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:682",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:714",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:626",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:649",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:658",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:664"
     ],
     "endpoint": [
       "batch",
@@ -1735,9 +1735,9 @@
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:2035",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:2093",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:2116",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:677",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:690",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:711"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:720",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:733",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:754"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -1826,8 +1826,8 @@
     "constant": "SystemEventNames.purchaseSynced",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1347",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1554"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1396",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1610"
     ],
     "endpoint": [
       "batch",
@@ -1852,7 +1852,7 @@
     "properties": {
       "customer_id": {
         "required": true,
-        "source": "decoded purchase synchronization response",
+        "source": "initiating distinct ID after available comparable response validation",
         "type": "String"
       },
       "experience_id": {
@@ -1870,14 +1870,14 @@
         "source": "stored transaction evidence, encoded empty when unavailable on legacy path",
         "type": "String"
       },
-      "product_id": {
-        "required": true,
-        "source": "stored transaction evidence, encoded empty when unavailable on legacy path",
-        "type": "String"
-      },
       "placement_id": {
         "required": false,
         "source": "accepted commercial transaction context when available",
+        "type": "String"
+      },
+      "product_id": {
+        "required": true,
+        "source": "stored transaction evidence, encoded empty when unavailable on legacy path",
         "type": "String"
       },
       "transaction_id": {
@@ -1954,7 +1954,7 @@
     "constant": "SystemEventNames.restoreCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1130"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1174"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -1977,7 +1977,7 @@
     "constant": "SystemEventNames.restoreFailed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1139",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1183",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:2139"
     ],
     "endpoint": "/i/event response lane",
@@ -2006,7 +2006,7 @@
     "constant": "SystemEventNames.restoreNoPurchases",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1150"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1194"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -2037,11 +2037,6 @@
     "lane": "processCapture",
     "persists": true,
     "properties": {
-      "method": {
-        "required": true,
-        "source": "screen dismissal method",
-        "type": "String"
-      },
       "experience_id": {
         "required": true,
         "source": "JourneyRunner active Experience id",
@@ -2055,6 +2050,11 @@
       "journey_id": {
         "required": true,
         "source": "JourneyRunner active Journey id",
+        "type": "String"
+      },
+      "method": {
+        "required": true,
+        "source": "screen dismissal method",
         "type": "String"
       },
       "screen_id": {
@@ -2080,11 +2080,6 @@
     "lane": "processCapture",
     "persists": true,
     "properties": {
-      "screen_id": {
-        "required": true,
-        "source": "active Journey screen id",
-        "type": "String"
-      },
       "experience_id": {
         "required": true,
         "source": "JourneyRunner active Experience id",
@@ -2098,6 +2093,11 @@
       "journey_id": {
         "required": true,
         "source": "JourneyRunner active Journey id",
+        "type": "String"
+      },
+      "screen_id": {
+        "required": true,
+        "source": "active Journey screen id",
         "type": "String"
       }
     },
@@ -2135,11 +2135,6 @@
       true
     ],
     "properties": {
-      "journey_id": {
-        "required": false,
-        "source": "requesting Journey when scoped",
-        "type": "String"
-      },
       "experience_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
@@ -2148,6 +2143,11 @@
       "experience_version": {
         "required": false,
         "source": "requesting Journey experience when scoped",
+        "type": "String"
+      },
+      "journey_id": {
+        "required": false,
+        "source": "requesting Journey when scoped",
         "type": "String"
       }
     },
@@ -2188,11 +2188,6 @@
       true
     ],
     "properties": {
-      "journey_id": {
-        "required": false,
-        "source": "requesting Journey when scoped",
-        "type": "String"
-      },
       "experience_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
@@ -2201,6 +2196,11 @@
       "experience_version": {
         "required": false,
         "source": "requesting Journey experience when scoped",
+        "type": "String"
+      },
+      "journey_id": {
+        "required": false,
+        "source": "requesting Journey when scoped",
         "type": "String"
       }
     },

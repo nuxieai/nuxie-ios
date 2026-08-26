@@ -192,8 +192,8 @@ private final class CheckoutRecoveryDeletionFailureStore:
     private let lock = NSLock()
     private var entries: [String: PendingPurchaseRecord] = [:]
 
-    func load() -> [String: PendingPurchaseRecord] {
-        lock.withLock { entries }
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]> {
+        lock.withLock { .value(entries) }
     }
 
     func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
@@ -212,8 +212,8 @@ private final class PendingTransitionFailureStore:
     private let lock = NSLock()
     private var entries: [String: PendingPurchaseRecord] = [:]
 
-    func load() -> [String: PendingPurchaseRecord] {
-        lock.withLock { entries }
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]> {
+        lock.withLock { .value(entries) }
     }
 
     func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
@@ -252,16 +252,22 @@ final class TransactionServiceTests: AsyncSpec {
             /// A TransactionService over the durable pending-purchase store in
             /// `pendingStorageURL` — building a second one models a process
             /// relaunch over the same storage.
-            func makeTransactionService() -> TransactionService {
+            func makeTransactionService(
+                pendingPurchaseStore: (any PendingPurchaseStoreProtocol)? = nil,
+                accountOwnershipStore: any PurchaseAccountOwnershipStoreProtocol =
+                    InMemoryPurchaseAccountOwnershipStore()
+            ) -> TransactionService {
                 let activeSettings = settings!
                 let activeEventSink = eventSink!
                 return TransactionService(
                     productService: mocks.productService,
                     transactionObserver: mockTransactionObserver,
-                    pendingPurchaseStore: PendingPurchaseStore(
-                        customStoragePath: pendingStorageURL,
-                        scope: purchaseStorageScope
-                    ),
+                    pendingPurchaseStore: pendingPurchaseStore
+                        ?? PendingPurchaseStore(
+                            customStoragePath: pendingStorageURL,
+                            scope: purchaseStorageScope
+                        ),
+                    accountOwnershipStore: accountOwnershipStore,
                     dateProvider: dateProvider,
                     settings: activeSettings,
                     eventSink: activeEventSink,
@@ -273,6 +279,20 @@ final class TransactionServiceTests: AsyncSpec {
                     featureService: featureService,
                     testStore: mockTestStore
                 )
+            }
+
+            func writeCorruptStore(fileName: String) throws -> (URL, Data) {
+                let directory = purchaseStorageScope.storageDirectory(
+                    customStoragePath: pendingStorageURL
+                )
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+                let file = directory.appendingPathComponent(fileName)
+                let contents = Data("{ unreadable".utf8)
+                try contents.write(to: file)
+                return (file, contents)
             }
 
             beforeEach {
@@ -357,6 +377,64 @@ final class TransactionServiceTests: AsyncSpec {
                     try? FileManager.default.removeItem(at: pendingStorageURL)
                 }
             }
+
+            it("does not consume unreadable pending state as retired") {
+                let (file, contents) = try writeCorruptStore(
+                    fileName: "pending-purchases.json"
+                )
+                transactionService = makeTransactionService()
+                let token = purchaseStorageScope.appAccountToken(
+                    distinctId: "test-user"
+                )
+
+                let ownership = await transactionService.pendingPurchaseOwnership(
+                    productId: mockProduct.storeProductId
+                )
+                guard case .unavailable = ownership else {
+                    fail("Expected unavailable pending ownership")
+                    return
+                }
+                await expect {
+                    await transactionService.retireCheckoutRecovery(
+                        appAccountToken: token,
+                        productId: mockProduct.storeProductId
+                    )
+                }.to(beFalse())
+                expect(try Data(contentsOf: file)) == contents
+            }
+
+            it("does not consume unreadable account ownership as absent") {
+                let (file, contents) = try writeCorruptStore(
+                    fileName: "account-ownership.json"
+                )
+                let store = PurchaseAccountOwnershipStore(
+                    customStoragePath: pendingStorageURL,
+                    scope: purchaseStorageScope
+                )
+                transactionService = makeTransactionService(
+                    accountOwnershipStore: store
+                )
+                let token = purchaseStorageScope.appAccountToken(
+                    distinctId: "test-user"
+                )
+
+                let owner = await transactionService.purchaseAccountOwner(
+                    appAccountToken: token
+                )
+                guard case .unreadable = owner else {
+                    fail("Expected unreadable account owner")
+                    return
+                }
+                let authority = await transactionService.durablePurchaseEvidenceAuthority(
+                    appAccountToken: token,
+                    productId: mockProduct.storeProductId
+                )
+                guard case .unreadable = authority else {
+                    fail("Expected unreadable purchase authority")
+                    return
+                }
+                expect(try Data(contentsOf: file)) == contents
+            }
             
             describe("purchase") {
                 it("persists exact protected recovery context before native StoreKit opens") {
@@ -402,7 +480,7 @@ final class TransactionServiceTests: AsyncSpec {
                     let entries = PendingPurchaseStore(
                         customStoragePath: pendingStorageURL,
                         scope: purchaseStorageScope
-                    ).load()
+                    ).load().valueTreatingAbsentAsEmpty([:])!
                     let record = entries.values.first
                     expect(record?.scope) == purchaseStorageScope
                     expect(record?.distinctId) == "test-user"
@@ -434,7 +512,7 @@ final class TransactionServiceTests: AsyncSpec {
                     expect(PendingPurchaseStore(
                         customStoragePath: pendingStorageURL,
                         scope: purchaseStorageScope
-                    ).load()).to(beEmpty())
+                    ).load().valueTreatingAbsentAsEmpty([:])!).to(beEmpty())
                     let remainsActive = await transactionService.isActiveCheckout(
                         appAccountToken: record?.appAccountToken,
                         productId: mockProduct.storeProductId,
@@ -1220,7 +1298,7 @@ final class TransactionServiceTests: AsyncSpec {
                         }.to(throwError())
 
                         expect(mockNativePurchaseAdapter.finishCallCount) == 0
-                        expect(recoveryStore.load().values.first?.commercialContext) ==
+                        expect(recoveryStore.load().valueTreatingAbsentAsEmpty([:])!.values.first?.commercialContext) ==
                             mockProduct.purchaseContext
                     }
 
@@ -1770,7 +1848,7 @@ final class TransactionServiceTests: AsyncSpec {
                             try await transactionService.purchase(mockProduct)
                         }.to(throwError(StoreKitError.purchaseFailed(nil)))
 
-                        let retained = store.load().values.first
+                        let retained = store.load().valueTreatingAbsentAsEmpty([:])!.values.first
                         expect(retained?.state) == .checkout
                         expect(retained?.commercialContext.placementId) == "placement"
 
@@ -1819,7 +1897,7 @@ final class TransactionServiceTests: AsyncSpec {
                         }.to(throwError(StoreKitError.purchaseCancelled))
 
                         expect(mockNativePurchaseAdapter.purchasedProducts).to(haveCount(1))
-                        expect(store.load()).to(beEmpty())
+                        expect(store.load().valueTreatingAbsentAsEmpty([:])!).to(beEmpty())
                     }
 
                     it("rejects a second unresolved checkout for the same customer and product") {

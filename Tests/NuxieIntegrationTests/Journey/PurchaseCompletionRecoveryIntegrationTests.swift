@@ -449,7 +449,7 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                 await observer.retryStoredEvidence()
                 let eventId = (["purchase-completed"] + scope.storageComponents
                     + [transactionId]).joined(separator: ":")
-                expect(evidenceStore.load()).to(beEmpty())
+                expect(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!).to(beEmpty())
                 expect(captureStore.storedEvents.filter { $0.id == eventId }.map(\.id))
                     == [eventId]
                 expect(journeyStore.hasHandledEvent(id: eventId)) == false
@@ -464,7 +464,7 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                     journeys: journeys
                 )
 
-                expect(evidenceStore.load()).to(beEmpty())
+                expect(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!).to(beEmpty())
                 expect(captureStore.storedEvents.filter { $0.id == eventId }.map(\.id))
                     == [eventId]
                 expect(journeyStore.hasHandledEvent(id: eventId)) == false
