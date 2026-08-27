@@ -303,9 +303,14 @@ final class TrackWithResponseTests: AsyncSpec {
             // MARK: - Error Handling
 
             context("error handling") {
-                it("does not replay a failed synchronous enrollment later") {
+                it("does not replay a terminally rejected synchronous enrollment later") {
                     // Given
-                    await mockNuxieApi.configureTrackEventFailure(error: URLError(.notConnectedToInternet))
+                    await mockNuxieApi.configureTrackEventFailure(
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 422,
+                            message: "Invalid enrollment"
+                        )
+                    )
 
                     // When/Then
                     await expect {
@@ -328,10 +333,13 @@ final class TrackWithResponseTests: AsyncSpec {
                     await expect { await eventLog.getQueuedEventCount() }.to(equal(0))
                 }
 
-                it("keeps a failed synchronous enrollment reserved when its terminal ack fails") {
+                it("keeps a terminally rejected enrollment reserved when its ack fails") {
                     mockEventStore.shouldFailMarkDelivered = true
                     await mockNuxieApi.configureTrackEventFailure(
-                        error: URLError(.notConnectedToInternet)
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 422,
+                            message: "Invalid enrollment"
+                        )
                     )
 
                     await expect {
@@ -600,7 +608,10 @@ final class TrackWithResponseTests: AsyncSpec {
                 it("durably retires a terminal direct send once the store recovers") {
                     mockEventStore.shouldFailMarkDelivered = true
                     await mockNuxieApi.configureTrackEventFailure(
-                        error: URLError(.notConnectedToInternet)
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 422,
+                            message: "Invalid enrollment"
+                        )
                     )
 
                     await expect {
@@ -1405,6 +1416,8 @@ final class TrackWithResponseMockSessionService: SessionServiceProtocol, @unchec
 }
 
 private final class RoutingJourneyStartService: JourneyServiceProtocol {
+    func registerDetachedPresentationOwner(distinctId: String) async {}
+
     private let eventLog: EventLogProtocol
     private let delayBeforeJourneyStartNanoseconds: UInt64
 

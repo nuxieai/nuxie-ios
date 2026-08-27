@@ -33,6 +33,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     private var _backgroundPreparationPauseCallCount = 0
     private var _foregroundPreparationResumeCallCount = 0
     private var _onAppBecameActiveHandler: (@Sendable () async -> Void)?
+    private var _viewControllerHandler: (@Sendable () async -> Void)?
     private var _productAuthorityResolution: ActiveProductEvidenceAuthorityResolution = .unavailable
     private var _deliverProductAuthorityOnHandlerRegistration = false
 
@@ -131,6 +132,11 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     var onAppBecameActiveHandler: (@Sendable () async -> Void)? {
         get { withLock { _onAppBecameActiveHandler } }
         set { withLock { _onAppBecameActiveHandler = newValue } }
+    }
+
+    var viewControllerHandler: (@Sendable () async -> Void)? {
+        get { withLock { _viewControllerHandler } }
+        set { withLock { _viewControllerHandler = newValue } }
     }
 
     public func onAppDidEnterBackground() async {
@@ -272,14 +278,22 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     
     @MainActor
     func viewController(for versionId: String) async throws -> ExperienceViewController {
-        let (shouldFail, failure, mockVC, defaultVC): (Bool, Error?, ExperienceViewController?, ExperienceViewController?) =
+        let (shouldFail, failure, mockVC, defaultVC, handler): (
+            Bool,
+            Error?,
+            ExperienceViewController?,
+            ExperienceViewController?,
+            (@Sendable () async -> Void)?
+        ) =
             withLock {
                 _displayAttempts.append((versionId: versionId, timestamp: Date()))
                 return (
                     _shouldFailExperienceDisplay, _failureError, _mockViewControllers[versionId],
-                    _defaultMockViewController
+                    _defaultMockViewController, _viewControllerHandler
                 )
             }
+
+        await handler?()
 
         if shouldFail {
             throw failure ?? MockExperienceServiceError.experienceNotFound(versionId)
@@ -375,6 +389,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             _presentationCommitValidationResults = []
             _backgroundPreparationPauseCallCount = 0
             _foregroundPreparationResumeCallCount = 0
+            _viewControllerHandler = nil
             _productAuthorityResolution = .unavailable
             _deliverProductAuthorityOnHandlerRegistration = false
         }

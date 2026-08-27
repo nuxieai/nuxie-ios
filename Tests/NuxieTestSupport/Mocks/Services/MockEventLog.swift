@@ -535,6 +535,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             return tasks
         }
         preparedTasks.forEach { $0.cancel() }
+        cancelPreparedResponseDeliveriesCallCount = 0
+        cancelledPreparedResponseDistinctIds.removeAll()
     }
     
     public func addEventHandler(pattern: String, handler: @escaping (NuxieEvent) -> Void) {
@@ -984,8 +986,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     // MARK: - Cleanup
 
     public private(set) var cancelPreparedResponseDeliveriesCallCount = 0
-    public func cancelPreparedResponseDeliveries() async {
+    public private(set) var cancelledPreparedResponseDistinctIds: [String?] = []
+    public func cancelPreparedResponseDeliveries(for distinctId: String?) async {
         cancelPreparedResponseDeliveriesCallCount += 1
+        cancelledPreparedResponseDistinctIds.append(distinctId)
     }
 
     public func close() async {

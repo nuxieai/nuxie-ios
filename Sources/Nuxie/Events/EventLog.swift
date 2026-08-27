@@ -325,7 +325,7 @@ protocol JourneyEventAccess:
 {
   /// Cancel in-flight prepared response deliveries so shutdown can join
   /// response wrappers that await their values.
-  func cancelPreparedResponseDeliveries() async
+  func cancelPreparedResponseDeliveries(for distinctId: String?) async
 
   func setJourneyOwnershipRejectedHandler(
     _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
@@ -449,7 +449,7 @@ protocol EventLogProtocol:
 
   /// Cancel in-flight prepared response deliveries without closing the log,
   /// so shutdown can join response wrappers that await their values.
-  func cancelPreparedResponseDeliveries() async
+  func cancelPreparedResponseDeliveries(for distinctId: String?) async
 
   /// Wait until all previously enqueued commands (capture + committed routing)
   /// are processed. Useful in tests for determinism.
@@ -668,6 +668,7 @@ actor EventLog: EventLogProtocol {
   private var flushWaiters: [CheckedContinuation<Void, Never>] = []
   private var retryCount = 0
   private var nextRetryDate: Date?
+  private var deliveryState = DeliveryState()
   private var isPaused = false
   private var flushTimerTask: Task<Void, Never>?
   private var activeDirectDeliveryIds: Set<String> = []
@@ -685,6 +686,7 @@ actor EventLog: EventLogProtocol {
   private var activeDurableCommitCount = 0
   private var durableCommitDrainWaiters: [CheckedContinuation<Void, Never>] = []
   private var preparedDeliveryTasks: [UUID: Task<EventResponse, Never>] = [:]
+  private var preparedDeliveryEvents: [UUID: NuxieEvent] = [:]
   private var preparedDeliveryBoundaryTasks:
     [UUID: Task<PreparedDeliveryResult, Never>] = [:]
   private var preparedDeliveryBoundaryTail:
@@ -693,7 +695,6 @@ actor EventLog: EventLogProtocol {
   private var nonDurableDeliveryIds: Set<String> = []
   private var isRefillingDeliveryWindow = false
   private var deliveryWindowRefillRequested = false
-
   // MARK: - Initialization
 
   public init(
@@ -1050,13 +1051,27 @@ actor EventLog: EventLogProtocol {
     do {
       response = try await apiClient.trackEvent(localEvent)
     } catch {
-      // Preserve the synchronous trackWithResponse contract: a transport
-      // failure is terminal for this attempt and must not create a delayed
-      // journey decision after its caller has handled the failure locally.
-      if wasPersisted {
-        await completeTerminalDirectDelivery(ids: [localEvent.id])
-      } else {
-        activeDirectDeliveryIds.remove(localEvent.id)
+      switch deliveryDisposition(for: error) {
+      case .split, .terminalPoison:
+        if wasPersisted {
+          await completeTerminalDirectDelivery(ids: [localEvent.id])
+        } else {
+          activeDirectDeliveryIds.remove(localEvent.id)
+        }
+      case .unhealthyAuthentication:
+        _ = scheduleAuthenticationRetry()
+        await retainFailedDirectDelivery(
+          localEvent,
+          wasPersisted: wasPersisted,
+          retainNonDurable: true
+        )
+      case .retry(let retryAfter):
+        _ = scheduleRetry(retryAfter: retryAfter)
+        await retainFailedDirectDelivery(
+          localEvent,
+          wasPersisted: wasPersisted,
+          retainNonDurable: true
+        )
       }
       throw error
     }
@@ -1070,6 +1085,10 @@ actor EventLog: EventLogProtocol {
       sourceEventId: localEvent.id
     )
     await commitServerFacts(response.facts ?? [], distinctId: distinctId)
+
+    // A successful direct delivery proves transport and auth are working;
+    // restore health exactly like the prepared, decision, and batch paths.
+    deliveryState.health = .healthy
 
     await acquireTriggerDelivery()
     await handleJourneyOwnershipResponseSignals(response)
@@ -1609,6 +1628,10 @@ actor EventLog: EventLogProtocol {
       }
       let result: PreparedDeliveryResult
       if Task.isCancelled {
+        await self.retainCancelledPreparedDelivery(
+          event,
+          wasPersisted: wasPersisted
+        )
         result = PreparedDeliveryResult(
           response: EventResponse(status: "offline", eventId: event.id),
           shouldHandleResponseSignals: false
@@ -1624,7 +1647,7 @@ actor EventLog: EventLogProtocol {
     }
     let response = Task { [weak self] in
       let result = await delivery.value
-      if result.shouldHandleResponseSignals {
+      if result.shouldHandleResponseSignals, !Task.isCancelled {
         // The delivery boundary has already been retired. Mailbox refresh may
         // reenter trackForTrigger, so it must run after waiters on that older
         // prepared delivery are free to advance.
@@ -1636,6 +1659,7 @@ actor EventLog: EventLogProtocol {
     preparedDeliveryBoundaryTasks[taskID] = delivery
     preparedDeliveryBoundaryTail = (taskID, delivery)
     preparedDeliveryTasks[taskID] = response
+    preparedDeliveryEvents[taskID] = event
     return PreparedTriggerCommit(event: event, response: response, sequence: sequence)
   }
 
@@ -1671,6 +1695,7 @@ actor EventLog: EventLogProtocol {
 
   private func preparedDeliveryDidFinish(_ taskID: UUID) {
     _ = preparedDeliveryTasks.removeValue(forKey: taskID)
+    _ = preparedDeliveryEvents.removeValue(forKey: taskID)
   }
 
   private func waitForPreparedTriggerDeliveries() async {
@@ -1695,7 +1720,7 @@ actor EventLog: EventLogProtocol {
       )
     }
     guard !Task.isCancelled else {
-      activeDirectDeliveryIds.remove(event.id)
+      await retainCancelledPreparedDelivery(event, wasPersisted: wasPersisted)
       return PreparedDeliveryResult(
         response: EventResponse(status: "offline", eventId: event.id),
         shouldHandleResponseSignals: false
@@ -1703,6 +1728,7 @@ actor EventLog: EventLogProtocol {
     }
     do {
       let response = try await apiClient.trackEvent(event)
+      deliveryState.health = .healthy
       installVolatileJourneyOwnershipLosses(in: response)
       let ownershipFenceCommit = await persistJourneyOwnershipLosses(
         in: response,
@@ -1735,14 +1761,36 @@ actor EventLog: EventLogProtocol {
         shouldHandleResponseSignals: true
       )
     } catch {
-      activeDirectDeliveryIds.remove(event.id)
       guard !Task.isCancelled else {
+        await retainCancelledPreparedDelivery(event, wasPersisted: wasPersisted)
         return PreparedDeliveryResult(
           response: EventResponse(status: "offline", eventId: event.id),
           shouldHandleResponseSignals: false
         )
       }
-      await enqueueForDelivery(event, isPersisted: wasPersisted)
+      switch deliveryDisposition(for: error) {
+      case .split, .terminalPoison:
+        if wasPersisted {
+          await completeTerminalDirectDelivery(ids: [event.id])
+        } else {
+          activeDirectDeliveryIds.remove(event.id)
+        }
+        LogError("Terminal prepared journey fact dropped: \(error)")
+      case .unhealthyAuthentication:
+        _ = scheduleAuthenticationRetry()
+        await retainFailedDirectDelivery(
+          event,
+          wasPersisted: wasPersisted,
+          retainNonDurable: true
+        )
+      case .retry(let retryAfter):
+        _ = scheduleRetry(retryAfter: retryAfter)
+        await retainFailedDirectDelivery(
+          event,
+          wasPersisted: wasPersisted,
+          retainNonDurable: true
+        )
+      }
       LogWarning(
         "Prepared trigger round trip failed for '\(event.name)'; continuing local-first: \(error)"
       )
@@ -2171,9 +2219,16 @@ actor EventLog: EventLogProtocol {
 
   // MARK: - Close
 
-  public func cancelPreparedResponseDeliveries() async {
-    let boundaries = Array(preparedDeliveryBoundaryTasks.values)
-    let deliveries = Array(preparedDeliveryTasks.values)
+  public func cancelPreparedResponseDeliveries(for distinctId: String?) async {
+    let taskIDs = Set(preparedDeliveryEvents.compactMap { taskID, event in
+      distinctId == nil || event.distinctId == distinctId ? taskID : nil
+    })
+    let boundaries = preparedDeliveryBoundaryTasks.compactMap {
+      taskIDs.contains($0.key) ? $0.value : nil
+    }
+    let deliveries = preparedDeliveryTasks.compactMap {
+      taskIDs.contains($0.key) ? $0.value : nil
+    }
     boundaries.forEach { $0.cancel() }
     deliveries.forEach { $0.cancel() }
   }
@@ -2590,6 +2645,26 @@ actor EventLog: EventLogProtocol {
     await refillDeliveryWindow()
   }
 
+  private func retainFailedDirectDelivery(
+    _ event: NuxieEvent,
+    wasPersisted: Bool,
+    retainNonDurable: Bool = false
+  ) async {
+    activeDirectDeliveryIds.remove(event.id)
+    guard wasPersisted || retainNonDurable else { return }
+    await enqueueForDelivery(event, isPersisted: wasPersisted)
+  }
+
+  private func retainCancelledPreparedDelivery(
+    _ event: NuxieEvent,
+    wasPersisted: Bool
+  ) async {
+    activeDirectDeliveryIds.remove(event.id)
+    guard !closeFlag.isClosed else { return }
+    _ = scheduleRetry()
+    await enqueueForDelivery(event, isPersisted: wasPersisted)
+  }
+
   private func completeTerminalDirectDelivery(ids: [String]) async {
     if await markDelivered(ids: ids) {
       activeDirectDeliveryIds.subtract(ids)
@@ -2656,6 +2731,9 @@ actor EventLog: EventLogProtocol {
     deliveryQueue.removeAll { idSet.contains($0.id) }
     nonDurableDeliveryIds.subtract(idSet)
     await refillDeliveryWindow()
+    if deliveryQueue.isEmpty {
+      deliveryState.adaptiveBatchSize = nil
+    }
   }
 
   // MARK: - Delivery queue
@@ -2857,6 +2935,9 @@ actor EventLog: EventLogProtocol {
       // Concurrent enqueues only add ids, so "every pre-flush event is still
       // queued" means the attempt removed nothing: stop this cycle.
       if pendingBefore.isSubset(of: Set(deliveryQueue.map(\.id))) {
+        if deliveryState.didRepartitionLastFlush {
+          continue
+        }
         return false
       }
     }
@@ -2883,6 +2964,7 @@ actor EventLog: EventLogProtocol {
     }
 
     isCurrentlyFlushing = true
+    deliveryState.didRepartitionLastFlush = false
 
     if let decision = deliveryQueue.first,
       isJourneyDecisionEvent(decision.name) {
@@ -2911,7 +2993,7 @@ actor EventLog: EventLogProtocol {
     // Never let a decision-lane event leak into a batch behind accepted events.
     let batch = Array(
       deliveryQueue
-        .prefix(deliveryConfig.maxBatchSize)
+        .prefix(deliveryState.adaptiveBatchSize ?? deliveryConfig.maxBatchSize)
         .prefix { !isJourneyDecisionEvent($0.name) }
     )
 
@@ -2924,6 +3006,15 @@ actor EventLog: EventLogProtocol {
     do {
       let response = try await apiClient.sendBatch(events: batchItems)
       LogDebug("Batch response: processed=\(response.processed), failed=\(response.failed)")
+      guard validate(response: response, for: batch) else {
+        scheduleRetry()
+        LogError(
+          "Invalid batch acknowledgement metadata; retaining \(batch.count) events pending"
+        )
+        finishCurrentFlush()
+        return true
+      }
+      deliveryState.health = .healthy
       if response.failed == 0 {
         await handleBatchSuccess(batch)
       } else {
@@ -2956,6 +3047,7 @@ actor EventLog: EventLogProtocol {
   private func deliverJourneyDecision(_ event: NuxieEvent) async {
     do {
       let response = try await apiClient.trackEvent(event)
+      deliveryState.health = .healthy
       installVolatileJourneyOwnershipLosses(in: response)
       let ownershipFenceCommit = await persistJourneyOwnershipLosses(
         in: response,
@@ -2989,7 +3081,7 @@ actor EventLog: EventLogProtocol {
         await flushIfOverThreshold()
       }
     } catch {
-      if isPermanentBatchFailure(error),
+      if [.terminalPoison, .split].contains(deliveryDisposition(for: error)),
          await canRetireJourneyDecisionWithoutDelivery(
            sourceEventId: event.id
          ) {
@@ -3005,14 +3097,18 @@ actor EventLog: EventLogProtocol {
         return
       }
 
-      retryCount += 1
-      let cappedExponent = min(
-        retryCount - 1,
-        max(deliveryConfig.maxRetries - 1, 0)
-      )
-      let backoffDelay =
-        deliveryConfig.baseRetryDelay * pow(2, Double(cappedExponent))
-      nextRetryDate = Date().addingTimeInterval(backoffDelay)
+      let disposition = deliveryDisposition(for: error)
+      let backoffDelay: TimeInterval
+      if disposition == .unhealthyAuthentication {
+        backoffDelay = scheduleAuthenticationRetry()
+      } else {
+        let retryAfter: TimeInterval? = if case .retry(let retryAfter) = disposition {
+          retryAfter
+        } else {
+          nil
+        }
+        backoffDelay = scheduleRetry(retryAfter: retryAfter)
+      }
       LogWarning(
         "Journey decision delivery failed; keeping \(event.id) pending for direct retry in \(backoffDelay)s: \(error)"
       )
@@ -3117,13 +3213,7 @@ actor EventLog: EventLogProtocol {
       retryCount = 0
       nextRetryDate = nil
     } else {
-      retryCount += 1
-      let cappedExponent = min(
-        retryCount - 1,
-        max(deliveryConfig.maxRetries - 1, 0)
-      )
-      let backoffDelay = deliveryConfig.baseRetryDelay * pow(2, Double(cappedExponent))
-      nextRetryDate = Date().addingTimeInterval(backoffDelay)
+      let backoffDelay = scheduleRetry()
       LogWarning("Partial batch made no progress, retrying in \(backoffDelay)s")
     }
 
@@ -3142,50 +3232,128 @@ actor EventLog: EventLogProtocol {
   }
 
   private func handleBatchFailure(_ batch: [NuxieEvent], error: Error) async {
-    // Permanent rejection (4xx): the server will never accept these events.
-    // Deliberate poison drop: mark delivered so they never resurrect.
-    if isPermanentBatchFailure(error) {
+    switch deliveryDisposition(for: error) {
+    case .split, .terminalPoison:
+      if batch.count > 1 {
+        let splitSize = max(1, batch.count / 2)
+        deliveryState.adaptiveBatchSize = splitSize
+        deliveryState.didRepartitionLastFlush = true
+        retryCount = 0
+        nextRetryDate = nil
+        LogWarning(
+          "Batch rejected; splitting \(batch.count) events into batches of \(splitSize) for isolation"
+        )
+        finishCurrentFlush()
+        return
+      }
+
       let batchIds = batch.map { $0.id }
       let removed = await retireDelivered(ids: batchIds)
       if removed {
         retryCount = 0
         nextRetryDate = nil
       }
-      LogWarning("Permanent failure (4xx), dropped \(batch.count) events: \(error)")
+      LogError("Terminal poison event dropped after isolation: \(error)")
       finishCurrentFlush()
       return
+
+    case .unhealthyAuthentication:
+      let retryDelay = scheduleAuthenticationRetry()
+      LogError(
+        "SDK event delivery is unhealthy: authentication rejected; keeping \(batch.count) events pending for foreground/periodic retry in \(retryDelay)s"
+      )
+      finishCurrentFlush()
+      return
+
+    case .retry(let retryAfter):
+      let backoffDelay = scheduleRetry(retryAfter: retryAfter)
+
+      LogWarning(
+        "Batch delivery failed (attempt \(retryCount)), keeping \(batch.count) events pending; next retry in \(backoffDelay)s: \(error)"
+      )
+
+      finishCurrentFlush()
     }
-
-    // Transport-level failure (offline, 5xx, timeout): the batch stays in
-    // the queue and its rows stay pending in the store — a failed batch is
-    // NEVER acked for retry-exhaustion reasons. Retry exhaustion only ends
-    // the current flush cycle (deliveryFlushAll stops on no progress); the
-    // next flush, timer tick, or launch retries the same rows, and the
-    // server dedupes any overlap on the event-id idempotency key. The
-    // backoff exponent is capped so a long outage cannot push the next
-    // retry date to infinity.
-    retryCount += 1
-    let cappedExponent = min(retryCount - 1, max(deliveryConfig.maxRetries - 1, 0))
-    let backoffDelay = deliveryConfig.baseRetryDelay * pow(2, Double(cappedExponent))
-    nextRetryDate = Date().addingTimeInterval(backoffDelay)
-
-    LogWarning(
-      "Batch delivery failed (attempt \(retryCount)), keeping \(batch.count) events pending; next retry in \(backoffDelay)s: \(error)"
-    )
-
-    finishCurrentFlush()
   }
 
-  private func isPermanentBatchFailure(_ error: Error) -> Bool {
-    if let networkError = error as? NuxieNetworkError,
-      case .httpError(let statusCode, _) = networkError
-    {
-      return (400..<500).contains(statusCode)
+  private func deliveryDisposition(for error: Error) -> DeliveryDisposition {
+    guard let networkError = error as? NuxieNetworkError,
+          let statusCode = networkError.httpStatusCode else {
+      return .retry(retryAfter: nil)
     }
 
-    // (URLError rawValues are negative CFNetwork codes — never 4xx; only
-    // NuxieNetworkError.httpError carries an HTTP status.)
-    return false
+    switch statusCode {
+    case 400, 422:
+      return .terminalPoison
+    case 401, 403:
+      return .unhealthyAuthentication
+    case 408, 425, 429:
+      return .retry(retryAfter: parseRetryAfter(networkError.retryAfter))
+    case 413:
+      return .split
+    default:
+      return .retry(retryAfter: nil)
+    }
+  }
+
+  private func validate(response: BatchResponse, for batch: [NuxieEvent]) -> Bool {
+    guard response.total == batch.count,
+          response.processed >= 0,
+          response.failed >= 0,
+          response.processed + response.failed == response.total else {
+      return false
+    }
+
+    let errors = response.errors ?? []
+    guard errors.count == response.failed else { return false }
+    let indexes = errors.map(\.index)
+    guard Set(indexes).count == indexes.count else { return false }
+    return indexes.allSatisfy(batch.indices.contains)
+  }
+
+  @discardableResult
+  private func scheduleRetry(retryAfter: TimeInterval? = nil) -> TimeInterval {
+    retryCount += 1
+    let maximumExponent = max(deliveryConfig.maxRetries - 1, 0)
+    let cappedExponent = min(retryCount - 1, maximumExponent)
+    let ordinaryDelay = deliveryConfig.baseRetryDelay * pow(2, Double(cappedExponent))
+    let maximumDelay = deliveryConfig.baseRetryDelay * pow(2, Double(maximumExponent))
+    let delay = retryAfter.map { min(max($0, ordinaryDelay), maximumDelay) }
+      ?? ordinaryDelay
+    nextRetryDate = Date().addingTimeInterval(delay)
+    return delay
+  }
+
+  @discardableResult
+  private func scheduleAuthenticationRetry() -> TimeInterval {
+    retryCount += 1
+    deliveryState.health = .unhealthyAuthentication
+    let delay = deliveryConfig.flushIntervalSeconds
+    nextRetryDate = Date().addingTimeInterval(delay)
+    return delay
+  }
+
+  private func parseRetryAfter(_ value: String?) -> TimeInterval? {
+    guard let value else { return nil }
+    if let seconds = TimeInterval(value), seconds.isFinite, seconds >= 0 {
+      return seconds
+    }
+
+    let formats = [
+      "EEE',' dd MMM yyyy HH':'mm':'ss zzz",
+      "EEEE',' dd-MMM-yy HH':'mm':'ss zzz",
+      "EEE MMM d HH':'mm':'ss yyyy",
+    ]
+    for format in formats {
+      let formatter = DateFormatter()
+      formatter.locale = Locale(identifier: "en_US_POSIX")
+      formatter.timeZone = TimeZone(secondsFromGMT: 0)
+      formatter.dateFormat = format
+      if let date = formatter.date(from: value) {
+        return max(0, date.timeIntervalSinceNow)
+      }
+    }
+    return nil
   }
 
   private func startFlushTimer() {
@@ -3225,12 +3393,34 @@ actor EventLog: EventLogProtocol {
     (retryCount, nextRetryDate?.timeIntervalSince(date))
   }
 
+  func deliveryHealthState() -> String {
+    deliveryState.health.rawValue
+  }
+
   private func handleTimerFlush() async {
     await refillDeliveryWindow()
     if !deliveryQueue.isEmpty {
       LogDebug("Timer flush triggered (\(deliveryQueue.count) events)")
       _ = await performFlush()
     }
+  }
+
+  private enum DeliveryDisposition: Equatable {
+    case retry(retryAfter: TimeInterval?)
+    case split
+    case unhealthyAuthentication
+    case terminalPoison
+  }
+
+  private enum SDKDeliveryHealth: String {
+    case healthy
+    case unhealthyAuthentication = "unhealthy_authentication"
+  }
+
+  private struct DeliveryState {
+    var adaptiveBatchSize: Int?
+    var health: SDKDeliveryHealth = .healthy
+    var didRepartitionLastFlush = false
   }
 
   // MARK: - Drain (test determinism)

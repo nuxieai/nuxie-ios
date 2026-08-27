@@ -35,6 +35,8 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
     // Delay configuration for testing timing
     var sendBatchDelay: TimeInterval = 0
     var trackEventDelay: TimeInterval = 0
+    var maximumAcceptedBatchSize: Int?
+    var poisonEventName: String?
 
     func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
         sendBatchCalled = true
@@ -50,6 +52,18 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
         // Return error if configured
         if shouldFailSendBatch {
             throw sendBatchError ?? URLError(.badServerResponse)
+        }
+        if let maximumAcceptedBatchSize, events.count > maximumAcceptedBatchSize {
+            throw NuxieNetworkError.httpError(
+                statusCode: 413,
+                message: "Payload Too Large"
+            )
+        }
+        if let poisonEventName, events.contains(where: { $0.event == poisonEventName }) {
+            throw NuxieNetworkError.httpError(
+                statusCode: 422,
+                message: "Poison event"
+            )
         }
 
         let hasCustomResponse =
@@ -174,11 +188,21 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
         trackEventResponse = nil
         sendBatchDelay = 0
         trackEventDelay = 0
+        maximumAcceptedBatchSize = nil
+        poisonEventName = nil
     }
 
     // Helper functions for setting mock state
     func setSendBatchDelay(_ delay: TimeInterval) {
         sendBatchDelay = delay
+    }
+
+    func setMaximumAcceptedBatchSize(_ size: Int?) {
+        maximumAcceptedBatchSize = size
+    }
+
+    func setPoisonEventName(_ name: String?) {
+        poisonEventName = name
     }
 
     func setFailure(_ shouldFail: Bool, error: Error? = nil) {
@@ -952,7 +976,163 @@ final class EventLogDeliveryTests: AsyncSpec {
                     await expect { await log.getQueuedEventCount() }.to(equal(2))
                 }
 
-                it("should drop events on permanent error (4xx)") {
+                it("retains a batch rejected with request timeout for retry") {
+                    let event = TestEventBuilder(name: "request_timeout")
+                        .withDistinctId("user123")
+                        .build()
+                    await log.enqueueForDelivery(event)
+                    await mockApi.setFailure(
+                        true,
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 408,
+                            message: "Request Timeout"
+                        )
+                    )
+
+                    _ = await log.performFlush(forceSend: true)
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+                }
+
+                it("honors Retry-After seconds within the configured backoff ceiling") {
+                    await log.close()
+                    log = try await makeLog(
+                        maxRetries: 3,
+                        baseRetryDelay: 5
+                    )
+                    await log.enqueueForDelivery(
+                        TestEventBuilder(name: "rate_limited")
+                            .withDistinctId("user123")
+                            .build()
+                    )
+                    await mockApi.setFailure(
+                        true,
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 429,
+                            message: "Too Many Requests",
+                            retryAfter: "60"
+                        )
+                    )
+
+                    _ = await log.performFlush(forceSend: true)
+
+                    let retry = await log.retryBackoffState()
+                    expect(retry.attempts).to(equal(1))
+                    expect(retry.remainingDelay).toNot(beNil())
+                    let remainingDelay = retry.remainingDelay!
+                    expect(remainingDelay).to(beGreaterThan(19))
+                    expect(remainingDelay).to(beLessThanOrEqualTo(20))
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                }
+
+                it("honors Retry-After HTTP dates within the configured backoff ceiling") {
+                    await log.close()
+                    log = try await makeLog(
+                        maxRetries: 3,
+                        baseRetryDelay: 5
+                    )
+                    await log.enqueueForDelivery(
+                        TestEventBuilder(name: "date_rate_limited")
+                            .withDistinctId("user123")
+                            .build()
+                    )
+                    let formatter = DateFormatter()
+                    formatter.locale = Locale(identifier: "en_US_POSIX")
+                    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+                    formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss zzz"
+                    await mockApi.setFailure(
+                        true,
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 429,
+                            message: "Too Many Requests",
+                            retryAfter: formatter.string(
+                                from: Date().addingTimeInterval(60)
+                            )
+                        )
+                    )
+
+                    _ = await log.performFlush(forceSend: true)
+
+                    let retry = await log.retryBackoffState()
+                    expect(retry.remainingDelay).toNot(beNil())
+                    let remainingDelay = retry.remainingDelay!
+                    expect(remainingDelay).to(beGreaterThan(19))
+                    expect(remainingDelay).to(beLessThanOrEqualTo(20))
+                }
+
+                it("marks authentication rejection unhealthy without acknowledging events") {
+                    await log.enqueueForDelivery(
+                        TestEventBuilder(name: "auth_failure")
+                            .withDistinctId("user123")
+                            .build()
+                    )
+                    await mockApi.setFailure(
+                        true,
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 401,
+                            message: "Unauthorized"
+                        )
+                    )
+
+                    _ = await log.performFlush(forceSend: true)
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+                    await expect { await log.deliveryHealthState() }
+                        .to(equal("unhealthy_authentication"))
+                    let retry = await log.retryBackoffState()
+                    expect(retry.remainingDelay).toNot(beNil())
+                    let remainingDelay = retry.remainingDelay!
+                    expect(remainingDelay).to(beGreaterThan(29))
+                    expect(remainingDelay).to(beLessThanOrEqualTo(30))
+                }
+
+                it("splits an oversized batch until the server accepts it") {
+                    let events = (0..<4).map {
+                        TestEventBuilder(name: "oversized_\($0)")
+                            .withDistinctId("user123")
+                            .build()
+                    }
+                    for event in events {
+                        await log.enqueueForDelivery(event)
+                    }
+                    await mockApi.setMaximumAcceptedBatchSize(2)
+
+                    let drained = await log.deliveryFlushAll()
+
+                    expect(drained).to(beTrue())
+                    await expect { await mockApi.allBatchesSent.map(\.count) }
+                        .to(equal([4, 2, 2]))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+
+                    for index in 0..<4 {
+                        await log.enqueueForDelivery(
+                            TestEventBuilder(name: "post_split_\(index)")
+                                .withDistinctId("user123")
+                                .build()
+                        )
+                    }
+                    _ = await log.deliveryFlushAll()
+                    await expect { await mockApi.allBatchesSent.map(\.count) }
+                        .to(equal([4, 2, 2, 4, 2, 2]))
+                }
+
+                it("terminally retires a single oversized event") {
+                    let event = TestEventBuilder(name: "single_oversized")
+                        .withDistinctId("user123")
+                        .build()
+                    await log.enqueueForDelivery(event)
+                    await mockApi.setMaximumAcceptedBatchSize(0)
+
+                    _ = await log.performFlush(forceSend: true)
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.deliveredIds).to(equal([event.id]))
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(1))
+                }
+
+                it("isolates and drops explicit poison responses") {
                     let events = (0..<2).map { i in
                         TestEventBuilder(name: "event_\(i)")
                             .withDistinctId("user123")
@@ -966,7 +1146,7 @@ final class EventLogDeliveryTests: AsyncSpec {
                     // Configure the same HTTP 400 error shape that NuxieApi throws
                     await mockApi.setFailure(true, error: NuxieNetworkError.httpError(statusCode: 400, message: "Bad Request"))
 
-                    let result = await log.performFlush(forceSend: true)
+                    let result = await log.deliveryFlushAll()
 
                     expect(result).to(beTrue())
                     await expect { await mockApi.sendBatchCalled }.to(beTrue())
@@ -1250,6 +1430,79 @@ final class EventLogDeliveryTests: AsyncSpec {
                     await expect { await log.getQueuedEventCount() }.to(equal(0))
                     await expect { await mockApi.sendBatchCallCount }.to(equal(2))
                     await expect { await mockApi.lastBatchSent?.map(\.event) }.to(equal(["event_2"]))
+                }
+
+                it("acknowledges nothing for malformed partial-batch metadata") {
+                    let events = (0..<3).map {
+                        TestEventBuilder(name: "malformed_\($0)")
+                            .withDistinctId("user123")
+                            .build()
+                    }
+                    for event in events {
+                        await log.enqueueForDelivery(event)
+                    }
+                    await mockApi.setBatchResponse(BatchResponse(
+                        status: "partial",
+                        processed: 2,
+                        failed: 1,
+                        total: 4,
+                        errors: [
+                            BatchError(index: 7, event: "missing", error: "invalid")
+                        ]
+                    ))
+
+                    _ = await log.performFlush(forceSend: true)
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(3))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+                }
+
+                it("acknowledges nothing for duplicate partial-batch indexes") {
+                    let events = (0..<3).map {
+                        TestEventBuilder(name: "duplicate_index_\($0)")
+                            .withDistinctId("user123")
+                            .build()
+                    }
+                    for event in events {
+                        await log.enqueueForDelivery(event)
+                    }
+                    await mockApi.setBatchResponse(BatchResponse(
+                        status: "partial",
+                        processed: 1,
+                        failed: 2,
+                        total: 3,
+                        errors: [
+                            BatchError(index: 1, event: "duplicate", error: "invalid"),
+                            BatchError(index: 1, event: "duplicate", error: "invalid"),
+                        ]
+                    ))
+
+                    _ = await log.performFlush(forceSend: true)
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(3))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+                }
+
+                it("isolates a poison event without dropping valid neighbors") {
+                    let events = ["valid_before", "poison", "valid_after"].map {
+                        TestEventBuilder(name: $0)
+                            .withDistinctId("user123")
+                            .build()
+                    }
+                    for event in events {
+                        await log.enqueueForDelivery(event)
+                    }
+                    await mockApi.setPoisonEventName("poison")
+
+                    let drained = await log.deliveryFlushAll()
+
+                    expect(drained).to(beTrue())
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(Set(mockStore.deliveredIds)).to(equal(Set(events.map(\.id))))
+                    let successfulNames = await mockApi.allBatchesSent
+                        .filter { !$0.contains(where: { $0.event == "poison" }) }
+                        .flatMap { $0.map(\.event) }
+                    expect(successfulNames).to(contain("valid_before", "valid_after"))
                 }
 
                 it("should back off when a partial batch makes no progress") {

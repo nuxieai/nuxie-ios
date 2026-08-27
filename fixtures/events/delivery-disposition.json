@@ -1,0 +1,53 @@
+{
+  "suite": "events/delivery-disposition",
+  "version": 1,
+  "description": "Batch delivery responses are classified before the pending/acknowledged ledger changes. Retryable and malformed responses acknowledge nothing; oversized or poison batches split until a single poison event can be dead-lettered without losing valid neighbors.",
+  "vectors": [
+    {
+      "name": "rate limit honors retry after",
+      "response": { "status_code": 429, "retry_after": "60" },
+      "expect": { "disposition": "retry", "acknowledged": [], "backoff_capped": true }
+    },
+    {
+      "name": "authentication failure marks sdk unhealthy",
+      "response": { "status_code": 401 },
+      "expect": { "disposition": "unhealthy_authentication", "acknowledged": [], "retry_cadence": "periodic" }
+    },
+    {
+      "name": "oversized batch splits",
+      "batch": ["a", "b", "c", "d"],
+      "response": { "status_code": 413 },
+      "expect": { "disposition": "split", "next_batch_size": 2, "acknowledged": [] }
+    },
+    {
+      "name": "malformed partial response acknowledges nothing",
+      "batch": ["a", "b", "c"],
+      "response": {
+        "status_code": 200,
+        "processed": 2,
+        "failed": 1,
+        "total": 4,
+        "error_indexes": [7]
+      },
+      "expect": { "disposition": "retry", "acknowledged": [] }
+    },
+    {
+      "name": "mixed valid and invalid batch acknowledges valid indexes",
+      "batch": ["valid-a", "invalid", "valid-b"],
+      "response": {
+        "status_code": 200,
+        "processed": 2,
+        "failed": 1,
+        "total": 3,
+        "error_indexes": [1]
+      },
+      "expect": { "disposition": "partial", "acknowledged": ["valid-a", "valid-b"], "pending": ["invalid"] }
+    },
+    {
+      "name": "poison event isolation preserves valid neighbors",
+      "batch": ["valid-a", "poison", "valid-b"],
+      "response": { "status_code": 422 },
+      "expect": { "disposition": "split", "delivered": ["valid-a", "valid-b"], "dead_lettered": ["poison"] }
+    }
+  ]
+}

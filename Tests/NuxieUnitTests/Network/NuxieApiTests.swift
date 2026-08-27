@@ -867,9 +867,41 @@ final class NuxieApiTests: AsyncSpec {
                     do {
                         _ = try await api.sendBatch(events: events)
                         fail("Expected HTTP error")
-                    } catch NuxieNetworkError.httpError(let statusCode, let message) {
+                    } catch NuxieNetworkError.httpError(let statusCode, let message, _) {
                         expect(statusCode).to(equal(422))
                         expect(message).to(equal("invalid batch"))
+                    } catch {
+                        fail("Expected NuxieNetworkError.httpError but got \(error)")
+                    }
+                }
+
+                it("preserves Retry-After metadata on batch HTTP failures") {
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/batch"),
+                        handler: { request in
+                            let response = HTTPURLResponse(
+                                url: request.url!,
+                                statusCode: 429,
+                                httpVersion: nil,
+                                headerFields: [
+                                    "Content-Type": "application/json",
+                                    "Retry-After": "45",
+                                ]
+                            )!
+                            return (response, Data(#"{"message":"rate limited"}"#.utf8))
+                        }
+                    )
+
+                    do {
+                        _ = try await api.sendBatch(events: events)
+                        fail("Expected HTTP error")
+                    } catch NuxieNetworkError.httpError(
+                        let statusCode,
+                        _,
+                        let retryAfter
+                    ) {
+                        expect(statusCode).to(equal(429))
+                        expect(retryAfter).to(equal("45"))
                     } catch {
                         fail("Expected NuxieNetworkError.httpError but got \(error)")
                     }

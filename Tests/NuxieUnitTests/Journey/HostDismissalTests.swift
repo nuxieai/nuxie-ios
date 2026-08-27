@@ -71,6 +71,8 @@ final class HostDismissalTests: AsyncSpec {
                     .to(beFalse())
                 expect(harness.mocks.experiencePresentationService.dismissCurrentExperienceCallCount)
                     .to(equal(1))
+                expect(harness.mocks.eventLog.cancelPreparedResponseDeliveriesCallCount)
+                    .to(beGreaterThanOrEqualTo(1))
                 let activeRunnerCount = await harness.service.activeRunnerCount
                 expect(activeRunnerCount).to(equal(0))
 
@@ -88,6 +90,220 @@ final class HostDismissalTests: AsyncSpec {
                 expect(postShutdownJourney).to(beNil())
                 expect(harness.mocks.experiencePresentationService.presentExperienceCallCount)
                     .to(equal(1))
+            }
+
+            it("identity change dismisses the old presentation before retiring its runner and attributes the exit to the old id") { @MainActor in
+                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+                serviceUnderTest = harness.service
+                let journey = try await harness.startJourney(
+                    originEventId: "live-presentation-identity-change"
+                )
+                expect(harness.mocks.experiencePresentationService.isExperiencePresented)
+                    .to(beTrue())
+
+                harness.mocks.identityService.setDistinctId("replacement-user")
+                await harness.service.handleUserChange(
+                    from: harness.distinctId,
+                    to: "replacement-user"
+                )
+
+                expect(harness.mocks.experiencePresentationService.isExperiencePresented)
+                    .to(beFalse())
+                expect(harness.mocks.experiencePresentationService.dismissCurrentExperienceCallCount)
+                    .to(equal(1))
+                expect(harness.mocks.eventLog.cancelPreparedResponseDeliveriesCallCount)
+                    .to(beGreaterThanOrEqualTo(1))
+                expect(
+                    harness.mocks.eventLog.cancelledPreparedResponseDistinctIds
+                        .compactMap { $0 }
+                        .last
+                ).to(equal(harness.distinctId))
+                let activeRunnerCount = await harness.service.activeRunnerCount
+                expect(activeRunnerCount).to(equal(0))
+                let snapshot = await journey.snapshot()
+                expect(snapshot.status).to(equal(.cancelled))
+                let exit = harness.mocks.eventLog.trackWithResponseCalls.last {
+                    $0.event == JourneyEvents.journeyExited
+                }
+                expect(exit?.distinctIdOverride).to(equal(harness.distinctId))
+            }
+
+            it("identity change emits the old-id exit even when terminal persistence fails") { @MainActor in
+                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+                serviceUnderTest = harness.service
+                _ = try await harness.startJourney(
+                    originEventId: "identity-change-save-failure"
+                )
+                harness.store.shouldThrowOnSave = true
+
+                harness.mocks.identityService.setDistinctId("replacement-user")
+                await harness.service.handleUserChange(
+                    from: harness.distinctId,
+                    to: "replacement-user"
+                )
+
+                let exits = harness.mocks.eventLog.trackWithResponseCalls.filter {
+                    $0.event == JourneyEvents.journeyExited
+                }
+                expect(exits.count).to(equal(1))
+                expect(exits.first?.distinctIdOverride).to(equal(harness.distinctId))
+                let activeRunnerCount = await harness.service.activeRunnerCount
+                expect(activeRunnerCount).to(equal(0))
+            }
+
+            it("abandons an old-customer response draft before retiring its runner") { @MainActor in
+                let definition = ExperienceDefinition.singleScreen(
+                    responseSchema: PinnedResponseSessionSchema(
+                        key: "identity-survey",
+                        versionId: "identity-survey-v1",
+                        version: 1,
+                        fields: [ResponseSessionField(
+                            key: "answer",
+                            type: .text,
+                            required: true,
+                            options: nil,
+                            minimum: nil,
+                            maximum: nil
+                        )],
+                        capturesByScreen: [HostJourneyHarness.screenId: ["answer"]]
+                    ),
+                    controlsByScreen: [
+                        HostJourneyHarness.screenId: [
+                            "answer": ScreenControlActionDefinition(
+                                actionId: "answer",
+                                binding: .declarative([
+                                    .responseSet(field: "answer", value: .invocationValue)
+                                ])
+                            )
+                        ]
+                    ]
+                )
+                let harness = await HostJourneyHarness.make(definition: definition)
+                serviceUnderTest = harness.service
+                let journey = try await harness.startJourney(
+                    originEventId: "identity-change-response-draft"
+                )
+                await harness.service.handleRuntimeReady(
+                    journeyId: journey.id,
+                    controller: harness.controller
+                )
+                await harness.service.handleRendererControlAction(
+                    journeyId: journey.id,
+                    screenId: HostJourneyHarness.screenId,
+                    invocation: ScreenActionInvocation(
+                        actionId: "answer",
+                        value: .string("premium")
+                    )
+                )
+                let draft = await journey.snapshot()
+                expect(draft.responseSession?.state).to(equal(.draft))
+
+                harness.mocks.identityService.setDistinctId("replacement-user")
+                await harness.service.handleUserChange(
+                    from: harness.distinctId,
+                    to: "replacement-user"
+                )
+
+                let abandonment = await harness.mocks.nuxieApi.lastResponseAbandonCall
+                expect(abandonment?.distinctId).to(equal(harness.distinctId))
+                expect(abandonment?.journeyId).to(equal(journey.id))
+                let terminal = await journey.snapshot()
+                expect(terminal.status).to(equal(.cancelled))
+                expect(terminal.exitReason).to(equal(.cancelled))
+            }
+
+            it("identity change joins presentation shutdown with no published window") { @MainActor in
+                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+                serviceUnderTest = harness.service
+                _ = try await harness.startJourney(
+                    originEventId: "no-presentation-identity-change"
+                )
+                await harness.mocks.experiencePresentationService
+                    .shutdownCurrentExperience()
+                let dismissalCount = harness.mocks.experiencePresentationService
+                    .dismissCurrentExperienceCallCount
+                let shutdownCount = harness.mocks.experiencePresentationService
+                    .shutdownCurrentExperienceCallCount
+
+                harness.mocks.identityService.setDistinctId("replacement-user")
+                await harness.service.handleUserChange(
+                    from: harness.distinctId,
+                    to: "replacement-user"
+                )
+
+                expect(harness.mocks.experiencePresentationService.dismissCurrentExperienceCallCount)
+                    .to(equal(dismissalCount))
+                expect(harness.mocks.experiencePresentationService.shutdownCurrentExperienceCallCount)
+                    .to(equal(shutdownCount + 1))
+                let activeRunnerCount = await harness.service.activeRunnerCount
+                expect(activeRunnerCount).to(equal(0))
+            }
+
+            it("identity change invalidates a presentation before its window publishes") { @MainActor in
+                let shutdownStarted = HostDismissalSignal()
+                let harness = await HostJourneyHarness.make(
+                    definition: .singleScreen(),
+                    usesCoordinatedPresentation: true,
+                    shutdownStarted: shutdownStarted
+                )
+                serviceUnderTest = harness.service
+                let acquisitionGate = HostDismissalAsyncGate()
+                harness.mocks.experienceService.viewControllerHandler = {
+                    await acquisitionGate.suspend()
+                }
+                let startingJourney = Task {
+                    try? await harness.startJourney(
+                        originEventId: "identity-change-pre-publication"
+                    )
+                }
+                try await waitForHostDismissalGate(acquisitionGate)
+                expect(harness.experiencePresentation.isExperiencePresented)
+                    .to(beFalse())
+
+                harness.mocks.identityService.setDistinctId("replacement-user")
+                let identityChange = Task {
+                    await harness.service.handleUserChange(
+                        from: harness.distinctId,
+                        to: "replacement-user"
+                    )
+                }
+                try await waitForHostDismissalSignal(shutdownStarted)
+                expect(harness.experiencePresentation.isExperiencePresented)
+                    .to(beFalse())
+                await acquisitionGate.release()
+                _ = await startingJourney.value
+                await identityChange.value
+
+                expect(harness.experiencePresentation.isExperiencePresented)
+                    .to(beFalse())
+                let activeRunnerCount = await harness.service.activeRunnerCount
+                expect(activeRunnerCount).to(equal(0))
+            }
+
+            it("keeps rapid identity transitions scoped to each previous customer") { @MainActor in
+                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+                serviceUnderTest = harness.service
+                _ = try await harness.startJourney(
+                    originEventId: "rapid-identity-change"
+                )
+
+                harness.mocks.identityService.setDistinctId("identified-user")
+                await harness.service.handleUserChange(
+                    from: harness.distinctId,
+                    to: "identified-user"
+                )
+                harness.mocks.identityService.setDistinctId("reset-anonymous-user")
+                await harness.service.handleUserChange(
+                    from: "identified-user",
+                    to: "reset-anonymous-user"
+                )
+
+                let activeRunnerCount = await harness.service.activeRunnerCount
+                expect(activeRunnerCount).to(equal(0))
+                expect(harness.journeyExitedCalls()).to(haveCount(1))
+                expect(harness.mocks.eventLog.trackWithResponseCalls.filter {
+                    $0.event == JourneyEvents.journeyExited
+                }.first?.distinctIdOverride).to(equal(harness.distinctId))
             }
 
             it("drops an in-flight mailbox claim when shutdown begins") { @MainActor in
@@ -494,7 +710,7 @@ final class HostDismissalTests: AsyncSpec {
                     .to(equal("host"))
             }
 
-            it("preserves a reserved old-user host dismissal when persistence fails") { @MainActor in
+            it("joins an in-flight old-user host dismissal before identity teardown") { @MainActor in
                 let callbackEvent = "late-reserved-old-user-callback"
                 let taintedProperty = "replacement_user_reserved_taint"
                 let definition = ExperienceDefinition.singleScreen(
@@ -512,7 +728,10 @@ final class HostDismissalTests: AsyncSpec {
                         ),
                     ]
                 )
-                let harness = await HostJourneyHarness.make(definition: definition)
+                let harness = await HostJourneyHarness.make(
+                    definition: definition,
+                    usesCoordinatedPresentation: true
+                )
                 serviceUnderTest = harness.service
                 let journey = try await harness.startJourney(
                     originEventId: "failed-reserved-old-user-host-dismiss"
@@ -523,35 +742,36 @@ final class HostDismissalTests: AsyncSpec {
                 ) {
                     updates.append($0)
                 }
-                guard let delegate = harness.mocks.experiencePresentationService
-                    .currentRuntimeDelegate else {
-                    fail("expected the presentation's runtime delegate")
-                    return
+                let captureGate = HostDismissalAsyncGate()
+                harness.mocks.eventLog.prepareTriggerPropertiesHandler = {
+                    await captureGate.suspend()
                 }
-
-                await delegate.experienceViewControllerWillRequestHostDismiss(
-                    harness.controller
-                )
+                let hostDismissal = Task { @MainActor in
+                    await harness.experiencePresentation.dismissCurrentExperienceFromHost()
+                }
+                try await waitForHostDismissalGate(captureGate)
                 harness.mocks.identityService.setDistinctId("replacement-user")
-                await harness.service.handleUserChange(
-                    from: harness.distinctId,
-                    to: "replacement-user"
-                )
+                let identityChange = Task {
+                    await harness.service.handleUserChange(
+                        from: harness.distinctId,
+                        to: "replacement-user"
+                    )
+                }
+                await Task.yield()
+                await captureGate.release()
+                await hostDismissal.value
+                await identityChange.value
 
-                harness.store.shouldThrowOnSave = true
-                let terminalized = await delegate
-                    .experienceViewControllerDidRequestHostDismiss(harness.controller)
-                harness.store.shouldThrowOnSave = false
-
-                expect(terminalized).to(beFalse())
-                let retryable = await journey.snapshot()
+                let terminal = await journey.snapshot()
                 let reservation = await journey.hasHostDismissalReservation()
-                expect(retryable.status.isLive).to(beTrue())
-                expect(retryable.exitReason).to(beNil())
+                expect(terminal.status).to(equal(.completed))
+                expect(terminal.exitReason).to(equal(.dismissed))
                 expect(reservation).to(beFalse())
-                expect(harness.store.loadJourney(id: journey.id)?.status.isLive).to(beTrue())
-                expect(harness.journeyExitedCalls()).to(beEmpty())
-                expect(updates.values).to(beEmpty())
+                expect(harness.store.loadJourney(id: journey.id)).to(beNil())
+                expect(harness.journeyExitedCalls()).to(haveCount(1))
+                let update = try await waitForHostJourneyUpdate(in: updates)
+                expect(update.exitReason).to(equal(.dismissed))
+                expect(updates.values.contains(where: \.isDenied)).to(beFalse())
 
                 await harness.service.handleRendererEvent(
                     journeyId: journey.id,
@@ -566,42 +786,22 @@ final class HostDismissalTests: AsyncSpec {
                 expect(
                     harness.mocks.identityService.getUserProperties()[taintedProperty]
                 ).to(beNil())
-
-                await delegate.experienceViewControllerWillRequestHostDismiss(
-                    harness.controller
-                )
-                let retried = await delegate
-                    .experienceViewControllerDidRequestHostDismiss(harness.controller)
-                expect(retried).to(beTrue())
-                let completed = await journey.snapshot()
-                expect(completed.status).to(equal(.completed))
-                expect(completed.exitReason).to(equal(.dismissed))
-                expect(harness.journeyExitedCalls()).to(haveCount(1))
-                let update = try await waitForHostJourneyUpdate(in: updates)
-                expect(update.exitReason).to(equal(.dismissed))
-                expect(updates.values.contains(where: \.isDenied)).to(beFalse())
             }
 
-            it("retains an admitted host retry through a later identity change") { @MainActor in
-                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+            it("retires an admitted host retry during a later identity change") { @MainActor in
+                let harness = await HostJourneyHarness.make(
+                    definition: .singleScreen(),
+                    usesCoordinatedPresentation: true
+                )
                 serviceUnderTest = harness.service
                 let journey = try await harness.startJourney(
                     originEventId: "host-retry-before-identity-change"
                 )
-                guard let delegate = harness.mocks.experiencePresentationService
-                    .currentRuntimeDelegate else {
-                    fail("expected the presentation's runtime delegate")
-                    return
-                }
-
-                await delegate.experienceViewControllerWillRequestHostDismiss(
-                    harness.controller
-                )
                 harness.store.shouldThrowOnSave = true
-                let firstAttempt = await delegate
-                    .experienceViewControllerDidRequestHostDismiss(harness.controller)
+                await harness.experiencePresentation.dismissCurrentExperienceFromHost()
                 harness.store.shouldThrowOnSave = false
-                expect(firstAttempt).to(beFalse())
+                let retryable = await journey.snapshot()
+                expect(retryable.status.isLive).to(beTrue())
 
                 harness.mocks.identityService.setDistinctId("replacement-user")
                 await harness.service.handleUserChange(
@@ -613,20 +813,14 @@ final class HostDismissalTests: AsyncSpec {
                     for: harness.distinctId
                 )
                 let retainedState = await journey.snapshot()
-                expect(retained.map(\.id)).to(contain(journey.id))
-                expect(retainedState.status.isLive).to(beTrue())
+                expect(retained).to(beEmpty())
+                expect(retainedState.status).to(equal(.cancelled))
 
-                await delegate.experienceViewControllerWillRequestHostDismiss(
-                    harness.controller
-                )
-                let retried = await delegate
-                    .experienceViewControllerDidRequestHostDismiss(harness.controller)
                 let terminal = await journey.snapshot()
-                expect(retried).to(beTrue())
-                expect(terminal.exitReason).to(equal(.dismissed))
+                expect(terminal.exitReason).to(equal(.cancelled))
             }
 
-            it("does not park a retained host retry under a replacement identity") { @MainActor in
+            it("does not park a retired host retry under a replacement identity") { @MainActor in
                 let harness = await HostJourneyHarness.make(definition: .singleScreen())
                 serviceUnderTest = harness.service
                 let journey = try await harness.startJourney(
@@ -657,32 +851,24 @@ final class HostDismissalTests: AsyncSpec {
                 expect(harness.mocks.eventLog.trackedEvents.map(\.name))
                     .toNot(contain(JourneyEvents.journeyParked))
                 let retained = await journey.snapshot()
-                expect(retained.status.isLive).to(beTrue())
+                expect(retained.status).to(equal(.cancelled))
             }
 
-            it("keeps an authorized host retry live when a converted down-fact arrives") { @MainActor in
+            it("keeps a retired host retry terminal when a converted down-fact arrives") { @MainActor in
                 let harness = await HostJourneyHarness.make(
                     definition: .singleScreen(),
-                    exitPolicy: ExitPolicy(mode: .onGoal)
+                    exitPolicy: ExitPolicy(mode: .onGoal),
+                    usesCoordinatedPresentation: true
                 )
                 serviceUnderTest = harness.service
                 let journey = try await harness.startJourney(
                     originEventId: "host-retry-converted-fact"
                 )
-                guard let delegate = harness.mocks.experiencePresentationService
-                    .currentRuntimeDelegate else {
-                    fail("expected the presentation's runtime delegate")
-                    return
-                }
-
-                await delegate.experienceViewControllerWillRequestHostDismiss(
-                    harness.controller
-                )
                 harness.store.shouldThrowOnSave = true
-                let firstAttempt = await delegate
-                    .experienceViewControllerDidRequestHostDismiss(harness.controller)
+                await harness.experiencePresentation.dismissCurrentExperienceFromHost()
                 harness.store.shouldThrowOnSave = false
-                expect(firstAttempt).to(beFalse())
+                let liveRetry = await journey.snapshot()
+                expect(liveRetry.status.isLive).to(beTrue())
 
                 harness.mocks.identityService.setDistinctId("replacement-user")
                 await harness.service.handleUserChange(
@@ -701,19 +887,13 @@ final class HostDismissalTests: AsyncSpec {
                 ))
 
                 let retryable = await journey.snapshot()
-                expect(retryable.status.isLive).to(beTrue())
-                expect(retryable.exitReason).to(beNil())
+                expect(retryable.status).to(equal(.cancelled))
+                expect(retryable.exitReason).to(equal(.cancelled))
                 expect(retryable.convertedAt).to(beNil())
-                expect(harness.journeyExitedCalls()).to(beEmpty())
+                expect(harness.journeyExitedCalls()).to(haveCount(1))
 
-                await delegate.experienceViewControllerWillRequestHostDismiss(
-                    harness.controller
-                )
-                let retried = await delegate
-                    .experienceViewControllerDidRequestHostDismiss(harness.controller)
-                expect(retried).to(beTrue())
                 let terminal = await journey.snapshot()
-                expect(terminal.exitReason).to(equal(.dismissed))
+                expect(terminal.exitReason).to(equal(.cancelled))
                 expect(harness.journeyExitedCalls()).to(haveCount(1))
             }
 
@@ -837,8 +1017,11 @@ final class HostDismissalTests: AsyncSpec {
                 expect(reenrollment).to(beNil())
             }
 
-            it("retains a reserved journey through an identity change") { @MainActor in
-                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+            it("lets a coordinated host dismissal finish through an identity change") { @MainActor in
+                let harness = await HostJourneyHarness.make(
+                    definition: .singleScreen(),
+                    usesCoordinatedPresentation: true
+                )
                 serviceUnderTest = harness.service
                 let originEventId = "identity-change-host-dismiss"
                 let updates = TriggerUpdateRecorder()
@@ -846,28 +1029,30 @@ final class HostDismissalTests: AsyncSpec {
                     updates.append($0)
                 }
                 let journey = try await harness.startJourney(originEventId: originEventId)
-                guard let delegate = harness.mocks.experiencePresentationService
-                    .currentRuntimeDelegate else {
-                    fail("expected the presentation's runtime delegate")
-                    return
+                let captureGate = HostDismissalAsyncGate()
+                harness.mocks.eventLog.prepareTriggerPropertiesHandler = {
+                    await captureGate.suspend()
                 }
-
-                await delegate.experienceViewControllerWillRequestHostDismiss(
-                    harness.controller
-                )
-                await harness.service.handleUserChange(
-                    from: harness.distinctId,
-                    to: "replacement-user"
-                )
+                let hostDismissal = Task { @MainActor in
+                    await harness.experiencePresentation.dismissCurrentExperienceFromHost()
+                }
+                try await waitForHostDismissalGate(captureGate)
+                harness.mocks.identityService.setDistinctId("replacement-user")
+                let identityChange = Task {
+                    await harness.service.handleUserChange(
+                        from: harness.distinctId,
+                        to: "replacement-user"
+                    )
+                }
+                await Task.yield()
+                await captureGate.release()
+                await hostDismissal.value
+                await identityChange.value
 
                 let retained = await harness.service.getActiveJourneys(
                     for: harness.distinctId
                 )
-                expect(retained.map(\.id)).to(contain(journey.id))
-
-                await delegate.experienceViewControllerDidRequestHostDismiss(
-                    harness.controller
-                )
+                expect(retained).to(beEmpty())
 
                 let terminal = await journey.snapshot()
                 expect(terminal.status).to(equal(.completed))
@@ -1600,6 +1785,14 @@ private actor HostDismissalAsyncGate {
     }
 }
 
+private actor HostDismissalSignal {
+    private(set) var isSignaled = false
+
+    func signal() {
+        isSignaled = true
+    }
+}
+
 private actor HostDismissalNthCallGate {
     private let targetCall: Int
     private var callCount = 0
@@ -1647,6 +1840,117 @@ private func waitForHostDismissalGate(_ gate: HostDismissalNthCallGate) async th
     throw HostDismissalTestError.timedOut("in-flight authored callback")
 }
 
+private func waitForHostDismissalSignal(_ signal: HostDismissalSignal) async throws {
+    for _ in 0..<200 {
+        if await signal.isSignaled { return }
+        try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    throw HostDismissalTestError.timedOut("presentation shutdown entry")
+}
+
+@MainActor
+private final class ShutdownObservingExperiencePresentationService {
+    private let base: ExperiencePresentationServiceProtocol
+    private let shutdownStarted: HostDismissalSignal
+
+    init(
+        base: ExperiencePresentationServiceProtocol,
+        shutdownStarted: HostDismissalSignal
+    ) {
+        self.base = base
+        self.shutdownStarted = shutdownStarted
+    }
+
+    var isExperiencePresented: Bool { base.isExperiencePresented }
+    var presentedJourneyId: String? { base.presentedJourneyId }
+
+    func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?
+    ) async throws -> ExperienceViewController {
+        try await base.presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate
+        )
+    }
+
+    func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode
+    ) async throws -> ExperienceViewController {
+        try await base.presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode
+        )
+    }
+
+    func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        initialScreenID: String?
+    ) async throws -> ExperienceViewController {
+        try await base.presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            initialScreenID: initialScreenID
+        )
+    }
+
+    func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        commit: JourneyPendingPresentation
+    ) async throws -> ExperienceViewController {
+        try await base.presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            commit: commit
+        )
+    }
+
+    func dismissCurrentExperience() async {
+        await base.dismissCurrentExperience()
+    }
+
+    func dismissCurrentExperience(reason: CloseReason) async {
+        await base.dismissCurrentExperience(reason: reason)
+    }
+
+    func dismissCurrentExperienceFromHost() async {
+        await base.dismissCurrentExperienceFromHost()
+    }
+
+    func shutdownCurrentExperience() async {
+        await shutdownStarted.signal()
+        await base.shutdownCurrentExperience()
+    }
+
+    func onAppBecameActive() {
+        base.onAppBecameActive()
+    }
+
+    func onAppDidEnterBackground() {
+        base.onAppDidEnterBackground()
+    }
+}
+
+extension ShutdownObservingExperiencePresentationService:
+    ExperiencePresentationServiceProtocol {}
+
 private struct HostJourneyHarness {
     static let screenId = "screen-1"
     static let distinctId = "host-dismiss-user"
@@ -1656,6 +1960,7 @@ private struct HostJourneyHarness {
     let mocks: MockFactory
     let store: MockJourneyStore
     let service: JourneyService
+    let experiencePresentation: ExperiencePresentationServiceProtocol
     let controller: MockExperienceViewController
     let experience: Experience
     let distinctId: String
@@ -1664,7 +1969,9 @@ private struct HostJourneyHarness {
         definition: ExperienceDefinition,
         triggerEvent: String = "host-dismiss-trigger",
         reentry: ExperienceReentry = .everyTime,
-        exitPolicy: ExitPolicy? = nil
+        exitPolicy: ExitPolicy? = nil,
+        usesCoordinatedPresentation: Bool = false,
+        shutdownStarted: HostDismissalSignal? = nil
     ) async -> HostJourneyHarness {
         let mocks = MockFactory.shared
         let experience = makeExperience(
@@ -1680,7 +1987,34 @@ private struct HostJourneyHarness {
             )
         }
         let store = MockJourneyStore()
-        let service = mocks.makeJourneyService(journeyStore: store)
+        let experiencePresentation: ExperiencePresentationServiceProtocol
+        if usesCoordinatedPresentation {
+            let coordinatedPresentation = await MainActor.run {
+                ExperiencePresentationService(
+                    windowProvider: MockWindowProvider(),
+                    experiences: mocks.experienceService,
+                    eventLog: mocks.eventLog,
+                    triggerBroker: mocks.triggerBroker,
+                    dateProvider: mocks.dateProvider
+                )
+            }
+            if let shutdownStarted {
+                experiencePresentation = await MainActor.run {
+                    ShutdownObservingExperiencePresentationService(
+                        base: coordinatedPresentation,
+                        shutdownStarted: shutdownStarted
+                    )
+                }
+            } else {
+                experiencePresentation = coordinatedPresentation
+            }
+        } else {
+            experiencePresentation = mocks.experiencePresentationService
+        }
+        let service = mocks.makeJourneyService(
+            journeyStore: store,
+            experiencePresentation: experiencePresentation
+        )
         let reference = ExperienceReference(
             experienceId: experience.id,
             versionId: experience.versionId
@@ -1690,12 +2024,14 @@ private struct HostJourneyHarness {
         mocks.profileService.effectiveExperienceReferences = [reference]
         mocks.profileService.activeExperienceReferences = [reference]
         mocks.experienceService.mockExperiences[experience.versionId] = experience
+        mocks.experienceService.mockViewControllers[experience.versionId] = controller
         mocks.experiencePresentationService.defaultMockViewController = controller
 
         return HostJourneyHarness(
             mocks: mocks,
             store: store,
             service: service,
+            experiencePresentation: experiencePresentation,
             controller: controller,
             experience: experience,
             distinctId: distinctId
@@ -1783,7 +2119,9 @@ private extension ExperienceDefinition {
     }
 
     static func singleScreen(
-        routes routeDefinitions: [HostDismissalRoute] = []
+        routes routeDefinitions: [HostDismissalRoute] = [],
+        responseSchema: PinnedResponseSessionSchema? = nil,
+        controlsByScreen: [String: [String: ScreenControlActionDefinition]] = [:]
     ) -> ExperienceDefinition {
         var routes: [JourneyRouteKey: JourneyRoute] = [:]
         var plans: [JourneyExecutionPlan] = []
@@ -1833,8 +2171,8 @@ private extension ExperienceDefinition {
             viewModelValues: [],
             routes: routes,
             executionPlans: plans,
-            responseSchema: nil,
-            controlsByScreen: [:]
+            responseSchema: responseSchema,
+            controlsByScreen: controlsByScreen
         )
     }
 }

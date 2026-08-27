@@ -195,6 +195,95 @@ final class EventLogTests: AsyncSpec {
                     expect(props["device_model"]).toNot(beNil())
                     expect(props["os_version"]).toNot(beNil())
                 }
+
+                it("retains authentication-rejected direct journey facts") {
+                    await mockApi.configureTrackEventFailure(
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 401,
+                            message: "Unauthorized"
+                        )
+                    )
+                    try await log.configure(configuration: testConfig)
+
+                    await expect {
+                        try await log.trackWithResponse(
+                            JourneyEvents.journeyTransition,
+                            properties: nil
+                        )
+                    }.to(throwError())
+
+                    expect(mockStore.pendingIds).to(haveCount(1))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+                    await expect { await log.deliveryHealthState() }
+                        .to(equal("unhealthy_authentication"))
+                }
+
+                it("retains a retryable direct fact in memory when persistence fails") {
+                    mockStore.shouldFailStore = true
+                    await mockApi.configureTrackEventFailure(
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 401,
+                            message: "Unauthorized"
+                        )
+                    )
+                    try await log.configure(configuration: testConfig)
+
+                    await expect {
+                        try await log.trackWithResponse(
+                            JourneyEvents.journeyTransition,
+                            properties: nil
+                        )
+                    }.to(throwError())
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                    expect(mockStore.pendingIds).to(beEmpty())
+
+                    await mockApi.reset()
+                    _ = await log.performFlush(forceSend: true)
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("retains rate-limited direct journey facts") {
+                    await mockApi.configureTrackEventFailure(
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 429,
+                            message: "Too Many Requests",
+                            retryAfter: "60"
+                        )
+                    )
+                    try await log.configure(configuration: testConfig)
+
+                    await expect {
+                        try await log.trackWithResponse(
+                            JourneyEvents.journeyTransition,
+                            properties: nil
+                        )
+                    }.to(throwError())
+
+                    expect(mockStore.pendingIds).to(haveCount(1))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+                    let retry = await log.retryBackoffState()
+                    expect(retry.remainingDelay).toNot(beNil())
+                }
+
+                it("terminally retires a singleton oversized direct journey fact") {
+                    await mockApi.configureTrackEventFailure(
+                        error: NuxieNetworkError.httpError(
+                            statusCode: 413,
+                            message: "Payload Too Large"
+                        )
+                    )
+                    try await log.configure(configuration: testConfig)
+
+                    await expect {
+                        try await log.trackWithResponse(
+                            JourneyEvents.journeyTransition,
+                            properties: nil
+                        )
+                    }.to(throwError())
+
+                    expect(mockStore.pendingIds).to(beEmpty())
+                    expect(mockStore.deliveredIds).to(haveCount(1))
+                }
             }
 
             // MARK: - Retention
@@ -1280,6 +1369,48 @@ final class EventLogTests: AsyncSpec {
                         .to(contain("failed-prepared-first-id", "deferred-prepared-second-id"))
                 }
 
+                it("cancels only the old identity's prepared delivery and releases its row") {
+                    let transport = ScopedCancellationEventTransport()
+                    let orderedLog = EventLog(
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
+                        apiClient: transport,
+                        store: mockStore
+                    )
+                    log = orderedLog
+                    try await orderedLog.configure(configuration: testConfig)
+
+                    let old = await orderedLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "old-prepared-id",
+                            name: "old_prepared",
+                            distinctId: "old-user"
+                        )
+                    )
+                    await transport.waitUntilOldStarted()
+                    let new = await orderedLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "new-prepared-id",
+                            name: "new_prepared",
+                            distinctId: "new-user"
+                        )
+                    )
+
+                    await orderedLog.cancelPreparedResponseDeliveries(for: "old-user")
+
+                    let oldResponse = await old.response.value
+                    let newResponse = await new.response.value
+                    expect(oldResponse.status).to(equal("offline"))
+                    expect(newResponse.status).to(equal("ok"))
+                    await expect { await transport.directNames }
+                        .to(equal(["old_prepared", "new_prepared"]))
+                    await expect { await transport.batchNames }
+                        .to(equal([["old_prepared"]]))
+                    expect(mockStore.deliveredIds)
+                        .to(contain("old-prepared-id", "new-prepared-id"))
+                }
+
                 it("settles an in-flight authored delivery before closing its store") {
                     let transport = CancellableEventTransport()
                     let closingStore = MockEventStore()
@@ -1444,6 +1575,50 @@ private actor CancellableEventTransport: EventTransport {
             wasCancelled = true
             throw error
         }
+    }
+}
+
+private actor ScopedCancellationEventTransport: EventTransport {
+    private var oldStarted = false
+    private var oldStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var directNames: [String] = []
+    private(set) var batchNames: [[String]] = []
+
+    func waitUntilOldStarted() async {
+        guard !oldStarted else { return }
+        await withCheckedContinuation { oldStartWaiters.append($0) }
+    }
+
+    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
+        batchNames.append(events.map(\.event))
+        return BatchResponse(
+            status: "success",
+            processed: events.count,
+            failed: 0,
+            total: events.count,
+            errors: nil
+        )
+    }
+
+    func trackEvent(
+        event: String,
+        distinctId: String,
+        properties: sending [String: Any]?,
+        value: Double?,
+        entityId: String?
+    ) async throws -> EventResponse {
+        EventResponse(status: "ok", eventId: event)
+    }
+
+    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
+        directNames.append(event.name)
+        if event.distinctId == "old-user" {
+            oldStarted = true
+            oldStartWaiters.forEach { $0.resume() }
+            oldStartWaiters.removeAll()
+            try await Task.sleep(nanoseconds: 30_000_000_000)
+        }
+        return EventResponse(status: "ok", eventId: event.id)
     }
 }
 
