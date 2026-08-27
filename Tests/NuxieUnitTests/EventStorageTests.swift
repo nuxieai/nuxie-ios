@@ -77,7 +77,7 @@ final class EventStorageTests: AsyncSpec {
         
         describe("StoredEvent") {
             it("should create event with valid properties") {
-                let properties = ["key": "value", "number": 42, "$session_id": "test-session"] as [String: Any]
+                let properties = ["key": "value", "number": 42] as [String: Any]
                 guard let event = try? StoredEvent(
                     name: "test_event",
                     properties: properties,
@@ -89,8 +89,6 @@ final class EventStorageTests: AsyncSpec {
                 
                 expect(event.name) == "test_event"
                 expect(event.distinctId) == "test_user"
-                expect(event.sessionId) == "test-session"
-                
                 // Test property serialization/deserialization
                 let retrievedProperties = try? event.getProperties()
                 expect(retrievedProperties?["key"]?.value as? String) == "value"
@@ -162,16 +160,14 @@ final class EventStorageTests: AsyncSpec {
                     name: SystemEventNames.appOpened,
                     properties: Data(#"{"alpha":1,"beta":{"x":true,"y":2}}"#.utf8),
                     timestamp: timestamp,
-                    distinctId: "customer-a",
-                    sessionId: nil
+                    distinctId: "customer-a"
                 )
                 let reordered = StoredEvent(
                     id: first.id,
                     name: first.name,
                     properties: Data(#"{"beta":{"y":2,"x":true},"alpha":1}"#.utf8),
                     timestamp: timestamp,
-                    distinctId: first.distinctId,
-                    sessionId: nil
+                    distinctId: first.distinctId
                 )
 
                 expect(first.isByteEquivalent(to: reordered)).to(beTrue())
@@ -899,7 +895,6 @@ final class EventStorageTests: AsyncSpec {
         }
         
         describe("history persistence") {
-            // Session management tests moved to SessionServiceTests.swift
             
             it("should filter events by user correctly") {
                 // Store events for different users

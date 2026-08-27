@@ -445,7 +445,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         if reentry.type == "once_per_window" {
             try integer(reentry.object["windowSeconds"], minimum: 1, maximum: 366 * 24 * 60 * 60, path: "lifecycle.reentry.windowSeconds")
         }
-        try enumeration(lifecycle["exitPolicy"], values: ["on_goal", "on_stop_matching", "on_goal_or_stop", "never"], path: "lifecycle.exitPolicy")
+        try enumeration(lifecycle["exitPolicy"], values: ["on_goal", "never"], path: "lifecycle.exitPolicy")
         try enumeration(lifecycle["conversionAnchor"], values: ["journey_start", "last_experience_shown", "last_experience_interaction"], path: "lifecycle.conversionAnchor")
         if let limit = lifecycle["timeLimitSeconds"] { try integer(limit, minimum: 1, maximum: 366 * 24 * 60 * 60, path: "lifecycle.timeLimitSeconds") }
         if let value = lifecycle["goal"] {

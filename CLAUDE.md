@@ -22,7 +22,6 @@ Sources/Nuxie/
 ├── NuxieConfiguration.swift
 ├── Core/                   # NuxieLifecycleCoordinator (app lifecycle fan-out)
 ├── Identity/               # IdentityService (anon id, identify, reset)
-├── Session/                # SessionService (30-min idle / 24h rotation)
 ├── Events/                 # EventLog actor (capture → enrich → persist →
 │                           #   durable batched delivery → query, committed-
 │                           #   events subscriptions), SQLiteEventStore,

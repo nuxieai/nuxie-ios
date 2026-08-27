@@ -136,8 +136,6 @@ Code reality does conflict with broader forwarding premises. `$journey_effect_re
 
 Forwarding identity is captured at the producer. Products-unavailable includes product ids; screen, artifact-load, experiment diagnostic, and dismissal events include their available Experience context; dismissal includes the close reason; and purchase synchronization includes recoverable commercial context.
 
-### Documentation and session notes
+### Documentation notes
 
 The public system-events page omits `$journey_started`, `$products_unavailable`, `$experiment_exposure_fallback`, `$experiment_exposure_error`, `$customer_updated`, `$event_sent`, and `$app_action_requested`. It also says lifecycle capture is switch-controlled even though current lifecycle capture is unconditional.
-
-`$session_id` is a generic context property, not an event. No event exists solely for sessions. The public system-events page still mentions that property, while the internal review records the Session subsystem for deletion under UNIV-2664.

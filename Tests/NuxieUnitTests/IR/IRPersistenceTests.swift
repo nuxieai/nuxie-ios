@@ -95,19 +95,13 @@ final class IRPersistenceTests: AsyncSpec {
                 try? FileManager.default.removeItem(at: tempRoot)
             }
 
-            it("saves and loads journeys with IR-backed snapshots and pending actions") {
+            it("saves and loads journeys with typed snapshots and pending actions") {
                 let experience = makeExperience()
-                let waitCondition = makeEnvelope(.compare(
-                    op: ">=",
-                    left: .eventsCount(
-                        name: "purchase_completed",
-                        since: .timeAgo(duration: .duration(3_600)),
-                        until: .timeNow,
-                        within: nil,
-                        where_: .pred(op: "eq", key: "sku", value: .string("premium"))
-                    ),
-                    right: .number(1)
-                ))
+                let waitCondition = JourneyCondition.compare(
+                    op: "==",
+                    left: .eventField("sku"),
+                    right: .string("premium")
+                )
 
                 var journey = JourneySnapshot(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.executionState.pendingAction = JourneyPendingAction(
@@ -117,10 +111,13 @@ final class IRPersistenceTests: AsyncSpec {
                     actionIndex: 2,
                     kind: .waitUntil,
                     resumeAt: Date(timeIntervalSince1970: 1_723_780_600),
-                    condition: waitCondition,
+                    journeyCondition: waitCondition,
+                    journeyWaitTrigger: .event(
+                        eventName: "purchase_completed",
+                        payloadSchema: nil
+                    ),
                     maxTimeMs: 15_000,
-                    startedAt: Date(timeIntervalSince1970: 1_723_780_100),
-                    resumeActions: nil
+                    startedAt: Date(timeIntervalSince1970: 1_723_780_100)
                 )
 
                 let store = JourneyStore(customStoragePath: tempRoot, dateProvider: SystemDateProvider())
@@ -130,7 +127,7 @@ final class IRPersistenceTests: AsyncSpec {
 
                 expect(loaded).notTo(beNil())
                 expect(loaded?.goalSnapshot?.attributeExpr).to(equal(journey.goalSnapshot?.attributeExpr))
-                expect(loaded?.executionState.pendingAction?.condition).to(equal(waitCondition))
+                expect(loaded?.executionState.pendingAction?.journeyCondition).to(equal(waitCondition))
                 expect(loaded?.executionState.pendingAction?.maxTimeMs).to(equal(15_000))
                 expect(loaded?.stateVersion).to(equal(JourneyStateEnvelope.currentVersion))
                 expect(loaded?.epoch).to(equal(0))
@@ -145,6 +142,53 @@ final class IRPersistenceTests: AsyncSpec {
                     guard case .event(let trigger)? = experience.trigger else { return nil }
                     return trigger.condition
                 })()))
+            }
+
+            it("drops snapshots that contain retired pending-action schemas") {
+                for retiredKey in ["condition", "resumeActions"] {
+                    var journey = JourneySnapshot(
+                        id: "journey_\(retiredKey)",
+                        experience: makeExperience(),
+                        distinctId: "user_1",
+                        now: Date()
+                    )
+                    journey.executionState.pendingAction = JourneyPendingAction(
+                        handlerId: "handler_1",
+                        screenId: "screen_1",
+                        componentId: nil,
+                        actionIndex: 0,
+                        kind: .delay,
+                        resumeAt: Date(timeIntervalSince1970: 1_723_780_600),
+                        maxTimeMs: nil,
+                        startedAt: Date(timeIntervalSince1970: 1_723_780_100)
+                    )
+                    let store = JourneyStore(
+                        customStoragePath: tempRoot,
+                        dateProvider: SystemDateProvider()
+                    )
+                    try store.saveJourney(journey)
+                    let file = try onlyActiveJourneyFile()
+                    let data = try Data(contentsOf: file)
+                    var object = try XCTUnwrap(
+                        JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    )
+                    var executionState = try XCTUnwrap(
+                        object["executionState"] as? [String: Any]
+                    )
+                    var pending = try XCTUnwrap(
+                        executionState["pendingAction"] as? [String: Any]
+                    )
+                    pending[retiredKey] = retiredKey == "condition" ? [:] : []
+                    executionState["pendingAction"] = pending
+                    object["executionState"] = executionState
+                    try JSONSerialization.data(withJSONObject: object).write(
+                        to: file,
+                        options: .atomic
+                    )
+
+                    expect(store.loadActiveJourneys()).to(beEmpty())
+                    expect(FileManager.default.fileExists(atPath: file.path)).to(beFalse())
+                }
             }
 
             it("persists captured-event routing receipts across service instances") {
@@ -179,11 +223,9 @@ final class IRPersistenceTests: AsyncSpec {
                     actionIndex: 0,
                     kind: .delay,
                     resumeAt: Date(),
-                    condition: nil,
                     maxTimeMs: nil,
                     startedAt: Date(),
-                    responseVersion: 3,
-                    resumeActions: nil
+                    responseVersion: 3
                 )
                 let wait = JourneyPendingAction(
                     handlerId: "wait-handler",
@@ -192,12 +234,10 @@ final class IRPersistenceTests: AsyncSpec {
                     actionIndex: 0,
                     kind: .waitUntil,
                     resumeAt: Date(),
-                    condition: nil,
                     maxTimeMs: nil,
                     startedAt: Date(),
                     responseVersion: 3,
-                    allowsResponseVersionRefresh: true,
-                    resumeActions: nil
+                    allowsResponseVersionRefresh: true
                 )
 
                 expect(delay.hasResponseSnapshotConflict(currentVersion: 3)).to(beFalse())

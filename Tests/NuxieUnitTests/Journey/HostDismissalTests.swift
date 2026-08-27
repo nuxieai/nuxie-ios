@@ -8,21 +8,16 @@ import Nimble
 final class HostDismissalTests: AsyncSpec {
     override class func spec() {
         nonisolated(unsafe) var serviceUnderTest: JourneyService?
-        nonisolated(unsafe) var notificationToken: NSObjectProtocol?
         nonisolated(unsafe) var temporaryStorageURL: URL?
 
         beforeEach { @MainActor in
             serviceUnderTest = nil
-            notificationToken = nil
             temporaryStorageURL = nil
             await NuxieSDK.shared.shutdown()
             await MockFactory.shared.resetAll()
         }
 
         afterEach { @MainActor in
-            if let notificationToken {
-                NotificationCenter.default.removeObserver(notificationToken)
-            }
             await serviceUnderTest?.shutdown()
             await NuxieSDK.shared.shutdown()
             await MockFactory.shared.resetAll()
@@ -30,7 +25,6 @@ final class HostDismissalTests: AsyncSpec {
                 try? FileManager.default.removeItem(at: temporaryStorageURL)
             }
             serviceUnderTest = nil
-            notificationToken = nil
             temporaryStorageURL = nil
         }
 
@@ -320,10 +314,8 @@ final class HostDismissalTests: AsyncSpec {
                     actionIndex: 0,
                     kind: .delay,
                     resumeAt: resumeAt,
-                    condition: nil,
                     maxTimeMs: nil,
-                    startedAt: Date(),
-                    resumeActions: nil
+                    startedAt: Date()
                 )
                 let mailbox = JourneyMailboxEntry(
                     journeyId: journeyId,
@@ -442,15 +434,6 @@ final class HostDismissalTests: AsyncSpec {
                 let journey = try await harness.startJourney(
                     originEventId: "reserved-host-dismiss"
                 )
-                let notifications = HostDismissNotificationRecorder()
-                notificationToken = NotificationCenter.default.addObserver(
-                    forName: .nuxieDismiss,
-                    object: nil,
-                    queue: nil
-                ) { notification in
-                    notifications.append(notification)
-                }
-
                 guard let delegate = harness.mocks.experiencePresentationService
                     .currentRuntimeDelegate else {
                     fail("expected the presentation's runtime delegate")
@@ -468,7 +451,6 @@ final class HostDismissalTests: AsyncSpec {
                 let reserved = await journey.snapshot()
                 expect(reserved.status.isLive).to(beTrue())
                 expect(reserved.exitReason).to(beNil())
-                expect(notifications.values).to(beEmpty())
 
                 await delegate.experienceViewControllerDidRequestHostDismiss(
                     harness.controller
@@ -477,8 +459,6 @@ final class HostDismissalTests: AsyncSpec {
                 let terminal = await journey.snapshot()
                 expect(terminal.status).to(equal(.completed))
                 expect(terminal.exitReason).to(equal(.dismissed))
-                expect(notifications.values).to(haveCount(1))
-                expect(notifications.values.first?.reason).to(equal("host_dismissed"))
                 guard let exit = harness.journeyExitedCall() else {
                     fail("expected a journey exit event")
                     return
@@ -1452,15 +1432,6 @@ final class HostDismissalTests: AsyncSpec {
                 expect(active.executionState.currentScreenId)
                     .to(equal(HostJourneyHarness.screenId))
 
-                let notifications = HostDismissNotificationRecorder()
-                notificationToken = NotificationCenter.default.addObserver(
-                    forName: .nuxieDismiss,
-                    object: nil,
-                    queue: nil
-                ) { notification in
-                    notifications.append(notification)
-                }
-
                 guard let delegate = harness.mocks.experiencePresentationService
                     .currentRuntimeDelegate else {
                     fail("expected the presentation's runtime delegate")
@@ -1494,9 +1465,6 @@ final class HostDismissalTests: AsyncSpec {
                 }
                 expect(exit.properties?["reason"] as? String).to(equal("dismissed"))
                 expect(exit.properties?["dismissed_by"] as? String).to(equal("host"))
-                expect(notifications.values).to(haveCount(1))
-                expect(notifications.values.first?.reason).to(equal("host_dismissed"))
-                expect(notifications.values.first?.journeyId).to(equal(journey.id))
             }
 
             it("lets reserved host dismissal finish a ghost play-out") { @MainActor in
@@ -1536,6 +1504,73 @@ final class HostDismissalTests: AsyncSpec {
                 let journeyUpdate = try await waitForHostJourneyUpdate(in: updates)
                 expect(journeyUpdate.exitReason).to(equal(.dismissed))
                 expect(updates.values.contains(where: \.isDenied)).to(beFalse())
+            }
+
+            it("resumes an active server effect through its typed wait") { @MainActor in
+                let definition = ExperienceDefinition.singleScreen(
+                    routes: [
+                        .init(
+                            eventName: SystemEventNames.screenShown,
+                            program: [
+                                .object([
+                                    "type": .string("connector_action"),
+                                    "accountRef": .string("account-1"),
+                                    "toolKey": .string("send-message"),
+                                    "payload": .object([:]),
+                                    "timeoutMs": .number(120_000),
+                                    "onSucceeded": .array([]),
+                                    "onFailed": .array([]),
+                                    "onTimeout": .array([]),
+                                ]),
+                            ]
+                        ),
+                    ]
+                )
+                let harness = await HostJourneyHarness.make(definition: definition)
+                serviceUnderTest = harness.service
+                let journey = try await harness.startJourney(
+                    originEventId: "effect-wait-completion"
+                )
+                await harness.service.handleRuntimeReady(
+                    journeyId: journey.id,
+                    controller: harness.controller
+                )
+                guard let delegate = harness.mocks.experiencePresentationService
+                    .currentRuntimeDelegate else {
+                    fail("expected the presentation's runtime delegate")
+                    return
+                }
+                await delegate.experienceViewController(
+                    harness.controller,
+                    didChangeScreen: HostJourneyHarness.screenId
+                )
+
+                let waiting = await journey.snapshot()
+                expect(waiting.status).to(equal(.paused))
+                guard let requestedEffect = harness.mocks.eventLog.trackedEvents.last(where: {
+                    $0.name == JourneyEvents.journeyEffectRequested
+                }),
+                let properties = requestedEffect.properties,
+                let nodeId = properties["node_id"] as? String,
+                let invocationId = properties["invocation_id"] as? String else {
+                    fail("expected the active server-effect invocation identity")
+                    return
+                }
+
+                await harness.service.handleEvent(NuxieEvent(
+                    name: JourneyEvents.journeyEffectCompleted,
+                    distinctId: harness.distinctId,
+                    properties: [
+                        "journey_id": journey.id,
+                        "node_id": nodeId,
+                        "invocation_id": invocationId,
+                        "status": "ok",
+                    ]
+                ))
+
+                let resumed = await journey.snapshot()
+                expect(resumed.status).to(equal(.active))
+                expect(resumed.executionState.pendingAction).to(beNil())
             }
 
             it("abandons an active server effect wait") { @MainActor in
@@ -2200,28 +2235,6 @@ private final class TriggerResultRecorder: @unchecked Sendable {
 
     var value: TriggerResult? {
         lock.withLock { storage }
-    }
-}
-
-private final class HostDismissNotificationRecorder: @unchecked Sendable {
-    struct Value: Sendable {
-        let journeyId: String?
-        let reason: String?
-    }
-
-    private let lock = NSLock()
-    private var storage: [Value] = []
-
-    var values: [Value] {
-        lock.withLock { storage }
-    }
-
-    func append(_ notification: Notification) {
-        let value = Value(
-            journeyId: notification.userInfo?["journeyId"] as? String,
-            reason: notification.userInfo?["reason"] as? String
-        )
-        lock.withLock { storage.append(value) }
     }
 }
 

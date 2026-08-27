@@ -21,17 +21,10 @@ private func encodeEventTimestamp(_ timestamp: Date) -> String {
 // MARK: - Batch Request
 
 struct BatchRequest: Codable {
-    let historicalMigration: Bool?
     let batch: [BatchEventItem]
     
-    init(events: [BatchEventItem], historicalMigration: Bool = false) {
+    init(events: [BatchEventItem]) {
         self.batch = events
-        self.historicalMigration = historicalMigration ? historicalMigration : nil
-    }
-    
-    enum CodingKeys: String, CodingKey {
-        case historicalMigration = "historical_migration"
-        case batch
     }
     
     func asDictionary() throws -> [String: Any]? {

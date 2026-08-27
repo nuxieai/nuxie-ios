@@ -17,14 +17,14 @@ final class NuxieEventTests: QuickSpec {
                 let now = Date()
                 let event = TestEventBuilder(name: "test_event")
                     .withDistinctId("user123")
-                    .withProperties(["key": "value", "$session_id": "session1"])
+                    .withProperties(["key": "value", "source": "test"])
                     .withTimestamp(now)
                     .build()
                 
                 expect(event.name).to(equal("test_event"))
                 expect(event.distinctId).to(equal("user123"))
                 expect(event.properties["key"] as? String).to(equal("value"))
-                expect(event.properties["$session_id"] as? String).to(equal("session1"))
+                expect(event.properties["source"] as? String).to(equal("test"))
                 expect(event.id).toNot(beEmpty())
                 expect(event.timestamp).to(beCloseTo(now, within: 1))
             }
@@ -46,7 +46,7 @@ final class NuxieEventTests: QuickSpec {
                     .withDistinctId("user")
                     .build()
                 
-                expect(event.properties["$session_id"]).to(beNil())
+                expect(event.properties["source"]).to(beNil())
             }
             
             it("should handle empty properties") {

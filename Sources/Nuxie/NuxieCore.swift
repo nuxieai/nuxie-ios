@@ -8,7 +8,6 @@ struct NuxieCoreOverrides {
   var sleepProvider: SleepProviderProtocol?
   var api: NuxieApiProtocol?
   var identity: IdentityServiceProtocol?
-  var sessions: SessionServiceProtocol?
   var eventLog: EventLogProtocol?
   var irRuntime: IRRuntime?
   var segments: SegmentServiceProtocol?
@@ -61,7 +60,6 @@ final class NuxieCore: @unchecked Sendable {
   let sleepProvider: SleepProviderProtocol
   let api: NuxieApiProtocol
   let identity: IdentityServiceProtocol
-  let sessions: SessionServiceProtocol
   let eventLog: EventLogProtocol
   let irRuntime: IRRuntime
   let segments: SegmentServiceProtocol
@@ -104,10 +102,8 @@ final class NuxieCore: @unchecked Sendable {
     )
     let identity = overrides.identity
       ?? IdentityService(customStoragePath: internalConfiguration.customStoragePath)
-    let sessions = overrides.sessions ?? SessionService()
     let eventLog = overrides.eventLog ?? EventLog(
       identity: identity,
-      sessions: sessions,
       dateProvider: dateProvider,
       apiClient: api
     )
@@ -343,7 +339,6 @@ final class NuxieCore: @unchecked Sendable {
     self.sleepProvider = sleepProvider
     self.api = api
     self.identity = identity
-    self.sessions = sessions
     self.eventLog = eventLog
     self.irRuntime = irRuntime
     self.segments = segments

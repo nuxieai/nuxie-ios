@@ -101,7 +101,6 @@ protocol EventStoreProtocol: Sendable {
     _ distinctId: String, name: String, since: Date?, until: Date?,
     ascending: Bool, limit: Int
   ) async throws -> [StoredEvent]
-  func querySessionEvents(_ sessionId: String) async throws -> [StoredEvent]
   func getEventCount() async throws -> Int
   /// Atomically establish the conservative origin for a fresh current-schema
   /// database on its first SDK open.
@@ -203,7 +202,6 @@ actor SQLiteEventStore: EventStoreProtocol {
         properties BLOB NOT NULL,
         timestamp INTEGER NOT NULL,
         user_id TEXT NOT NULL,
-        session_id TEXT,
         delivery_state INTEGER NOT NULL DEFAULT 2,
         origin TEXT NOT NULL DEFAULT 'device'
     );
@@ -214,10 +212,8 @@ actor SQLiteEventStore: EventStoreProtocol {
     "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);",
     "CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id);",
     "CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);",
-    "CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id);",
     "CREATE INDEX IF NOT EXISTS idx_events_user_name_time ON events(user_id, name, timestamp DESC);",
     "CREATE INDEX IF NOT EXISTS idx_events_user_time ON events(user_id, timestamp DESC);",
-    "CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, timestamp DESC);",
     "CREATE INDEX IF NOT EXISTS idx_unresolved_ownership_journey_epoch ON unresolved_journey_ownership_responses(journey_id, authoritative_epoch);",
   ]
 
@@ -255,19 +251,19 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   private let insertEventSQL = """
     INSERT OR IGNORE INTO events (
-      id, name, properties, timestamp, user_id, session_id, delivery_state, origin
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+      id, name, properties, timestamp, user_id, delivery_state, origin
+    ) VALUES (?, ?, ?, ?, ?, ?, ?);
     """
 
   private let queryEventsSQL = """
-    SELECT id, name, properties, timestamp, user_id, session_id
+    SELECT id, name, properties, timestamp, user_id
     FROM events
     ORDER BY timestamp DESC
     LIMIT ?;
     """
 
   private let queryEventByIdSQL = """
-    SELECT id, name, properties, timestamp, user_id, session_id
+    SELECT id, name, properties, timestamp, user_id
     FROM events
     WHERE id = ?
     LIMIT 1;
@@ -517,13 +513,11 @@ actor SQLiteEventStore: EventStoreProtocol {
       ("idx_events_timestamp", [("timestamp", false)]),
       ("idx_events_user_id", [("user_id", false)]),
       ("idx_events_name", [("name", false)]),
-      ("idx_events_session_id", [("session_id", false)]),
       (
         "idx_events_user_name_time",
         [("user_id", false), ("name", false), ("timestamp", true)]
       ),
       ("idx_events_user_time", [("user_id", false), ("timestamp", true)]),
-      ("idx_events_session_time", [("session_id", false), ("timestamp", true)]),
     ]
     for indexName in requiredIndexes {
       try verifyIndex(
@@ -651,7 +645,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let columns = try tableColumns(named: "events", targetVersion: targetVersion)
-    guard columns.count == 8,
+    guard columns.count == 7,
           let id = columns["id"],
           id.type.caseInsensitiveCompare("TEXT") == .orderedSame,
           id.primaryKeyPosition == 1,
@@ -668,9 +662,6 @@ actor SQLiteEventStore: EventStoreProtocol {
           let userId = columns["user_id"],
           userId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
           userId.isNotNull,
-          let sessionId = columns["session_id"],
-          sessionId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
-          !sessionId.isNotNull,
           columns["origin"] != nil
     else {
       throw schemaError(
@@ -679,8 +670,7 @@ actor SQLiteEventStore: EventStoreProtocol {
         code: SQLITE_SCHEMA,
         message: "events must exactly define id TEXT PRIMARY KEY, name TEXT NOT NULL, "
           + "properties BLOB NOT NULL, timestamp INTEGER NOT NULL, user_id TEXT NOT NULL, "
-          + "nullable session_id TEXT, delivery_state INTEGER NOT NULL DEFAULT 2, "
-          + "and origin TEXT NOT NULL DEFAULT 'device'"
+          + "delivery_state INTEGER NOT NULL DEFAULT 2, and origin TEXT NOT NULL DEFAULT 'device'"
       )
     }
     return columns
@@ -1040,15 +1030,8 @@ actor SQLiteEventStore: EventStoreProtocol {
 
     sqlite3_bind_text(statement, 5, event.distinctId, -1, SQLITE_TRANSIENT)
 
-    // Use sessionId field directly for database storage
-    if let sessionId = event.sessionId {
-      sqlite3_bind_text(statement, 6, sessionId, -1, SQLITE_TRANSIENT)
-    } else {
-      sqlite3_bind_null(statement, 6)
-    }
-
-    sqlite3_bind_int(statement, 7, deliveryState.rawValue)
-    sqlite3_bind_text(statement, 8, origin.rawValue, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_int(statement, 6, deliveryState.rawValue)
+    sqlite3_bind_text(statement, 7, origin.rawValue, -1, SQLITE_TRANSIENT)
 
     // Execute
     if sqlite3_step(statement) != SQLITE_DONE {
@@ -1553,12 +1536,6 @@ actor SQLiteEventStore: EventStoreProtocol {
       bytes: propertiesBlob,
       count: Int(sqlite3_column_bytes(statement, 2))
     )
-    let sessionId: String? = {
-      guard sqlite3_column_type(statement, 5) != SQLITE_NULL,
-            let text = sqlite3_column_text(statement, 5) else { return nil }
-      return String(cString: text)
-    }()
-
     return StoredEvent(
       id: String(cString: sqlite3_column_text(statement, 0)),
       name: String(cString: sqlite3_column_text(statement, 1)),
@@ -1566,8 +1543,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       timestamp: Date(
         timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0
       ),
-      distinctId: String(cString: sqlite3_column_text(statement, 4)),
-      sessionId: sessionId
+      distinctId: String(cString: sqlite3_column_text(statement, 4))
     )
   }
 
@@ -1620,24 +1596,13 @@ actor SQLiteEventStore: EventStoreProtocol {
 
       let distinctId = String(cString: sqlite3_column_text(statement, 4))
 
-      let sessionId: String? = {
-        if sqlite3_column_type(statement, 5) == SQLITE_NULL {
-          return nil
-        }
-        if let text = sqlite3_column_text(statement, 5) {
-          return String(cString: text)
-        }
-        return nil
-      }()
-
       // Don't decode properties - keep as Data for lazy decoding
       let event = StoredEvent(
         id: id,
         name: name,
         properties: propertiesData,
         timestamp: timestamp,
-        distinctId: distinctId,
-        sessionId: sessionId
+        distinctId: distinctId
       )
 
       events.append(event)
@@ -2123,7 +2088,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     var sql = """
-      SELECT id, name, properties, timestamp, user_id, session_id
+      SELECT id, name, properties, timestamp, user_id
       FROM events
       WHERE user_id = ? AND name = ?
       """
@@ -2168,18 +2133,12 @@ actor SQLiteEventStore: EventStoreProtocol {
       guard let idText = sqlite3_column_text(statement, 0),
             let propertiesBlob = sqlite3_column_blob(statement, 2)
       else { continue }
-      let sessionId: String? = {
-        if sqlite3_column_type(statement, 5) == SQLITE_NULL { return nil }
-        if let text = sqlite3_column_text(statement, 5) { return String(cString: text) }
-        return nil
-      }()
       events.append(StoredEvent(
         id: String(cString: idText),
         name: name,
         properties: Data(bytes: propertiesBlob, count: Int(sqlite3_column_bytes(statement, 2))),
         timestamp: Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0),
-        distinctId: distinctId,
-        sessionId: sessionId
+        distinctId: distinctId
       ))
     }
     return events
@@ -2236,7 +2195,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let sql = """
-      SELECT id, name, properties, timestamp, user_id, session_id
+      SELECT id, name, properties, timestamp, user_id
       FROM events
       WHERE user_id = ?
       ORDER BY timestamp DESC
@@ -2284,24 +2243,13 @@ actor SQLiteEventStore: EventStoreProtocol {
 
       // user_id is already known (we're filtering by it)
 
-      let sessionId: String? = {
-        if sqlite3_column_type(statement, 5) == SQLITE_NULL {
-          return nil
-        }
-        if let text = sqlite3_column_text(statement, 5) {
-          return String(cString: text)
-        }
-        return nil
-      }()
-
       // Don't decode properties - keep as Data for lazy decoding
       let event = StoredEvent(
         id: id,
         name: name,
         properties: propertiesData,
         timestamp: timestamp,
-        distinctId: distinctId,
-        sessionId: sessionId
+        distinctId: distinctId
       )
 
       events.append(event)
@@ -2320,7 +2268,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let sql = """
-      SELECT id, name, properties, timestamp, user_id, session_id
+      SELECT id, name, properties, timestamp, user_id
       FROM events
       WHERE delivery_state = ?
       ORDER BY timestamp ASC, id ASC
@@ -2347,19 +2295,12 @@ actor SQLiteEventStore: EventStoreProtocol {
             let userIdText = sqlite3_column_text(statement, 4)
       else { continue }
 
-      let sessionId: String? = {
-        if sqlite3_column_type(statement, 5) == SQLITE_NULL { return nil }
-        if let text = sqlite3_column_text(statement, 5) { return String(cString: text) }
-        return nil
-      }()
-
       events.append(StoredEvent(
         id: String(cString: idText),
         name: String(cString: nameText),
         properties: Data(bytes: propertiesBlob, count: Int(sqlite3_column_bytes(statement, 2))),
         timestamp: Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0),
-        distinctId: String(cString: userIdText),
-        sessionId: sessionId
+        distinctId: String(cString: userIdText)
       ))
     }
     return events
@@ -2462,77 +2403,4 @@ actor SQLiteEventStore: EventStoreProtocol {
     return Int(sqlite3_changes(db))
   }
 
-  /// Query events for a specific session
-  /// - Parameter sessionId: Session ID to filter by
-  /// - Returns: Array of events from the session
-  /// - Throws: EventStorageError if query fails
-  public func querySessionEvents(_ sessionId: String) throws -> [StoredEvent] {
-    guard let db = db else {
-      throw EventStorageError.databaseNotInitialized
-    }
-
-    let sql = """
-      SELECT id, name, properties, timestamp, user_id, session_id
-      FROM events
-      WHERE session_id = ?
-      ORDER BY timestamp DESC;
-      """
-
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-
-    // Prepare statement
-    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
-      let errorMessage = String(cString: sqlite3_errmsg(db))
-      throw EventStorageError.queryFailed(
-        NSError(domain: "SQLite", code: 12, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
-    }
-
-    // Bind session ID
-    sqlite3_bind_text(statement, 1, sessionId, -1, SQLITE_TRANSIENT)
-
-    // Execute and collect results
-    var events: [StoredEvent] = []
-
-    while sqlite3_step(statement) == SQLITE_ROW {
-      let id: String = {
-        if let text = sqlite3_column_text(statement, 0) {
-          return String(cString: text)
-        }
-        return ""
-      }()
-
-      let name: String = {
-        if let text = sqlite3_column_text(statement, 1) {
-          return String(cString: text)
-        }
-        return ""
-      }()
-
-      let propertiesBlob = sqlite3_column_blob(statement, 2)
-      let propertiesSize = sqlite3_column_bytes(statement, 2)
-      let propertiesData = Data(bytes: propertiesBlob!, count: Int(propertiesSize))
-
-      let timestampMs = sqlite3_column_int64(statement, 3)
-      let timestamp = Date(timeIntervalSince1970: Double(timestampMs) / 1000.0)
-
-      let distinctId = String(cString: sqlite3_column_text(statement, 4))
-
-      // Session ID is already known (we're filtering by it)
-
-      // Don't decode properties - keep as Data for lazy decoding
-      let event = StoredEvent(
-        id: id,
-        name: name,
-        properties: propertiesData,
-        timestamp: timestamp,
-        distinctId: distinctId,
-        sessionId: sessionId
-      )
-
-      events.append(event)
-    }
-
-    return events
-  }
 }

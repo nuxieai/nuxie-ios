@@ -30,7 +30,6 @@ final class TrackWithResponseTests: AsyncSpec {
         var mockEventStore: MockEventStore!
         var mockIdentityService: MockIdentityService!
         var mockNuxieApi: MockNuxieApi!
-        var mockSessionService: TrackWithResponseMockSessionService!
         var testConfig: NuxieConfiguration!
 
         beforeEach {
@@ -42,12 +41,10 @@ final class TrackWithResponseTests: AsyncSpec {
             mockEventStore = MockEventStore()
             mockIdentityService = MockIdentityService()
             mockNuxieApi = MockNuxieApi()
-            mockSessionService = TrackWithResponseMockSessionService()
 
             // Create event log with mock event store
             eventLog = EventLog(
                 identity: mockIdentityService,
-                sessions: mockSessionService,
                 dateProvider: MockDateProvider(),
                 apiClient: mockNuxieApi,
                 store: mockEventStore
@@ -79,7 +76,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     // When
                     let response = try await eventLog.trackWithResponse(
                         "$journey_transition",
-                        properties: ["session_id": "test-session"]
+                        properties: ["request_id": "test-request"]
                     )
 
                     // Then
@@ -109,7 +106,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     _ = try await eventLog.trackWithResponse(
                         "$journey_exited",
                         properties: [
-                            "session_id": "session-123",
+                            "request_id": "request-123",
                             "exit_reason": "completed"
                         ]
                     )
@@ -119,7 +116,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     expect(callCount).to(equal(1))
                     let lastCall = await mockNuxieApi.lastTrackEventCall
                     expect(lastCall?.event).to(equal("$journey_exited"))
-                    expect(lastCall?.properties?["session_id"] as? String).to(equal("session-123"))
+                    expect(lastCall?.properties?["request_id"] as? String).to(equal("request-123"))
                     expect(lastCall?.properties?["exit_reason"] as? String).to(equal("completed"))
                 }
 
@@ -176,7 +173,6 @@ final class TrackWithResponseTests: AsyncSpec {
                     batchConfig.testingOverrides.eventBatchSize = 2
                     let batchedEventLog = EventLog(
                         identity: mockIdentityService,
-                        sessions: mockSessionService,
                         dateProvider: MockDateProvider(),
                         apiClient: mockNuxieApi,
                         store: mockEventStore
@@ -218,7 +214,6 @@ final class TrackWithResponseTests: AsyncSpec {
                     batchConfig.testingOverrides.eventBatchSize = 10
                     let routedEventLog = EventLog(
                         identity: mockIdentityService,
-                        sessions: mockSessionService,
                         dateProvider: MockDateProvider(),
                         apiClient: mockNuxieApi,
                         store: mockEventStore
@@ -272,7 +267,6 @@ final class TrackWithResponseTests: AsyncSpec {
                     batchConfig.testingOverrides.eventBatchSize = 10
                     let bufferedEventLog = EventLog(
                         identity: mockIdentityService,
-                        sessions: mockSessionService,
                         dateProvider: MockDateProvider(),
                         apiClient: mockNuxieApi,
                         store: mockEventStore
@@ -439,7 +433,6 @@ final class TrackWithResponseTests: AsyncSpec {
                     await eventLog.close()
                     eventLog = EventLog(
                         identity: mockIdentityService,
-                        sessions: mockSessionService,
                         dateProvider: MockDateProvider(),
                         apiClient: mockNuxieApi,
                         store: mockEventStore
@@ -766,25 +759,9 @@ final class TrackWithResponseTests: AsyncSpec {
                 }
             }
 
-            // MARK: - Session and Identity
+            // MARK: - Identity
 
-            context("session and identity") {
-                it("includes session ID in properties") {
-                    // Given
-                    mockSessionService.mockSessionId = "test-session-id"
-                    await mockNuxieApi.setTrackEventResponse(.success())
-
-                    // When
-                    _ = try await eventLog.trackWithResponse(
-                        "$journey_transition",
-                        properties: ["node_id": "node-1"]
-                    )
-
-                    // Then
-                    let lastCall = await mockNuxieApi.lastTrackEventCall
-                    expect(lastCall?.properties?["$session_id"] as? String).to(equal("test-session-id"))
-                }
-
+            context("identity") {
                 it("uses current distinct ID") {
                     // Given
                     mockIdentityService.setDistinctId("user-123")
@@ -821,7 +798,6 @@ final class TrackWithResponseTests: AsyncSpec {
                     let capturedTimestamp = CapturedEventTimestamp()
                     eventLog = EventLog(
                         identity: mockIdentityService,
-                        sessions: mockSessionService,
                         dateProvider: dateProvider,
                         apiClient: mockNuxieApi,
                         store: mockEventStore
@@ -875,7 +851,6 @@ final class TrackWithResponseTests: AsyncSpec {
                         eventId: "purchase-completed:transaction-1",
                         distinctId: "customer-a"
                     )
-                    mockSessionService.mockSessionId = "replacement-session"
                     let replay = await eventLog.captureSystemEvent(
                         "$purchase_completed",
                         properties: [
@@ -897,8 +872,6 @@ final class TrackWithResponseTests: AsyncSpec {
                         == "placement-1"
                     expect(replay?.event.properties["snapshot"] as? String)
                         == "first"
-                    expect(replay?.event.properties["$session_id"] as? String)
-                        == captured?.event.properties["$session_id"] as? String
                     expect(mockEventStore.storedEvents).to(haveCount(1))
                     expect(mockEventStore.pendingIds)
                         .to(contain("purchase-completed:transaction-1"))
@@ -1022,7 +995,6 @@ final class TrackWithResponseTests: AsyncSpec {
                     await eventLog.close()
                     eventLog = EventLog(
                         identity: mockIdentityService,
-                        sessions: mockSessionService,
                         dateProvider: MockDateProvider(),
                         apiClient: mockNuxieApi,
                         store: mockEventStore
@@ -1071,7 +1043,6 @@ final class TrackWithResponseTests: AsyncSpec {
                     let date = MockDateProvider()
                     eventLog = EventLog(
                         identity: mockIdentityService,
-                        sessions: mockSessionService,
                         dateProvider: date,
                         apiClient: mockNuxieApi,
                         store: mockEventStore,
@@ -1353,65 +1324,6 @@ final class TrackWithResponseTests: AsyncSpec {
                 }
             }
         }
-    }
-}
-
-// MARK: - Mock Session Service
-
-final class TrackWithResponseMockSessionService: SessionServiceProtocol, @unchecked Sendable {
-    private let lock = NSLock()
-    private var _mockSessionId: String? = "mock-session"
-    private var _touchCallCount = 0
-
-    var mockSessionId: String? {
-        get { lock.withLock { _mockSessionId } }
-        set { lock.withLock { _mockSessionId = newValue } }
-    }
-    var touchCallCount: Int {
-        lock.withLock { _touchCallCount }
-    }
-
-    func getSessionId(at date: Date, readOnly: Bool) -> String? {
-        return mockSessionId
-    }
-
-
-    func setSessionId(_ sessionId: String) {
-        mockSessionId = sessionId
-    }
-
-    func startSession() {
-        mockSessionId = "new-session"
-    }
-
-    func touchSession() {
-        lock.withLock { _touchCallCount += 1 }
-    }
-
-    func resetSession() {
-        lock.withLock {
-            _mockSessionId = "mock-session"
-            _touchCallCount = 0
-        }
-    }
-
-    func reset() {
-        lock.withLock {
-            _mockSessionId = "mock-session"
-            _touchCallCount = 0
-        }
-    }
-
-    func endSession() {
-        mockSessionId = nil
-    }
-
-    func onAppDidEnterBackground() {
-        // No-op for tests
-    }
-
-    func onAppBecameActive() {
-        // No-op for tests
     }
 }
 

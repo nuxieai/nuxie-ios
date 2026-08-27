@@ -198,13 +198,6 @@ final class NuxieContextBuilderTests: AsyncSpec {
                     expect(enriched["$log_level"] as? String).to(equal("debug"))
                 }
                 
-                it("should not stamp a session-start timestamp") {
-                    // Session boundaries come from $session_id (UUIDv7) stamps;
-                    // a per-event "$session_start = now" field was a lie.
-                    let enriched = await awaitEnriched(contextBuilder)
-                    expect(enriched["$session_start"]).to(beNil())
-                }
-                
                 it("should handle nil configuration") {
                     let builderWithoutConfig = NuxieContextBuilder(
                         identityService: identityService,

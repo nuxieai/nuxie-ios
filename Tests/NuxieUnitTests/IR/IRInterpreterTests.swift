@@ -207,7 +207,6 @@ final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
             limit: limit
         )
     }
-    func getEvents(for sessionId: String) async -> [StoredEvent] { return [] }
 }
 
 final class IRTestSegmentService: SegmentServiceProtocol, IRSegmentQueries, @unchecked Sendable {

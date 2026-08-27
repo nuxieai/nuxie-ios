@@ -177,38 +177,6 @@ final class IdentityIntegrationTests: AsyncSpec {
                 }
             }
 
-            // MARK: - Session Handling
-
-            describe("session handling on identify") {
-                it("should start new session when identifying") {
-                    let sessionService = NuxieSDK.shared.core!.sessions
-
-                    // Create initial session
-                    let firstSessionId = sessionService.getSessionId(at: Date(), readOnly: false)
-                    expect(firstSessionId).toNot(beNil())
-
-                    // Identify should create new session
-                    NuxieSDK.shared.identify("session-user")
-
-                    let secondSessionId = sessionService.getSessionId(at: Date(), readOnly: true)
-                    expect(secondSessionId).toNot(beNil())
-                    expect(secondSessionId).toNot(equal(firstSessionId))
-                }
-
-                it("should reset session on reset()") {
-                    let sessionService = NuxieSDK.shared.core!.sessions
-
-                    NuxieSDK.shared.identify("reset-session-user")
-                    let identifiedSessionId = sessionService.getSessionId(at: Date(), readOnly: false)
-
-                    NuxieSDK.shared.reset()
-
-                    // Session should be cleared or new
-                    let afterResetSessionId = sessionService.getSessionId(at: Date(), readOnly: false)
-                    expect(afterResetSessionId).toNot(equal(identifiedSessionId))
-                }
-            }
-
             // MARK: - Multiple Identity Transitions
 
             describe("multiple identity transitions") {
@@ -252,7 +220,6 @@ final class IdentityIntegrationTests: AsyncSpec {
                     let userId = "same-user"
 
                     NuxieSDK.shared.identify(userId)
-                    let sessionAfterFirst = NuxieSDK.shared.core!.sessions.getSessionId(at: Date(), readOnly: true)
 
                     // Re-identify with same ID
                     NuxieSDK.shared.identify(userId, userProperties: ["updated": true])
@@ -261,11 +228,6 @@ final class IdentityIntegrationTests: AsyncSpec {
                     expect(NuxieSDK.shared.getDistinctId()).to(equal(userId))
                     expect(NuxieSDK.shared.isIdentified).to(beTrue())
 
-                    // Re-identifying with the same id must NOT rotate the session:
-                    // apps call identify() on every launch and session analytics
-                    // would fragment otherwise.
-                    let sessionAfterSecond = NuxieSDK.shared.core!.sessions.getSessionId(at: Date(), readOnly: true)
-                    expect(sessionAfterSecond).to(equal(sessionAfterFirst))
                 }
             }
 

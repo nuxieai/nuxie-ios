@@ -214,7 +214,6 @@ actor JourneyRunner {
     private let profileService: ProfileServiceProtocol
     private let apiClient: ResponseWriting
     private let dateProvider: DateProviderProtocol
-    private let irRuntime: IRRuntime
     private let appActionHandler: @MainActor @Sendable (AppAction) -> Void
     /// The exact signed execution plan selected for this route and start
     /// plane. Plan selection is fail-closed.
@@ -340,7 +339,6 @@ actor JourneyRunner {
         profile: ProfileServiceProtocol,
         apiClient: ResponseWriting,
         dateProvider: DateProviderProtocol,
-        irRuntime: IRRuntime,
         appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in },
         responseSessionModule: ResponseSessionModule? = nil,
         persistResponseRetryMarker: @escaping @Sendable (JourneySnapshot) async -> Bool = { _ in true },
@@ -362,7 +360,6 @@ actor JourneyRunner {
         self.profileService = profile
         self.apiClient = apiClient
         self.dateProvider = dateProvider
-        self.irRuntime = irRuntime
         self.appActionHandler = appActionHandler
         let definition = experience.definition
         let persistedPlanId = initialState.executionState.planId
@@ -887,25 +884,6 @@ actor JourneyRunner {
             guard self.lastMileEffectRemainsLive() else { return }
             controller.performOpenLink(urlString: urlString, target: target)
         }
-        guard await executionRemainsLive() else { return }
-        var userInfo: [String: Any] = [
-            "journeyId": journey.id,
-            "experienceId": journey.experienceId,
-            "url": urlString
-        ]
-        if let target {
-            userInfo["target"] = target
-        }
-        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
-        if let resolvedScreenId = screenId ?? currentScreenId {
-            userInfo["screenId"] = resolvedScreenId
-        }
-        guard lastMileEffectRemainsLive() else { return }
-        NotificationCenter.default.post(
-            name: .nuxieOpenLink,
-            object: nil,
-            userInfo: userInfo
-        )
     }
 
     func dispatchEventTrigger(_ event: NuxieEvent) async -> RunOutcome? {
@@ -1036,7 +1014,7 @@ actor JourneyRunner {
                 if let condition = pending.journeyCondition {
                     return await evalJourneyCondition(condition, event: event)
                 }
-                return await evalConditionIR(pending.condition, event: event)
+                return false
             }
             return false
         }
@@ -1755,16 +1733,6 @@ actor JourneyRunner {
 
         isPaused = false
 
-        let context = TriggerContext(
-            hostId: pending.hostId,
-            screenId: pending.screenId,
-            componentId: pending.componentId,
-            handlerId: pending.handlerId,
-            instanceId: nil,
-            payload: event?.properties,
-            requiresTerminalTransfer: pending.requiresTerminalTransfer == true
-        )
-
         if let continuation = pending.continuation {
             let items = materializeContinuation(
                 continuation,
@@ -1781,34 +1749,9 @@ actor JourneyRunner {
             return await processQueue(resumeContext: nil)
         }
 
-        let request: ActionRequest
-        if let resumeActions = pending.resumeActions {
-            request = ActionRequest(
-                isPriority: isProcessing,
-                actions: resumeActions,
-                context: context,
-                identity: .resumed(handlerId: pending.handlerId),
-                resumeContext: ResumeContext(
-                    pending: pending,
-                    reason: reason,
-                    event: event
-                )
-            )
-        } else {
-            // Canonical canonical continuations persist their exact remaining program.
-            // A checkpoint without it belongs to the retired handler model and
-            // must not be reconstructed from mutable release metadata.
-            return nil
-        }
-
-        if isProcessing {
-            priorityActionQueue.append(request)
-            needsQueueDrain = true
-            return nil
-        }
-        sequenceStack.removeAll()
-        actionQueue.insert(request, at: 0)
-        return await processQueue(resumeContext: nil)
+        // A checkpoint without a durable continuation belongs to the retired
+        // handler model and is intentionally not reconstructed.
+        return nil
     }
 
     func hasPendingWork() async -> Bool {
@@ -2918,17 +2861,6 @@ actor JourneyRunner {
             }
         }
 
-        guard lastMileEffectRemainsLive() else { return }
-        NotificationCenter.default.post(
-            name: .nuxieBack,
-            object: nil,
-            userInfo: [
-                "journeyId": journey.id,
-                "experienceId": journey.experienceId,
-                "steps": steps,
-                "screenId": target
-            ]
-        )
     }
 
     private func handleDelay(
@@ -2945,7 +2877,6 @@ actor JourneyRunner {
             context: context,
             index: index,
             resumeAt: resumeAt,
-            condition: nil,
             maxTimeMs: nil
         ))
     }
@@ -2988,7 +2919,6 @@ actor JourneyRunner {
                 context: context,
                 index: index,
                 resumeAt: until,
-                condition: nil,
                 maxTimeMs: nil
             ))
         }
@@ -3032,7 +2962,6 @@ actor JourneyRunner {
                 context: context,
                 index: index,
                 resumeAt: deadline,
-                condition: nil,
                 journeyCondition: condition,
                 journeyWaitTrigger: action.trigger,
                 maxTimeMs: maxTimeMs,
@@ -3046,7 +2975,6 @@ actor JourneyRunner {
             context: context,
             index: index,
             resumeAt: nil,
-            condition: nil,
             journeyCondition: condition,
             journeyWaitTrigger: action.trigger,
             maxTimeMs: nil,
@@ -3762,23 +3690,7 @@ actor JourneyRunner {
             guard self.lastMileEffectRemainsLive() else { return }
             controller.performPurchase(placementId: placementId)
         }
-        guard await executionRemainsLive() else { return .retired }
-
-        var userInfo: [String: Any] = [
-            "journeyId": journey.id,
-            "experienceId": journey.experienceId,
-            "placementId": placementId
-        ]
-        if let screenId = resolvedScreenId {
-            userInfo["screenId"] = screenId
-        }
-        guard lastMileEffectRemainsLive() else { return .retired }
-        NotificationCenter.default.post(
-            name: .nuxiePurchase,
-            object: nil,
-            userInfo: userInfo
-        )
-        return .continue
+        return await executionRemainsLive() ? .continue : .retired
     }
 
     private func handleRestore(
@@ -3828,21 +3740,7 @@ actor JourneyRunner {
             guard self.lastMileEffectRemainsLive() else { return }
             controller.performRestore()
         }
-        guard await executionRemainsLive() else { return .retired }
-        var userInfo: [String: Any] = [
-            "journeyId": journey.id,
-            "experienceId": journey.experienceId
-        ]
-        if let screenId = context.screenId ?? currentScreenId {
-            userInfo["screenId"] = screenId
-        }
-        guard lastMileEffectRemainsLive() else { return .retired }
-        NotificationCenter.default.post(
-            name: .nuxieRestore,
-            object: nil,
-            userInfo: userInfo
-        )
-        return .continue
+        return await executionRemainsLive() ? .continue : .retired
     }
 
     private func handleRequestNotifications(
@@ -3911,26 +3809,7 @@ actor JourneyRunner {
             guard self.lastMileEffectRemainsLive() else { return }
             controller.performOpenLink(urlString: urlString, target: action.target)
         }
-        guard await executionRemainsLive() else { return .retired }
-        var userInfo: [String: Any] = [
-            "journeyId": journey.id,
-            "experienceId": journey.experienceId,
-            "url": urlString
-        ]
-        if let target = action.target {
-            userInfo["target"] = target
-        }
-        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
-        if let screenId = context.screenId ?? currentScreenId {
-            userInfo["screenId"] = screenId
-        }
-        guard lastMileEffectRemainsLive() else { return .retired }
-        NotificationCenter.default.post(
-            name: .nuxieOpenLink,
-            object: nil,
-            userInfo: userInfo
-        )
-        return .continue
+        return await executionRemainsLive() ? .continue : .retired
     }
 
     private func handleDismiss(
@@ -4120,9 +3999,13 @@ actor JourneyRunner {
             context: context,
             index: index,
             resumeAt: deadline,
-            condition: effectCompletionCondition(
+            journeyCondition: effectCompletionCondition(
                 nodeId: nodeId,
                 invocationId: invocationId
+            ),
+            journeyWaitTrigger: .event(
+                eventName: JourneyEvents.journeyEffectCompleted,
+                payloadSchema: nil
             ),
             maxTimeMs: boundedTimeoutMs,
             startedAt: startedAt
@@ -4176,22 +4059,24 @@ actor JourneyRunner {
     private func effectCompletionCondition(
         nodeId: String,
         invocationId: String
-    ) -> IREnvelope {
-        IREnvelope(
-            ir_version: 1,
-            engine_min: nil,
-            compiled_at: nil,
-            expr: .and([
-                .event(op: "eq", key: "name", value: .string(JourneyEvents.journeyEffectCompleted)),
-                .event(op: "eq", key: "properties.journey_id", value: .string(journey.id)),
-                .event(op: "eq", key: "properties.node_id", value: .string(nodeId)),
-                .event(
-                    op: "eq",
-                    key: "properties.invocation_id",
-                    value: .string(invocationId)
-                ),
-            ])
-        )
+    ) -> JourneyCondition {
+        .all([
+            .compare(
+                op: "==",
+                left: .eventField("journey_id"),
+                right: .string(journey.id)
+            ),
+            .compare(
+                op: "==",
+                left: .eventField("node_id"),
+                right: .string(nodeId)
+            ),
+            .compare(
+                op: "==",
+                left: .eventField("invocation_id"),
+                right: .string(invocationId)
+            ),
+        ])
     }
 
     private func bindEffectResult(_ properties: [String: Any], nodeId: String) async {
@@ -4362,19 +4247,15 @@ actor JourneyRunner {
         includeQueuedWork: Bool = true
     ) -> [JourneyContinuationStep] {
         let pausedFrame = sequenceStack[pausedFrameIndex]
-        let resumeActions = pending.resumeActions ?? pausedFrame.actions
-        let resumeIndex = pending.resumeActions == nil
-            ? (pending.kind == .delay
-                ? pausedInstructionIndex + 1
-                : pausedInstructionIndex)
-            : 0
-        let resumeActionPaths = pending.resumeActions == nil ? pausedFrame.actionPaths : nil
+        let resumeIndex = pending.kind == .delay
+            ? pausedInstructionIndex + 1
+            : pausedInstructionIndex
         var steps: [JourneyContinuationStep] = []
         appendRequest(
             rootId: pausedFrame.rootId,
             isPriority: pausedFrame.isPriority,
-            actions: resumeActions,
-            actionPaths: resumeActionPaths,
+            actions: pausedFrame.actions,
+            actionPaths: pausedFrame.actionPaths,
             startIndex: resumeIndex,
             context: pausedFrame.context,
             usesPendingResumeContext: true,
@@ -4647,7 +4528,6 @@ actor JourneyRunner {
         case .start: reason = .start
         case .timer: reason = .timer
         case .event: reason = .event
-        case .segmentChange: reason = .segmentChange
         }
         return JourneyContinuationResume(
             pending: resume.pending,
@@ -4695,7 +4575,7 @@ actor JourneyRunner {
                         event: event
                     )
                 } else {
-                    resumeContext = request.resume.map(materialize)
+                    resumeContext = request.resume.flatMap(materialize)
                 }
                 operation = .request(
                     ActionRequest(
@@ -4746,7 +4626,7 @@ actor JourneyRunner {
                         context: context,
                         identity: .resumed(handlerId: request.handlerId),
                         startIndex: request.startIndex,
-                        resumeContext: request.resume.map(materialize)
+                        resumeContext: request.resume.flatMap(materialize)
                     )
                 )
             case .pending(let pending):
@@ -4760,7 +4640,7 @@ actor JourneyRunner {
         }
     }
 
-    private func materialize(_ resume: JourneyContinuationResume) -> ResumeContext {
+    private func materialize(_ resume: JourneyContinuationResume) -> ResumeContext? {
         let event = resume.event.map {
             NuxieEvent(
                 id: $0.id,
@@ -4774,8 +4654,9 @@ actor JourneyRunner {
         switch resume.reason {
         case .start: reason = .start
         case .timer: reason = .timer
-        case .event: reason = event.map(ResumeReason.event) ?? .segmentChange
-        case .segmentChange: reason = .segmentChange
+        case .event:
+            guard let event else { return nil }
+            reason = .event(event)
         }
         return ResumeContext(pending: resume.pending, reason: reason, event: event)
     }
@@ -4884,7 +4765,6 @@ actor JourneyRunner {
         context: TriggerContext,
         index: Int,
         resumeAt: Date?,
-        condition: IREnvelope?,
         journeyCondition: JourneyCondition? = nil,
         journeyWaitTrigger: JourneyWaitTrigger? = nil,
         maxTimeMs: Int?,
@@ -4900,14 +4780,12 @@ actor JourneyRunner {
             actionIndex: index,
             kind: kind,
             resumeAt: resumeAt,
-            condition: condition,
             journeyCondition: journeyCondition,
             journeyWaitTrigger: journeyWaitTrigger,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt ?? dateProvider.now(),
             responseVersion: responseVersion,
             allowsResponseVersionRefresh: allowsResponseVersionRefresh ? true : nil,
-            resumeActions: nil,
             requiresTerminalTransfer: context.requiresTerminalTransfer ? true : nil
         )
     }
@@ -5072,18 +4950,6 @@ actor JourneyRunner {
             }
         )
         return resolver.resolve(value)
-    }
-
-    private func evalConditionIR(_ envelope: IREnvelope?, event: NuxieEvent?) async -> Bool {
-        guard let envelope else { return true }
-
-        let responseSession = (await journey.snapshot()).responseSession
-        let config = irRuntime.standardConfig(
-            event: event,
-            responseSession: responseSession
-        )
-
-        return await irRuntime.eval(envelope, config)
     }
 
     private func evalJourneyCondition(_ condition: JourneyCondition, event: NuxieEvent?) async -> Bool {

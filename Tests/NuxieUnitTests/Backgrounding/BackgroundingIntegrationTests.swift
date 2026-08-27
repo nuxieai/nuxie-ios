@@ -12,109 +12,6 @@ final class BackgroundingIntegrationTests: AsyncSpec {
     override class func spec() {
         describe("Backgrounding Integration") {
 
-            // MARK: - SessionService Backgrounding
-
-            describe("SessionService backgrounding behavior") {
-                var sessionService: SessionService!
-
-                beforeEach {
-                    sessionService = SessionService()
-                }
-
-                afterEach {
-                    sessionService = nil
-                }
-
-                it("should mark app as in background on onAppDidEnterBackground") {
-                    // Create initial session
-                    _ = sessionService.getSessionId(at: Date(), readOnly: false)
-
-                    // Enter background
-                    sessionService.onAppDidEnterBackground()
-
-                    // Session should still exist (not cleared immediately)
-                    let sessionId = sessionService.getSessionId(at: Date(), readOnly: true)
-                    expect(sessionId).toNot(beNil())
-                }
-
-                it("should handle session expiration during background") {
-                    let now = Date()
-
-                    // Create session
-                    let originalSessionId = sessionService.getSessionId(at: now, readOnly: false)
-                    expect(originalSessionId).toNot(beNil())
-
-                    // Enter background
-                    sessionService.onAppDidEnterBackground()
-
-                    // Simulate 31 minutes passing while backgrounded
-                    let afterTimeout = now.addingTimeInterval(31 * 60)
-
-                    // Return to foreground
-                    sessionService.onAppBecameActive()
-
-                    // Try to get session at the later time - should create new session
-                    let newSessionId = sessionService.getSessionId(at: afterTimeout, readOnly: false)
-                    expect(newSessionId).toNot(beNil())
-                    expect(newSessionId).toNot(equal(originalSessionId))
-                }
-
-                it("should preserve session when returning quickly from background") {
-                    let now = Date()
-
-                    // Create session
-                    let originalSessionId = sessionService.getSessionId(at: now, readOnly: false)
-
-                    // Background and immediately foreground
-                    sessionService.onAppDidEnterBackground()
-                    sessionService.onAppBecameActive()
-
-                    // Session should be preserved
-                    let afterSessionId = sessionService.getSessionId(at: now.addingTimeInterval(1), readOnly: true)
-                    expect(afterSessionId).to(equal(originalSessionId))
-                }
-
-                it("should handle multiple background/foreground cycles") {
-                    let now = Date()
-                    var currentTime = now
-
-                    // Create initial session
-                    let originalSessionId = sessionService.getSessionId(at: currentTime, readOnly: false)
-
-                    // Perform multiple cycles within timeout
-                    for _ in 0..<5 {
-                        sessionService.onAppDidEnterBackground()
-                        currentTime = currentTime.addingTimeInterval(60) // 1 minute each
-                        sessionService.onAppBecameActive()
-                        let sessionId = sessionService.getSessionId(at: currentTime, readOnly: false)
-
-                        // Session should be preserved (total time < 30 min)
-                        expect(sessionId).to(equal(originalSessionId))
-                    }
-                }
-
-                it("should rotate the session after a background timeout") {
-                    let now = Date()
-
-                    // Create session
-                    let original = sessionService.getSessionId(at: now, readOnly: false)
-                    expect(original).toNot(beNil())
-
-                    // Background
-                    sessionService.onAppDidEnterBackground()
-
-                    // Simulate timeout
-                    let afterTimeout = now.addingTimeInterval(31 * 60)
-
-                    // Foreground - should trigger new session
-                    sessionService.onAppBecameActive()
-                    let rotated = sessionService.getSessionId(at: afterTimeout, readOnly: false)
-
-                    expect(rotated).toNot(beNil())
-                    expect(rotated).toNot(equal(original))
-                }
-            }
-
             // MARK: - Full SDK Backgrounding Integration
 
             describe("SDK backgrounding integration") {
@@ -144,10 +41,14 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                     let identityBefore = NuxieSDK.shared.getDistinctId()
                     let anonymousIdBefore = NuxieSDK.shared.getAnonymousId()
 
-                    // Simulate background/foreground (via SessionService)
-                    let sessionService = NuxieSDK.shared.core!.sessions
-                    sessionService.onAppDidEnterBackground()
-                    sessionService.onAppBecameActive()
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidEnterBackground,
+                        object: nil
+                    )
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidBecomeActive,
+                        object: nil
+                    )
 
                     // Identity should be preserved
                     expect(NuxieSDK.shared.getDistinctId()).to(equal(identityBefore))
@@ -166,11 +67,14 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                         return events.contains { $0.name == "before_background" }
                     }.toEventually(beTrue(), timeout: .seconds(2))
 
-                    // Background
-                    let sessionService = NuxieSDK.shared.core!.sessions
-                    sessionService.onAppDidEnterBackground()
-                    // Foreground
-                    sessionService.onAppBecameActive()
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidEnterBackground,
+                        object: nil
+                    )
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidBecomeActive,
+                        object: nil
+                    )
 
                     // Track event after returning
                     NuxieSDK.shared.trigger("after_background")
@@ -184,13 +88,17 @@ final class BackgroundingIntegrationTests: AsyncSpec {
 
                 it("should handle rapid background/foreground cycles") {
                     let eventLog = NuxieSDK.shared.core!.eventLog
-                    let sessionService = NuxieSDK.shared.core!.sessions
-
                     // Rapid cycles
                     for i in 0..<10 {
-                        sessionService.onAppDidEnterBackground()
+                        NotificationCenter.default.post(
+                            name: NuxieSystemNotifications.appDidEnterBackground,
+                            object: nil
+                        )
                         NuxieSDK.shared.trigger("cycle_event_\(i)")
-                        sessionService.onAppBecameActive()
+                        NotificationCenter.default.post(
+                            name: NuxieSystemNotifications.appDidBecomeActive,
+                            object: nil
+                        )
                     }
 
                     // All events should be tracked
@@ -298,69 +206,6 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
             }
 
-            // MARK: - Thread Safety During Backgrounding
-
-            describe("thread safety during backgrounding") {
-                var sessionService: SessionService!
-
-                beforeEach {
-                    sessionService = SessionService()
-                }
-
-                afterEach {
-                    sessionService = nil
-                }
-
-                it("should handle concurrent background/foreground calls") {
-                    let iterations = 50
-                    let service = sessionService!
-
-                    // Create initial session
-                    _ = service.getSessionId(at: Date(), readOnly: false)
-
-                    await withTaskGroup(of: Void.self) { group in
-                        for _ in 0..<iterations {
-                            group.addTask {
-                                service.onAppDidEnterBackground()
-                                service.onAppBecameActive()
-                            }
-                        }
-                    }
-
-                    // Should not crash and session should still be valid
-                    let sessionId = service.getSessionId(at: Date(), readOnly: true)
-                    expect(sessionId).toNot(beNil())
-                }
-
-                it("should handle concurrent getSessionId during backgrounding") {
-                    let service = sessionService!
-
-                    // Create initial session
-                    _ = service.getSessionId(at: Date(), readOnly: false)
-
-                    // Background
-                    service.onAppDidEnterBackground()
-
-                    // Concurrent session accesses
-                    let sessionIds: [String?] = await withTaskGroup(of: String?.self) { group in
-                        for _ in 0..<50 {
-                            group.addTask {
-                                service.getSessionId(at: Date(), readOnly: true)
-                            }
-                        }
-                        var results: [String?] = []
-                        for await sessionId in group {
-                            results.append(sessionId)
-                        }
-                        return results
-                    }
-
-                    // All IDs should be the same (or all nil)
-                    let uniqueIds = Set(sessionIds.compactMap { $0 })
-                    expect(uniqueIds.count).to(beLessThanOrEqualTo(1))
-                }
-            }
-
             // MARK: - State Consistency
 
             describe("state consistency after backgrounding") {
@@ -377,12 +222,16 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should maintain SDK isSetup state after backgrounding") {
-                    let sessionService = NuxieSDK.shared.core!.sessions
-
                     expect(NuxieSDK.shared.isSetup).to(beTrue())
 
-                    sessionService.onAppDidEnterBackground()
-                    sessionService.onAppBecameActive()
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidEnterBackground,
+                        object: nil
+                    )
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidBecomeActive,
+                        object: nil
+                    )
 
                     expect(NuxieSDK.shared.isSetup).to(beTrue())
                 }
@@ -390,9 +239,14 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 it("should maintain identified state after backgrounding") {
                     NuxieSDK.shared.identify("state-test-user")
 
-                    let sessionService = NuxieSDK.shared.core!.sessions
-                    sessionService.onAppDidEnterBackground()
-                    sessionService.onAppBecameActive()
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidEnterBackground,
+                        object: nil
+                    )
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidBecomeActive,
+                        object: nil
+                    )
 
                     expect(NuxieSDK.shared.isIdentified).to(beTrue())
                     expect(NuxieSDK.shared.getDistinctId()).to(equal("state-test-user"))
@@ -400,10 +254,8 @@ final class BackgroundingIntegrationTests: AsyncSpec {
 
                 it("should preserve events stored during background") {
                     let eventLog = NuxieSDK.shared.core!.eventLog
-                    let sessionService = NuxieSDK.shared.core!.sessions
 
                     // Background
-                    sessionService.onAppDidEnterBackground()
                     await eventLog.onAppDidEnterBackground()
 
                     // Track event while backgrounded
@@ -412,7 +264,6 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                     await eventLog.drain()
 
                     // Foreground
-                    sessionService.onAppBecameActive()
                     await eventLog.onAppBecameActive()
 
                     // Event should be stored

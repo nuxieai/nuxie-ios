@@ -15,7 +15,6 @@ final class ServerFactCommitTests: AsyncSpec {
                 identityService.setDistinctId("user-1")
                 let eventLog = EventLog(
                     identity: identityService,
-                    sessions: TrackWithResponseTestSessionService(),
                     dateProvider: MockDateProvider(),
                     apiClient: MockNuxieApi(),
                     store: eventStore
@@ -59,7 +58,6 @@ final class ServerFactCommitTests: AsyncSpec {
 
                 let eventLog = EventLog(
                     identity: identityService,
-                    sessions: TrackWithResponseTestSessionService(),
                     dateProvider: MockDateProvider(),
                     apiClient: api,
                     store: eventStore
@@ -134,7 +132,6 @@ final class ServerFactCommitTests: AsyncSpec {
                 identityService.setDistinctId("user-1")
                 let eventLog = EventLog(
                     identity: identityService,
-                    sessions: TrackWithResponseTestSessionService(),
                     dateProvider: MockDateProvider(),
                     apiClient: MockNuxieApi(),
                     store: eventStore
@@ -179,17 +176,4 @@ final class ServerFactCommitTests: AsyncSpec {
             }
         }
     }
-}
-
-private final class TrackWithResponseTestSessionService: SessionServiceProtocol {
-    func getSessionId(at date: Date, readOnly: Bool) -> String? { "session-1" }
-    func getNextSessionId() -> String? { "session-2" }
-    func setSessionId(_ sessionId: String) {}
-    func startSession() {}
-    func touchSession() {}
-    func resetSession() {}
-    func reset() {}
-    func endSession() {}
-    func onAppDidEnterBackground() {}
-    func onAppBecameActive() {}
 }

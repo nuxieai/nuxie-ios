@@ -415,15 +415,7 @@ extension NuxieApi {
     
     /// Send batch of events (protocol conformance)
     public func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
-        return try await sendBatch(events: events, historicalMigration: false)
-    }
-    
-    /// Send batch of events with historical migration option
-    public func sendBatch(
-        events: [BatchEventItem],
-        historicalMigration: Bool
-    ) async throws -> BatchResponse {
-        let request = BatchRequest(events: events, historicalMigration: historicalMigration)
+        let request = BatchRequest(events: events)
         LogDebug("[sendBatch] Sending batch of \(events.count) events (gzipped)")
         let result: BatchResponse = try await self.request(
             endpoint: .batch(request),

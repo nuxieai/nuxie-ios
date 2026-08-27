@@ -33,9 +33,9 @@ enum ExperienceInteractiveStepDeliveryPlanner {
 
     private static func isHostPhase(_ effect: ExperienceInteractiveEffectKind) -> Bool {
         switch effect {
-        case .reportedEvent, .stateChange, .viewModelChange:
+        case .reportedEvent, .viewModelChange:
             false
-        case .responseSet, .responseUnset, .journeyEvent, .navigate, .hostCommand,
+        case .responseSet, .responseUnset, .journeyEvent, .hostCommand,
              .rejectedHostCommand:
             true
         }
@@ -59,12 +59,6 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    )
-
-    func experienceScreenViewController(
-        _ controller: ExperienceScreenViewController,
-        didRequestNavigationTo screenID: String,
-        transition: Any?
     )
 
     func experienceScreenViewController(
@@ -724,8 +718,6 @@ final class ExperienceScreenViewController: UIViewController {
                     instanceID: instanceID
                 )
             }
-        case .stateChange:
-            break
         case .viewModelChange(let change):
             guard change.origin == .runtime, let interactiveScreen else { return }
             do {
@@ -769,12 +761,6 @@ final class ExperienceScreenViewController: UIViewController {
                     in: properties
                 ),
                 instanceID: Self.stringProperty(["instanceId", "instance_id"], in: properties)
-            )
-        case .navigate(let screenID, let transition):
-            delegate?.experienceScreenViewController(
-                self,
-                didRequestNavigationTo: screenID,
-                transition: transition.map(Self.rendererValue)
             )
         case .rejectedHostCommand(let name, let reason):
             LogWarning(

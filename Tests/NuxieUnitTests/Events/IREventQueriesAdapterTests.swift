@@ -182,7 +182,6 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     properties: Data("not-json".utf8),
                     timestamp: now.addingTimeInterval(-60),
                     distinctId: userId,
-                    sessionId: nil
                 )
                 let queries = IREventQueriesAdapter(
                     eventLog: log,
@@ -418,7 +417,6 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                 identity.setDistinctId(userId)
                 let log = EventLog(
                     identity: identity,
-                    sessions: MockSessionService(),
                     dateProvider: MockDateProvider(initialDate: now),
                     apiClient: MockNuxieApi(),
                     store: store
@@ -459,7 +457,6 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                 identity.setDistinctId(userId)
                 let log = EventLog(
                     identity: identity,
-                    sessions: MockSessionService(),
                     dateProvider: MockDateProvider(initialDate: now),
                     apiClient: MockNuxieApi(),
                     store: store

@@ -67,12 +67,6 @@ struct ExitPolicy: Codable, Sendable {
         /// Exit when goal is achieved
         case onGoal = "on_goal"
         
-        /// Exit when no longer matching trigger conditions
-        case onStopMatching = "on_stop_matching"
-        
-        /// Exit when either goal is met OR stop matching
-        case onGoalOrStop = "on_goal_or_stop"
-        
         /// Never exit early (run to completion)
         case never = "never"
     }

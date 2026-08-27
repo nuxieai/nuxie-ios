@@ -30,9 +30,6 @@ struct StoredEvent: Codable, Sendable {
     /// Always present for SDK-generated events.
     let distinctId: String
     
-    /// Session ID for efficient database queries (also in properties as $session_id)
-    let sessionId: String?
-
     /// Origin of the committed fact. Device events are the default.
     public var origin: StoredEventOrigin {
         guard let rawValue = getPropertiesDict()[Self.originProperty] as? String else {
@@ -60,9 +57,6 @@ struct StoredEvent: Codable, Sendable {
         self.timestamp = timestamp
         self.distinctId = distinctId
         
-        // Extract session ID from properties for efficient database queries
-        self.sessionId = properties["$session_id"] as? String
-        
         // Convert properties to AnyCodable and encode to Data
         let anyCodableProps = properties.mapValues { AnyCodable($0) }
         self.properties = try JSONEncoder().encode(anyCodableProps)
@@ -75,21 +69,18 @@ struct StoredEvent: Codable, Sendable {
     ///   - properties: Event properties as JSON Data
     ///   - timestamp: Event timestamp
     ///   - distinctId: Distinct ID (required)
-    ///   - sessionId: Session ID (optional)
     init(
         id: String,
         name: String,
         properties: Data,
         timestamp: Date,
-        distinctId: String,
-        sessionId: String?
+        distinctId: String
     ) {
         self.id = id
         self.name = name
         self.properties = properties
         self.timestamp = timestamp
         self.distinctId = distinctId
-        self.sessionId = sessionId
     }
     
     /// Get properties as decoded [String: AnyCodable] dictionary (lazy decoding)

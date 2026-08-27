@@ -392,7 +392,6 @@ $tracking_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event resp
         identity.setDistinctId("customer-1")
         let log = EventLog(
             identity: identity,
-            sessions: MockSessionService(),
             dateProvider: MockDateProvider(),
             apiClient: MockNuxieApiForQueue()
         )
