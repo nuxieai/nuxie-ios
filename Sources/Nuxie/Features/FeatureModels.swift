@@ -117,6 +117,18 @@ public struct FeatureAccess: Sendable {
         self.type = type
         self.opaqueRequiredBalance = opaqueRequiredBalance
     }
+
+    /// Canonical wrapper encoding pinned by
+    /// `fixtures/encodings/feature-usage.json`.
+    @_spi(Testing)
+    public var wireValue: [String: AnyCodable] {
+        [
+            "allowed": AnyCodable(allowed),
+            "unlimited": AnyCodable(unlimited),
+            "balance": AnyCodable(balance.map { $0 as Any } ?? NSNull()),
+            "type": AnyCodable(type.rawValue),
+        ]
+    }
 }
 
 // MARK: - Feature Check Result
@@ -350,5 +362,30 @@ public struct FeatureUsageResult: Sendable {
         self.message = message
         self.usage = usage
         self.authoritativeAccess = authoritativeAccess
+    }
+
+    /// Canonical wrapper encoding pinned by
+    /// `fixtures/encodings/feature-usage.json`.
+    @_spi(Testing)
+    public var wireValue: [String: AnyCodable] {
+        let usageValue: Any = usage.map { usage in
+            [
+                "current": usage.current,
+                "limit": usage.limit.map { $0 as Any } ?? NSNull(),
+                "remaining": usage.remaining.map { $0 as Any } ?? NSNull(),
+            ] as [String: Any]
+        } ?? NSNull()
+        let authoritativeAccessValue: Any = authoritativeAccess.map { access in
+            access.wireValue.mapValues(\.value)
+        } ?? NSNull()
+
+        return [
+            "success": AnyCodable(success),
+            "featureId": AnyCodable(featureId),
+            "amountUsed": AnyCodable(amountUsed),
+            "message": AnyCodable(message.map { $0 as Any } ?? NSNull()),
+            "usage": AnyCodable(usageValue),
+            "authoritativeAccess": AnyCodable(authoritativeAccessValue),
+        ]
     }
 }

@@ -1,0 +1,64 @@
+{
+  "suite": "encodings/app-action",
+  "version": 1,
+  "description": "Canonical wire encoding of AppAction and AppActionValue — the serialized app-action request shape RN/Flutter/Unity/UE/Godot bindings receive from nuxie(_:didRequestAppAction:).",
+  "vectors": [
+    {
+      "name": "resolved payload covers every scalar and nested containers",
+      "action": {
+        "name": "export_finished",
+        "payload": {
+          "integer": 7,
+          "boolean": true,
+          "string": "pdf",
+          "double": 2.5,
+          "null": null,
+          "object": { "nested": { "enabled": true }, "items": [1, 2.5, null] },
+          "array": [{ "code": "A" }, 2.5, null]
+        },
+        "experience": {
+          "experienceId": "experience-1",
+          "experienceVersion": "version-1",
+          "journeyId": "journey-1"
+        }
+      },
+      "expect": {
+        "name": "export_finished",
+        "payload": {
+          "integer": 7,
+          "boolean": true,
+          "string": "pdf",
+          "double": 2.5,
+          "object": "{\"items\":[1,2.5,null],\"nested\":{\"enabled\":true}}",
+          "array": "[{\"code\":\"A\"},2.5,null]"
+        },
+        "experience": {
+          "experienceId": "experience-1",
+          "experienceVersion": "version-1",
+          "journeyId": "journey-1"
+        }
+      }
+    },
+    {
+      "name": "absent payload and optional identifiers remain null",
+      "action": {
+        "name": "refresh_home",
+        "payload": null,
+        "experience": {
+          "experienceId": "experience-2",
+          "experienceVersion": null,
+          "journeyId": null
+        }
+      },
+      "expect": {
+        "name": "refresh_home",
+        "payload": null,
+        "experience": {
+          "experienceId": "experience-2",
+          "experienceVersion": null,
+          "journeyId": null
+        }
+      }
+    }
+  ]
+}

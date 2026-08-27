@@ -22,7 +22,38 @@ public struct AppAction: Sendable, Equatable {
     public let experience: ExperienceRef
 }
 
+extension AppAction {
+    /// Canonical wrapper encoding pinned by
+    /// `fixtures/encodings/app-action.json`.
+    @_spi(Testing)
+    public var wireValue: [String: AnyCodable] {
+        let experienceValue: [String: Any] = [
+            "experienceId": experience.experienceId,
+            "experienceVersion": experience.experienceVersion ?? NSNull(),
+            "journeyId": experience.journeyId ?? NSNull(),
+        ]
+        let payloadValue: Any = payload.map { payload in
+            payload.mapValues(\.wireScalar)
+        } ?? NSNull()
+
+        return [
+            "name": AnyCodable(name),
+            "payload": AnyCodable(payloadValue),
+            "experience": AnyCodable(experienceValue),
+        ]
+    }
+}
+
 extension AppActionValue {
+    fileprivate var wireScalar: Any {
+        switch self {
+        case .string(let value): value
+        case .int(let value): value
+        case .double(let value): value
+        case .bool(let value): value
+        }
+    }
+
     /// Converts a resolved authored value into the public scalar vocabulary.
     /// Arrays and objects remain lossless as compact JSON strings.
     static func resolved(_ value: Any) -> AppActionValue? {
