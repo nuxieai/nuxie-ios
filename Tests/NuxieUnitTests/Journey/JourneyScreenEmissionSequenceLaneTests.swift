@@ -91,6 +91,47 @@ final class JourneyScreenEmissionSequenceLaneTests: XCTestCase {
         XCTAssertEqual(replayResult, Self.drained(sequence: 0))
     }
 
+    func testCloseAbortsActiveQueuedAndFutureSubmissions() async {
+        let lane = JourneyScreenEmissionSequenceLane()
+        let gate = ScreenEmissionLaneGate()
+
+        async let active = lane.submit(
+            batch(sequence: 0, previous: nil),
+            durableLastProcessedSequence: nil,
+            durableResult: nil,
+            process: {
+                await gate.suspend()
+                return Self.drained(sequence: 0)
+            },
+            reject: { Self.rejected(sequence: 0) }
+        )
+        await gate.waitUntilEntered()
+        async let queued = lane.submit(
+            batch(sequence: 1, previous: 0),
+            durableLastProcessedSequence: nil,
+            durableResult: nil,
+            process: { Self.drained(sequence: 1) },
+            reject: { Self.rejected(sequence: 1) }
+        )
+        await Task.yield()
+
+        await lane.close(reason: .runMissing)
+
+        let activeResult = await active
+        let queuedResult = await queued
+        let futureResult = await lane.submit(
+            batch(sequence: 2, previous: 1),
+            durableLastProcessedSequence: nil,
+            durableResult: nil,
+            process: { Self.drained(sequence: 2) },
+            reject: { Self.rejected(sequence: 2) }
+        )
+        await gate.release()
+        XCTAssertEqual(activeResult, Self.aborted(sequence: 0))
+        XCTAssertEqual(queuedResult, Self.aborted(sequence: 1))
+        XCTAssertEqual(futureResult, Self.aborted(sequence: 2))
+    }
+
     private func batch(sequence: UInt64, previous: UInt64?) -> ScreenEmissionBatch {
         ScreenEmissionBatch(
             journeyId: "journey-1",
@@ -131,6 +172,15 @@ final class JourneyScreenEmissionSequenceLaneTests: XCTestCase {
             acceptedEmissionIds: [],
             skippedEmissionIds: ["emission-\(sequence)"],
             reason: .batchSequenceOutOfOrder
+        )
+    }
+
+    private static func aborted(sequence: UInt64) -> JourneyScreenEmissionDrainResult {
+        JourneyScreenEmissionDrainResult(
+            status: .aborted,
+            acceptedEmissionIds: [],
+            skippedEmissionIds: ["emission-\(sequence)"],
+            reason: .runMissing
         )
     }
 }

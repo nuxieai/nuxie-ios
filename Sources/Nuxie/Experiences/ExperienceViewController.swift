@@ -1891,12 +1891,7 @@ extension ExperienceViewController {
             screenEmissionRun = nil
             return
         }
-        let run = ScreenEmissionRun(
-            journeyId: scope.journeyId,
-            executionOwnershipEpoch: scope.executionOwnershipEpoch,
-            lifecycleGeneration: scope.lifecycleGeneration,
-            presentationEpoch: scope.presentationEpoch
-        )
+        let run = screenEmissionRun(from: scope)
         screenEmissionRun = run
         await screenEmissionDispatcher.restoreProgress(
             journeyId: run.journeyId,
@@ -1904,23 +1899,58 @@ extension ExperienceViewController {
             nextEmissionSequence: scope.nextEmissionSequence
         )
     }
+
+    private func screenEmissionRun(from scope: ScreenControlRunScope) -> ScreenEmissionRun {
+        ScreenEmissionRun(
+            journeyId: scope.journeyId,
+            executionOwnershipEpoch: scope.executionOwnershipEpoch,
+            lifecycleGeneration: scope.lifecycleGeneration,
+            presentationEpoch: scope.presentationEpoch
+        )
+    }
+
+    private func capturedScreenEmissionRun() -> ScreenEmissionRun? {
+        guard let pending = pendingScreenEmissionRunScope else {
+            return screenEmissionRun
+        }
+        guard let scope = pending else { return nil }
+        return screenEmissionRun(from: scope)
+    }
 }
 
 #if canImport(UIKit)
+enum ScreenEmissionPublicationDisposition: Equatable, Sendable {
+    case published
+    case rejected
+}
+
 extension ExperienceViewController {
-    func publishScreenInput(_ input: ExperienceRuntimeScreenEmission) async {
-        await screenEmissionPublicationGate.withLock { [weak self] in
-            guard let self else { return }
-            await self.publishScreenInputSerially(input)
+    @discardableResult
+    func publishScreenInput(
+        _ input: ExperienceRuntimeScreenEmission
+    ) async -> ScreenEmissionPublicationDisposition {
+        let originatingRun = capturedScreenEmissionRun()
+        return await screenEmissionPublicationGate.withLock { [weak self] in
+            guard let self else { return .rejected }
+            return await self.publishScreenInputSerially(
+                input,
+                originatingRun: originatingRun
+            )
         }
     }
 
-    private func publishScreenInputSerially(_ input: ExperienceRuntimeScreenEmission) async {
+    private func publishScreenInputSerially(
+        _ input: ExperienceRuntimeScreenEmission,
+        originatingRun: ScreenEmissionRun?
+    ) async -> ScreenEmissionPublicationDisposition {
         await applyPendingScreenEmissionRunScope()
         guard let run = screenEmissionRun,
+              run == originatingRun,
               let definition = experience.definition else {
-            LogWarning("ExperienceViewController: rejected screen emission without an active signed run")
-            return
+            LogWarning(
+                "ExperienceViewController: rejected screen emission from an inactive signed run"
+            )
+            return .rejected
         }
 
         let result: Result<ScreenEmissionBatch, ScreenEmissionDispatchError>
@@ -1933,7 +1963,7 @@ extension ExperienceViewController {
                 LogWarning(
                     "ExperienceViewController: rejected unknown screen action \(invocation.actionId) on \(screenId)"
                 )
-                return
+                return .rejected
             }
             result = await screenEmissionDispatcher.dispatch(
                 run: run,
@@ -1950,9 +1980,11 @@ extension ExperienceViewController {
             )
         }
 
+        let disposition: ScreenEmissionPublicationDisposition
         switch result {
         case .failure(let error):
             LogWarning("ExperienceViewController: screen emission dispatch failed: \(error)")
+            disposition = .rejected
         case .success(let batch):
             let published = await runtimeDelegate?.experienceViewController(
                 self,
@@ -1961,8 +1993,10 @@ extension ExperienceViewController {
             if !published {
                 _ = await screenEmissionDispatcher.rollbackUnpublishedBatch(batch)
             }
+            disposition = published ? .published : .rejected
         }
         await applyPendingScreenEmissionRunScope()
+        return disposition
     }
 }
 

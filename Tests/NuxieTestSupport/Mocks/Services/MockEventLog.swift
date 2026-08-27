@@ -30,6 +30,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _preparedTriggerBeforeSend:
         (@Sendable (NuxieEvent) -> NuxieEvent?)?
     private var _prepareTriggerPropertiesHandler: (@Sendable () async -> Void)?
+    private var _commitPreparedTriggerHandler: (@Sendable () async -> Void)?
     private var _drainHandler: (@Sendable () async -> Void)?
     private var _trackWithResponseHandler: (@Sendable (String) async -> Void)?
     private var _capturedEventObserver: (@Sendable (NuxieEvent) -> Void)?
@@ -47,6 +48,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     public var prepareTriggerPropertiesHandler: (@Sendable () async -> Void)? {
         get { lock.withLock { _prepareTriggerPropertiesHandler } }
         set { lock.withLock { _prepareTriggerPropertiesHandler = newValue } }
+    }
+
+    public var commitPreparedTriggerHandler: (@Sendable () async -> Void)? {
+        get { lock.withLock { _commitPreparedTriggerHandler } }
+        set { lock.withLock { _commitPreparedTriggerHandler = newValue } }
     }
 
     public var drainHandler: (@Sendable () async -> Void)? {
@@ -505,6 +511,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _journeyOwnershipRejectedHandler = nil
             _journeyHandoffDeliveredHandler = nil
             _preparedTriggerBeforeSend = nil
+            _commitPreparedTriggerHandler = nil
             _prepareTriggerPropertiesHandler = nil
             _drainHandler = nil
             _trackWithResponseHandler = nil
@@ -740,6 +747,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     public func commitPreparedTriggerEvent(
         _ event: NuxieEvent
     ) async -> PreparedTriggerCommit {
+        let commitHandler = lock.withLock { _commitPreparedTriggerHandler }
+        await commitHandler?()
         let (delayNanoseconds, generation) = lock.withLock {
             _trackForTriggerCalls.append((
                 event: event.name,

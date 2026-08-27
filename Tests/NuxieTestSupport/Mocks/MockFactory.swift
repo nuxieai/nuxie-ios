@@ -124,6 +124,7 @@ public final class MockFactory: @unchecked Sendable {
         experiencePresentation: ExperiencePresentationServiceProtocol? = nil,
         presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace(),
         restoredPresentationAttempt: ExperiencePresentationAttempt? = nil,
+        responseWriter: ResponseWriting? = nil,
         features suppliedFeatures: FeatureServiceProtocol? = nil,
         featureInfo suppliedFeatureInfo: FeatureInfo? = nil
     ) -> JourneyService {
@@ -167,7 +168,7 @@ public final class MockFactory: @unchecked Sendable {
             sleepProvider: sleepProvider,
             goalEvaluator: goalEvaluator,
             irRuntime: irRuntime,
-            api: nuxieApi,
+            api: responseWriter ?? nuxieApi,
             presentationTrace: presentationTrace,
             restoredPresentationAttempt: restoredPresentationAttempt
         )

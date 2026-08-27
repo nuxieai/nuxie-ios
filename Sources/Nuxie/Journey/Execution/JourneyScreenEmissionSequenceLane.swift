@@ -6,11 +6,12 @@ import Foundation
 /// and predecessor sequencing.
 actor JourneyScreenEmissionSequenceLane {
     typealias Operation = @Sendable () async -> JourneyScreenEmissionDrainResult
+    typealias Rejection = @Sendable () -> JourneyScreenEmissionDrainResult
 
     private struct Pending: Sendable {
         let batch: ScreenEmissionBatch
         let process: Operation
-        let reject: Operation
+        let reject: Rejection
         var waiters: [CheckedContinuation<JourneyScreenEmissionDrainResult, Never>]
     }
 
@@ -20,14 +21,19 @@ actor JourneyScreenEmissionSequenceLane {
     private var processed: [UInt64: (invocationId: String, result: JourneyScreenEmissionDrainResult)] = [:]
     private var active: Pending?
     private var draining = false
+    private var drainTask: Task<Void, Never>?
+    private var closeReason: JourneyScreenEmissionSkipReason?
 
     func submit(
         _ batch: ScreenEmissionBatch,
         durableLastProcessedSequence: UInt64?,
         durableResult: JourneyScreenEmissionDrainResult?,
         process: @escaping Operation,
-        reject: @escaping Operation
+        reject: @escaping Rejection
     ) async -> JourneyScreenEmissionDrainResult {
+        if let closeReason {
+            return aborted(batch, reason: closeReason)
+        }
         if !initialized {
             lastProcessedSequence = durableLastProcessedSequence
             initialized = true
@@ -41,12 +47,12 @@ actor JourneyScreenEmissionSequenceLane {
         }
         if let previous = batch.previousCommittedBatchSequence,
            previous >= batch.batchSequence {
-            return await reject()
+            return reject()
         }
         if let completed = processed[batch.batchSequence] {
             return completed.invocationId == batch.invocationId
                 ? completed.result
-                : await reject()
+                : reject()
         }
         if let durableResult {
             if let current = lastProcessedSequence {
@@ -63,11 +69,11 @@ actor JourneyScreenEmissionSequenceLane {
         }
         if let lastProcessedSequence,
            batch.batchSequence <= lastProcessedSequence {
-            return await reject()
+            return reject()
         }
         if var current = active, current.batch.batchSequence == batch.batchSequence {
             guard current.batch.invocationId == batch.invocationId else {
-                return await reject()
+                return reject()
             }
             return await withCheckedContinuation { continuation in
                 current.waiters.append(continuation)
@@ -78,7 +84,7 @@ actor JourneyScreenEmissionSequenceLane {
         return await withCheckedContinuation { continuation in
             if var existing = pending[batch.batchSequence] {
                 guard existing.batch.invocationId == batch.invocationId else {
-                    Task { continuation.resume(returning: await reject()) }
+                    continuation.resume(returning: reject())
                     return
                 }
                 existing.waiters.append(continuation)
@@ -95,6 +101,25 @@ actor JourneyScreenEmissionSequenceLane {
         }
     }
 
+    func close(reason: JourneyScreenEmissionSkipReason) {
+        guard closeReason == nil else { return }
+        closeReason = reason
+        drainTask?.cancel()
+        // Do not join here: the external operation may ignore cancellation.
+        // Submit waiters are resolved below, and the weak completion callback
+        // prevents the abandoned worker from retaining this closed lane.
+        drainTask = nil
+
+        let unresolved = [active].compactMap { $0 } + Array(pending.values)
+        active = nil
+        pending.removeAll()
+        draining = false
+        for submission in unresolved {
+            let result = aborted(submission.batch, reason: reason)
+            submission.waiters.forEach { $0.resume(returning: result) }
+        }
+    }
+
     private func pump() {
         guard !draining else { return }
         let next = pending.values
@@ -104,8 +129,9 @@ actor JourneyScreenEmissionSequenceLane {
         pending.removeValue(forKey: next.batch.batchSequence)
         active = next
         draining = true
-        Task {
+        drainTask = Task { [weak self] in
             let result = await next.process()
+            guard let self else { return }
             await self.finished(sequence: next.batch.batchSequence, result: result)
         }
     }
@@ -113,7 +139,7 @@ actor JourneyScreenEmissionSequenceLane {
     private func finished(
         sequence: UInt64,
         result: JourneyScreenEmissionDrainResult
-    ) async {
+    ) {
         guard let completed = active,
               completed.batch.batchSequence == sequence else { return }
         lastProcessedSequence = completed.batch.batchSequence
@@ -130,13 +156,26 @@ actor JourneyScreenEmissionSequenceLane {
         }
         for candidate in impossible {
             pending.removeValue(forKey: candidate.batch.batchSequence)
-            let rejected = await candidate.reject()
+            let rejected = candidate.reject()
             candidate.waiters.forEach { $0.resume(returning: rejected) }
         }
 
         active = nil
         draining = false
+        drainTask = nil
         pump()
+    }
+
+    private func aborted(
+        _ batch: ScreenEmissionBatch,
+        reason: JourneyScreenEmissionSkipReason
+    ) -> JourneyScreenEmissionDrainResult {
+        JourneyScreenEmissionDrainResult(
+            status: .aborted,
+            acceptedEmissionIds: [],
+            skippedEmissionIds: batch.emissions.map(\.id),
+            reason: reason
+        )
     }
 }
 #endif

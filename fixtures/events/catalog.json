@@ -5,7 +5,7 @@
     "constant": "JourneyEvents.appActionRequested",
     "docs": false,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3644"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3847"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -203,7 +203,7 @@
     "constant": "JourneyEvents.customerUpdated",
     "docs": false,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3338"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3541"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -243,10 +243,10 @@
     "constant": "JourneyEvents.eventSent",
     "docs": false,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3208",
-      "Sources/Nuxie/Journey/JourneyService.swift:3116",
-      "Sources/Nuxie/Journey/JourneyService.swift:4101",
-      "Sources/Nuxie/Journey/JourneyService.swift:4258"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3411",
+      "Sources/Nuxie/Journey/JourneyService.swift:3299",
+      "Sources/Nuxie/Journey/JourneyService.swift:4284",
+      "Sources/Nuxie/Journey/JourneyService.swift:4441"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -501,7 +501,7 @@
     "constant": "JourneyEvents.experimentExposure",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3106"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3309"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -556,7 +556,7 @@
     "constant": "JourneyEvents.experimentExposureError",
     "docs": false,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3065"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3268"
     ],
     "endpoint": "batch",
     "fixtures": [],
@@ -604,7 +604,7 @@
     "constant": "JourneyEvents.experimentExposureFallback",
     "docs": false,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3122"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3325"
     ],
     "endpoint": "batch",
     "fixtures": [],
@@ -735,7 +735,7 @@
     "constant": "JourneyEvents.journeyClaimed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:966"
+      "Sources/Nuxie/Journey/JourneyService.swift:978"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -771,7 +771,7 @@
     "constant": "JourneyEvents.journeyConverted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:5553",
+      "Sources/Nuxie/Journey/JourneyService.swift:5736",
       "Sources/Nuxie/Events/EventLog.swift:1951"
     ],
     "endpoint": [
@@ -884,7 +884,7 @@
     "constant": "JourneyEvents.journeyEffectRequested",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3983"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:4186"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -935,7 +935,7 @@
     "constant": "JourneyEvents.journeyEnrolled",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:661"
+      "Sources/Nuxie/Journey/JourneyService.swift:673"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -991,9 +991,9 @@
     "constant": "JourneyEvents.journeyExited",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:4928",
-      "Sources/Nuxie/Journey/JourneyService.swift:5108",
-      "Sources/Nuxie/Journey/JourneyService.swift:6042"
+      "Sources/Nuxie/Journey/JourneyService.swift:5111",
+      "Sources/Nuxie/Journey/JourneyService.swift:5291",
+      "Sources/Nuxie/Journey/JourneyService.swift:6225"
     ],
     "endpoint": [
       "/i/event response lane",
@@ -1053,7 +1053,7 @@
     "constant": "JourneyEvents.journeyHandoff",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:4555"
+      "Sources/Nuxie/Journey/JourneyService.swift:4738"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [
@@ -1096,8 +1096,8 @@
     "constant": "JourneyEvents.journeyMilestone",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3300",
-      "Sources/Nuxie/Journey/JourneyService.swift:2975"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3503",
+      "Sources/Nuxie/Journey/JourneyService.swift:3158"
     ],
     "endpoint": [
       "/i/event response lane",
@@ -1156,7 +1156,7 @@
     "constant": "JourneyEvents.journeyParked",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:4778"
+      "Sources/Nuxie/Journey/JourneyService.swift:4961"
     ],
     "endpoint": "batch",
     "fixtures": [],
@@ -1247,10 +1247,10 @@
     "constant": "JourneyEvents.journeyTransition",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:1364",
-      "Sources/Nuxie/Journey/JourneyService.swift:1416",
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:1741",
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:2563"
+      "Sources/Nuxie/Journey/JourneyService.swift:1376",
+      "Sources/Nuxie/Journey/JourneyService.swift:1428",
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:1897",
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:2725"
     ],
     "endpoint": [
       "/i/event response lane",
@@ -1349,7 +1349,7 @@
     "constant": "SystemEventNames.notificationsDenied",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:2869",
+      "Sources/Nuxie/Journey/JourneyService.swift:3052",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:871"
     ],
     "endpoint": [
@@ -1402,7 +1402,7 @@
     "constant": "SystemEventNames.notificationsEnabled",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:2869",
+      "Sources/Nuxie/Journey/JourneyService.swift:3052",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:871"
     ],
     "endpoint": [
@@ -1455,8 +1455,8 @@
     "constant": "SystemEventNames.permissionDenied",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:2869",
-      "Sources/Nuxie/Journey/JourneyService.swift:3416",
+      "Sources/Nuxie/Journey/JourneyService.swift:3052",
+      "Sources/Nuxie/Journey/JourneyService.swift:3599",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:871"
     ],
     "endpoint": [
@@ -1514,7 +1514,7 @@
     "constant": "SystemEventNames.permissionGranted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:2869",
+      "Sources/Nuxie/Journey/JourneyService.swift:3052",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:871"
     ],
     "endpoint": [
@@ -1569,7 +1569,7 @@
     "constant": "SystemEventNames.productsUnavailable",
     "docs": false,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:968"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:995"
     ],
     "endpoint": "batch",
     "fixtures": [],
@@ -1607,7 +1607,7 @@
     "constant": "SystemEventNames.purchaseCancelled",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2122"
+      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2156"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -1734,9 +1734,9 @@
     "constant": "SystemEventNames.purchaseFailed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2106",
-      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2164",
-      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2187",
+      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2140",
+      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2198",
+      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2221",
       "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:720",
       "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:733",
       "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:754"
@@ -1787,7 +1787,7 @@
     "constant": "SystemEventNames.purchasePending",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2136"
+      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2170"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -1977,7 +1977,7 @@
     "docs": true,
     "emitters": [
       "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1183",
-      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2210"
+      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2244"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -2028,7 +2028,7 @@
     "constant": "SystemEventNames.screenDismissed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:750"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:764"
     ],
     "endpoint": "batch",
     "fixtures": [],
@@ -2112,7 +2112,7 @@
     "constant": "SystemEventNames.trackingAuthorized",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:2869",
+      "Sources/Nuxie/Journey/JourneyService.swift:3052",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:871"
     ],
     "endpoint": [
@@ -2165,7 +2165,7 @@
     "constant": "SystemEventNames.trackingDenied",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:2869",
+      "Sources/Nuxie/Journey/JourneyService.swift:3052",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:871"
     ],
     "endpoint": [

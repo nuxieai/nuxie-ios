@@ -275,6 +275,7 @@ actor JourneyRunner {
     private var didFailSubmitResponse = false
     private var responseFieldSynchronizationDepth = 0
     private var responseOperationFailureRevision: UInt64 = 0
+    private let screenPresentationMutationGate = ExperienceInteractiveOperationGate()
     private var presentationEpochAdvancedForScreenId: String?
     private var authoredEvents: [AuthoredEvent] = []
     private var activeScreenRouteAdmissionId: String?
@@ -531,6 +532,13 @@ actor JourneyRunner {
     /// Persists renderer attachment before initial screen activation. The
     /// pending commit stays untouched unless the durable write succeeds.
     func commitRendererAttachment() async -> Bool {
+        return await screenPresentationMutationGate.withLock { [weak self] in
+            guard let self else { return false }
+            return await self.commitRendererAttachmentUnlocked()
+        }
+    }
+
+    private func commitRendererAttachmentUnlocked() async -> Bool {
         guard await executionRemainsLive() else { return false }
         let versioned = await journey.versionedSnapshot()
         let state = versioned.snapshot
@@ -673,20 +681,12 @@ actor JourneyRunner {
 
     private func dispatchScreenChanged(_ screenId: String) async -> RunOutcome? {
         guard await executionRemainsLive() else { return nil }
-        let epochAlreadyAdvanced = presentationEpochAdvancedForScreenId == screenId
-        if epochAlreadyAdvanced {
-            presentationEpochAdvancedForScreenId = nil
-        }
-        await journey.update { state in
-            guard state.status.isLive else { return }
-            if !epochAlreadyAdvanced,
-               state.executionState.currentScreenId != screenId {
-                state.executionState.presentationEpoch &+= 1
-            }
-            state.executionState.currentScreenId = screenId
+        await screenPresentationMutationGate.withLock { [weak self] in
+            await self?.commitScreenChangedPresentation(screenId)
         }
         guard await executionRemainsLive() else { return nil }
         let state = await journey.snapshot()
+        guard await executionRemainsLive() else { return nil }
         let properties: [String: Any] = [
             "screen_id": screenId,
             "journey_id": state.id,
@@ -726,6 +726,20 @@ actor JourneyRunner {
             return outcome
         }
         return await dispatchScreenLifecycleEvent(event, screenId: screenId)
+    }
+
+    private func commitScreenChangedPresentation(_ screenId: String) async {
+        guard await executionRemainsLive() else { return }
+        let epochAlreadyAdvanced = presentationEpochAdvancedForScreenId == screenId
+        if epochAlreadyAdvanced { presentationEpochAdvancedForScreenId = nil }
+        await journey.update { state in
+            guard self.lastMileEffectRemainsLive(), state.status.isLive else { return }
+            if !epochAlreadyAdvanced,
+               state.executionState.currentScreenId != screenId {
+                state.executionState.presentationEpoch &+= 1
+            }
+            state.executionState.currentScreenId = screenId
+        }
     }
 
     func handleScreenDismissed(
@@ -789,13 +803,26 @@ actor JourneyRunner {
         dismissedScreenId: String,
         revealingScreenId: String?
     ) async -> Bool {
+        await screenPresentationMutationGate.withLock { [weak self] in
+            guard let self else { return false }
+            return await self.reconcileDismissedScreenStateUnlocked(
+                dismissedScreenId: dismissedScreenId,
+                revealingScreenId: revealingScreenId
+            )
+        }
+    }
+
+    private func reconcileDismissedScreenStateUnlocked(
+        dismissedScreenId: String,
+        revealingScreenId: String?
+    ) async -> Bool {
         guard await executionRemainsLive() else { return false }
         let epochAlreadyAdvanced = presentationEpochAdvancedForScreenId == revealingScreenId
         if epochAlreadyAdvanced {
             presentationEpochAdvancedForScreenId = nil
         }
         return await journey.update { state in
-            guard state.status.isLive else { return false }
+            guard self.lastMileEffectRemainsLive(), state.status.isLive else { return false }
             guard let revealingScreenId, !revealingScreenId.isEmpty else {
                 // Keep the terminal screen addressable until the journey's
                 // dismissal notification and completion have consumed it.
@@ -1192,10 +1219,33 @@ actor JourneyRunner {
     func applyScreenResponseEmission(
         _ emission: ScreenEmission,
         screenId: String,
-        field: String
+        field: String,
+        batch: ScreenEmissionBatch
+    ) async -> JourneyScreenResponseEmissionResult {
+        return await screenPresentationMutationGate.withLock { [weak self] in
+            guard let self else {
+                return .rejected(message: "journey execution is no longer live")
+            }
+            return await self.applyScreenResponseEmissionUnlocked(
+                emission,
+                screenId: screenId,
+                field: field,
+                batch: batch
+            )
+        }
+    }
+
+    private func applyScreenResponseEmissionUnlocked(
+        _ emission: ScreenEmission,
+        screenId: String,
+        field: String,
+        batch: ScreenEmissionBatch
     ) async -> JourneyScreenResponseEmissionResult {
         guard await executionRemainsLive() else {
             return .rejected(message: "journey execution is no longer live")
+        }
+        guard await responseEmissionRemainsAuthorized(batch) else {
+            return .rejected(message: "renderer presentation is no longer active")
         }
         guard responseSessionModule != nil, let responseSessionRun,
               responseSessionRun.schema != nil else {
@@ -1237,14 +1287,35 @@ actor JourneyRunner {
         guard await executionRemainsLive() else {
             return .rejected(message: "journey execution is no longer live")
         }
+        guard await responseEmissionRemainsAuthorized(batch) else {
+            _ = await removePendingResponseFieldWrite(operationId: emission.id)
+            return .rejected(message: "renderer presentation changed during response mutation")
+        }
 
-        return await synchronizePendingResponseFieldWrites()
+        return await synchronizePendingResponseFieldWrites(batch: batch)
             ? .accepted
             : .rejected(message: "response session mutation failed")
     }
 
-    private func synchronizePendingResponseFieldWrites() async -> Bool {
+    private func synchronizePendingResponseFieldWrites(
+        batch: ScreenEmissionBatch? = nil
+    ) async -> Bool {
+        if batch != nil {
+            return await synchronizePendingResponseFieldWritesUnlocked(batch: batch)
+        }
+        return await screenPresentationMutationGate.withLock { [weak self] in
+            guard let self else { return false }
+            return await self.synchronizePendingResponseFieldWritesUnlocked(batch: batch)
+        }
+    }
+
+    private func synchronizePendingResponseFieldWritesUnlocked(
+        batch: ScreenEmissionBatch?
+    ) async -> Bool {
         guard await executionRemainsLive() else { return false }
+        if let batch, !(await responseEmissionRemainsAuthorized(batch)) {
+            return false
+        }
         responseFieldSynchronizationDepth += 1
         defer { responseFieldSynchronizationDepth -= 1 }
         guard let responseSessionModule, let responseSessionRun,
@@ -1254,6 +1325,9 @@ actor JourneyRunner {
         let pending = (await journey.snapshot()).pendingResponseFieldWrites.values.sorted {
             ($0.occurredAt, $0.operationId) < ($1.occurredAt, $1.operationId)
         }
+        if let batch, !(await responseEmissionRemainsAuthorized(batch)) {
+            return false
+        }
         guard !pending.isEmpty else {
             didFailResponseWrite = false
             return true
@@ -1261,7 +1335,14 @@ actor JourneyRunner {
 
         for write in pending {
             guard await executionRemainsLive() else { return false }
+            if let batch, !(await responseEmissionRemainsAuthorized(batch)) {
+                return false
+            }
             do {
+                let previousSnapshot = try await responseSessionModule.snapshot(
+                    journeyId: journey.id
+                )
+                let authorization = batch.map(responseTransactionAuthorization)
                 let localResult: ResponseSessionOperationResult
                 switch write.mutation {
                 case .set:
@@ -1271,7 +1352,8 @@ actor JourneyRunner {
                         screenId: write.screenId,
                         field: write.field,
                         value: write.value,
-                        occurredAt: write.occurredAt
+                        occurredAt: write.occurredAt,
+                        authorization: authorization
                     )
                 case .unset:
                     localResult = try await responseSessionModule.unset(
@@ -1279,7 +1361,8 @@ actor JourneyRunner {
                         emissionId: write.operationId,
                         screenId: write.screenId,
                         field: write.field,
-                        occurredAt: write.occurredAt
+                        occurredAt: write.occurredAt,
+                        authorization: authorization
                     )
                 }
                 guard case .accepted = localResult else {
@@ -1287,6 +1370,17 @@ actor JourneyRunner {
                     throw ResponseSessionModuleError.snapshotAuthorityMismatch
                 }
                 guard await executionRemainsLive() else { return false }
+                if let batch,
+                   !(await responseEmissionRemainsAuthorized(batch)) {
+                    _ = try? await responseSessionModule.rollback(
+                        run: responseSessionRun,
+                        operationId: write.operationId,
+                        expected: localResult,
+                        restoring: previousSnapshot
+                    )
+                    _ = await removePendingResponseFieldWrite(operationId: write.operationId)
+                    return false
+                }
                 didAttemptResponseDraftWrite = true
                 let serverValue = UncheckedSendable(write.value.foundationValue)
                 let serverWrite = try await apiClient.setResponseField(
@@ -1298,30 +1392,75 @@ actor JourneyRunner {
                     value: serverValue.value
                 )
                 guard await executionRemainsLive() else { return false }
+                if let batch,
+                   !(await responseEmissionRemainsAuthorized(batch)) {
+                    _ = try? await responseSessionModule.rollback(
+                        run: responseSessionRun,
+                        operationId: write.operationId,
+                        expected: localResult,
+                        restoring: previousSnapshot
+                    )
+                    _ = await removePendingResponseFieldWrite(operationId: write.operationId)
+                    return false
+                }
+                let synchronizationOperationId: String
+                let synchronizationResult: ResponseSessionOperationResult
                 if write.operationId == pending.last?.operationId,
                    let response = serverWrite.response {
                     let currentVersion =
                         (try? await responseSessionModule.snapshot(journeyId: journey.id)?.version)
                         ?? 0
+                    if let batch,
+                       !(await responseEmissionRemainsAuthorized(batch)) {
+                        _ = try? await responseSessionModule.rollback(
+                            run: responseSessionRun,
+                            operationId: write.operationId,
+                            expected: localResult,
+                            restoring: previousSnapshot
+                        )
+                        _ = await removePendingResponseFieldWrite(operationId: write.operationId)
+                        return false
+                    }
                     guard let snapshot = Self.responseSessionSnapshot(
                         from: response,
                         version: currentVersion + 1
                     ) else {
                         throw ResponseSessionModuleError.snapshotAuthorityMismatch
                     }
-                    _ = try await responseSessionModule.reconcile(
+                    synchronizationOperationId =
+                        "server:\(response.id):\(response.updatedAt.timeIntervalSince1970)"
+                    synchronizationResult = try await responseSessionModule.reconcile(
                         run: responseSessionRun,
-                        operationId:
-                            "server:\(response.id):\(response.updatedAt.timeIntervalSince1970)",
-                        snapshot: snapshot
+                        operationId: synchronizationOperationId,
+                        snapshot: snapshot,
+                        authorization: authorization
                     )
                 } else {
-                    _ = try await responseSessionModule.acknowledgeWrite(
+                    synchronizationOperationId = "server-write:\(write.operationId)"
+                    synchronizationResult = try await responseSessionModule.acknowledgeWrite(
                         run: responseSessionRun,
-                        operationId: "server-write:\(write.operationId)"
+                        operationId: synchronizationOperationId,
+                        authorization: authorization
                     )
                 }
                 guard await executionRemainsLive() else { return false }
+                if let batch,
+                   !(await responseEmissionRemainsAuthorized(batch)) {
+                    _ = try? await responseSessionModule.rollback(
+                        run: responseSessionRun,
+                        operationId: synchronizationOperationId,
+                        expected: synchronizationResult,
+                        restoring: localResult.snapshot
+                    )
+                    _ = try? await responseSessionModule.rollback(
+                        run: responseSessionRun,
+                        operationId: write.operationId,
+                        expected: localResult,
+                        restoring: previousSnapshot
+                    )
+                    _ = await removePendingResponseFieldWrite(operationId: write.operationId)
+                    return false
+                }
                 guard await removePendingResponseFieldWrite(operationId: write.operationId) else {
                     throw ResponseSessionModuleError.snapshotAuthorityMismatch
                 }
@@ -1336,6 +1475,23 @@ actor JourneyRunner {
         }
         didFailResponseWrite = false
         return true
+    }
+
+    private func responseTransactionAuthorization(
+        _ batch: ScreenEmissionBatch
+    ) -> ResponseSessionTransactionAuthorization {
+        ResponseSessionTransactionAuthorization(
+            executionOwnershipEpoch: batch.executionOwnershipEpoch,
+            lifecycleGeneration: batch.lifecycleGeneration,
+            presentationEpoch: batch.presentationEpoch,
+            screenId: batch.source.screenId
+        )
+    }
+
+    private func responseEmissionRemainsAuthorized(
+        _ batch: ScreenEmissionBatch
+    ) async -> Bool {
+        responseTransactionAuthorization(batch).permits(await journey.snapshot())
     }
 
     private func persistPendingResponseFieldWrite(_ write: PendingResponseFieldWrite) async -> Bool {
@@ -1830,6 +1986,12 @@ actor JourneyRunner {
 
     func isSynchronizingResponseFields() -> Bool {
         responseFieldSynchronizationDepth > 0
+    }
+
+    func withScreenPresentationMutationLock<Value: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> Value
+    ) async rethrows -> Value {
+        try await screenPresentationMutationGate.withLock(operation)
     }
 
     func consumeDeferredDismissReasonIfReady() async -> CloseReason? {
@@ -2826,62 +2988,103 @@ actor JourneyRunner {
 
     private func navigate(to screenId: String, transition: AnyCodable?) async {
         guard await executionRemainsLive() else { return }
-        let state = await journey.snapshot()
-        guard await executionRemainsLive() else { return }
-        let previousScreenId = state.executionState.currentScreenId
-        if let previousScreenId, previousScreenId != screenId {
-            await journey.update {
-                guard $0.status.isLive else { return }
-                $0.executionState.navigationStack.append(previousScreenId)
-                $0.executionState.presentationEpoch &+= 1
-            }
-            presentationEpochAdvancedForScreenId = screenId
+        let previousScreenId = await screenPresentationMutationGate.withLock { [weak self] in
+            await self?.commitNavigationAdvance(to: screenId)
         }
         guard await executionRemainsLive() else { return }
         let didNavigate = await sendShowScreen(screenId, transition: transition)
         guard await executionRemainsLive() else { return }
-        if !didNavigate, presentationEpochAdvancedForScreenId == screenId {
-            presentationEpochAdvancedForScreenId = nil
-            await journey.update { state in
-                guard state.status.isLive else { return }
-                if state.executionState.navigationStack.last == previousScreenId {
-                    state.executionState.navigationStack.removeLast()
-                }
-                state.executionState.presentationEpoch &-= 1
+        if !didNavigate, previousScreenId != nil {
+            await screenPresentationMutationGate.withLock { [weak self] in
+                await self?.rollbackNavigationAdvance(
+                    to: screenId,
+                    previousScreenId: previousScreenId
+                )
             }
+        }
+    }
+
+    private func commitNavigationAdvance(to screenId: String) async -> String? {
+        guard await executionRemainsLive() else { return nil }
+        let state = await journey.snapshot()
+        guard await executionRemainsLive() else { return nil }
+        guard let previousScreenId = state.executionState.currentScreenId,
+              previousScreenId != screenId else { return nil }
+        await journey.update {
+            guard self.lastMileEffectRemainsLive(), $0.status.isLive else { return }
+            $0.executionState.navigationStack.append(previousScreenId)
+            $0.executionState.presentationEpoch &+= 1
+        }
+        presentationEpochAdvancedForScreenId = screenId
+        return previousScreenId
+    }
+
+    private func rollbackNavigationAdvance(
+        to screenId: String,
+        previousScreenId: String?
+    ) async {
+        guard await executionRemainsLive() else { return }
+        guard presentationEpochAdvancedForScreenId == screenId else { return }
+        presentationEpochAdvancedForScreenId = nil
+        await journey.update { state in
+            guard self.lastMileEffectRemainsLive(), state.status.isLive else { return }
+            if state.executionState.navigationStack.last == previousScreenId {
+                state.executionState.navigationStack.removeLast()
+            }
+            state.executionState.presentationEpoch &-= 1
         }
     }
 
     private func handleBack(_ action: BackAction) async {
         guard await executionRemainsLive() else { return }
-        let steps = max(1, action.steps ?? 1)
-        let currentStack = (await journey.snapshot()).executionState.navigationStack
+        let preparation = await screenPresentationMutationGate.withLock { [weak self] in
+            await self?.commitBackAdvance(steps: max(1, action.steps ?? 1))
+        }
         guard await executionRemainsLive() else { return }
-        guard !currentStack.isEmpty else { return }
+        guard let preparation else { return }
+        let didNavigate = await sendShowScreen(
+            preparation.target,
+            transition: action.transition
+        )
+        guard await executionRemainsLive() else { return }
+        if !didNavigate {
+            await screenPresentationMutationGate.withLock { [weak self] in
+                await self?.rollbackBackAdvance(preparation)
+            }
+        }
+    }
 
-        var stack = currentStack
-        let targetIndex = max(0, stack.count - steps)
-        let target = stack[targetIndex]
-        stack = Array(stack.prefix(targetIndex))
-        let updatedStack = stack
+    private struct BackAdvance: Sendable {
+        let target: String
+        let previousStack: [String]
+    }
+
+    private func commitBackAdvance(steps: Int) async -> BackAdvance? {
+        guard await executionRemainsLive() else { return nil }
+        let currentStack = (await journey.snapshot()).executionState.navigationStack
+        guard await executionRemainsLive() else { return nil }
+        guard !currentStack.isEmpty else { return nil }
+        let targetIndex = max(0, currentStack.count - steps)
+        let target = currentStack[targetIndex]
+        let updatedStack = Array(currentStack.prefix(targetIndex))
         await journey.update {
-            guard $0.status.isLive else { return }
+            guard self.lastMileEffectRemainsLive(), $0.status.isLive else { return }
             $0.executionState.navigationStack = updatedStack
             $0.executionState.presentationEpoch &+= 1
         }
-        guard await executionRemainsLive() else { return }
         presentationEpochAdvancedForScreenId = target
-        let didNavigate = await sendShowScreen(target, transition: action.transition)
-        guard await executionRemainsLive() else { return }
-        if !didNavigate, presentationEpochAdvancedForScreenId == target {
-            presentationEpochAdvancedForScreenId = nil
-            await journey.update {
-                guard $0.status.isLive else { return }
-                $0.executionState.navigationStack = currentStack
-                $0.executionState.presentationEpoch &-= 1
-            }
-        }
+        return BackAdvance(target: target, previousStack: currentStack)
+    }
 
+    private func rollbackBackAdvance(_ preparation: BackAdvance) async {
+        guard await executionRemainsLive() else { return }
+        guard presentationEpochAdvancedForScreenId == preparation.target else { return }
+        presentationEpochAdvancedForScreenId = nil
+        await journey.update {
+            guard self.lastMileEffectRemainsLive(), $0.status.isLive else { return }
+            $0.executionState.navigationStack = preparation.previousStack
+            $0.executionState.presentationEpoch &-= 1
+        }
     }
 
     private func handleDelay(

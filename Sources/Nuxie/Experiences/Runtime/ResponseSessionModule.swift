@@ -161,6 +161,25 @@ struct ResponseSessionTransactionDecision: Sendable {
     let synchronization: ResponseSessionSynchronizationItem?
 }
 
+/// Narrows a renderer-authored response transaction to the presentation that
+/// captured it. Journey-backed stores enforce this inside the same atomic
+/// state update that commits the response receipt and snapshot.
+struct ResponseSessionTransactionAuthorization: Sendable, Equatable {
+    let executionOwnershipEpoch: UInt64
+    let lifecycleGeneration: UInt64
+    let presentationEpoch: UInt64
+    let screenId: String
+
+    func permits(_ state: JourneySnapshot) -> Bool {
+        UInt64(max(state.epoch, 0)) == executionOwnershipEpoch
+            && state.executionState.lifecycleGeneration == lifecycleGeneration
+            && state.executionState.presentationEpoch == presentationEpoch
+            && state.executionState.currentScreenId == screenId
+            && state.status.isLive
+            && !state.isGhost
+    }
+}
+
 protocol ResponseSessionStore: Sendable {
     func load(journeyId: String) async -> ResponseSessionSnapshot?
     func setRetryRequired(journeyId: String, required: Bool) async throws
@@ -169,15 +188,29 @@ protocol ResponseSessionStore: Sendable {
     func transact(
         journeyId: String,
         operationId: String,
+        authorization: ResponseSessionTransactionAuthorization?,
         decide: @Sendable (ResponseSessionSnapshot?) throws -> ResponseSessionTransactionDecision
     ) async throws -> ResponseSessionOperationResult
+
+    func rollback(
+        journeyId: String,
+        operationId: String,
+        expected: ResponseSessionOperationResult,
+        restoring snapshot: ResponseSessionSnapshot?
+    ) async throws -> Bool
 }
 
 actor InMemoryResponseSessionStore: ResponseSessionStore {
+    private struct RollbackState: Sendable {
+        let snapshot: ResponseSessionSnapshot?
+        let synchronizationCount: Int
+    }
+
     private var sessions: [String: ResponseSessionSnapshot] = [:]
     private var receipts: [String: ResponseSessionOperationResult] = [:]
     private var synchronization: [ResponseSessionSynchronizationItem] = []
     private var retryRequired: Set<String> = []
+    private var rollbackStates: [String: RollbackState] = [:]
 
     func load(journeyId: String) -> ResponseSessionSnapshot? { sessions[journeyId] }
 
@@ -192,15 +225,41 @@ actor InMemoryResponseSessionStore: ResponseSessionStore {
     func transact(
         journeyId: String,
         operationId: String,
+        authorization: ResponseSessionTransactionAuthorization?,
         decide: @Sendable (ResponseSessionSnapshot?) throws -> ResponseSessionTransactionDecision
     ) throws -> ResponseSessionOperationResult {
         let receiptKey = "\(journeyId):\(operationId)"
         if let receipt = receipts[receiptKey] { return receipt }
         let decision = try decide(sessions[journeyId])
+        rollbackStates[receiptKey] = RollbackState(
+            snapshot: sessions[journeyId],
+            synchronizationCount: synchronization.count
+        )
         if let next = decision.next { sessions[journeyId] = next }
         if let item = decision.synchronization { synchronization.append(item) }
         receipts[receiptKey] = decision.result
         return decision.result
+    }
+
+    func rollback(
+        journeyId: String,
+        operationId: String,
+        expected: ResponseSessionOperationResult,
+        restoring snapshot: ResponseSessionSnapshot?
+    ) -> Bool {
+        let receiptKey = "\(journeyId):\(operationId)"
+        guard receipts[receiptKey] == expected,
+              sessions[journeyId] == expected.snapshot,
+              let rollback = rollbackStates.removeValue(forKey: receiptKey),
+              rollback.snapshot == snapshot else { return false }
+        if let snapshot {
+            sessions[journeyId] = snapshot
+        } else {
+            sessions.removeValue(forKey: journeyId)
+        }
+        receipts.removeValue(forKey: receiptKey)
+        synchronization.removeLast(synchronization.count - rollback.synchronizationCount)
+        return true
     }
 
     func synchronizationItems() -> [ResponseSessionSynchronizationItem] {
@@ -247,6 +306,7 @@ actor JourneyResponseSessionStore: ResponseSessionStore {
     func transact(
         journeyId: String,
         operationId: String,
+        authorization: ResponseSessionTransactionAuthorization?,
         decide: @Sendable (ResponseSessionSnapshot?) throws -> ResponseSessionTransactionDecision
     ) async throws -> ResponseSessionOperationResult {
         guard journeyId == journey.id else {
@@ -259,7 +319,8 @@ actor JourneyResponseSessionStore: ResponseSessionStore {
         let decision = try decide(state.responseSession)
         let committed = await journey.update { current -> JourneySnapshot? in
             guard current.responseSession == state.responseSession,
-                  current.responseSessionReceipts[operationId] == nil else {
+                  current.responseSessionReceipts[operationId] == nil,
+                  authorization?.permits(current) != false else {
                 return nil
             }
             current.responseSession = decision.next
@@ -285,6 +346,38 @@ actor JourneyResponseSessionStore: ResponseSessionStore {
             throw error
         }
         return decision.result
+    }
+
+    func rollback(
+        journeyId: String,
+        operationId: String,
+        expected: ResponseSessionOperationResult,
+        restoring snapshot: ResponseSessionSnapshot?
+    ) async throws -> Bool {
+        guard journeyId == journey.id else {
+            throw ResponseSessionModuleError.snapshotAuthorityMismatch
+        }
+        let committed = await journey.update { current -> JourneySnapshot? in
+            guard current.responseSessionReceipts[operationId] == expected,
+                  current.responseSession == expected.snapshot else { return nil }
+            current.responseSession = snapshot
+            current.responseSessionReceipts.removeValue(forKey: operationId)
+            current.updatedAt = Date()
+            return current
+        }
+        guard let committed else { return false }
+        do {
+            try journeyStore.saveJourney(committed)
+        } catch {
+            _ = await journey.update { current in
+                guard current.responseSession == snapshot,
+                      current.responseSessionReceipts[operationId] == nil else { return }
+                current.responseSession = expected.snapshot
+                current.responseSessionReceipts[operationId] = expected
+            }
+            throw error
+        }
+        return true
     }
 }
 
@@ -358,11 +451,16 @@ actor ResponseSessionModule {
     func reconcile(
         run: ResponseSessionRunAuthority,
         operationId: String,
-        snapshot: ResponseSessionSnapshot
+        snapshot: ResponseSessionSnapshot,
+        authorization: ResponseSessionTransactionAuthorization? = nil
     ) async throws -> ResponseSessionOperationResult {
         try assertPinned(run)
         try Self.validate(snapshot: snapshot, for: run)
-        return try await transact(run: run, operationId: operationId) { current in
+        return try await transact(
+            run: run,
+            operationId: operationId,
+            authorization: authorization
+        ) { current in
             let next = current.map { max($0.version + 1, snapshot.version) } ?? snapshot.version
             let authoritative = ResponseSessionSnapshot(
                 responseId: snapshot.responseId,
@@ -444,10 +542,15 @@ actor ResponseSessionModule {
     /// without inventing a new version or changing the draft lifecycle.
     func acknowledgeWrite(
         run: ResponseSessionRunAuthority,
-        operationId: String
+        operationId: String,
+        authorization: ResponseSessionTransactionAuthorization? = nil
     ) async throws -> ResponseSessionOperationResult {
         try assertPinned(run)
-        return try await transact(run: run, operationId: operationId) { current in
+        return try await transact(
+            run: run,
+            operationId: operationId,
+            authorization: authorization
+        ) { current in
             guard let current else {
                 throw ResponseSessionModuleError.schemaMissing
             }
@@ -484,10 +587,15 @@ actor ResponseSessionModule {
         screenId: String,
         field fieldKey: String,
         value: ScreenEmissionValue,
-        occurredAt: String
+        occurredAt: String,
+        authorization: ResponseSessionTransactionAuthorization? = nil
     ) async throws -> ResponseSessionOperationResult {
         try validateTimestamp(occurredAt)
-        return try await transact(run: run, operationId: emissionId) { current in
+        return try await transact(
+            run: run,
+            operationId: emissionId,
+            authorization: authorization
+        ) { current in
             switch Self.validateMutation(
                 run: run,
                 current: current,
@@ -534,10 +642,15 @@ actor ResponseSessionModule {
         emissionId: String,
         screenId: String,
         field fieldKey: String,
-        occurredAt: String
+        occurredAt: String,
+        authorization: ResponseSessionTransactionAuthorization? = nil
     ) async throws -> ResponseSessionOperationResult {
         try validateTimestamp(occurredAt)
-        return try await transact(run: run, operationId: emissionId) { current in
+        return try await transact(
+            run: run,
+            operationId: emissionId,
+            authorization: authorization
+        ) { current in
             switch Self.validateMutation(
                 run: run,
                 current: current,
@@ -673,6 +786,7 @@ actor ResponseSessionModule {
     private func transact(
         run: ResponseSessionRunAuthority,
         operationId: String,
+        authorization: ResponseSessionTransactionAuthorization? = nil,
         decide: @escaping @Sendable (
             ResponseSessionSnapshot?
         ) throws -> ResponseSessionTransactionDecision
@@ -681,6 +795,7 @@ actor ResponseSessionModule {
         let result = try await store.transact(
             journeyId: run.journeyId,
             operationId: operationId,
+            authorization: authorization,
             decide: decide
         )
         if let snapshot = result.snapshot,
@@ -691,6 +806,24 @@ actor ResponseSessionModule {
             snapshots[run.journeyId] = nil
         }
         return result
+    }
+
+    func rollback(
+        run: ResponseSessionRunAuthority,
+        operationId: String,
+        expected: ResponseSessionOperationResult,
+        restoring snapshot: ResponseSessionSnapshot?
+    ) async throws -> Bool {
+        try assertPinned(run)
+        guard try await store.rollback(
+            journeyId: run.journeyId,
+            operationId: operationId,
+            expected: expected,
+            restoring: snapshot
+        ) else { return false }
+        snapshots[run.journeyId] = snapshot
+        _ = publish(run: run, session: snapshot)
+        return true
     }
 
     private func assertPinned(_ run: ResponseSessionRunAuthority) throws {

@@ -120,7 +120,7 @@ These controls persist through Journey response state rather than the event stor
 
 ### Inline literals not in constants
 
-No uncataloged event name was found. The inline event-name strings in `ScreenEmissionRouter` and the server down-fact raw values all resolve to existing constants. `$navigate` is excluded because `ExperienceInteractiveScreen` treats it as a rejected runtime control command, not an emitted event.
+No uncataloged event name was found. The inline event-name strings in the renderer screen-emission path and the server down-fact raw values all resolve to existing constants. `$navigate` is excluded because `ExperienceInteractiveScreen` treats it as a rejected runtime control command, not an emitted event.
 
 ### Forwarding spec table gaps
 
