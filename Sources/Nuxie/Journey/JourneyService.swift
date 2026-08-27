@@ -42,6 +42,11 @@ protocol JourneyServiceProtocol: AnyObject, Sendable {
   /// and retry rather than acknowledging local completion.
   func handleCapturedEventForTrigger(_ event: NuxieEvent) async -> [JourneyTriggerResult]?
 
+  /// Record the customer that owns a detached (journey-less) presentation so
+  /// identity changes can tear it down; every detached presentation caller
+  /// must register before presenting.
+  func registerDetachedPresentationOwner(distinctId: String) async
+
   func getActiveJourneys(for distinctId: String) async -> [Journey]
 
   /// Resolve identity already held by a live or ghost journey for forwarding
@@ -198,6 +203,7 @@ actor JourneyService: JourneyServiceProtocol {
   private var pendingScreenEvents: [String: PendingScreenEvent] = [:]
   private var runtimeDelegates: [String: JourneyRendererBridge] = [:]
   private var presentationTraceStates: [String: JourneyPresentationTraceState] = [:]
+  private var detachedPresentationOwnerDistinctId: String?
   private let timerScheduler: JourneyTimerScheduler
   private var completingJourneyIds: Set<String> = []
   private var journeyCompletionWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
@@ -209,6 +215,8 @@ actor JourneyService: JourneyServiceProtocol {
   private var admissionsInProgress: Set<AdmissionKey> = []
   private var restoredPresentationRetriesInProgress: Set<String> = []
   private var scopedAuthoredResponseTasks: [UUID: Task<Void, Never>] = [:]
+  private var scopedAuthoredResponseOwners: [UUID: String] = [:]
+  private var retiringResponseDistinctIds: Set<String> = []
   private var scopedAuthoredResponseTail: (id: UUID, task: Task<Void, Never>)?
   private var scopedAuthoredOutcomeDepth = 0
   private var nextScopedAuthoredResponseToSchedule: UInt64 = 0
@@ -486,12 +494,12 @@ actor JourneyService: JourneyServiceProtocol {
     // Cancel deliveries before presentation or runner teardown. Joining a
     // scoped response wrapper can block on its EventLog delivery future, so
     // release those futures before waiting for the wrappers.
-    await eventLog.cancelPreparedResponseDeliveries()
+    await eventLog.cancelPreparedResponseDeliveries(for: nil)
     let responseTasks = Array(scopedAuthoredResponseTasks.values)
     responseTasks.forEach { $0.cancel() }
     for task in responseTasks { await task.value }
 
-    await experiencePresentationService.shutdownCurrentExperience()
+    await shutdownPresentedExperience()
 
     let runners = Array(experienceRunners.values)
     experienceRunners.removeAll()
@@ -502,6 +510,8 @@ actor JourneyService: JourneyServiceProtocol {
     journeyCompletionWaiters.removeAll()
     completionWaiters.forEach { $0.resume() }
     scopedAuthoredResponseTasks.removeAll()
+    scopedAuthoredResponseOwners.removeAll()
+    retiringResponseDistinctIds.removeAll()
     scopedAuthoredResponseTail = nil
     pendingScopedAuthoredResponses.removeAll()
     directlyHandledPreparedResponseSequences.removeAll()
@@ -524,22 +534,34 @@ actor JourneyService: JourneyServiceProtocol {
   public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
     guard !isShutDown else { return }
     LogInfo("JourneyService handling user change from \(NuxieLogger.shared.logDistinctID(oldDistinctId)) to \(NuxieLogger.shared.logDistinctID(newDistinctId))")
+    retiringResponseDistinctIds.insert(oldDistinctId)
+    defer { retiringResponseDistinctIds.remove(oldDistinctId) }
 
+    await cancelOldCustomerResponseWork(oldDistinctId: oldDistinctId)
+    guard !isShutDown else { return }
+
+    let oldCustomerJourneyIds = Set(
+      inMemoryJourneysById.values
+        .filter { $0.distinctId == oldDistinctId }
+        .map(\.id)
+    )
     let oldJourneys = await getActiveJourneys(for: oldDistinctId)
     guard !isShutDown else { return }
+    // Presentation owns MainActor cleanup that must settle before the old
+    // customer's runners can be retired and terminal facts can be emitted.
+    await shutdownPresentedExperience(
+      ownedBy: oldCustomerJourneyIds,
+      detachedOwnerDistinctId: oldDistinctId
+    )
+    guard !isShutDown else { return }
+
     for journey in oldJourneys {
-      if hostDismissalRetryAuthorizations[journey.id] === journey {
-        continue
-      }
-      await cancelJourney(journey)
+      await teardownOldCustomerJourney(journey)
       guard !isShutDown else { return }
-      guard inMemoryJourneysById[journey.id] === journey,
-            (await journey.snapshot()).status.isLive,
-            !(await journey.hasHostDismissalReservation()) else {
-        continue
-      }
-      await discardLocalJourney(journey, terminalStatus: .cancelled)
     }
+
+    // Only admit persisted work after every old-customer presentation,
+    // runner, timer, and terminal fact has settled.
 
     let persisted = journeyStore.loadActiveJourneys()
       .filter { $0.distinctId == newDistinctId && $0.status.isLive }
@@ -1511,7 +1533,8 @@ actor JourneyService: JourneyServiceProtocol {
     await handleScopedGatePlan(
       response?.gatePlan(),
       sourceJourney: journey,
-      sourceExperience: sourceExperience
+      sourceExperience: sourceExperience,
+      sourceDistinctId: routedEvent.distinctId
     )
   }
 
@@ -1974,7 +1997,8 @@ actor JourneyService: JourneyServiceProtocol {
       sourceJourney: sourceCompleted ? nil : journey,
       sourceExperience: sourceCompleted
         ? nil
-        : sourceScopedGoalExperience(for: journey, experiences: experiences)
+        : sourceScopedGoalExperience(for: journey, experiences: experiences),
+      sourceDistinctId: exactEvent.distinctId
     )
     markPreparedResponseSequenceHandledDirectly(pending.commit.sequence)
     _ = await updateScreenEventPhase(
@@ -2544,7 +2568,8 @@ actor JourneyService: JourneyServiceProtocol {
       sourceExperience: sourceScopedGoalExperience(
         for: journey,
         experiences: experiences ?? cachedExperiences
-      )
+      ),
+      sourceDistinctId: scopedEvent.distinctId
     )
   }
 
@@ -2677,7 +2702,8 @@ actor JourneyService: JourneyServiceProtocol {
     await handleScopedGatePlan(
       response?.gatePlan(),
       sourceJourney: sourceJourneyStillCompleted ? nil : journey,
-      sourceExperience: resolvedSourceExperience
+      sourceExperience: resolvedSourceExperience,
+      sourceDistinctId: scopedEvent.distinctId
     )
   }
 
@@ -2944,7 +2970,8 @@ actor JourneyService: JourneyServiceProtocol {
       sourceExperience: sourceScopedGoalExperience(
         for: journey,
         experiences: routed.experiences
-      )
+      ),
+      sourceDistinctId: journey.distinctId
     )
   }
 
@@ -2988,7 +3015,10 @@ actor JourneyService: JourneyServiceProtocol {
   private func scheduleScopedAuthoredResponse(
     _ pending: PendingScopedAuthoredResponse
   ) {
-    guard !isShutDown else { return }
+    guard !isShutDown,
+          !retiringResponseDistinctIds.contains(
+            pending.sourceJourney.distinctId
+          ) else { return }
     let previousTask = scopedAuthoredResponseTail?.task
     let taskId = UUID()
     let task = Task { [weak self] in
@@ -3003,11 +3033,13 @@ actor JourneyService: JourneyServiceProtocol {
       await self.finishScopedAuthoredResponseTask(id: taskId)
     }
     scopedAuthoredResponseTasks[taskId] = task
+    scopedAuthoredResponseOwners[taskId] = pending.sourceJourney.distinctId
     scopedAuthoredResponseTail = (taskId, task)
   }
 
   private func finishScopedAuthoredResponseTask(id: UUID) {
     scopedAuthoredResponseTasks.removeValue(forKey: id)
+    scopedAuthoredResponseOwners.removeValue(forKey: id)
     guard scopedAuthoredResponseTail?.id == id else { return }
     scopedAuthoredResponseTail = nil
   }
@@ -3063,7 +3095,8 @@ actor JourneyService: JourneyServiceProtocol {
     await handleScopedGatePlan(
       response?.gatePlan(),
       sourceJourney: journey,
-      sourceExperience: nil
+      sourceExperience: nil,
+      sourceDistinctId: distinctId
     )
   }
 
@@ -5064,7 +5097,8 @@ actor JourneyService: JourneyServiceProtocol {
   private func handleScopedGatePlan(
     _ plan: GatePlan?,
     sourceJourney: Journey? = nil,
-    sourceExperience: Experience? = nil
+    sourceExperience: Experience? = nil,
+    sourceDistinctId: String
   ) async {
     guard !isShutDown, let plan else { return }
     let sourceRunner: JourneyRunner?
@@ -5104,7 +5138,10 @@ actor JourneyService: JourneyServiceProtocol {
       guard let sourceCompleted = await closeSource(),
             await sourceRemainsAuthorized(completed: sourceCompleted) else { return }
       guard !isShutDown else { return }
-      _ = try? await experiencePresentationService.presentExperience(experienceVersionId, from: nil, runtimeDelegate: nil)
+      await presentDetachedExperience(
+        experienceVersionId,
+        ownerDistinctId: sourceDistinctId
+      )
 
     case .requireFeature:
       guard let featureId = plan.featureId else { return }
@@ -5139,7 +5176,10 @@ actor JourneyService: JourneyServiceProtocol {
       guard let sourceCompleted = await closeSource(),
             await sourceRemainsAuthorized(completed: sourceCompleted) else { return }
       guard !isShutDown else { return }
-      _ = try? await experiencePresentationService.presentExperience(experienceVersionId, from: nil, runtimeDelegate: nil)
+      await presentDetachedExperience(
+        experienceVersionId,
+        ownerDistinctId: sourceDistinctId
+      )
     }
   }
 
@@ -5594,6 +5634,101 @@ actor JourneyService: JourneyServiceProtocol {
     let config = irRuntime.standardConfig(event: event)
 
     return await irRuntime.eval(envelope, config)
+  }
+
+  /// Joins the full presentation teardown introduced for SDK shutdown, while
+  /// optionally restricting it to a known set of customer-owned journeys.
+  private func shutdownPresentedExperience(
+    ownedBy journeyIds: Set<String>? = nil,
+    detachedOwnerDistinctId: String? = nil
+  ) async {
+    guard let journeyIds else {
+      await experiencePresentationService.shutdownCurrentExperience()
+      detachedPresentationOwnerDistinctId = nil
+      return
+    }
+    if await experiencePresentationService.isExperiencePresented {
+      if let presentedJourneyId = await experiencePresentationService.presentedJourneyId {
+        guard journeyIds.contains(presentedJourneyId) else { return }
+      } else {
+        guard self.detachedPresentationOwnerDistinctId == detachedOwnerDistinctId else {
+          return
+        }
+      }
+    }
+    let detachedOwnerAtShutdown = self.detachedPresentationOwnerDistinctId
+    await experiencePresentationService.shutdownCurrentExperience()
+    if self.detachedPresentationOwnerDistinctId == detachedOwnerAtShutdown {
+      self.detachedPresentationOwnerDistinctId = nil
+    }
+  }
+
+  public func registerDetachedPresentationOwner(distinctId: String) async {
+    detachedPresentationOwnerDistinctId = distinctId
+  }
+
+  private func presentDetachedExperience(
+    _ experienceVersionId: String,
+    ownerDistinctId: String
+  ) async {
+    detachedPresentationOwnerDistinctId = ownerDistinctId
+    do {
+      _ = try await experiencePresentationService.presentExperience(
+        experienceVersionId,
+        from: nil,
+        runtimeDelegate: nil
+      )
+    } catch {
+      if detachedPresentationOwnerDistinctId == ownerDistinctId {
+        detachedPresentationOwnerDistinctId = nil
+      }
+    }
+  }
+
+  private func cancelOldCustomerResponseWork(oldDistinctId: String) async {
+    let retiredSequences = pendingScopedAuthoredResponses.compactMap {
+      $0.value.sourceJourney.distinctId == oldDistinctId ? $0.key : nil
+    }
+    retiredSequences.forEach { pendingScopedAuthoredResponses.removeValue(forKey: $0) }
+    directlyHandledPreparedResponseSequences.formUnion(retiredSequences)
+    scheduleReadyScopedAuthoredResponses()
+    await eventLog.cancelPreparedResponseDeliveries(for: oldDistinctId)
+    let oldTaskIds = Set(scopedAuthoredResponseOwners.compactMap {
+      $0.value == oldDistinctId ? $0.key : nil
+    })
+    let responseTasks = scopedAuthoredResponseTasks.compactMap {
+      oldTaskIds.contains($0.key) ? $0.value : nil
+    }
+    responseTasks.forEach { $0.cancel() }
+    for task in responseTasks { await task.value }
+  }
+
+  private func teardownOldCustomerJourney(_ journey: Journey) async {
+    timerScheduler.cancelTasks(journeyId: journey.id)
+    hostDismissalRetryAuthorizations.removeValue(forKey: journey.id)
+    await journey.releaseHostDismissalReservation()
+    let preCancellationState = await journey.snapshot()
+    await cancelJourney(journey)
+    guard inMemoryJourneysById[journey.id] === journey,
+          (await journey.snapshot()).status.isLive else { return }
+    let exitedProperties = JourneyEvents.journeyExitedProperties(
+      journey: preCancellationState,
+      reason: .cancelled,
+      at: dateProvider.now()
+    )
+    do {
+      _ = try await eventLog.trackWithResponse(
+        JourneyEvents.journeyExited,
+        properties: exitedProperties,
+        flushStrategy: .eventLog,
+        distinctIdOverride: preCancellationState.distinctId
+      )
+    } catch {
+      LogWarning(
+        "JourneyService: failed to deliver identity-change exit for \(journey.id): \(error)"
+      )
+    }
+    await discardLocalJourney(journey, terminalStatus: .cancelled)
   }
 
 }

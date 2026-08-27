@@ -305,7 +305,8 @@ actor NuxieApi: NuxieApiProtocol {
             let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data)
             throw NuxieNetworkError.httpError(
                 statusCode: response.statusCode,
-                message: errorResponse?.message ?? "Unknown error"
+                message: errorResponse?.message ?? "Unknown error",
+                retryAfter: response.value(forHTTPHeaderField: "Retry-After")
             )
         }
     }

@@ -270,6 +270,7 @@ actor TriggerService: TriggerServiceProtocol {
         await handleGatePlan(
           gatePlan,
           eventId: eventId,
+          ownerDistinctId: nuxieEvent.distinctId,
           presentationAttempt: presentationAttempt
         )
       } else {
@@ -339,6 +340,7 @@ actor TriggerService: TriggerServiceProtocol {
   private func handleGatePlan(
     _ plan: GatePlan,
     eventId: String,
+    ownerDistinctId: String,
     presentationAttempt: ExperiencePresentationAttempt?
   ) async {
     switch plan.decision {
@@ -350,12 +352,14 @@ actor TriggerService: TriggerServiceProtocol {
       await handleShowExperience(
         plan,
         eventId: eventId,
+        ownerDistinctId: ownerDistinctId,
         presentationAttempt: presentationAttempt
       )
     case .requireFeature:
       await handleRequireFeature(
         plan,
         eventId: eventId,
+        ownerDistinctId: ownerDistinctId,
         presentationAttempt: presentationAttempt
       )
     }
@@ -364,6 +368,7 @@ actor TriggerService: TriggerServiceProtocol {
   private func handleShowExperience(
     _ plan: GatePlan,
     eventId: String,
+    ownerDistinctId: String,
     presentationAttempt: ExperiencePresentationAttempt?
   ) async {
     guard let experienceVersionId = plan.flowId else {
@@ -379,6 +384,7 @@ actor TriggerService: TriggerServiceProtocol {
     await presentExperience(
       experienceVersionId: experienceVersionId,
       eventId: eventId,
+      ownerDistinctId: ownerDistinctId,
       presentationAttempt: presentationAttempt
     )
   }
@@ -386,6 +392,7 @@ actor TriggerService: TriggerServiceProtocol {
   private func handleRequireFeature(
     _ plan: GatePlan,
     eventId: String,
+    ownerDistinctId: String,
     presentationAttempt: ExperiencePresentationAttempt?
   ) async {
     guard let featureId = plan.featureId else {
@@ -430,6 +437,7 @@ actor TriggerService: TriggerServiceProtocol {
       await presentExperience(
         experienceVersionId: experienceVersionId,
         eventId: eventId,
+        ownerDistinctId: ownerDistinctId,
         presentationAttempt: presentationAttempt
       )
     }
@@ -487,6 +495,7 @@ actor TriggerService: TriggerServiceProtocol {
   private func presentExperience(
     experienceVersionId: String,
     eventId: String,
+    ownerDistinctId: String,
     presentationAttempt: ExperiencePresentationAttempt?
   ) async {
     do {
@@ -513,6 +522,11 @@ actor TriggerService: TriggerServiceProtocol {
       } else {
         runtimeDelegate = nil
       }
+      // The gate-plan path presents without a journey; register ownership so
+      // an identity change tears this presentation down (UNIV-2659).
+      await journeyService.registerDetachedPresentationOwner(
+        distinctId: ownerDistinctId
+      )
       let controller = try await experiencePresentationService.presentExperience(
         experienceVersionId,
         from: nil,

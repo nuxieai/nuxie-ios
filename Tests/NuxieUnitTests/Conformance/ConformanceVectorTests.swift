@@ -279,6 +279,74 @@ final class ConformanceVectorTests: XCTestCase {
         }
     }
 
+    func testDeliveryDispositionFixtureCoversRequiredHazards() throws {
+        let url = Self.fixturesRoot.appendingPathComponent(
+            "events/delivery-disposition.json"
+        )
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                as? [String: Any]
+        )
+        XCTAssertEqual(root["suite"] as? String, "events/delivery-disposition")
+        XCTAssertEqual(root["version"] as? Int, 1)
+        let vectors = try XCTUnwrap(root["vectors"] as? [[String: Any]])
+        XCTAssertEqual(Set(vectors.compactMap { $0["name"] as? String }), Set([
+            "rate limit honors retry after",
+            "authentication failure marks sdk unhealthy",
+            "oversized batch splits",
+            "malformed partial response acknowledges nothing",
+            "mixed valid and invalid batch acknowledges valid indexes",
+            "poison event isolation preserves valid neighbors",
+        ]))
+
+        for vector in vectors {
+            let name = try XCTUnwrap(vector["name"] as? String)
+            let response = try XCTUnwrap(vector["response"] as? [String: Any])
+            let expectation = try XCTUnwrap(vector["expect"] as? [String: Any])
+            let statusCode = try XCTUnwrap(response["status_code"] as? Int)
+
+            switch name {
+            case "rate limit honors retry after":
+                XCTAssertEqual(statusCode, 429)
+                XCTAssertEqual(response["retry_after"] as? String, "60")
+                XCTAssertEqual(expectation["disposition"] as? String, "retry")
+                XCTAssertEqual(expectation["backoff_capped"] as? Bool, true)
+            case "authentication failure marks sdk unhealthy":
+                XCTAssertEqual(statusCode, 401)
+                XCTAssertEqual(
+                    expectation["disposition"] as? String,
+                    "unhealthy_authentication"
+                )
+                XCTAssertEqual(expectation["retry_cadence"] as? String, "periodic")
+            case "oversized batch splits":
+                XCTAssertEqual(statusCode, 413)
+                XCTAssertEqual((vector["batch"] as? [String])?.count, 4)
+                XCTAssertEqual(expectation["next_batch_size"] as? Int, 2)
+            case "malformed partial response acknowledges nothing":
+                XCTAssertEqual(statusCode, 200)
+                XCTAssertEqual(response["total"] as? Int, 4)
+                XCTAssertEqual(response["error_indexes"] as? [Int], [7])
+                XCTAssertEqual(expectation["disposition"] as? String, "retry")
+            case "mixed valid and invalid batch acknowledges valid indexes":
+                XCTAssertEqual(statusCode, 200)
+                XCTAssertEqual(response["processed"] as? Int, 2)
+                XCTAssertEqual(response["failed"] as? Int, 1)
+                XCTAssertEqual(response["error_indexes"] as? [Int], [1])
+                XCTAssertEqual(expectation["disposition"] as? String, "partial")
+            case "poison event isolation preserves valid neighbors":
+                XCTAssertEqual(statusCode, 422)
+                XCTAssertEqual(expectation["disposition"] as? String, "split")
+                XCTAssertEqual(expectation["dead_lettered"] as? [String], ["poison"])
+            default:
+                XCTFail("Unhandled delivery disposition fixture: \(name)")
+            }
+
+            if expectation["acknowledged"] != nil {
+                XCTAssertNotNil(expectation["acknowledged"] as? [String])
+            }
+        }
+    }
+
     func testJourneyParkingVectors() throws {
         let url = Self.fixturesRoot.appendingPathComponent(
             "journeys/parking/emission.json"

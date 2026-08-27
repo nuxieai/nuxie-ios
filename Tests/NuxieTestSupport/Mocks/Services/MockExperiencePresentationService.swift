@@ -21,6 +21,7 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
     private var _presentationDelay: TimeInterval = 0
     private var _presentExperienceCallCount = 0
     private var _dismissCurrentExperienceCallCount = 0
+    private var _shutdownCurrentExperienceCallCount = 0
     private var _currentRuntimeDelegate: ExperienceRuntimeDelegate?
     private var _currentExperienceViewController: ExperienceViewController?
     private var _initialScreenIDs: [String?] = []
@@ -88,6 +89,12 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
     public var dismissCurrentExperienceCallCount: Int {
         get { lock.withLock { _dismissCurrentExperienceCallCount } }
         set { lock.withLock { _dismissCurrentExperienceCallCount = newValue } }
+    }
+
+    /// Number of coordinated shutdown requests received by the mock.
+    public var shutdownCurrentExperienceCallCount: Int {
+        get { lock.withLock { _shutdownCurrentExperienceCallCount } }
+        set { lock.withLock { _shutdownCurrentExperienceCallCount = newValue } }
     }
 
     var currentRuntimeDelegate: ExperienceRuntimeDelegate? {
@@ -224,7 +231,10 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
 
     @MainActor
     func shutdownCurrentExperience() async {
-        await dismissCurrentExperience()
+        lock.withLock { _shutdownCurrentExperienceCallCount += 1 }
+        if isExperiencePresented {
+            await dismissCurrentExperience()
+        }
     }
 
     @MainActor
@@ -388,6 +398,7 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
             _presentationDelay = 0
             _presentExperienceCallCount = 0
             _dismissCurrentExperienceCallCount = 0
+            _shutdownCurrentExperienceCallCount = 0
             _mockViewControllers = [:]
             _defaultMockViewController = nil
             _currentRuntimeDelegate = nil

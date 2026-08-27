@@ -779,7 +779,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
                 metadata: nil
             )
             XCTFail("Expected the rejected command to throw")
-        } catch NuxieNetworkError.httpError(let statusCode, _) {
+        } catch NuxieNetworkError.httpError(let statusCode, _, _) {
             XCTAssertEqual(statusCode, 402)
         }
 

@@ -13,6 +13,9 @@ These language-neutral vectors pin the cross-plane experience-execution contract
   stable retry identity, capture-before-retirement ordering, evidence
   retention, post-use access, and one-emission contract for atomic
   purchase-backed feature use.
+- `events/delivery-disposition`: retry/auth/split/poison classification,
+  all-or-nothing partial-ack validation, and poison-event isolation without
+  disturbing valid neighbors.
 - `golden-journey`: the minimal synchronous-enrollment journey vocabulary.
 - `journeys/handoff`: server→device mailbox claim plus device→server
   `$journey_handoff` property shape, direction, epoch 0/1 encoding,

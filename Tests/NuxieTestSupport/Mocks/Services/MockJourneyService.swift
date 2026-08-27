@@ -104,6 +104,11 @@ public actor MockJourneyService: JourneyServiceProtocol {
         return triggerResults
     }
 
+        public private(set) var registeredDetachedPresentationOwners: [String] = []
+    public func registerDetachedPresentationOwner(distinctId: String) async {
+        registeredDetachedPresentationOwners.append(distinctId)
+    }
+
     public func handleCapturedEventForTrigger(
         _ event: NuxieEvent
     ) async -> [JourneyTriggerResult]? {

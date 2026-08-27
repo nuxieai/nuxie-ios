@@ -146,6 +146,51 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 expect(stored.map(\.name)).to(contain("offline_event"))
             }
 
+            it("keeps authentication-rejected rows pending across relaunch") {
+                eventLog.track(
+                    "auth_retained_event",
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                await eventLog.drain()
+                await api.setBatchError(
+                    NuxieNetworkError.httpError(
+                        statusCode: 401,
+                        message: "Unauthorized"
+                    )
+                )
+
+                _ = await eventLog.flushEvents()
+                await expect { await eventLog.deliveryHealthState() }
+                    .to(equal("unhealthy_authentication"))
+                await eventLog.close()
+
+                await api.setBatchError(nil)
+                let relaunchService = EventLog(
+                    identity: identity,
+                    sessions: sessions,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                eventLog = relaunchService
+                try await relaunchService.configure(configuration: config)
+
+                _ = await relaunchService.flushEvents()
+                await expect {
+                    await api.sentEvents.filter {
+                        $0.name == "auth_retained_event"
+                    }.count
+                }.to(equal(2))
+
+                _ = await relaunchService.flushEvents()
+                await expect {
+                    await api.sentEvents.filter {
+                        $0.name == "auth_retained_event"
+                    }.count
+                }.to(equal(2))
+            }
+
             it("forwards a durable capture once and does not replay it after relaunch") {
                 let firstRecorder = OrchestrationForwardingRecorder()
                 await eventLog.subscribeForwarding { event in

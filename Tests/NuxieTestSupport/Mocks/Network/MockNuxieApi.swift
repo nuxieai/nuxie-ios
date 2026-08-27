@@ -6,6 +6,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     // Response configuration
     public var shouldFailProfile = false
     public var shouldFailBatch = false
+    public var batchError: Error?
     public var shouldFailTrackEvent = false
     public var trackEventError: Error?
     public var trackEventDelay: TimeInterval = 0
@@ -147,6 +148,10 @@ public actor MockNuxieApi: NuxieApiProtocol {
         shouldFailBatch = shouldFail
     }
 
+    public func setBatchError(_ error: Error?) {
+        batchError = error
+    }
+
     public func setShouldFailProfile(_ shouldFail: Bool) {
         self.shouldFailProfile = shouldFail
     }
@@ -183,8 +188,9 @@ public actor MockNuxieApi: NuxieApiProtocol {
             sentEvents.append(nuxieEvent)
         }
         
-        if shouldFailBatch {
-            throw NuxieNetworkError.httpError(statusCode: 500, message: "Mock batch error")
+        if shouldFailBatch || batchError != nil {
+            throw batchError
+                ?? NuxieNetworkError.httpError(statusCode: 500, message: "Mock batch error")
         }
         
         return BatchResponse(
@@ -397,6 +403,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public func reset() {
         shouldFailProfile = false
         shouldFailBatch = false
+        batchError = nil
         shouldFailTrackEvent = false
         trackEventError = nil
         trackEventDelay = 0

@@ -8,6 +8,8 @@ import Quick
 #endif
 
 private actor FlowShownBeforeJourneyDecisionService: JourneyServiceProtocol {
+    func registerDetachedPresentationOwner(distinctId: String) async {}
+
     private let broker: TriggerBrokerProtocol
     private let journey: Journey
     private let finalUpdate: JourneyUpdate
