@@ -3252,6 +3252,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         ])
     }
 
+    #if canImport(UIKit)
     func testNativeControlAndSiblingEffectsAssembleIntoOneAtomicRuntimeInput() throws {
         var assembler = ExperienceRuntimeScreenEmissionAssembler()
         let invocation = ScreenActionInvocation(
@@ -3286,6 +3287,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             ]
         ))
     }
+    #endif
 
     private var scriptedCommands: [ExperienceInteractiveHostCommand] {
         [

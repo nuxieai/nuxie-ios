@@ -1909,7 +1909,7 @@ extension ExperienceViewController {
         )
     }
 
-    private func capturedScreenEmissionRun() -> ScreenEmissionRun? {
+    func captureScreenEmissionRun() -> ScreenEmissionRun? {
         guard let pending = pendingScreenEmissionRunScope else {
             return screenEmissionRun
         }
@@ -1929,7 +1929,17 @@ extension ExperienceViewController {
     func publishScreenInput(
         _ input: ExperienceRuntimeScreenEmission
     ) async -> ScreenEmissionPublicationDisposition {
-        let originatingRun = capturedScreenEmissionRun()
+        await publishScreenInput(
+            input,
+            originatingRun: captureScreenEmissionRun()
+        )
+    }
+
+    @discardableResult
+    func publishScreenInput(
+        _ input: ExperienceRuntimeScreenEmission,
+        originatingRun: ScreenEmissionRun?
+    ) async -> ScreenEmissionPublicationDisposition {
         return await screenEmissionPublicationGate.withLock { [weak self] in
             guard let self else { return .rejected }
             return await self.publishScreenInputSerially(
@@ -2006,12 +2016,20 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
         screenTransitionCoordinator?.layoutTextInputs()
     }
 
+    func screenEmissionRun(
+        for controller: ExperienceScreenViewController
+    ) -> ScreenEmissionRun? {
+        guard acceptsRuntimeCallback(from: controller) else { return nil }
+        return captureScreenEmissionRun()
+    }
+
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
-        didEmitScreenEmission input: ExperienceRuntimeScreenEmission
+        didEmitScreenEmission input: ExperienceRuntimeScreenEmission,
+        originatingRun: ScreenEmissionRun?
     ) async {
         guard acceptsRuntimeCallback(from: controller) else { return }
-        await publishScreenInput(input)
+        await publishScreenInput(input, originatingRun: originatingRun)
     }
 
     func experienceScreenViewController(

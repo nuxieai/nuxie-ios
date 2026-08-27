@@ -82,6 +82,7 @@ final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
                 }
             }
 
+            #if canImport(UIKit)
             it("admits a typed renderer batch through the production journey bridge") { @MainActor in
                 let fixture = try ExperienceReleaseTestFixture.make()
                 let storageURL = FileManager.default.temporaryDirectory
@@ -177,6 +178,7 @@ final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
                 )) ?? []
                 expect(markers.contains { $0.hasSuffix(".json") }).to(beTrue())
             }
+            #endif
         }
     }
 

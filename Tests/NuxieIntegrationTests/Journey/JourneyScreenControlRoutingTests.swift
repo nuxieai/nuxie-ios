@@ -1410,6 +1410,67 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             await writer.release()
         }
 
+        it("closes old-user renderer lanes before presentation teardown") {
+            let writer = SuspendedScreenResponseWriter()
+            let presentation = RendererDrainJoiningPresentationService()
+            presentation.defaultMockViewController = controller
+            service = mocks.makeJourneyService(
+                journeyStore: store,
+                experiencePresentation: presentation,
+                responseWriter: writer,
+                features: featureService,
+                featureInfo: featureInfo
+            )
+            let experience = signedExperience(definition: responseDefinition())
+            guard let journey = await start(experience),
+                  let scope = await service.screenControlRunScope(journeyId: journey.id) else {
+                fail("expected live signed response screen")
+                return
+            }
+            let batch = ScreenEmissionBatch(
+                journeyId: journey.id,
+                executionOwnershipEpoch: scope.executionOwnershipEpoch,
+                lifecycleGeneration: scope.lifecycleGeneration,
+                presentationEpoch: scope.presentationEpoch,
+                batchSequence: 0,
+                previousCommittedBatchSequence: nil,
+                invocationId: "identity-suspended-response",
+                source: ScreenEmissionSource(
+                    screenId: scope.screenId,
+                    actionId: "answer",
+                    componentId: nil,
+                    instanceId: nil
+                ),
+                emissions: [ScreenEmission(
+                    id: "identity-suspended-response-emission",
+                    sequence: 0,
+                    occurredAt: Date().ISO8601Format(),
+                    name: SystemEventNames.responseSet,
+                    payload: ["field": .string("answer"), "value": .string("held")]
+                )]
+            )
+            let rendererDrain = Task {
+                await service.handleRendererScreenEmissionBatch(batch)
+            }
+            presentation.joinRendererDrain(rendererDrain)
+            await writer.waitUntilWriteStarts()
+            mocks.identityService.setDistinctId("replacement-user")
+
+            await service.handleUserChange(
+                from: distinctId,
+                to: "replacement-user"
+            )
+
+            let rendererDrainResult = await rendererDrain.value
+            await writer.waitUntilCancelled()
+            let writerWasCancelled = await writer.wasCancelled()
+            let retiredScope = await service.screenControlRunScope(journeyId: journey.id)
+            expect(rendererDrainResult).to(beTrue())
+            expect(writerWasCancelled).to(beTrue())
+            expect(retiredScope).to(beNil())
+            await writer.release()
+        }
+
         it("waits for the remounted renderer before replaying an admitted screen batch") {
             let experience = signedExperience(definition: replayRecoveryDefinition())
             guard let journey = await start(experience) else {
@@ -1758,25 +1819,28 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 ))
             }
             await gate.waitUntilEntered()
-            let stale = Task { @MainActor in
-                await controller.publishScreenInput(.control(
-                    screenId: initialScope.screenId,
-                    invocation: ScreenActionInvocation(
-                        actionId: "submit",
-                        value: .string("stale"),
-                        componentId: "submit-button",
-                        instanceId: "survey-1"
-                    ),
-                    additionalDrafts: []
-                ))
-            }
-            await Task.yield()
+            let staleOriginatingRun = controller.captureScreenEmissionRun()
             await journey.update { $0.executionState.presentationEpoch &+= 1 }
             let updatedScope = await service.screenControlRunScope(journeyId: journey.id)
             let revisitedScope = try XCTUnwrap(updatedScope)
             expect(revisitedScope.screenId).to(equal(initialScope.screenId))
             expect(revisitedScope.presentationEpoch).toNot(equal(initialScope.presentationEpoch))
             await controller.configureScreenEmissionRun(revisitedScope)
+            let stale = Task { @MainActor in
+                await controller.publishScreenInput(
+                    .control(
+                        screenId: initialScope.screenId,
+                        invocation: ScreenActionInvocation(
+                            actionId: "submit",
+                            value: .string("stale"),
+                            componentId: "submit-button",
+                            instanceId: "survey-1"
+                        ),
+                        additionalDrafts: []
+                    ),
+                    originatingRun: staleOriginatingRun
+                )
+            }
             await gate.release()
             let firstDisposition = await first.value
             let staleDisposition = await stale.value

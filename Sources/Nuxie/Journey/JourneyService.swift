@@ -502,10 +502,7 @@ actor JourneyService: JourneyServiceProtocol {
     // presentation teardown waits for that delivery to settle. Close every
     // lane first so active and queued submits resolve without depending on
     // the external write completing.
-    let screenRuntimes = Array(screenControlRuntimes.values)
-    for runtime in screenRuntimes {
-      await runtime.sequenceLane.close(reason: .runMissing)
-    }
+    await removeScreenControlRuntimes(journeyIds: Set(screenControlRuntimes.keys))
 
     // Revoke runner ownership before real presentation teardown. Hidden and
     // dismissed callbacks emitted by teardown must fail closed instead of
@@ -558,6 +555,8 @@ actor JourneyService: JourneyServiceProtocol {
         .map(\.id)
     )
     let oldJourneys = await getActiveJourneys(for: oldDistinctId)
+    guard !isShutDown else { return }
+    await removeScreenControlRuntimes(journeyIds: oldCustomerJourneyIds)
     guard !isShutDown else { return }
     // Presentation owns MainActor cleanup that must settle before the old
     // customer's runners can be retired and terminal facts can be emitted.
@@ -2590,8 +2589,19 @@ actor JourneyService: JourneyServiceProtocol {
     }
   }
 
-  private func removeScreenControlRuntime(journeyId: String) {
-    screenControlRuntimes.removeValue(forKey: journeyId)
+  private func removeScreenControlRuntime(journeyId: String) async {
+    await removeScreenControlRuntimes(journeyIds: [journeyId])
+  }
+
+  private func removeScreenControlRuntimes(journeyIds: Set<String>) async {
+    // Revoke every runtime before yielding so teardown callbacks and new
+    // submissions fail closed while suspended lane workers are cancelled.
+    let runtimes = journeyIds.compactMap {
+      screenControlRuntimes.removeValue(forKey: $0)
+    }
+    for runtime in runtimes {
+      await runtime.sequenceLane.close(reason: .runMissing)
+    }
   }
 
   private func restoredScreenEvent(from record: JourneyScreenEventRecord) -> NuxieEvent? {
@@ -4806,12 +4816,12 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     timerScheduler.cancelTasks(journeyId: journey.id)
+    await removeScreenControlRuntime(journeyId: journey.id)
     if let runner = experienceRunners[journey.id] {
       await runner.retire()
       guard !isShutDown else { return false }
     }
     experienceRunners.removeValue(forKey: journey.id)
-    removeScreenControlRuntime(journeyId: journey.id)
     pendingScreenEvents = pendingScreenEvents.filter {
       $0.value.journeyId != journey.id
     }
@@ -5145,13 +5155,13 @@ actor JourneyService: JourneyServiceProtocol {
       guard ownsHostCompletion(journey, runner: completingRunner) else { return }
     }
     timerScheduler.cancelTasks(journeyId: journey.id)
+    await removeScreenControlRuntime(journeyId: journey.id)
     await completingRunner?.retire()
     guard !isShutDown else { return }
     if dismissedBy == .host {
       guard ownsHostCompletion(journey, runner: completingRunner) else { return }
     }
     experienceRunners.removeValue(forKey: journey.id)
-    removeScreenControlRuntime(journeyId: journey.id)
     pendingScreenEvents = pendingScreenEvents.filter {
       $0.value.journeyId != journey.id
     }

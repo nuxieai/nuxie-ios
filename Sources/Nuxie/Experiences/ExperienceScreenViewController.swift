@@ -103,9 +103,14 @@ enum ExperienceInteractiveStepDeliveryPlanner {
 protocol ExperienceScreenViewControllerDelegate: AnyObject {
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController)
 
+    func screenEmissionRun(
+        for controller: ExperienceScreenViewController
+    ) -> ScreenEmissionRun?
+
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
-        didEmitScreenEmission input: ExperienceRuntimeScreenEmission
+        didEmitScreenEmission input: ExperienceRuntimeScreenEmission,
+        originatingRun: ScreenEmissionRun?
     ) async
 
     func experienceScreenViewController(
@@ -654,6 +659,7 @@ final class ExperienceScreenViewController: UIViewController {
         textInputOverlayBridge.onCommitText = { [weak self] input, text in
             guard let self,
                   let draft = Self.responseSetDraft(for: input, text: text) else { return }
+            let originatingRun = self.delegate?.screenEmissionRun(for: self)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.delegate?.experienceScreenViewController(
@@ -666,7 +672,8 @@ final class ExperienceScreenViewController: UIViewController {
                             instanceId: nil
                         ),
                         drafts: [draft]
-                    )
+                    ),
+                    originatingRun: originatingRun
                 )
             }
         }
@@ -729,6 +736,7 @@ final class ExperienceScreenViewController: UIViewController {
         snapshot: ExperienceInteractiveViewModelSnapshot?
     ) async {
         guard !isShuttingDown, runtimeFailure == nil else { return }
+        let originatingRun = delegate?.screenEmissionRun(for: self)
         let items = ExperienceInteractiveStepDeliveryPlanner.items(
             effects: effects,
             includesTextInputLayout: snapshot != nil
@@ -764,7 +772,8 @@ final class ExperienceScreenViewController: UIViewController {
         if let emission {
             await delegate?.experienceScreenViewController(
                 self,
-                didEmitScreenEmission: emission
+                didEmitScreenEmission: emission,
+                originatingRun: originatingRun
             )
         }
     }
