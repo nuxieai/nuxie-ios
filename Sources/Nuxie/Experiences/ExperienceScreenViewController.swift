@@ -8,6 +8,63 @@ enum ExperienceInteractiveStepDeliveryItem: Equatable, Sendable {
     case textInputLayout
 }
 
+enum ExperienceRuntimeScreenEmission: Equatable, Sendable {
+    case control(
+        screenId: String,
+        invocation: ScreenActionInvocation,
+        additionalDrafts: [ScreenEmissionDraft]
+    )
+    case effects(source: ScreenEmissionSource, drafts: [ScreenEmissionDraft])
+}
+
+private enum ExperienceRuntimeProjectedEmission {
+    case control(screenId: String, invocation: ScreenActionInvocation)
+    case draft(ScreenEmissionDraft, source: ScreenEmissionSource)
+}
+
+struct ExperienceRuntimeScreenEmissionAssembler {
+    enum AssemblyError: Error, Equatable {
+        case multipleControls
+    }
+
+    private var control: (screenId: String, invocation: ScreenActionInvocation)?
+    private var drafts: [ScreenEmissionDraft] = []
+    private var source: ScreenEmissionSource?
+    private var hasMultipleControls = false
+
+    mutating func appendControl(
+        screenId: String,
+        invocation: ScreenActionInvocation
+    ) {
+        if control == nil {
+            control = (screenId, invocation)
+        } else {
+            hasMultipleControls = true
+        }
+    }
+
+    mutating func appendDraft(
+        _ draft: ScreenEmissionDraft,
+        source: ScreenEmissionSource
+    ) {
+        drafts.append(draft)
+        self.source = self.source ?? source
+    }
+
+    func assembled() -> Result<ExperienceRuntimeScreenEmission?, AssemblyError> {
+        guard !hasMultipleControls else { return .failure(.multipleControls) }
+        if let control {
+            return .success(.control(
+                screenId: control.screenId,
+                invocation: control.invocation,
+                additionalDrafts: drafts
+            ))
+        }
+        guard !drafts.isEmpty, let source else { return .success(nil) }
+        return .success(.effects(source: source, drafts: drafts))
+    }
+}
+
 enum ExperienceInteractiveStepDeliveryPlanner {
     static func items(
         effects: [ExperienceInteractiveEffect],
@@ -33,7 +90,7 @@ enum ExperienceInteractiveStepDeliveryPlanner {
 
     private static func isHostPhase(_ effect: ExperienceInteractiveEffectKind) -> Bool {
         switch effect {
-        case .reportedEvent, .viewModelChange:
+        case .controlAction, .reportedEvent, .viewModelChange:
             false
         case .responseSet, .responseUnset, .journeyEvent, .hostCommand,
              .rejectedHostCommand:
@@ -46,10 +103,15 @@ enum ExperienceInteractiveStepDeliveryPlanner {
 protocol ExperienceScreenViewControllerDelegate: AnyObject {
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController)
 
+    func screenEmissionRun(
+        for controller: ExperienceScreenViewController
+    ) -> ScreenEmissionRun?
+
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
-        didEmitEvent event: ExperienceRendererEvent
-    )
+        didEmitScreenEmission input: ExperienceRuntimeScreenEmission,
+        originatingRun: ScreenEmissionRun?
+    ) async
 
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
@@ -537,18 +599,12 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
-    static func responseSetEvent(
+    static func responseSetDraft(
         for input: NativeExperienceTextInput,
         text: String
-    ) -> ExperienceRendererEvent? {
+    ) -> ScreenEmissionDraft? {
         guard let fieldKey = input.responseFieldKey, !fieldKey.isEmpty else { return nil }
-        return ExperienceRendererEvent(
-            name: SystemEventNames.responseSet,
-            properties: ["field": fieldKey, "value": text],
-            screenId: input.screenId,
-            componentId: input.inputId,
-            instanceId: nil
-        )
+        return .responseSet(field: fieldKey, value: .string(text))
     }
 
     private func enqueueStateCommand(
@@ -602,8 +658,24 @@ final class ExperienceScreenViewController: UIViewController {
     private func configureTextInputCallbacks() {
         textInputOverlayBridge.onCommitText = { [weak self] input, text in
             guard let self,
-                  let event = Self.responseSetEvent(for: input, text: text) else { return }
-            self.delegate?.experienceScreenViewController(self, didEmitEvent: event)
+                  let draft = Self.responseSetDraft(for: input, text: text) else { return }
+            let originatingRun = self.delegate?.screenEmissionRun(for: self)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.delegate?.experienceScreenViewController(
+                    self,
+                    didEmitScreenEmission: .effects(
+                        source: ScreenEmissionSource(
+                            screenId: input.screenId,
+                            actionId: "text_input:\(input.inputId)",
+                            componentId: input.inputId,
+                            instanceId: nil
+                        ),
+                        drafts: [draft]
+                    ),
+                    originatingRun: originatingRun
+                )
+            }
         }
     }
 
@@ -664,25 +736,75 @@ final class ExperienceScreenViewController: UIViewController {
         snapshot: ExperienceInteractiveViewModelSnapshot?
     ) async {
         guard !isShuttingDown, runtimeFailure == nil else { return }
+        let originatingRun = delegate?.screenEmissionRun(for: self)
         let items = ExperienceInteractiveStepDeliveryPlanner.items(
             effects: effects,
             includesTextInputLayout: snapshot != nil
         )
+        var assembler = ExperienceRuntimeScreenEmissionAssembler()
         for item in items {
             guard !isShuttingDown, runtimeFailure == nil else { return }
             switch item {
             case .effect(let effect):
-                await route(effect)
+                guard let projected = await route(effect) else { continue }
+                switch projected {
+                case .control(let screenId, let invocation):
+                    assembler.appendControl(screenId: screenId, invocation: invocation)
+                case .draft(let draft, let draftSource):
+                    assembler.appendDraft(draft, source: draftSource)
+                }
             case .textInputLayout:
                 if let snapshot {
                     textInputOverlayBridge.update(snapshot: snapshot)
                 }
             }
         }
+        let emission: ExperienceRuntimeScreenEmission?
+        switch assembler.assembled() {
+        case .failure:
+            LogWarning(
+                "ExperienceScreenViewController: rejected native transaction with multiple controls"
+            )
+            return
+        case .success(let assembled):
+            emission = assembled
+        }
+        if let emission {
+            await delegate?.experienceScreenViewController(
+                self,
+                didEmitScreenEmission: emission,
+                originatingRun: originatingRun
+            )
+        }
     }
 
-    private func route(_ effect: ExperienceInteractiveEffect) async {
+    private func route(
+        _ effect: ExperienceInteractiveEffect
+    ) async -> ExperienceRuntimeProjectedEmission? {
         switch effect.kind {
+        case .controlAction(let actionId, let event):
+            let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
+                ($0.key, Self.rendererValue($0.value))
+            })
+            let eventScreenID = Self.stringProperty(
+                ["screenId", "screen_id"],
+                in: properties
+            ) ?? screenId
+            return .control(
+                screenId: eventScreenID,
+                invocation: ScreenActionInvocation(
+                    actionId: actionId,
+                    value: properties["value"].map(ScreenEmissionValue.init(rendererValue:)),
+                    componentId: Self.stringProperty(
+                        ["componentId", "component_id", "elementId", "element_id"],
+                        in: properties
+                    ),
+                    instanceId: Self.stringProperty(
+                        ["instanceId", "instance_id"],
+                        in: properties
+                    )
+                )
+            )
         case .reportedEvent(let event):
             resolveExitWaiters(eventName: event.name)
             let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
@@ -707,19 +829,24 @@ final class ExperienceScreenViewController: UIViewController {
                     )
                 )
             } else if !event.name.isEmpty {
-                emitEvent(
-                    name: event.name,
-                    properties: properties,
-                    screenID: eventScreenID,
-                    componentID: Self.stringProperty(
-                        ["componentId", "component_id", "elementId", "element_id"],
-                        in: properties
-                    ),
-                    instanceID: instanceID
+                return .draft(
+                    .event(name: event.name, payload: properties.mapValues(
+                        ScreenEmissionValue.init(rendererValue:)
+                    )),
+                    source: ScreenEmissionSource(
+                        screenId: eventScreenID,
+                        actionId: "runtime:\(effect.correlationID)",
+                        componentId: Self.stringProperty(
+                            ["componentId", "component_id", "elementId", "element_id"],
+                            in: properties
+                        ),
+                        instanceId: instanceID
+                    )
                 )
             }
+            return nil
         case .viewModelChange(let change):
-            guard change.origin == .runtime, let interactiveScreen else { return }
+            guard change.origin == .runtime, let interactiveScreen else { return nil }
             do {
                 let resolved = try await interactiveScreen.resolveViewModelChange(change)
                 delegate?.experienceScreenViewController(
@@ -739,53 +866,58 @@ final class ExperienceScreenViewController: UIViewController {
             } catch {
                 handleTerminalFailure(error)
             }
+            return nil
         case .responseSet(let field, let value):
-            emitEvent(
-                name: SystemEventNames.responseSet,
-                properties: ["field": field, "value": Self.rendererValue(value)]
+            return .draft(
+                .responseSet(
+                    field: field,
+                    value: ScreenEmissionValue(rendererValue: Self.rendererValue(value))
+                ),
+                source: runtimeEmissionSource(for: effect)
             )
         case .responseUnset(let field):
-            emitEvent(
-                name: SystemEventNames.responseUnset,
-                properties: ["field": field]
+            return .draft(
+                .responseUnset(field: field),
+                source: runtimeEmissionSource(for: effect)
             )
         case .journeyEvent(let name, let payload),
              .hostCommand(let name, let payload):
             let properties = Self.rendererProperties(payload)
-            emitEvent(
-                name: name,
-                properties: properties,
-                screenID: Self.stringProperty(["screenId", "screen_id"], in: properties),
-                componentID: Self.stringProperty(
-                    ["componentId", "component_id", "elementId", "element_id"],
-                    in: properties
+            return .draft(
+                .event(
+                    name: name,
+                    payload: properties.mapValues(ScreenEmissionValue.init(rendererValue:))
                 ),
-                instanceID: Self.stringProperty(["instanceId", "instance_id"], in: properties)
+                source: ScreenEmissionSource(
+                    screenId: Self.stringProperty(
+                        ["screenId", "screen_id"], in: properties
+                    ) ?? screenId,
+                    actionId: "runtime:\(effect.correlationID)",
+                    componentId: Self.stringProperty(
+                        ["componentId", "component_id", "elementId", "element_id"],
+                        in: properties
+                    ),
+                    instanceId: Self.stringProperty(
+                        ["instanceId", "instance_id"], in: properties
+                    )
+                )
             )
         case .rejectedHostCommand(let name, let reason):
             LogWarning(
                 "ExperienceScreenViewController: rejected host command '\(name)' on \(screenId): \(reason)"
             )
+            return nil
         }
     }
 
-    private func emitEvent(
-        name: String,
-        properties: [String: Any],
-        screenID: String? = nil,
-        componentID: String? = nil,
-        instanceID: String? = nil
-    ) {
-        guard !name.isEmpty else { return }
-        delegate?.experienceScreenViewController(
-            self,
-            didEmitEvent: ExperienceRendererEvent(
-                name: name,
-                properties: properties,
-                screenId: screenID ?? screenId,
-                componentId: componentID,
-                instanceId: instanceID
-            )
+    private func runtimeEmissionSource(
+        for effect: ExperienceInteractiveEffect
+    ) -> ScreenEmissionSource {
+        ScreenEmissionSource(
+            screenId: screenId,
+            actionId: "runtime:\(effect.correlationID)",
+            componentId: nil,
+            instanceId: nil
         )
     }
 

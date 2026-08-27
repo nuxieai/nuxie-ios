@@ -54,10 +54,13 @@ struct ScreenEmissionRun: Codable, Equatable, Sendable {
 }
 
 struct ScreenControlRunScope: Equatable, Sendable {
+    let journeyId: String
     let screenId: String
     let executionOwnershipEpoch: UInt64
     let lifecycleGeneration: UInt64
     let presentationEpoch: UInt64
+    let nextBatchSequence: UInt64
+    let nextEmissionSequence: UInt64
 }
 
 struct ScreenActionInvocation: Codable, Equatable, Sendable {
@@ -194,15 +197,29 @@ final class ScreenEmissionDispatcher: Sendable {
         run: ScreenEmissionRun,
         screenId: String,
         definition: ScreenControlActionDefinition,
-        invocation: ScreenActionInvocation
+        invocation: ScreenActionInvocation,
+        additionalDrafts: [ScreenEmissionDraft] = []
     ) async -> Result<ScreenEmissionBatch, ScreenEmissionDispatchError> {
         await gate.withLock { [state] in
             await state.dispatch(
                 run: run,
                 screenId: screenId,
                 definition: definition,
-                invocation: invocation
+                invocation: invocation,
+                additionalDrafts: additionalDrafts
             )
+        }
+    }
+
+    /// Publishes already-typed runtime effects through the same atomic identity
+    /// and sequencing lane as declarative and scripted control actions.
+    func dispatch(
+        run: ScreenEmissionRun,
+        source: ScreenEmissionSource,
+        drafts: [ScreenEmissionDraft]
+    ) async -> Result<ScreenEmissionBatch, ScreenEmissionDispatchError> {
+        await gate.withLock { [state] in
+            await state.dispatch(run: run, source: source, drafts: drafts)
         }
     }
 
@@ -260,7 +277,11 @@ private actor ScreenEmissionDispatcherState {
             nextEmissionSequence
         )
         if nextBatchSequence > 0 {
-            lastCommittedBatchSequence[journeyId] = nextBatchSequence - 1
+            let durablePredecessor = nextBatchSequence - 1
+            lastCommittedBatchSequence[journeyId] = max(
+                lastCommittedBatchSequence[journeyId] ?? durablePredecessor,
+                durablePredecessor
+            )
         }
     }
 
@@ -268,12 +289,9 @@ private actor ScreenEmissionDispatcherState {
         run: ScreenEmissionRun,
         screenId: String,
         definition: ScreenControlActionDefinition,
-        invocation: ScreenActionInvocation
+        invocation: ScreenActionInvocation,
+        additionalDrafts: [ScreenEmissionDraft]
     ) async -> Result<ScreenEmissionBatch, ScreenEmissionDispatchError> {
-        let batchSequence = nextBatchSequence[run.journeyId, default: 0]
-        nextBatchSequence[run.journeyId] = batchSequence + 1
-        let invocationId = createId()
-
         guard definition.actionId == invocation.actionId else {
             return .failure(.actionIdentityMismatch(
                 expected: definition.actionId,
@@ -281,18 +299,26 @@ private actor ScreenEmissionDispatcherState {
             ))
         }
 
+        // Acceptance consumes the batch position before native/script work.
+        // A failed transaction publishes nothing, but deliberately leaves a
+        // gap so a later invocation can never reuse its accepted order.
+        let batchSequence = nextBatchSequence[run.journeyId, default: 0]
+        nextBatchSequence[run.journeyId] = batchSequence + 1
+
         let drafts: [ScreenEmissionDraft]
         do {
+            let actionDrafts: [ScreenEmissionDraft]
             switch definition.binding {
             case .declarative(let actions):
-                drafts = try executeDeclarative(actions, invocation: invocation)
+                actionDrafts = try executeDeclarative(actions, invocation: invocation)
             case .script:
-                drafts = try await executeScriptAction(ScreenScriptActionInput(
+                actionDrafts = try await executeScriptAction(ScreenScriptActionInput(
                     screenId: screenId,
                     actionId: definition.actionId,
                     invocation: invocation
                 ))
             }
+            drafts = actionDrafts + additionalDrafts
             try validate(drafts)
         } catch let error as ScreenEmissionDispatchError {
             return .failure(error)
@@ -300,6 +326,53 @@ private actor ScreenEmissionDispatcherState {
             return .failure(.scriptExecutionFailed(message: String(describing: error)))
         }
 
+        let invocationId = createId()
+
+        return materializeBatch(
+            run: run,
+            source: ScreenEmissionSource(
+                screenId: screenId,
+                actionId: definition.actionId,
+                componentId: invocation.componentId,
+                instanceId: invocation.instanceId
+            ),
+            drafts: drafts,
+            batchSequence: batchSequence,
+            invocationId: invocationId
+        )
+    }
+
+    func dispatch(
+        run: ScreenEmissionRun,
+        source: ScreenEmissionSource,
+        drafts: [ScreenEmissionDraft]
+    ) -> Result<ScreenEmissionBatch, ScreenEmissionDispatchError> {
+        let batchSequence = nextBatchSequence[run.journeyId, default: 0]
+        nextBatchSequence[run.journeyId] = batchSequence + 1
+        do {
+            try validate(drafts)
+        } catch let error as ScreenEmissionDispatchError {
+            return .failure(error)
+        } catch {
+            return .failure(.scriptExecutionFailed(message: String(describing: error)))
+        }
+        let invocationId = createId()
+        return materializeBatch(
+            run: run,
+            source: source,
+            drafts: drafts,
+            batchSequence: batchSequence,
+            invocationId: invocationId
+        )
+    }
+
+    private func materializeBatch(
+        run: ScreenEmissionRun,
+        source: ScreenEmissionSource,
+        drafts: [ScreenEmissionDraft],
+        batchSequence: UInt64,
+        invocationId: String
+    ) -> Result<ScreenEmissionBatch, ScreenEmissionDispatchError> {
         let firstSequence = nextEmissionSequence[run.journeyId, default: 0]
         let emissions = drafts.enumerated().map { offset, draft in
             materialize(
@@ -315,12 +388,7 @@ private actor ScreenEmissionDispatcherState {
             batchSequence: batchSequence,
             previousCommittedBatchSequence: lastCommittedBatchSequence[run.journeyId],
             invocationId: invocationId,
-            source: ScreenEmissionSource(
-                screenId: screenId,
-                actionId: definition.actionId,
-                componentId: invocation.componentId,
-                instanceId: invocation.instanceId
-            ),
+            source: source,
             emissions: emissions
         )
         nextEmissionSequence[run.journeyId] = firstSequence + UInt64(emissions.count)

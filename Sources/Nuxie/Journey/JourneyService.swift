@@ -152,8 +152,7 @@ actor JourneyService: JourneyServiceProtocol {
 
   private struct ScreenControlRuntime: Sendable {
     let definition: ExperienceDefinition
-    let dispatcher: ScreenEmissionDispatcher
-    let router: ScreenEmissionRouter
+    let sequenceLane: JourneyScreenEmissionSequenceLane
     let operationGate: ExperienceInteractiveOperationGate
   }
 
@@ -205,7 +204,8 @@ actor JourneyService: JourneyServiceProtocol {
   private var detachedPresentationOwnerDistinctId: String?
   private let timerScheduler: JourneyTimerScheduler
   private var completingJourneyIds: Set<String> = []
-  private var journeyCompletionWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+  private var journeyCompletionWaiters: [String: [CheckedContinuation<Bool, Never>]] = [:]
+  private var journeyCompletionResults = JourneyCompletionResultCache(limit: 64)
   /// A failed terminal write may leave an already-admitted host dismissal
   /// retryable after identity has changed. Authorization is bound to the exact
   /// retained Journey object so a replacement run can never inherit it.
@@ -498,16 +498,25 @@ actor JourneyService: JourneyServiceProtocol {
     responseTasks.forEach { $0.cancel() }
     for task in responseTasks { await task.value }
 
-    await shutdownPresentedExperience()
+    // A renderer delivery can be waiting for a response write while
+    // presentation teardown waits for that delivery to settle. Close every
+    // lane first so active and queued submits resolve without depending on
+    // the external write completing.
+    await removeScreenControlRuntimes(journeyIds: Set(screenControlRuntimes.keys))
 
+    // Revoke runner ownership before real presentation teardown. Hidden and
+    // dismissed callbacks emitted by teardown must fail closed instead of
+    // queuing behind an external response write that ignored cancellation.
     let runners = Array(experienceRunners.values)
     experienceRunners.removeAll()
     for runner in runners { await runner.retire() }
 
+    await shutdownPresentedExperience()
+
     await timerScheduler.cancelAll()
     let completionWaiters = journeyCompletionWaiters.values.flatMap { $0 }
     journeyCompletionWaiters.removeAll()
-    completionWaiters.forEach { $0.resume() }
+    completionWaiters.forEach { $0.resume(returning: false) }
     scopedAuthoredResponseTasks.removeAll()
     scopedAuthoredResponseOwners.removeAll()
     retiringResponseDistinctIds.removeAll()
@@ -520,6 +529,7 @@ actor JourneyService: JourneyServiceProtocol {
     runtimeDelegates.removeAll()
     presentationTraceStates.removeAll()
     completingJourneyIds.removeAll()
+    journeyCompletionResults.removeAll()
     claimingJourneyIds.removeAll()
     restoredPresentationRetriesInProgress.removeAll()
     capturedResultsAwaitingReceipt.removeAll()
@@ -545,6 +555,8 @@ actor JourneyService: JourneyServiceProtocol {
         .map(\.id)
     )
     let oldJourneys = await getActiveJourneys(for: oldDistinctId)
+    guard !isShutDown else { return }
+    await removeScreenControlRuntimes(journeyIds: oldCustomerJourneyIds)
     guard !isShutDown else { return }
     // Presentation owns MainActor cleanup that must settle before the old
     // customer's runners can be retired and terminal facts can be emitted.
@@ -651,6 +663,7 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     guard !isShutDown else { return nil }
+    journeyCompletionResults.removeValue(forKey: journey.id)
     inMemoryJourneysById[journey.id] = journey
 
     let enrollmentState = await journey.snapshot()
@@ -1038,6 +1051,7 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func restorePersistedJourney(_ journey: Journey, state: JourneySnapshot) {
     guard !isShutDown else { return }
+    journeyCompletionResults.removeValue(forKey: journey.id)
     inMemoryJourneysById[journey.id] = journey
     if let pending = state.executionState.pendingAction,
        let resumeAt = pending.resumeAt {
@@ -1456,260 +1470,647 @@ actor JourneyService: JourneyServiceProtocol {
     persistJourney(updatedState)
   }
 
-  func handleRendererEvent(
-    journeyId: String,
-    event rendererEvent: ExperienceRendererEvent
-  ) async {
-    guard !rendererEvent.name.isEmpty else { return }
-    guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId],
-          await ownsExecutableJourney(journey, runner: runner) else { return }
+  /// Accepts the sole renderer output contract. The active screen and every
+  /// run fence are checked before the batch is made durable or any emission is
+  /// prepared, routed, persisted, or tracked.
+  func handleRendererScreenEmissionBatch(_ batch: ScreenEmissionBatch) async -> Bool {
+    guard let runtime = screenControlRuntimes[batch.journeyId] else { return false }
+    let admitted: JourneyScreenBatchRecovery? = await runtime.operationGate.withLock { [weak self] in
+      guard let self else { return nil }
+      let recovery = await self.recoverScreenBatch(batch)
+      if recovery.result == nil {
+        guard await self.persistAdmittedScreenBatch(batch) else { return nil }
+      }
+      return recovery
+    }
+    guard let recovery = admitted else { return false }
+    let result = await runtime.sequenceLane.submit(
+      batch,
+      durableLastProcessedSequence: recovery.lastProcessedSequence,
+      durableResult: recovery.result,
+      process: { [weak self] in
+        guard let self else {
+          return Self.rejectedScreenBatch(batch, reason: .runMissing)
+        }
+        return await runtime.operationGate.withLock {
+          let result = await self.drainScreenEmissionBatch(batch)
+          await self.recordScreenBatch(
+            journeyId: batch.journeyId,
+            sequence: batch.batchSequence,
+            invocationId: batch.invocationId,
+            result: result
+          )
+          return result
+        }
+      },
+      reject: {
+        Self.rejectedScreenBatch(batch, reason: .batchSequenceOutOfOrder)
+      }
+    )
+    if result.status != .drained {
+      LogWarning(
+        "JourneyService: screen emission batch \(batch.invocationId) ended with \(result.status)"
+      )
+    }
+    // Persistence is the publication boundary. Once crossed, the renderer
+    // must not reclaim or reuse this batch sequence, even if live fences
+    // invalidate it before the first effect drains.
+    return true
+  }
 
-    let eventProperties = await eventLog.prepareTriggerProperties(
-      rendererEvent.properties
-    )
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-    let event = NuxieEvent(
-      name: rendererEvent.name,
-      distinctId: journey.distinctId,
-      properties: eventProperties
-    )
-    let state = await journey.snapshot()
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-    let outcome = await runner.dispatchScreenEvent(
-      event,
-      screenId: rendererEvent.screenId ?? state.executionState.currentScreenId,
-      componentId: rendererEvent.componentId,
-      instanceId: rendererEvent.instanceId
-    )
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-    await handleOutcome(outcome, journey: journey)
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-    let updatedState = await journey.snapshot()
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-    persistJourney(updatedState)
+  /// Admits non-renderer Journey ingress through the same beforeSend,
+  /// durable-customer-event, route, and finish authority as screen emissions.
+  func handleJourneyIngressEvent(
+    _ event: JourneyIngressEvent
+  ) async -> Result<ScreenCustomerEventAdmission, JourneyIngressRejection> {
+    guard Self.isValidJourneyIngressName(event) else {
+      return .failure(.eventNameInvalid)
+    }
+    guard let scope = Self.journeyIngressRunScope(event.source) else {
+      return await admitGlobalJourneyIngress(event)
+    }
+    guard let runtime = screenControlRuntimes[scope.journeyId] else {
+      return .failure(.runMissing)
+    }
+    return await runtime.operationGate.withLock { [weak self] in
+      guard let self else { return .failure(.runMissing) }
+      guard let run = await self.screenEmissionRunState(journeyId: scope.journeyId) else {
+        return .failure(.runMissing)
+      }
+      guard run.journeyId == scope.journeyId,
+            run.experienceId == scope.experienceId,
+            run.customerId == event.customerId else {
+        return .failure(.runIdentityMismatch)
+      }
+      guard run.executionOwnershipEpoch == scope.executionOwnershipEpoch else {
+        return .failure(.ownershipStale)
+      }
+      guard run.lifecycleGeneration == scope.lifecycleGeneration else {
+        return .failure(.lifecycleStale)
+      }
+      guard !run.terminal else { return .failure(.runTerminal) }
+      if case .some(.effectOutcome(_, _, _)) = Self.journeyIngressRoute(event) {
+        // Effect outcomes require an exact durable continuation. That resolver
+        // remains deliberately closed until the runner exposes one authority.
+        return .failure(.effectOutcomeInvalid)
+      }
+      return await self.admitScopedJourneyIngress(event, run: run)
+    }
+  }
 
-    let routedEvent: NuxieEvent
-    let response: EventResponse?
+  private func admitScopedJourneyIngress(
+    _ event: JourneyIngressEvent,
+    run: JourneyScreenEmissionRunState
+  ) async -> Result<ScreenCustomerEventAdmission, JourneyIngressRejection> {
+    let customerEvent = ScreenCustomerEvent(
+      id: event.id,
+      customerId: event.customerId,
+      occurredAt: event.occurredAt,
+      name: event.name,
+      payload: event.payload,
+      source: .ingress(event.source),
+      causality: run.causality
+    )
     do {
-      let tracked = try await eventLog.trackForTrigger(
-        rendererEvent.name,
-        properties: rendererEvent.properties,
-        persistToHistory: true,
-        distinctIdOverride: journey.distinctId,
-        applyBeforeSend: false
+      let admission = try await acceptScreenCustomerEvent(
+        ScreenCustomerEventAcceptance(
+          event: customerEvent,
+          localRoute: Self.journeyIngressRoute(event),
+          excludeExperienceId: run.experienceId
+        )
       )
-      routedEvent = tracked.0
-      response = tracked.1
+      if case .ready(let route) = admission.localRoute {
+        await runScreenLocalRoute(route, event: customerEvent)
+      }
+      await finishScreenSourceEvent(customerEvent)
+      return .success(admission)
     } catch {
-      LogWarning("JourneyService: Failed to track renderer event \(rendererEvent.name): \(error)")
-      routedEvent = event
-      response = nil
-    }
-
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-
-    let experiences = await getAllExperiences(for: routedEvent.distinctId) ?? []
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-    let sourceExperience = sourceScopedGoalExperience(for: journey, experiences: experiences)
-    let transientEvent = makeStoredEvent(from: routedEvent)
-    await processActiveJourneys(
-      for: routedEvent,
-      experiences: experiences,
-      transientEventsByJourneyId: [journeyId: [transientEvent]],
-      restrictedToJourneyIds: [journeyId],
-      skipEventTriggerForJourneyIds: [journeyId]
-    )
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-
-    await routeRendererEventOutsideSourceJourney(
-      routedEvent,
-      sourceJourneyId: journeyId,
-      excludedExperienceId: journey.experienceId,
-      experiences: experiences
-    )
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-    await handleScopedGatePlan(
-      response?.gatePlan(),
-      sourceJourney: journey,
-      sourceExperience: sourceExperience,
-      sourceDistinctId: routedEvent.distinctId
-    )
-  }
-
-  func handleRendererControlAction(
-    journeyId: String,
-    screenId: String?,
-    invocation: ScreenActionInvocation
-  ) async {
-    guard let scope = await screenControlRunScope(journeyId: journeyId),
-          screenId == scope.screenId else { return }
-    await handleRendererControlAction(
-      journeyId: journeyId,
-      scope: scope,
-      invocation: invocation
-    )
-  }
-
-  func handleRendererControlAction(
-    journeyId: String,
-    scope: ScreenControlRunScope?,
-    invocation: ScreenActionInvocation
-  ) async {
-    guard let runtime = screenControlRuntimes[journeyId] else {
-      LogWarning(
-        "JourneyService: rejected screen action \(invocation.actionId); no signed Journey canonical runtime for \(journeyId)"
-      )
-      return
-    }
-    await runtime.operationGate.withLock { [self] in
-      await dispatchRendererControlAction(
-        journeyId: journeyId,
-        scope: scope,
-        invocation: invocation,
-        runtime: runtime
-      )
+      return .failure(.customerEventAcceptanceFailed)
     }
   }
 
-  private func dispatchRendererControlAction(
-    journeyId: String,
-    scope: ScreenControlRunScope?,
-    invocation: ScreenActionInvocation,
-    runtime: ScreenControlRuntime
-  ) async {
-    guard let journey = inMemoryJourneysById[journeyId],
-          let runner = experienceRunners[journeyId],
-          await ownsExecutableJourney(journey, runner: runner) else { return }
-    let state = await journey.snapshot()
-    guard await ownsExecutableJourney(journey, runner: runner),
-          let scope,
-          state.status.isLive, !state.isGhost,
-          let activeScreenId = state.executionState.currentScreenId,
-          !activeScreenId.isEmpty,
-          scope.screenId == activeScreenId,
-          scope.executionOwnershipEpoch == UInt64(max(state.epoch, 0)),
-          scope.lifecycleGeneration == state.executionState.lifecycleGeneration,
-          scope.presentationEpoch == state.executionState.presentationEpoch else {
-      LogWarning(
-        "JourneyService: rejected screen action \(invocation.actionId) from an inactive screen"
-      )
-      return
-    }
-    let resolvedScreenId = activeScreenId
-    guard let action = runtime.definition.control(
-      screenId: resolvedScreenId,
-      actionId: invocation.actionId
-    ) else {
-      LogWarning(
-        "JourneyService: rejected unknown screen action \(invocation.actionId) on \(resolvedScreenId)"
-      )
-      return
-    }
-
-    let result = await runtime.dispatcher.dispatch(
-      run: ScreenEmissionRun(
-        journeyId: journeyId,
-        executionOwnershipEpoch: scope.executionOwnershipEpoch,
-        lifecycleGeneration: scope.lifecycleGeneration,
-        presentationEpoch: scope.presentationEpoch
-      ),
-      screenId: resolvedScreenId,
-      definition: action,
-      invocation: invocation
+  private func admitGlobalJourneyIngress(
+    _ event: JourneyIngressEvent
+  ) async -> Result<ScreenCustomerEventAdmission, JourneyIngressRejection> {
+    let properties = await eventLog.prepareTriggerProperties(
+      event.payload.mapValues(\.foundationValue)
     )
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-    switch result {
-    case .failure(let error):
-      LogWarning(
-        "JourneyService: screen action \(invocation.actionId) failed on \(resolvedScreenId): \(error)"
-      )
-    case .success(let batch):
-      guard await persistPendingScreenBatch(batch, for: journey) else {
-        let rolledBack = await runtime.dispatcher.rollbackUnpublishedBatch(batch)
-        LogWarning(
-          """
-          JourneyService: failed to persist screen action batch \(batch.invocationId); \
-          dispatcher rollback=\(rolledBack)
-          """
-        )
-        return
-      }
-      guard await ownsExecutableJourney(journey, runner: runner) else { return }
-      let drain = await runtime.router.drain(batch)
-      guard await ownsExecutableJourney(journey, runner: runner) else { return }
-      if drain.status != .drained {
-        LogWarning(
-          "JourneyService: screen action \(invocation.actionId) drain ended with \(drain.status)"
-        )
-      }
+    let exact = NuxieEvent(
+      id: event.id,
+      name: event.name,
+      distinctId: event.customerId,
+      properties: properties,
+      timestamp: parseExecutionDate(event.occurredAt) ?? dateProvider.now()
+    )
+    guard let prepared = await eventLog.applyBeforeSend(to: exact) else {
+      return .success(ScreenCustomerEventAdmission(
+        disposition: .accepted,
+        localRoute: .none
+      ))
     }
-  }
-
-  private func makeScreenEmissionRouter() -> ScreenEmissionRouter {
-    ScreenEmissionRouter(ports: ScreenEmissionRouterPorts(
-      createCausalityId: { UUID.v7().uuidString },
-      readRun: { [weak self] journeyId in
-        await self?.screenEventRouterRun(journeyId: journeyId)
-      },
-      applyResponse: { [weak self] run, source, emission in
-        guard let self else { return .rejected(message: "journey service unavailable") }
-        return await self.applyScreenResponse(run: run, source: source, emission: emission)
-      },
-      acceptCustomerEvent: { [weak self] acceptance in
-        guard let self else { throw EventRoutingError.eventRoutingFailed }
-        return try await self.acceptScreenCustomerEvent(acceptance)
-      },
-      recoverBatch: { [weak self] batch in
-        await self?.recoverScreenBatch(batch) ?? ScreenBatchRecovery(
-          lastProcessedSequence: nil,
-          result: nil
-        )
-      },
-      recordBatchResult: { [weak self] journeyId, sequence, invocationId, result in
-        await self?.recordScreenBatch(
-          journeyId: journeyId,
-          sequence: sequence,
-          invocationId: invocationId,
-          result: result
-        )
-      },
-      resolveEffectOutcomeParent: { _, _, _ in nil },
-      runRouteToStableBoundary: { [weak self] route, event, _ in
-        await self?.runScreenLocalRoute(route, event: event)
-      },
-      finishSourceEvent: { [weak self] event, _ in
-        await self?.finishScreenSourceEvent(event)
-      },
-      recordDiagnostic: { diagnostic in
-        LogWarning(
-          "JourneyService: screen emission \(diagnostic.emissionId) rejected: \(diagnostic.message)"
-        )
-      },
-      recordSkippedTail: { tail in
-        LogWarning(
-          "JourneyService: skipped \(tail.emissionIds.count) screen emissions for \(tail.journeyId): \(tail.reason)"
-        )
-      }
+    let stable = NuxieEvent(
+      id: event.id,
+      name: prepared.name,
+      forwardingName: prepared.forwardingName,
+      distinctId: prepared.distinctId,
+      properties: prepared.properties,
+      timestamp: prepared.timestamp
+    )
+    let commit = await eventLog.commitPreparedTriggerEvent(stable)
+    _ = await commit.response.value
+    return .success(ScreenCustomerEventAdmission(
+      disposition: .accepted,
+      localRoute: .none
     ))
   }
 
-  private func screenEventRouterRun(journeyId: String) async -> ScreenEventRouterRun? {
+  private func persistAdmittedScreenBatch(_ batch: ScreenEmissionBatch) async -> Bool {
+    guard screenEmissionGateFailure(
+      batch,
+      run: await screenEmissionRunState(journeyId: batch.journeyId)
+    ) == nil,
+    let journey = inMemoryJourneysById[batch.journeyId] else { return false }
+    let state = await journey.snapshot()
+    guard isStructurallyValidScreenBatch(
+      batch,
+      routing: state.executionState.screenRouting,
+      responseSessionReceiptIds: Set(state.responseSessionReceipts.keys)
+    ) else { return false }
+    return await persistPendingScreenBatch(batch, for: journey)
+  }
+
+  private func isStructurallyValidScreenBatch(
+    _ batch: ScreenEmissionBatch,
+    routing: JourneyScreenRoutingState,
+    responseSessionReceiptIds: Set<String>
+  ) -> Bool {
+    let key = String(batch.batchSequence)
+    if let receipt = routing.batchReceipts[key] {
+      return receipt.invocationId == batch.invocationId
+    }
+    if let pending = routing.pendingBatches[key] {
+      return pending == batch
+    }
+    let latestPending = routing.pendingBatches.values.map(\.batchSequence).max()
+    let latestCommitted = [routing.lastProcessedBatchSequence, latestPending]
+      .compactMap { $0 }
+      .max()
+    guard batch.previousCommittedBatchSequence == latestCommitted else { return false }
+    if let latestCommitted, batch.batchSequence <= latestCommitted { return false }
+    guard Set(batch.emissions.map(\.id)).count == batch.emissions.count else { return false }
+    if let first = batch.emissions.first {
+      guard first.sequence == routing.nextEmissionSequence else { return false }
+    }
+    let durableEventIds = Set(routing.recentEventIds)
+      .union(routing.eventRecords.keys)
+      .union(routing.pendingBatches.values.flatMap { $0.emissions.map(\.id) })
+      .union(routing.batchReceipts.values.flatMap {
+        $0.result.acceptedEmissionIds + $0.result.skippedEmissionIds
+      })
+      .union(responseSessionReceiptIds)
+    guard durableEventIds.isDisjoint(with: batch.emissions.map(\.id)) else { return false }
+    for (offset, emission) in batch.emissions.enumerated() where offset > 0 {
+      guard emission.sequence == batch.emissions[offset - 1].sequence + 1 else {
+        return false
+      }
+    }
+    return true
+  }
+
+  private func drainScreenEmissionBatch(
+    _ batch: ScreenEmissionBatch
+  ) async -> JourneyScreenEmissionDrainResult {
+    var acceptedIds: [String] = []
+    if let failure = screenEmissionGateFailure(
+      batch,
+      run: await screenEmissionRunState(journeyId: batch.journeyId)
+    ) {
+      return rejectedScreenBatch(batch, from: 0, reason: failure)
+    }
+
+    for (index, emission) in batch.emissions.enumerated() {
+      guard let run = await screenEmissionRunState(journeyId: batch.journeyId) else {
+        return invalidatedScreenBatch(
+          batch,
+          from: index,
+          acceptedIds: acceptedIds,
+          reason: .runMissing
+        )
+      }
+      if let failure = screenEmissionGateFailure(batch, run: run) {
+        return invalidatedScreenBatch(
+          batch,
+          from: index,
+          acceptedIds: acceptedIds,
+          reason: failure
+        )
+      }
+
+      if emission.name == SystemEventNames.responseSet
+        || emission.name == SystemEventNames.responseUnset {
+        switch await applyScreenResponse(
+          run: run,
+          batch: batch,
+          source: batch.source,
+          emission: emission
+        ) {
+        case .accepted:
+          acceptedIds.append(emission.id)
+          if let failure = screenEmissionGateFailure(
+            batch,
+            run: await screenEmissionRunState(journeyId: batch.journeyId)
+          ) {
+            return invalidatedScreenBatch(
+              batch,
+              from: index + 1,
+              acceptedIds: acceptedIds,
+              reason: failure
+            )
+          }
+        case .rejected(let message):
+          if let failure = screenEmissionGateFailure(
+            batch,
+            run: await screenEmissionRunState(journeyId: batch.journeyId)
+          ) {
+            return invalidatedScreenBatch(
+              batch,
+              from: index,
+              acceptedIds: acceptedIds,
+              reason: failure
+            )
+          }
+          LogWarning(
+            "JourneyService: screen emission \(emission.id) rejected: \(message)"
+          )
+          return abortedScreenBatch(
+            batch,
+            from: index,
+            acceptedIds: acceptedIds,
+            reason: .responseRejected
+          )
+        }
+      } else if emission.name.isEmpty || emission.name.hasPrefix("$") {
+        let reason: JourneyScreenEmissionSkipReason = emission.name.isEmpty
+          ? .eventNameInvalid
+          : .reservedNameInvalid
+        LogWarning(
+          "JourneyService: rejected invalid screen emission name \(emission.name)"
+        )
+        return abortedScreenBatch(
+          batch,
+          from: index,
+          acceptedIds: acceptedIds,
+          reason: reason
+        )
+      } else {
+        let customerEvent = ScreenCustomerEvent(
+          id: emission.id,
+          customerId: run.customerId,
+          occurredAt: emission.occurredAt,
+          name: emission.name,
+          payload: emission.payload,
+          source: .screen(
+            experienceId: run.experienceId,
+            journeyId: run.journeyId,
+            source: batch.source
+          ),
+          causality: run.causality
+        )
+        do {
+          let admission = try await acceptScreenCustomerEvent(
+            ScreenCustomerEventAcceptance(
+              event: customerEvent,
+              localRoute: .screen(
+                screenId: batch.source.screenId,
+                eventName: emission.name
+              ),
+              excludeExperienceId: run.experienceId
+            ),
+            screenBatch: batch
+          )
+          acceptedIds.append(customerEvent.id)
+          if let failure = screenEmissionGateFailure(
+            batch,
+            run: await screenEmissionRunState(journeyId: batch.journeyId)
+          ) {
+            return invalidatedScreenBatch(
+              batch,
+              from: index + 1,
+              acceptedIds: acceptedIds,
+              reason: failure
+            )
+          }
+          switch admission.localRoute {
+          case .none, .alreadyProcessed:
+            break
+          case .ready(let route):
+            await runScreenLocalRoute(route, event: customerEvent)
+            if let failure = screenEmissionGateFailure(
+              batch,
+              run: await screenEmissionRunState(journeyId: batch.journeyId)
+            ) {
+              return invalidatedScreenBatch(
+                batch,
+                from: index + 1,
+                acceptedIds: acceptedIds,
+                reason: failure
+              )
+            }
+          case .payloadInvalid(_, let routeRevision):
+            LogWarning(
+              "JourneyService: screen emission \(emission.id) rejected by route \(routeRevision)"
+            )
+          }
+          await finishScreenSourceEvent(customerEvent)
+          if let failure = screenEmissionGateFailure(
+            batch,
+            run: await screenEmissionRunState(journeyId: batch.journeyId)
+          ) {
+            return invalidatedScreenBatch(
+              batch,
+              from: index + 1,
+              acceptedIds: acceptedIds,
+              reason: failure
+            )
+          }
+        } catch {
+          if let failure = screenEmissionGateFailure(
+            batch,
+            run: await screenEmissionRunState(journeyId: batch.journeyId)
+          ) {
+            return invalidatedScreenBatch(
+              batch,
+              from: index,
+              acceptedIds: acceptedIds,
+              reason: failure
+            )
+          }
+          LogWarning(
+            "JourneyService: screen emission \(emission.id) admission failed: \(error)"
+          )
+          return abortedScreenBatch(
+            batch,
+            from: index,
+            acceptedIds: acceptedIds,
+            reason: .customerEventAcceptanceFailed
+          )
+        }
+      }
+
+      if index + 1 < batch.emissions.count,
+         let failure = screenEmissionGateFailure(
+           batch,
+           run: await screenEmissionRunState(journeyId: batch.journeyId)
+         ) {
+        return invalidatedScreenBatch(
+          batch,
+          from: index + 1,
+          acceptedIds: acceptedIds,
+          reason: failure
+        )
+      }
+    }
+
+    return JourneyScreenEmissionDrainResult(
+      status: .drained,
+      acceptedEmissionIds: acceptedIds,
+      skippedEmissionIds: [],
+      reason: nil
+    )
+  }
+
+  private func screenEmissionGateFailure(
+    _ batch: ScreenEmissionBatch,
+    run: JourneyScreenEmissionRunState?
+  ) -> JourneyScreenEmissionSkipReason? {
+    guard let run else { return .runMissing }
+    guard run.executionOwnershipEpoch == batch.executionOwnershipEpoch else {
+      return .ownershipStale
+    }
+    guard run.lifecycleGeneration == batch.lifecycleGeneration else {
+      return .lifecycleStale
+    }
+    guard run.presentationEpoch == batch.presentationEpoch else {
+      return .presentationStale
+    }
+    guard run.screenId == batch.source.screenId else { return .screenStale }
+    guard !run.terminal else { return .runTerminal }
+    return nil
+  }
+
+  private static func screenCustomerEventSourceIdentity(
+    _ source: ScreenCustomerEventSource
+  ) -> (experienceId: String, journeyId: String)? {
+    switch source {
+    case .screen(let experienceId, let journeyId, _):
+      return (experienceId, journeyId)
+    case .ingress(let ingress):
+      guard let scope = journeyIngressRunScope(ingress) else { return nil }
+      return (scope.experienceId, scope.journeyId)
+    }
+  }
+
+  private static func journeyIngressRunScope(
+    _ source: JourneyIngressSource
+  ) -> JourneyIngressRunScope? {
+    switch source {
+    case .hostApp, .sdkSystemGlobal:
+      return nil
+    case .sdkSystemRun(let scope, _),
+         .journeySystem(let scope),
+         .journeyAction(let scope, _, _):
+      return scope
+    }
+  }
+
+  private static func journeyIngressRoute(
+    _ event: JourneyIngressEvent
+  ) -> ScreenLocalRouteRequest? {
+    guard case .sdkSystemRun(_, let effectInvocationId) = event.source else {
+      return nil
+    }
+    guard let effectInvocationId else {
+      return .journey(eventName: event.name)
+    }
+    let effect = purchaseEffectOutcomeNames.contains(event.name)
+      ? "purchase"
+      : "restore"
+    return .effectOutcome(
+      effect: effect,
+      invocationId: effectInvocationId,
+      outcome: event.name
+    )
+  }
+
+  private static func isValidJourneyIngressName(_ event: JourneyIngressEvent) -> Bool {
+    switch event.source {
+    case .hostApp, .journeyAction:
+      return !event.name.isEmpty && !event.name.hasPrefix("$")
+    case .sdkSystemGlobal:
+      return sdkGlobalIngressNames.contains(event.name)
+    case .sdkSystemRun(_, let effectInvocationId):
+      guard sdkRunIngressNames.contains(event.name) else { return false }
+      return effectInvocationId == nil || effectOutcomeIngressNames.contains(event.name)
+    case .journeySystem:
+      return journeySystemIngressNames.contains(event.name)
+    }
+  }
+
+  private static let sdkGlobalIngressNames: Set<String> = [
+    SystemEventNames.identify,
+    SystemEventNames.appInstalled,
+    SystemEventNames.appUpdated,
+    SystemEventNames.appOpened,
+    SystemEventNames.appBackgrounded,
+    SystemEventNames.featureUsed,
+  ]
+
+  private static let sdkRunIngressNames: Set<String> = [
+    SystemEventNames.screenShown,
+    SystemEventNames.screenDismissed,
+    SystemEventNames.purchaseCompleted,
+    SystemEventNames.purchaseFailed,
+    SystemEventNames.purchaseCancelled,
+    SystemEventNames.purchasePending,
+    SystemEventNames.purchaseSynced,
+    SystemEventNames.restoreCompleted,
+    SystemEventNames.restoreFailed,
+    SystemEventNames.restoreNoPurchases,
+    SystemEventNames.notificationsEnabled,
+    SystemEventNames.notificationsDenied,
+    SystemEventNames.permissionGranted,
+    SystemEventNames.permissionDenied,
+    SystemEventNames.trackingAuthorized,
+    SystemEventNames.trackingDenied,
+  ]
+
+  private static let purchaseEffectOutcomeNames: Set<String> = [
+    SystemEventNames.purchaseCompleted,
+    SystemEventNames.purchaseFailed,
+    SystemEventNames.purchaseCancelled,
+  ]
+
+  private static let effectOutcomeIngressNames = purchaseEffectOutcomeNames.union([
+    SystemEventNames.restoreCompleted,
+    SystemEventNames.restoreFailed,
+    SystemEventNames.restoreNoPurchases,
+  ])
+
+  private static let journeySystemIngressNames: Set<String> = [
+    JourneyEvents.journeyEnrolled,
+    JourneyEvents.journeyTransition,
+    JourneyEvents.journeyMilestone,
+    JourneyEvents.journeyConverted,
+    JourneyEvents.journeyExited,
+    JourneyEvents.journeyEffectRequested,
+    JourneyEvents.journeyEffectCompleted,
+    JourneyEvents.journeyClaimed,
+    JourneyEvents.journeyHandoff,
+    JourneyEvents.journeyParked,
+    JourneyEvents.journeySuperseded,
+    JourneyEvents.experienceShown,
+    JourneyEvents.experienceDismissed,
+    JourneyEvents.experienceErrored,
+    JourneyEvents.experienceArtifactLoadSucceeded,
+    JourneyEvents.experienceArtifactLoadFailed,
+    JourneyEvents.experimentExposure,
+    JourneyEvents.experimentExposureFallback,
+    JourneyEvents.experimentExposureError,
+  ]
+
+  private static func rejectedScreenBatch(
+    _ batch: ScreenEmissionBatch,
+    reason: JourneyScreenEmissionSkipReason
+  ) -> JourneyScreenEmissionDrainResult {
+    JourneyScreenEmissionDrainResult(
+      status: .rejected,
+      acceptedEmissionIds: [],
+      skippedEmissionIds: batch.emissions.map(\.id),
+      reason: reason
+    )
+  }
+
+  private func rejectedScreenBatch(
+    _ batch: ScreenEmissionBatch,
+    from index: Int,
+    reason: JourneyScreenEmissionSkipReason
+  ) -> JourneyScreenEmissionDrainResult {
+    let skippedIds = skippedScreenEmissionIds(batch, from: index, reason: reason)
+    return JourneyScreenEmissionDrainResult(
+      status: .rejected,
+      acceptedEmissionIds: [],
+      skippedEmissionIds: skippedIds,
+      reason: reason
+    )
+  }
+
+  private func invalidatedScreenBatch(
+    _ batch: ScreenEmissionBatch,
+    from index: Int,
+    acceptedIds: [String],
+    reason: JourneyScreenEmissionSkipReason
+  ) -> JourneyScreenEmissionDrainResult {
+    let skippedIds = skippedScreenEmissionIds(batch, from: index, reason: reason)
+    return JourneyScreenEmissionDrainResult(
+      status: .invalidated,
+      acceptedEmissionIds: acceptedIds,
+      skippedEmissionIds: skippedIds,
+      reason: reason
+    )
+  }
+
+  private func abortedScreenBatch(
+    _ batch: ScreenEmissionBatch,
+    from index: Int,
+    acceptedIds: [String],
+    reason: JourneyScreenEmissionSkipReason
+  ) -> JourneyScreenEmissionDrainResult {
+    let skippedIds = skippedScreenEmissionIds(batch, from: index, reason: reason)
+    return JourneyScreenEmissionDrainResult(
+      status: .aborted,
+      acceptedEmissionIds: acceptedIds,
+      skippedEmissionIds: skippedIds,
+      reason: reason
+    )
+  }
+
+  private func skippedScreenEmissionIds(
+    _ batch: ScreenEmissionBatch,
+    from index: Int,
+    reason: JourneyScreenEmissionSkipReason
+  ) -> [String] {
+    guard index < batch.emissions.count else { return [] }
+    let ids = batch.emissions[index...].map(\.id)
+    LogWarning(
+      "JourneyService: skipped \(ids.count) screen emissions for \(batch.journeyId): \(reason)"
+    )
+    return ids
+  }
+
+  private func screenEmissionRunState(journeyId: String) async -> JourneyScreenEmissionRunState? {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId],
           await ownsExecutableJourney(journey, runner: runner) else { return nil }
     let state = await journey.snapshot()
     guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
-    return ScreenEventRouterRun(
-      journeyId: journeyId,
+    return screenEmissionRunState(journey: journey, state: state)
+  }
+
+  private func screenEmissionRunState(
+    journey: Journey,
+    state: JourneySnapshot
+  ) -> JourneyScreenEmissionRunState {
+    JourneyScreenEmissionRunState(
+      journeyId: journey.id,
       experienceId: journey.experienceId,
       customerId: journey.distinctId,
       executionOwnershipEpoch: UInt64(max(state.epoch, 0)),
       lifecycleGeneration: state.executionState.lifecycleGeneration,
       presentationEpoch: state.executionState.presentationEpoch,
+      screenId: state.executionState.currentScreenId,
       terminal: !state.status.isLive || state.isGhost,
       causality: ExperienceEventCausality(
-        chainId: journeyId,
+        chainId: journey.id,
         parentEventId: nil,
         visitedExperienceIds: [journey.experienceId],
         hopCount: 0
@@ -1727,18 +2128,22 @@ actor JourneyService: JourneyServiceProtocol {
           let screenId = state.executionState.currentScreenId,
           !screenId.isEmpty else { return nil }
     return ScreenControlRunScope(
+      journeyId: journeyId,
       screenId: screenId,
       executionOwnershipEpoch: UInt64(max(state.epoch, 0)),
       lifecycleGeneration: state.executionState.lifecycleGeneration,
-      presentationEpoch: state.executionState.presentationEpoch
+      presentationEpoch: state.executionState.presentationEpoch,
+      nextBatchSequence: state.executionState.screenRouting.nextBatchSequence,
+      nextEmissionSequence: state.executionState.screenRouting.nextEmissionSequence
     )
   }
 
   private func applyScreenResponse(
-    run: ScreenEventRouterRun,
+    run: JourneyScreenEmissionRunState,
+    batch: ScreenEmissionBatch,
     source: ScreenEmissionSource,
     emission: ScreenEmission
-  ) async -> ScreenResponseEmissionResult {
+  ) async -> JourneyScreenResponseEmissionResult {
     guard let journey = inMemoryJourneysById[run.journeyId],
           let runner = experienceRunners[run.journeyId],
           await ownsExecutableJourney(journey, runner: runner),
@@ -1755,6 +2160,10 @@ actor JourneyService: JourneyServiceProtocol {
     }
     let before = await journey.snapshot()
     guard await ownsExecutableJourney(journey, runner: runner),
+          screenEmissionGateFailure(
+            batch,
+            run: screenEmissionRunState(journey: journey, state: before)
+          ) == nil,
           before.status.isLive, !before.isGhost,
           before.executionState.pendingAction == nil else {
       return .rejected(message: "journey cannot accept a response mutation")
@@ -1762,25 +2171,41 @@ actor JourneyService: JourneyServiceProtocol {
     let result = await runner.applyScreenResponseEmission(
       emission,
       screenId: source.screenId,
-      field: field
+      field: field,
+      batch: batch
     )
     guard await ownsExecutableJourney(journey, runner: runner) else {
       return .rejected(message: "journey no longer owns renderer execution")
     }
     let updatedState = await journey.snapshot()
-    guard await ownsExecutableJourney(journey, runner: runner) else {
-      return .rejected(message: "journey no longer owns renderer execution")
+    guard await ownsExecutableJourney(journey, runner: runner),
+          screenEmissionGateFailure(
+            batch,
+            run: screenEmissionRunState(journey: journey, state: updatedState)
+          ) == nil else {
+      return .rejected(message: "renderer presentation changed during response mutation")
     }
     persistJourney(updatedState)
     await completeDeferredDismissIfReady(journeyId: journey.id)
+    guard screenEmissionGateFailure(
+      batch,
+      run: await screenEmissionRunState(journeyId: journey.id)
+    ) == nil else {
+      return .rejected(message: "renderer presentation changed during response mutation")
+    }
     return result
   }
 
   private func acceptScreenCustomerEvent(
-    _ acceptance: ScreenCustomerEventAcceptance
+    _ acceptance: ScreenCustomerEventAcceptance,
+    screenBatch: ScreenEmissionBatch? = nil
   ) async throws -> ScreenCustomerEventAdmission {
-    guard case .screen(let sourceExperienceId, let sourceJourneyId, _) = acceptance.event.source,
-          let journey = inMemoryJourneysById[sourceJourneyId],
+    guard let sourceIdentity = Self.screenCustomerEventSourceIdentity(
+      acceptance.event.source
+    ) else { throw EventRoutingError.eventRoutingFailed }
+    let sourceJourneyId = sourceIdentity.journeyId
+    let sourceExperienceId = sourceIdentity.experienceId
+    guard let journey = inMemoryJourneysById[sourceJourneyId],
           let runner = experienceRunners[sourceJourneyId],
           sourceExperienceId == journey.experienceId,
           acceptance.event.customerId == journey.distinctId,
@@ -1791,6 +2216,7 @@ actor JourneyService: JourneyServiceProtocol {
     guard await ownsExecutableJourney(journey, runner: runner) else {
       throw EventRoutingError.eventRoutingFailed
     }
+    try await requireActiveScreenEmissionFence(screenBatch)
     if let record = initial.executionState.screenRouting
       .eventRecords[acceptance.event.id] {
       if (record.phase == .admitted || record.phase == .routeExecuting),
@@ -1800,6 +2226,7 @@ actor JourneyService: JourneyServiceProtocol {
         guard await ownsExecutableJourney(journey, runner: runner) else {
           throw EventRoutingError.eventRoutingFailed
         }
+        try await requireActiveScreenEmissionFence(screenBatch)
         pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
           journeyId: sourceJourneyId,
           event: event,
@@ -1825,6 +2252,7 @@ actor JourneyService: JourneyServiceProtocol {
     guard await ownsExecutableJourney(journey, runner: runner) else {
       throw EventRoutingError.eventRoutingFailed
     }
+    try await requireActiveScreenEmissionFence(screenBatch)
     let exactEvent = NuxieEvent(
       id: acceptance.event.id,
       name: acceptance.event.name,
@@ -1832,10 +2260,11 @@ actor JourneyService: JourneyServiceProtocol {
       properties: properties,
       timestamp: parseExecutionDate(acceptance.event.occurredAt) ?? dateProvider.now()
     )
-    guard let prepared = await eventLog.applyBeforeSend(to: exactEvent) else {
+    guard let beforeSendEvent = await eventLog.applyBeforeSend(to: exactEvent) else {
       guard await ownsExecutableJourney(journey, runner: runner) else {
         throw EventRoutingError.eventRoutingFailed
       }
+      try await requireActiveScreenEmissionFence(screenBatch)
       let persisted = await persistScreenEventRecord(
         JourneyScreenEventRecord(
           sourceEvent: acceptance.event,
@@ -1851,30 +2280,50 @@ actor JourneyService: JourneyServiceProtocol {
           claimedEffectPaths: [],
           pendingAuthoredEvents: []
         ),
-        journey: journey
+        journey: journey,
+        screenBatch: screenBatch
       )
       guard persisted,
             await ownsExecutableJourney(journey, runner: runner) else {
         throw EventRoutingError.eventRoutingFailed
       }
+      try await requireActiveScreenEmissionFence(screenBatch)
       return ScreenCustomerEventAdmission(
         disposition: .accepted,
         localRoute: .none
       )
     }
+    let prepared = NuxieEvent(
+      id: acceptance.event.id,
+      name: beforeSendEvent.name,
+      forwardingName: beforeSendEvent.forwardingName,
+      distinctId: beforeSendEvent.distinctId,
+      properties: beforeSendEvent.properties,
+      timestamp: beforeSendEvent.timestamp
+    )
     guard await ownsExecutableJourney(journey, runner: runner) else {
       throw EventRoutingError.eventRoutingFailed
     }
+    try await requireActiveScreenEmissionFence(screenBatch)
 
     let localRoute: ScreenLocalRouteDisposition
+    let routeHost: JourneyRouteHost? = switch acceptance.localRoute {
+    case .some(.screen(let screenId, _)): .screen(screenId)
+    case .some(.journey): .journey
+    case .some(.effectOutcome(_, _, _)), .none: nil
+    }
     if prepared.distinctId == acceptance.event.customerId,
-       case .screen(let screenId, _)? = acceptance.localRoute,
+       let routeHost,
        let definition = screenControlRuntimes[sourceJourneyId]?.definition,
-       let route = definition.route(host: .screen(screenId), eventName: prepared.name),
+       let route = definition.route(host: routeHost, eventName: prepared.name),
        definition.executionPlan(for: route, startPlane: .device) != nil {
+      let key: ScreenLocalRouteRequest = switch routeHost {
+      case .screen(let screenId): .screen(screenId: screenId, eventName: prepared.name)
+      case .journey: .journey(eventName: prepared.name)
+      }
       localRoute = .ready(AcceptedScreenLocalRoute(
         admissionId: acceptance.event.id,
-        key: .screen(screenId: screenId, eventName: prepared.name),
+        key: key,
         routeRevision: route.revisionSHA256
       ))
     } else {
@@ -1894,15 +2343,24 @@ actor JourneyService: JourneyServiceProtocol {
       claimedEffectPaths: [],
       pendingAuthoredEvents: []
     )
-    guard await persistScreenEventRecord(record, journey: journey) else {
-      throw EventRoutingError.eventRoutingFailed
-    }
-    guard await ownsExecutableJourney(journey, runner: runner) else {
-      throw EventRoutingError.eventRoutingFailed
-    }
-    let commit = await eventLog.commitPreparedTriggerEvent(prepared)
-    guard await ownsExecutableJourney(journey, runner: runner) else {
-      throw EventRoutingError.eventRoutingFailed
+    let commit: PreparedTriggerCommit
+    do {
+      commit = try await runner.withScreenPresentationMutationLock { [weak self] in
+        guard let self else { throw EventRoutingError.eventRoutingFailed }
+        return try await self.commitScreenCustomerEventAdmission(
+          record: record,
+          prepared: prepared,
+          journey: journey,
+          runner: runner,
+          screenBatch: screenBatch
+        )
+      }
+    } catch {
+      await rollbackScreenCustomerEventAdmission(
+        eventId: acceptance.event.id,
+        journey: journey
+      )
+      throw error
     }
     pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
       journeyId: sourceJourneyId,
@@ -1916,23 +2374,85 @@ actor JourneyService: JourneyServiceProtocol {
     )
   }
 
+  private func commitScreenCustomerEventAdmission(
+    record: JourneyScreenEventRecord,
+    prepared: NuxieEvent,
+    journey: Journey,
+    runner: JourneyRunner,
+    screenBatch: ScreenEmissionBatch?
+  ) async throws -> PreparedTriggerCommit {
+    try await requireActiveScreenEmissionFence(screenBatch)
+    guard await persistScreenEventRecord(
+      record,
+      journey: journey,
+      screenBatch: screenBatch
+    ) else {
+      throw EventRoutingError.eventRoutingFailed
+    }
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      throw EventRoutingError.eventRoutingFailed
+    }
+    try await requireActiveScreenEmissionFence(screenBatch)
+    let commit = await eventLog.commitPreparedTriggerEvent(prepared)
+    guard await ownsExecutableJourney(journey, runner: runner) else {
+      throw EventRoutingError.eventRoutingFailed
+    }
+    try await requireActiveScreenEmissionFence(screenBatch)
+    return commit
+  }
+
+  private func rollbackScreenCustomerEventAdmission(
+    eventId: String,
+    journey: Journey
+  ) async {
+    _ = await updateDurableScreenRouting(journey: journey) { routing in
+      guard routing.eventRecords[eventId]?.phase == .admitted else { return }
+      routing.eventRecords.removeValue(forKey: eventId)
+    }
+  }
+
+  private func requireActiveScreenEmissionFence(
+    _ batch: ScreenEmissionBatch?
+  ) async throws {
+    guard let batch else { return }
+    guard screenEmissionGateFailure(
+      batch,
+      run: await screenEmissionRunState(journeyId: batch.journeyId)
+    ) == nil else {
+      throw EventRoutingError.eventRoutingFailed
+    }
+  }
+
   private func runScreenLocalRoute(
     _ route: AcceptedScreenLocalRoute,
     event: ScreenCustomerEvent
   ) async {
-    guard case .screen(let screenId, _) = route.key,
-          case .screen(_, let journeyId, let source) = event.source,
-          let pending = pendingScreenEvents[event.id],
+    guard let sourceIdentity = Self.screenCustomerEventSourceIdentity(event.source)
+      else { return }
+    let journeyId = sourceIdentity.journeyId
+    guard let pending = pendingScreenEvents[event.id],
           let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId],
           await ownsExecutableJourney(journey, runner: runner) else { return }
-    let outcome = await runner.dispatchAdmittedScreenEvent(
-      pending.event,
-      screenId: screenId,
-      componentId: source.componentId,
-      instanceId: source.instanceId,
-      admission: route
-    )
+    let outcome: JourneyRunner.RunOutcome?
+    switch route.key {
+    case .screen(let screenId, _):
+      guard case .screen(_, _, let source) = event.source else { return }
+      outcome = await runner.dispatchAdmittedScreenEvent(
+        pending.event,
+        screenId: screenId,
+        componentId: source.componentId,
+        instanceId: source.instanceId,
+        admission: route
+      )
+    case .journey:
+      outcome = await runner.dispatchAdmittedJourneyIngressEvent(
+        pending.event,
+        admission: route
+      )
+    case .effectOutcome:
+      return
+    }
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
     await handleOutcome(outcome, journey: journey)
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
@@ -1948,8 +2468,10 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func finishScreenSourceEvent(_ event: ScreenCustomerEvent) async {
-    guard case .screen(_, let journeyId, _) = event.source,
-          let pending = pendingScreenEvents.removeValue(forKey: event.id) else { return }
+    guard let sourceIdentity = Self.screenCustomerEventSourceIdentity(event.source)
+      else { return }
+    let journeyId = sourceIdentity.journeyId
+    guard let pending = pendingScreenEvents.removeValue(forKey: event.id) else { return }
     guard pending.journeyId == journeyId,
           pending.event.id == event.id,
           pending.event.distinctId == event.customerId,
@@ -2007,15 +2529,15 @@ actor JourneyService: JourneyServiceProtocol {
     )
   }
 
-  private func recoverScreenBatch(_ batch: ScreenEmissionBatch) async -> ScreenBatchRecovery {
+  private func recoverScreenBatch(_ batch: ScreenEmissionBatch) async -> JourneyScreenBatchRecovery {
     guard let journey = inMemoryJourneysById[batch.journeyId] else {
-      return ScreenBatchRecovery(lastProcessedSequence: nil, result: nil)
+      return JourneyScreenBatchRecovery(lastProcessedSequence: nil, result: nil)
     }
     let routing = (await journey.snapshot()).executionState.screenRouting
     let result = routing.batchReceipts[String(batch.batchSequence)].flatMap { receipt in
       receipt.invocationId == batch.invocationId ? receipt.result : nil
     }
-    return ScreenBatchRecovery(
+    return JourneyScreenBatchRecovery(
       lastProcessedSequence: routing.lastProcessedBatchSequence,
       result: result
     )
@@ -2025,7 +2547,7 @@ actor JourneyService: JourneyServiceProtocol {
     journeyId: String,
     sequence: UInt64,
     invocationId: String,
-    result: ScreenEventRouterDrainResult
+    result: JourneyScreenEmissionDrainResult
   ) async {
     guard let journey = inMemoryJourneysById[journeyId] else { return }
     let state = await journey.snapshot()
@@ -2067,8 +2589,19 @@ actor JourneyService: JourneyServiceProtocol {
     }
   }
 
-  private func removeScreenControlRuntime(journeyId: String) {
-    screenControlRuntimes.removeValue(forKey: journeyId)
+  private func removeScreenControlRuntime(journeyId: String) async {
+    await removeScreenControlRuntimes(journeyIds: [journeyId])
+  }
+
+  private func removeScreenControlRuntimes(journeyIds: Set<String>) async {
+    // Revoke every runtime before yielding so teardown callbacks and new
+    // submissions fail closed while suspended lane workers are cancelled.
+    let runtimes = journeyIds.compactMap {
+      screenControlRuntimes.removeValue(forKey: $0)
+    }
+    for runtime in runtimes {
+      await runtime.sequenceLane.close(reason: .runMissing)
+    }
   }
 
   private func restoredScreenEvent(from record: JourneyScreenEventRecord) -> NuxieEvent? {
@@ -2088,9 +2621,19 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func persistScreenEventRecord(
     _ record: JourneyScreenEventRecord,
-    journey: Journey
+    journey: Journey,
+    screenBatch: ScreenEmissionBatch? = nil
   ) async -> Bool {
-    await updateDurableScreenRouting(journey: journey) { routing in
+    await updateDurableScreenRouting(
+      journey: journey,
+      validate: { candidate in
+        guard let screenBatch else { return true }
+        return self.screenEmissionGateFailure(
+          screenBatch,
+          run: self.screenEmissionRunState(journey: journey, state: candidate)
+        ) == nil
+      }
+    ) { routing in
       routing.eventRecords[record.sourceEvent.id] = record
     }
   }
@@ -2112,7 +2655,19 @@ actor JourneyService: JourneyServiceProtocol {
     _ batch: ScreenEmissionBatch,
     for journey: Journey
   ) async -> Bool {
-    await updateDurableScreenRouting(journey: journey) { routing in
+    await updateDurableScreenRouting(
+      journey: journey,
+      validate: { candidate in
+        self.screenEmissionGateFailure(
+          batch,
+          run: self.screenEmissionRunState(journey: journey, state: candidate)
+        ) == nil && self.isStructurallyValidScreenBatch(
+          batch,
+          routing: candidate.executionState.screenRouting,
+          responseSessionReceiptIds: Set(candidate.responseSessionReceipts.keys)
+        )
+      }
+    ) { routing in
       routing.pendingBatches[String(batch.batchSequence)] = batch
       routing.nextBatchSequence = max(
         routing.nextBatchSequence,
@@ -2129,6 +2684,7 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func updateDurableScreenRouting(
     journey: Journey,
+    validate: (JourneySnapshot) -> Bool = { _ in true },
     _ update: (inout JourneyScreenRoutingState) -> Void
   ) async -> Bool {
     guard let runner = experienceRunners[journey.id],
@@ -2137,6 +2693,7 @@ actor JourneyService: JourneyServiceProtocol {
       guard await ownsExecutableJourney(journey, runner: runner) else { return false }
       let versioned = await journey.versionedSnapshot()
       guard await ownsExecutableJourney(journey, runner: runner) else { return false }
+      guard validate(versioned.snapshot) else { return false }
       var candidate = versioned.snapshot
       update(&candidate.executionState.screenRouting)
       candidate.updatedAt = dateProvider.now()
@@ -2166,18 +2723,13 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func resumePendingScreenBatches(journeyId: String) async {
     guard let journey = inMemoryJourneysById[journeyId],
-          let runtime = screenControlRuntimes[journeyId] else { return }
+          screenControlRuntimes[journeyId] != nil else { return }
     let routing = (await journey.snapshot()).executionState.screenRouting
-    await runtime.dispatcher.restoreProgress(
-      journeyId: journeyId,
-      nextBatchSequence: routing.nextBatchSequence,
-      nextEmissionSequence: routing.nextEmissionSequence
-    )
     let batches = routing.pendingBatches.values.sorted {
       $0.batchSequence < $1.batchSequence
     }
     for batch in batches {
-      _ = await runtime.router.drain(batch)
+      _ = await handleRendererScreenEmissionBatch(batch)
     }
   }
 
@@ -3237,9 +3789,9 @@ actor JourneyService: JourneyServiceProtocol {
             )
           )
         },
-        persistResponseRetryMarker: { [weak self, weak journey] state in
+        persistResponseRetryMarker: { [weak self, weak journey] in
           guard let self, let journey else { return false }
-          return await self.persistResponseRetryMarker(state, for: journey)
+          return await self.persistResponseRetryMarker(for: journey)
         },
         persistEntryActionClaim: { [weak self, weak journey] state in
           guard let self, let journey else { return false }
@@ -3275,31 +3827,11 @@ actor JourneyService: JourneyServiceProtocol {
     guard await ownsExecutableJourney(journey) else { return nil }
     experienceRunners[journey.id] = runner
     if let definition = controlExperience.definition {
-      let dateProvider = self.dateProvider
-      let router = makeScreenEmissionRouter()
-      let dispatcher = ScreenEmissionDispatcher(
-        createId: { UUID.v7().uuidString },
-        now: { dateProvider.now().ISO8601Format() },
-        executeScriptAction: { input in
-          throw ScreenEmissionDispatchError.scriptActionMissing(
-            actionId: input.actionId
-          )
-        }
-      )
       screenControlRuntimes[journey.id] = ScreenControlRuntime(
         definition: definition,
-        dispatcher: dispatcher,
-        router: router,
+        sequenceLane: JourneyScreenEmissionSequenceLane(),
         operationGate: ExperienceInteractiveOperationGate()
       )
-      let routing = (await journey.snapshot()).executionState.screenRouting
-      guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
-      await dispatcher.restoreProgress(
-        journeyId: journey.id,
-        nextBatchSequence: routing.nextBatchSequence,
-        nextEmissionSequence: routing.nextEmissionSequence
-      )
-      guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
     }
 
     switch stimulus {
@@ -4284,12 +4816,12 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     timerScheduler.cancelTasks(journeyId: journey.id)
+    await removeScreenControlRuntime(journeyId: journey.id)
     if let runner = experienceRunners[journey.id] {
       await runner.retire()
       guard !isShutDown else { return false }
     }
     experienceRunners.removeValue(forKey: journey.id)
-    removeScreenControlRuntime(journeyId: journey.id)
     pendingScreenEvents = pendingScreenEvents.filter {
       $0.value.journeyId != journey.id
     }
@@ -4411,10 +4943,8 @@ actor JourneyService: JourneyServiceProtocol {
   /// journey. This keeps retry recovery on the same checkpoint boundary as
   /// lifecycle updates and prevents stale runner snapshots from resurrecting
   /// a deleted journey.
-  private func persistResponseRetryMarker(
-    _ state: JourneySnapshot,
-    for journey: Journey
-  ) -> Bool {
+  private func persistResponseRetryMarker(for journey: Journey) async -> Bool {
+    let state = await journey.snapshot()
     guard !isShutDown,
           inMemoryJourneysById[state.id] === journey,
           state.status.isLive,
@@ -4458,12 +4988,21 @@ actor JourneyService: JourneyServiceProtocol {
     guard !isShutDown else { return }
     guard completingJourneyIds.insert(journey.id).inserted else {
       if dismissedBy == .host {
-        await waitForJourneyCompletionAttempt(journeyId: journey.id)
-        await completeJourney(journey, reason: reason, dismissedBy: dismissedBy)
+        let completed = await waitForJourneyCompletion(journeyId: journey.id)
+        if !completed {
+          await completeJourney(journey, reason: reason, dismissedBy: dismissedBy)
+        }
       }
       return
     }
-    defer { finishJourneyCompletionAttempt(journeyId: journey.id) }
+    journeyCompletionResults.removeValue(forKey: journey.id)
+    var completionBookkeepingFinished = false
+    defer {
+      finishJourneyCompletionAttempt(
+        journeyId: journey.id,
+        completed: completionBookkeepingFinished
+      )
+    }
 
     let terminalAuthority: JourneyTerminalTransitionAuthority = dismissedBy == .host
       ? .host
@@ -4616,13 +5155,13 @@ actor JourneyService: JourneyServiceProtocol {
       guard ownsHostCompletion(journey, runner: completingRunner) else { return }
     }
     timerScheduler.cancelTasks(journeyId: journey.id)
+    await removeScreenControlRuntime(journeyId: journey.id)
     await completingRunner?.retire()
     guard !isShutDown else { return }
     if dismissedBy == .host {
       guard ownsHostCompletion(journey, runner: completingRunner) else { return }
     }
     experienceRunners.removeValue(forKey: journey.id)
-    removeScreenControlRuntime(journeyId: journey.id)
     pendingScreenEvents = pendingScreenEvents.filter {
       $0.value.journeyId != journey.id
     }
@@ -4640,6 +5179,7 @@ actor JourneyService: JourneyServiceProtocol {
     if dismissedBy != .host || hostExitCaptured && completionRecorded {
       journeyStore.deleteJourney(id: journey.id)
     }
+    completionBookkeepingFinished = completionRecorded
 
     if let triggerCompletion, dismissedBy == .host {
       await triggerBroker.emit(
@@ -4654,17 +5194,25 @@ actor JourneyService: JourneyServiceProtocol {
     }
   }
 
-  private func waitForJourneyCompletionAttempt(journeyId: String) async {
-    guard completingJourneyIds.contains(journeyId) else { return }
-    await withCheckedContinuation { continuation in
+  /// Joins completion bookkeeping for an owned journey. Callers that know an
+  /// admitted event is terminal may register before the competing completion
+  /// path starts; completed runs return immediately after service cleanup.
+  func waitForJourneyCompletion(journeyId: String) async -> Bool {
+    if let result = journeyCompletionResults.result(for: journeyId) {
+      return result
+    }
+    guard inMemoryJourneysById[journeyId] != nil
+      || completingJourneyIds.contains(journeyId) else { return false }
+    return await withCheckedContinuation { continuation in
       journeyCompletionWaiters[journeyId, default: []].append(continuation)
     }
   }
 
-  private func finishJourneyCompletionAttempt(journeyId: String) {
+  private func finishJourneyCompletionAttempt(journeyId: String, completed: Bool) {
     completingJourneyIds.remove(journeyId)
+    journeyCompletionResults.insert(completed, for: journeyId)
     let waiters = journeyCompletionWaiters.removeValue(forKey: journeyId) ?? []
-    waiters.forEach { $0.resume() }
+    waiters.forEach { $0.resume(returning: completed) }
   }
 
   private func retryPendingHostExitCaptures(
@@ -5705,5 +6253,40 @@ extension JourneyService: PresentationAttemptJourneyRouting {
     presentationAttempt: ExperiencePresentationAttempt?
   ) async -> [JourneyTriggerResult] {
     await routeEvent(event, presentationAttempt: presentationAttempt) ?? []
+  }
+}
+
+private struct JourneyCompletionResultCache {
+  private let limit: Int
+  private var results: [String: Bool] = [:]
+  private var insertionOrder: [String] = []
+
+  init(limit: Int) {
+    self.limit = limit
+  }
+
+  func result(for journeyId: String) -> Bool? {
+    results[journeyId]
+  }
+
+  mutating func insert(_ completed: Bool, for journeyId: String) {
+    if results[journeyId] == nil {
+      insertionOrder.append(journeyId)
+    }
+    results[journeyId] = completed
+    while results.count > limit {
+      let oldestJourneyId = insertionOrder.removeFirst()
+      results.removeValue(forKey: oldestJourneyId)
+    }
+  }
+
+  mutating func removeValue(forKey journeyId: String) {
+    results.removeValue(forKey: journeyId)
+    insertionOrder.removeAll { $0 == journeyId }
+  }
+
+  mutating func removeAll() {
+    results.removeAll()
+    insertionOrder.removeAll()
   }
 }

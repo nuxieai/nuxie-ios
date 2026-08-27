@@ -487,7 +487,7 @@ struct JourneyScreenEventRecord: Codable, Sendable {
 
 struct JourneyScreenBatchReceipt: Codable, Sendable {
     let invocationId: String
-    let result: ScreenEventRouterDrainResult
+    let result: JourneyScreenEmissionDrainResult
 }
 
 struct JourneyScreenRoutingState: Codable, Sendable {

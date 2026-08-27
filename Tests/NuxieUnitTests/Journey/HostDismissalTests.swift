@@ -181,9 +181,8 @@ final class HostDismissalTests: AsyncSpec {
                     journeyId: journey.id,
                     controller: harness.controller
                 )
-                await harness.service.handleRendererControlAction(
+                await harness.emitControl(
                     journeyId: journey.id,
-                    screenId: HostJourneyHarness.screenId,
                     invocation: ScreenActionInvocation(
                         actionId: "answer",
                         value: .string("premium")
@@ -753,15 +752,9 @@ final class HostDismissalTests: AsyncSpec {
                 expect(update.exitReason).to(equal(.dismissed))
                 expect(updates.values.contains(where: \.isDenied)).to(beFalse())
 
-                await harness.service.handleRendererEvent(
+                await harness.emitEvent(
                     journeyId: journey.id,
-                    event: ExperienceRendererEvent(
-                        name: callbackEvent,
-                        properties: [:],
-                        screenId: HostJourneyHarness.screenId,
-                        componentId: nil,
-                        instanceId: nil
-                    )
+                    name: callbackEvent
                 )
                 expect(
                     harness.mocks.identityService.getUserProperties()[taintedProperty]
@@ -1116,15 +1109,9 @@ final class HostDismissalTests: AsyncSpec {
                 expect(oldJourneys).to(beEmpty())
                 expect(harness.store.loadJourney(id: journey.id)).to(beNil())
 
-                await harness.service.handleRendererEvent(
+                await harness.emitEvent(
                     journeyId: journey.id,
-                    event: ExperienceRendererEvent(
-                        name: callbackEvent,
-                        properties: [:],
-                        screenId: HostJourneyHarness.screenId,
-                        componentId: nil,
-                        instanceId: nil
-                    )
+                    name: callbackEvent
                 )
 
                 expect(
@@ -1167,15 +1154,9 @@ final class HostDismissalTests: AsyncSpec {
                 }
 
                 let callback = Task {
-                    await harness.service.handleRendererEvent(
+                    await harness.emitEvent(
                         journeyId: journey.id,
-                        event: ExperienceRendererEvent(
-                            name: callbackEvent,
-                            properties: [:],
-                            screenId: HostJourneyHarness.screenId,
-                            componentId: nil,
-                            instanceId: nil
-                        )
+                        name: callbackEvent
                     )
                 }
                 try await waitForHostDismissalGate(gate)
@@ -1268,15 +1249,9 @@ final class HostDismissalTests: AsyncSpec {
                 }
 
                 let callback = Task {
-                    await harness.service.handleRendererEvent(
+                    await harness.emitEvent(
                         journeyId: journey.id,
-                        event: ExperienceRendererEvent(
-                            name: callbackEvent,
-                            properties: [:],
-                            screenId: HostJourneyHarness.screenId,
-                            componentId: nil,
-                            instanceId: nil
-                        )
+                        name: callbackEvent
                     )
                 }
                 try await waitForHostDismissalGate(gate)
@@ -2082,6 +2057,108 @@ private struct HostJourneyHarness {
             throw HostDismissalTestError.failedToStartJourney
         }
         return journey
+    }
+
+    func emitControl(
+        journeyId: String,
+        invocation: ScreenActionInvocation
+    ) async {
+        guard let scope = await service.screenControlRunScope(journeyId: journeyId),
+              let action = experience.definition?.control(
+                screenId: scope.screenId,
+                actionId: invocation.actionId
+              ) else { return }
+        await emit(
+            journeyId: journeyId,
+            scope: scope,
+            source: ScreenEmissionSource(
+                screenId: scope.screenId,
+                actionId: invocation.actionId,
+                componentId: invocation.componentId,
+                instanceId: invocation.instanceId
+            ),
+            action: action,
+            invocation: invocation
+        )
+    }
+
+    func emitEvent(
+        journeyId: String,
+        name: String,
+        properties: [String: Any] = [:]
+    ) async {
+        guard let scope = await service.screenControlRunScope(journeyId: journeyId) else {
+            return
+        }
+        let dispatcher = makeScreenEmissionDispatcher()
+        await dispatcher.restoreProgress(
+            journeyId: journeyId,
+            nextBatchSequence: scope.nextBatchSequence,
+            nextEmissionSequence: scope.nextEmissionSequence
+        )
+        let result = await dispatcher.dispatch(
+            run: emissionRun(scope),
+            source: ScreenEmissionSource(
+                screenId: scope.screenId,
+                actionId: "test:event",
+                componentId: nil,
+                instanceId: nil
+            ),
+            drafts: [.event(
+                name: name,
+                payload: properties.mapValues(ScreenEmissionValue.init(rendererValue:))
+            )]
+        )
+        guard case .success(let batch) = result else { return }
+        if !(await service.handleRendererScreenEmissionBatch(batch)) {
+            _ = await dispatcher.rollbackUnpublishedBatch(batch)
+        }
+    }
+
+    private func emit(
+        journeyId: String,
+        scope: ScreenControlRunScope,
+        source: ScreenEmissionSource,
+        action: ScreenControlActionDefinition,
+        invocation: ScreenActionInvocation
+    ) async {
+        let dispatcher = makeScreenEmissionDispatcher()
+        await dispatcher.restoreProgress(
+            journeyId: journeyId,
+            nextBatchSequence: scope.nextBatchSequence,
+            nextEmissionSequence: scope.nextEmissionSequence
+        )
+        let result = await dispatcher.dispatch(
+            run: emissionRun(scope),
+            screenId: source.screenId,
+            definition: action,
+            invocation: invocation
+        )
+        guard case .success(let batch) = result else { return }
+        if !(await service.handleRendererScreenEmissionBatch(batch)) {
+            _ = await dispatcher.rollbackUnpublishedBatch(batch)
+        }
+    }
+
+    private func emissionRun(_ scope: ScreenControlRunScope) -> ScreenEmissionRun {
+        ScreenEmissionRun(
+            journeyId: scope.journeyId,
+            executionOwnershipEpoch: scope.executionOwnershipEpoch,
+            lifecycleGeneration: scope.lifecycleGeneration,
+            presentationEpoch: scope.presentationEpoch
+        )
+    }
+
+    private func makeScreenEmissionDispatcher() -> ScreenEmissionDispatcher {
+        ScreenEmissionDispatcher(
+            createId: { UUID.v7().uuidString },
+            now: { Date().ISO8601Format() },
+            executeScriptAction: { input in
+                throw ScreenEmissionDispatchError.scriptActionMissing(
+                    actionId: input.actionId
+                )
+            }
+        )
     }
 
     func journeyExitedCalls() -> [(event: String, properties: [String: Any]?)] {

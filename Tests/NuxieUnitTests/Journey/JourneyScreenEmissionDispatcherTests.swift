@@ -1,22 +1,125 @@
 import XCTest
 @testable import Nuxie
 
-final class ScreenEmissionDispatcherTests: XCTestCase {
-    func testGeneratedRendererInvocationCrossesIntoSignedDeclarativeControl() async throws {
-        let rendererEvent = ExperienceRendererEvent(
-            name: "Nuxie Interaction",
-            properties: [
-                "nuxieTrigger": "tap",
-                "actionId": "submit_survey",
-                "value": ["plan": "premium", "seats": 3],
-                "componentId": "submit_button",
-                "instanceId": "survey_1",
-            ],
+final class JourneyScreenEmissionDispatcherTests: XCTestCase {
+    func testJourneyIngressCausalityRejectsCyclesAndHopOverflow() throws {
+        let source = ExperienceEventCausality(
+            chainId: "chain-1",
+            parentEventId: "parent-1",
+            visitedExperienceIds: ["experience-1"],
+            hopCount: 1
+        )
+        XCTAssertEqual(
+            extendExperienceAdmissionCausality(
+                source,
+                targetExperienceId: "experience-1"
+            ).failure,
+            .experienceCycle
+        )
+        XCTAssertEqual(
+            extendExperienceAdmissionCausality(
+                ExperienceEventCausality(
+                    chainId: source.chainId,
+                    parentEventId: source.parentEventId,
+                    visitedExperienceIds: source.visitedExperienceIds,
+                    hopCount: 32
+                ),
+                targetExperienceId: "experience-2"
+            ).failure,
+            .experienceHopLimit
+        )
+        XCTAssertEqual(
+            try extendExperienceAdmissionCausality(
+                source,
+                targetExperienceId: "experience-2"
+            ).get().visitedExperienceIds,
+            ["experience-1", "experience-2"]
+        )
+    }
+
+    func testTypedRuntimeEffectsProduceOneAtomicBatch() async throws {
+        let dispatcher = ScreenEmissionDispatcher(
+            createId: incrementingID(),
+            now: { "2026-08-17T22:00:00.000Z" },
+            executeScriptAction: { _ in [] }
+        )
+
+        let result = await dispatcher.dispatch(
+            run: ScreenEmissionRun(
+                journeyId: "journey_1",
+                executionOwnershipEpoch: 3,
+                lifecycleGeneration: 2,
+                presentationEpoch: 7
+            ),
+            source: ScreenEmissionSource(
+                screenId: "survey",
+                actionId: "submit_survey",
+                componentId: "submit_button",
+                instanceId: "survey_1"
+            ),
+            drafts: [
+                .responseSet(field: "answer", value: .string("premium")),
+                .event(name: "survey_submitted", payload: [
+                    "answer": .string("premium"),
+                ]),
+            ]
+        )
+
+        let batch = try XCTUnwrap(result.success)
+        XCTAssertEqual(batch.invocationId, "id_1")
+        XCTAssertEqual(batch.emissions.map(\.id), ["id_2", "id_3"])
+        XCTAssertEqual(batch.emissions.map(\.sequence), [0, 1])
+        XCTAssertEqual(batch.emissions.map(\.name), [
+            SystemEventNames.responseSet,
+            "survey_submitted",
+        ])
+    }
+
+    func testRejectedTypedEffectsLeaveABatchGapWithoutConsumingEmissionIdentity() async throws {
+        let dispatcher = ScreenEmissionDispatcher(
+            createId: incrementingID(),
+            now: { "2026-08-17T22:00:00.000Z" },
+            executeScriptAction: { _ in [] }
+        )
+        let run = ScreenEmissionRun(
+            journeyId: "journey_1",
+            executionOwnershipEpoch: 3,
+            lifecycleGeneration: 2,
+            presentationEpoch: 7
+        )
+        let source = ScreenEmissionSource(
             screenId: "survey",
+            actionId: "runtime",
             componentId: nil,
             instanceId: nil
         )
-        let invocation = try XCTUnwrap(rendererEvent.controlActionInvocation)
+
+        let rejected = await dispatcher.dispatch(
+            run: run,
+            source: source,
+            drafts: [.event(name: "", payload: [:])]
+        )
+        let accepted = await dispatcher.dispatch(
+            run: run,
+            source: source,
+            drafts: [.event(name: "accepted", payload: [:])]
+        )
+
+        XCTAssertEqual(rejected.failure, .invalidEventName(eventName: ""))
+        let batch = try XCTUnwrap(accepted.success)
+        XCTAssertEqual(batch.batchSequence, 1)
+        XCTAssertNil(batch.previousCommittedBatchSequence)
+        XCTAssertEqual(batch.invocationId, "id_1")
+        XCTAssertEqual(batch.emissions.map(\.id), ["id_2"])
+    }
+
+    func testTypedControlInvocationCrossesIntoSignedDeclarativeControl() async throws {
+        let invocation = ScreenActionInvocation(
+            actionId: "submit_survey",
+            value: .object(["plan": .string("premium"), "seats": .number(3)]),
+            componentId: "submit_button",
+            instanceId: "survey_1"
+        )
         let dispatcher = ScreenEmissionDispatcher(
             createId: incrementingID(),
             now: { "2026-08-17T22:00:00.000Z" },
@@ -33,7 +136,7 @@ final class ScreenEmissionDispatcherTests: XCTestCase {
                 lifecycleGeneration: 1,
                 presentationEpoch: 1
             ),
-            screenId: try XCTUnwrap(rendererEvent.screenId),
+            screenId: "survey",
             definition: ScreenControlActionDefinition(
                 actionId: "submit_survey",
                 binding: .declarative([
@@ -61,23 +164,6 @@ final class ScreenEmissionDispatcherTests: XCTestCase {
             "component": .string("submit_button"),
             "instance": .string("survey_1"),
         ])
-    }
-
-    func testRendererControlEnvelopeNeverClaimsOrdinaryOrMalformedEvents() {
-        XCTAssertNil(ExperienceRendererEvent(
-            name: "customer_event",
-            properties: ["actionId": "submit"],
-            screenId: "survey",
-            componentId: nil,
-            instanceId: nil
-        ).controlActionInvocation)
-        XCTAssertNil(ExperienceRendererEvent(
-            name: "Nuxie Interaction",
-            properties: ["nuxieTrigger": "tap"],
-            screenId: "survey",
-            componentId: nil,
-            instanceId: nil
-        ).controlActionInvocation)
     }
 
     func testDeclarativeAndScriptActionsProduceTheSameEmissionContract() async throws {
@@ -222,6 +308,48 @@ final class ScreenEmissionDispatcherTests: XCTestCase {
         XCTAssertEqual(batch.batchSequence, 9)
         XCTAssertEqual(batch.previousCommittedBatchSequence, 8)
         XCTAssertEqual(batch.emissions.map(\.sequence), [27])
+    }
+
+    func testStaleRestoreCannotRegressTheCommittedPredecessor() async throws {
+        let dispatcher = ScreenEmissionDispatcher(
+            createId: incrementingID(),
+            now: { "2026-08-17T22:00:00.000Z" },
+            executeScriptAction: { _ in [] }
+        )
+        let run = ScreenEmissionRun(
+            journeyId: "journey_1",
+            executionOwnershipEpoch: 3,
+            lifecycleGeneration: 2,
+            presentationEpoch: 7
+        )
+        let source = ScreenEmissionSource(
+            screenId: "survey",
+            actionId: "runtime",
+            componentId: nil,
+            instanceId: nil
+        )
+        for name in ["first", "second", "third"] {
+            _ = await dispatcher.dispatch(
+                run: run,
+                source: source,
+                drafts: [.event(name: name, payload: [:])]
+            )
+        }
+
+        await dispatcher.restoreProgress(
+            journeyId: run.journeyId,
+            nextBatchSequence: 1,
+            nextEmissionSequence: 1
+        )
+        let result = await dispatcher.dispatch(
+            run: run,
+            source: source,
+            drafts: [.event(name: "fourth", payload: [:])]
+        )
+        let batch = try XCTUnwrap(result.success)
+        XCTAssertEqual(batch.batchSequence, 3)
+        XCTAssertEqual(batch.previousCommittedBatchSequence, 2)
+        XCTAssertEqual(batch.emissions.map(\.sequence), [3])
     }
 
     func testUnpublishedTailRollbackReusesItsBatchAndEmissionSequences() async throws {

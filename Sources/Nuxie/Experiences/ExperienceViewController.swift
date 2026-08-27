@@ -23,34 +23,6 @@ import AppKit
 import SafariServices
 #endif
 
-// @unchecked Sendable: immutable snapshot; the [String: Any] payload is
-// write-once at construction and never mutated afterwards.
-struct ExperienceRendererEvent: @unchecked Sendable {
-    let name: String
-    let properties: [String: Any]
-    let screenId: String?
-    let componentId: String?
-    let instanceId: String?
-}
-
-extension ExperienceRendererEvent {
-    static let controlActionEventName = "Nuxie Interaction"
-
-    /// The renderer emits one canonical invocation for generated controls. The
-    /// signed release remains authoritative for what that action does.
-    var controlActionInvocation: ScreenActionInvocation? {
-        guard name == Self.controlActionEventName,
-              let actionId = properties["actionId"] as? String,
-              !actionId.isEmpty else { return nil }
-        return ScreenActionInvocation(
-            actionId: actionId,
-            value: properties["value"].map(ScreenEmissionValue.init(rendererValue:)),
-            componentId: (properties["componentId"] as? String) ?? componentId,
-            instanceId: (properties["instanceId"] as? String) ?? instanceId
-        )
-    }
-}
-
 // @unchecked Sendable: immutable snapshot; the Any value is write-once at
 // construction and never mutated afterwards.
 struct ExperienceRendererViewModelChange: @unchecked Sendable {
@@ -112,8 +84,8 @@ protocol ExperienceRuntimeDelegate: AnyObject {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitEvent event: ExperienceRendererEvent
-    )
+        didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+    ) async -> Bool
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -220,8 +192,8 @@ extension ExperienceRuntimeDelegate {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitEvent event: ExperienceRendererEvent
-    ) {}
+        didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+    ) async -> Bool { false }
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -441,6 +413,10 @@ class ExperienceViewController: NuxiePlatformViewController {
     private var inFlightCommerceOperationCount = 0
     private var commerceOperationWaiters: [CheckedContinuation<Void, Never>] = []
     private var hostDismissalRequested = false
+    private let screenEmissionDispatcher: ScreenEmissionDispatcher
+    private let screenEmissionPublicationGate = ExperienceInteractiveOperationGate()
+    private var screenEmissionRun: ScreenEmissionRun?
+    private var pendingScreenEmissionRunScope: ScreenControlRunScope??
 
     // MARK: - Computed Properties
 
@@ -476,6 +452,15 @@ class ExperienceViewController: NuxiePlatformViewController {
         self.systemEventSink = systemEventSink
         self.recoveryAffordanceDelay = recoveryAffordanceDelay
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
+        self.screenEmissionDispatcher = ScreenEmissionDispatcher(
+            createId: { UUID.v7().uuidString },
+            now: { Date().ISO8601Format() },
+            executeScriptAction: { input in
+                throw ScreenEmissionDispatchError.scriptActionMissing(
+                    actionId: input.actionId
+                )
+            }
+        )
         self.viewModel = ExperienceViewModel(
             experience: experience,
             artifactTelemetryContext: artifactTelemetryContext,
@@ -1889,19 +1874,162 @@ private extension ExperienceViewController {
 
 }
 
+extension ExperienceViewController {
+    func configureScreenEmissionRun(_ scope: ScreenControlRunScope?) async {
+        // Screen changes can be caused by the batch currently being drained.
+        // Queue the new scope without waiting on that batch's publication
+        // gate; the current publisher applies it after rollback/publication,
+        // and the next publisher applies it before dispatch.
+        pendingScreenEmissionRunScope = .some(scope)
+    }
+
+    private func applyPendingScreenEmissionRunScope() async {
+        guard let pending = pendingScreenEmissionRunScope else { return }
+        pendingScreenEmissionRunScope = nil
+        let scope = pending
+        guard let scope else {
+            screenEmissionRun = nil
+            return
+        }
+        let run = screenEmissionRun(from: scope)
+        screenEmissionRun = run
+        await screenEmissionDispatcher.restoreProgress(
+            journeyId: run.journeyId,
+            nextBatchSequence: scope.nextBatchSequence,
+            nextEmissionSequence: scope.nextEmissionSequence
+        )
+    }
+
+    private func screenEmissionRun(from scope: ScreenControlRunScope) -> ScreenEmissionRun {
+        ScreenEmissionRun(
+            journeyId: scope.journeyId,
+            executionOwnershipEpoch: scope.executionOwnershipEpoch,
+            lifecycleGeneration: scope.lifecycleGeneration,
+            presentationEpoch: scope.presentationEpoch
+        )
+    }
+
+    func captureScreenEmissionRun() -> ScreenEmissionRun? {
+        guard let pending = pendingScreenEmissionRunScope else {
+            return screenEmissionRun
+        }
+        guard let scope = pending else { return nil }
+        return screenEmissionRun(from: scope)
+    }
+}
+
 #if canImport(UIKit)
+enum ScreenEmissionPublicationDisposition: Equatable, Sendable {
+    case published
+    case rejected
+}
+
+extension ExperienceViewController {
+    @discardableResult
+    func publishScreenInput(
+        _ input: ExperienceRuntimeScreenEmission
+    ) async -> ScreenEmissionPublicationDisposition {
+        await publishScreenInput(
+            input,
+            originatingRun: captureScreenEmissionRun()
+        )
+    }
+
+    @discardableResult
+    func publishScreenInput(
+        _ input: ExperienceRuntimeScreenEmission,
+        originatingRun: ScreenEmissionRun?
+    ) async -> ScreenEmissionPublicationDisposition {
+        return await screenEmissionPublicationGate.withLock { [weak self] in
+            guard let self else { return .rejected }
+            return await self.publishScreenInputSerially(
+                input,
+                originatingRun: originatingRun
+            )
+        }
+    }
+
+    private func publishScreenInputSerially(
+        _ input: ExperienceRuntimeScreenEmission,
+        originatingRun: ScreenEmissionRun?
+    ) async -> ScreenEmissionPublicationDisposition {
+        await applyPendingScreenEmissionRunScope()
+        guard let run = screenEmissionRun,
+              run == originatingRun,
+              let definition = experience.definition else {
+            LogWarning(
+                "ExperienceViewController: rejected screen emission from an inactive signed run"
+            )
+            return .rejected
+        }
+
+        let result: Result<ScreenEmissionBatch, ScreenEmissionDispatchError>
+        switch input {
+        case .control(let screenId, let invocation, let additionalDrafts):
+            guard let action = definition.control(
+                screenId: screenId,
+                actionId: invocation.actionId
+            ) else {
+                LogWarning(
+                    "ExperienceViewController: rejected unknown screen action \(invocation.actionId) on \(screenId)"
+                )
+                return .rejected
+            }
+            result = await screenEmissionDispatcher.dispatch(
+                run: run,
+                screenId: screenId,
+                definition: action,
+                invocation: invocation,
+                additionalDrafts: additionalDrafts
+            )
+        case .effects(let source, let drafts):
+            result = await screenEmissionDispatcher.dispatch(
+                run: run,
+                source: source,
+                drafts: drafts
+            )
+        }
+
+        let disposition: ScreenEmissionPublicationDisposition
+        switch result {
+        case .failure(let error):
+            LogWarning("ExperienceViewController: screen emission dispatch failed: \(error)")
+            disposition = .rejected
+        case .success(let batch):
+            let published = await runtimeDelegate?.experienceViewController(
+                self,
+                didEmitScreenEmissionBatch: batch
+            ) ?? false
+            if !published {
+                _ = await screenEmissionDispatcher.rollbackUnpublishedBatch(batch)
+            }
+            disposition = published ? .published : .rejected
+        }
+        await applyPendingScreenEmissionRunScope()
+        return disposition
+    }
+}
+
 extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {
         guard acceptsRuntimeCallback(from: controller) else { return }
         screenTransitionCoordinator?.layoutTextInputs()
     }
 
+    func screenEmissionRun(
+        for controller: ExperienceScreenViewController
+    ) -> ScreenEmissionRun? {
+        guard acceptsRuntimeCallback(from: controller) else { return nil }
+        return captureScreenEmissionRun()
+    }
+
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
-        didEmitEvent event: ExperienceRendererEvent
-    ) {
+        didEmitScreenEmission input: ExperienceRuntimeScreenEmission,
+        originatingRun: ScreenEmissionRun?
+    ) async {
         guard acceptsRuntimeCallback(from: controller) else { return }
-        runtimeDelegate?.experienceViewController(self, didEmitEvent: event)
+        await publishScreenInput(input, originatingRun: originatingRun)
     }
 
     func experienceScreenViewController(

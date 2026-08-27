@@ -3213,6 +3213,82 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         ])
     }
 
+    func testRouterUsesSignedEventNameForControlsAndNeverInfersFromActionIdPayload() {
+        var router = ExperienceInteractiveEffectRouter()
+        let ordinary = ExperienceInteractiveReportedEvent(
+            localIndex: 0,
+            coreType: 128,
+            name: "analytics_event",
+            url: "",
+            target: "",
+            delay: 0,
+            properties: [ExperienceInteractiveField(
+                key: "actionId",
+                value: .string("signed_control")
+            )]
+        )
+        let control = ExperienceInteractiveReportedEvent(
+            localIndex: 1,
+            coreType: 128,
+            name: "signed_control",
+            url: "",
+            target: "",
+            delay: 0,
+            properties: []
+        )
+
+        let effects = router.project(
+            reportedEvents: [ordinary, control],
+            viewModelChanges: [],
+            hostCommands: [],
+            controlActionIds: ["signed_control"],
+            declaredEventNames: [],
+            correlationID: 9
+        )
+
+        XCTAssertEqual(effects.map(\.kind), [
+            .reportedEvent(ordinary),
+            .controlAction(actionId: "signed_control", event: control),
+        ])
+    }
+
+    #if canImport(UIKit)
+    func testNativeControlAndSiblingEffectsAssembleIntoOneAtomicRuntimeInput() throws {
+        var assembler = ExperienceRuntimeScreenEmissionAssembler()
+        let invocation = ScreenActionInvocation(
+            actionId: "submit",
+            value: .string("pro"),
+            componentId: "submit-button",
+            instanceId: "survey-1"
+        )
+        let source = ScreenEmissionSource(
+            screenId: "survey",
+            actionId: "runtime:42",
+            componentId: nil,
+            instanceId: nil
+        )
+        assembler.appendControl(screenId: "survey", invocation: invocation)
+        assembler.appendDraft(
+            .responseSet(field: "plan", value: .string("pro")),
+            source: source
+        )
+        assembler.appendDraft(
+            .event(name: "submitted", payload: ["plan": .string("pro")]),
+            source: source
+        )
+
+        let assembled = try XCTUnwrap(try assembler.assembled().get())
+        XCTAssertEqual(assembled, .control(
+            screenId: "survey",
+            invocation: invocation,
+            additionalDrafts: [
+                .responseSet(field: "plan", value: .string("pro")),
+                .event(name: "submitted", payload: ["plan": .string("pro")]),
+            ]
+        ))
+    }
+    #endif
+
     private var scriptedCommands: [ExperienceInteractiveHostCommand] {
         [
             ExperienceInteractiveHostCommand(

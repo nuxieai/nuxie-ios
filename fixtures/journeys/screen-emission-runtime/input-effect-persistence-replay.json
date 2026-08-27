@@ -1,0 +1,45 @@
+{
+  "suite": "journeys/screen-emission-runtime",
+  "version": 1,
+  "run": {
+    "journey_id": "screen-emission-run-1",
+    "experience_id": "screen-emission-experience-1",
+    "customer_id": "screen-emission-customer-1",
+    "screen_id": "survey",
+    "execution_ownership_epoch": 3,
+    "lifecycle_generation": 2,
+    "presentation_epoch": 7
+  },
+  "input": {
+    "action_id": "submit_survey",
+    "component_id": "submit_button",
+    "instance_id": "survey_1",
+    "value": "premium"
+  },
+  "effects": [
+    {
+      "kind": "response_set",
+      "field": "answer",
+      "value": "premium"
+    },
+    {
+      "kind": "event",
+      "name": "survey_submitted",
+      "payload": {
+        "answer": "premium"
+      }
+    }
+  ],
+  "expected": {
+    "batch_sequence": 0,
+    "emission_sequences": [0, 1],
+    "emission_ids": ["emission-1", "emission-2"],
+    "customer_event_ids": ["emission-2"],
+    "response_values": {
+      "answer": "premium"
+    },
+    "pending_batch_count_after_drain": 0,
+    "replay_customer_event_count": 1,
+    "replay_response_version_increment": 0
+  }
+}
