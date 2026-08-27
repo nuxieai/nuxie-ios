@@ -62,6 +62,34 @@
       }
     },
     {
+      "name": "usage result pins absent nested usage fields",
+      "kind": "featureUsage",
+      "result": {
+        "success": true,
+        "featureId": "api_calls",
+        "amountUsed": 0.5,
+        "message": null,
+        "usage": {
+          "current": 0.5,
+          "limit": null,
+          "remaining": null
+        },
+        "authoritativeAccess": null
+      },
+      "expect": {
+        "success": true,
+        "featureId": "api_calls",
+        "amountUsed": 0.5,
+        "message": null,
+        "usage": {
+          "current": 0.5,
+          "limit": null,
+          "remaining": null
+        },
+        "authoritativeAccess": null
+      }
+    },
+    {
       "name": "cache-first metered access preserves fractional balance",
       "kind": "featureAccess",
       "policy": "cacheFirst",
@@ -93,6 +121,23 @@
         "unlimited": false,
         "balance": null,
         "type": "boolean"
+      }
+    },
+    {
+      "name": "remote unlimited access preserves true",
+      "kind": "featureAccess",
+      "policy": "remote",
+      "access": {
+        "allowed": true,
+        "unlimited": true,
+        "balance": null,
+        "type": "metered"
+      },
+      "expect": {
+        "allowed": true,
+        "unlimited": true,
+        "balance": null,
+        "type": "metered"
       }
     }
   ]

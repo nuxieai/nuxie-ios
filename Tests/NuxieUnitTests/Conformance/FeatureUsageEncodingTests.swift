@@ -21,8 +21,10 @@ final class FeatureUsageEncodingTests: XCTestCase {
             Set([
                 "usage result preserves fractional counters and authoritative access",
                 "usage result pins absent optional fields",
+                "usage result pins absent nested usage fields",
                 "cache-first metered access preserves fractional balance",
                 "remote boolean access pins a null balance",
+                "remote unlimited access preserves true",
             ])
         )
         var coveredPolicies = Set<String>()
