@@ -44,12 +44,6 @@ struct ExperienceInteractiveReportedEvent: Equatable, Sendable {
     let properties: [ExperienceInteractiveField]
 }
 
-struct ExperienceInteractiveStateChange: Equatable, Sendable {
-    let layerIndex: Int
-    let coreType: UInt32
-    let globalID: UInt32?
-}
-
 enum ExperienceInteractiveViewModelValue: Equatable, Sendable {
     case unsupported
     case bytes(Data)
@@ -183,12 +177,10 @@ struct ExperienceInteractiveHostCommand: Equatable, Sendable {
 
 enum ExperienceInteractiveEffectKind: Equatable, Sendable {
     case reportedEvent(ExperienceInteractiveReportedEvent)
-    case stateChange(ExperienceInteractiveStateChange)
     case viewModelChange(ExperienceInteractiveViewModelChange)
     case responseSet(field: String, value: ExperienceInteractiveValue)
     case responseUnset(field: String)
     case journeyEvent(name: String, payload: ExperienceInteractiveValue)
-    case navigate(screenID: String, transition: ExperienceInteractiveValue?)
     case hostCommand(name: String, payload: ExperienceInteractiveValue)
     case rejectedHostCommand(name: String, reason: String)
 }
@@ -345,23 +337,17 @@ struct ExperienceInteractiveEffectRouter: Sendable {
 
     mutating func project(
         reportedEvents: [ExperienceInteractiveReportedEvent],
-        stateChanges: [ExperienceInteractiveStateChange] = [],
         viewModelChanges: [ExperienceInteractiveViewModelChange],
         hostCommands: [ExperienceInteractiveHostCommand],
         declaredEventNames: Set<String>,
-        validScreenIDs: Set<String>,
         correlationID: UInt64
     ) -> [ExperienceInteractiveEffect] {
         var staged: [ExperienceInteractiveEffectKind] = []
         staged.reserveCapacity(
-            reportedEvents.count + stateChanges.count
-                + viewModelChanges.count + hostCommands.count
+            reportedEvents.count + viewModelChanges.count + hostCommands.count
         )
         staged.append(contentsOf: reportedEvents.map {
             .reportedEvent($0)
-        })
-        staged.append(contentsOf: stateChanges.map {
-            .stateChange($0)
         })
         staged.append(contentsOf: viewModelChanges.map {
             .viewModelChange($0)
@@ -369,8 +355,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         staged.append(contentsOf: hostCommands.map {
             interpret(
                 $0,
-                declaredEventNames: declaredEventNames,
-                validScreenIDs: validScreenIDs
+                declaredEventNames: declaredEventNames
             )
         })
 
@@ -394,8 +379,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
 
     private func interpret(
         _ command: ExperienceInteractiveHostCommand,
-        declaredEventNames: Set<String>,
-        validScreenIDs: Set<String>
+        declaredEventNames: Set<String>
     ) -> ExperienceInteractiveEffectKind {
         switch command.name {
         case SystemEventNames.responseSet:
@@ -418,6 +402,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
             }
             return .responseUnset(field: field)
         case "$navigate":
+            // Screens emit events; Journey Routes are the sole navigation authority.
             return .rejectedHostCommand(
                 name: command.name,
                 reason: "screens emit events; Journey Routes own navigation"
@@ -1588,8 +1573,6 @@ actor ExperienceInteractiveScreen {
     nonisolated let artboardBounds: CGRect
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
-    private let screenID: String
-    private let validScreenIDs: Set<String>
     private let declaredEventNames: Set<String>
     private let textInputs: [String: NativeExperienceTextInput]
     private let imageIDsByName: [String: UInt64]
@@ -1618,8 +1601,6 @@ actor ExperienceInteractiveScreen {
         runtime: NuxieNativeRuntime,
         fontScope: ExperienceRuntimeFontScope,
         artboardBounds: CGRect,
-        screenID: String,
-        validScreenIDs: Set<String>,
         declaredEventNames: Set<String>,
         textInputs: [String: NativeExperienceTextInput],
         imageIDsByName: [String: UInt64],
@@ -1637,8 +1618,6 @@ actor ExperienceInteractiveScreen {
         self.runtime = runtime
         self.fontScope = fontScope
         self.artboardBounds = artboardBounds
-        self.screenID = screenID
-        self.validScreenIDs = validScreenIDs
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
         self.imageIDsByName = imageIDsByName
@@ -1750,8 +1729,6 @@ actor ExperienceInteractiveScreen {
                 throw ExperienceInteractiveScreenError.invalidScreen(screenID)
             }
         }
-        let manifestScreenIDs = Set(payload.renderPlan.screens.map(\.screenId))
-        let journeyScreenIDs = Set(payload.journey.screens.map(\.id))
         var schemaIndexByViewModel = initialState.schemaIndexByViewModel
         var snapshotTopology = ExperienceInteractiveSnapshotTopology()
         var trackedLists = ExperienceInteractiveTrackedListPlanner()
@@ -1783,8 +1760,6 @@ actor ExperienceInteractiveScreen {
                 width: manifestScreen.width,
                 height: manifestScreen.height
             ),
-            screenID: screenID,
-            validScreenIDs: manifestScreenIDs.intersection(journeyScreenIDs),
             declaredEventNames: Set(
                 payload.definition?.routes.keys.compactMap { key in
                     guard key.host == .screen(screenID) else { return nil }
@@ -1836,17 +1811,9 @@ actor ExperienceInteractiveScreen {
     ) -> ExperienceInteractiveStepResult {
         let effects = router.project(
             reportedEvents: result.events.map(Self.reportedEvent),
-            stateChanges: result.stateChanges.map {
-                ExperienceInteractiveStateChange(
-                    layerIndex: $0.layerIndex,
-                    coreType: $0.coreType,
-                    globalID: $0.globalID
-                )
-            },
             viewModelChanges: publishableViewModelChanges(result.viewModelChanges),
             hostCommands: result.hostCommands.map(Self.hostCommand),
             declaredEventNames: declaredEventNames,
-            validScreenIDs: validScreenIDs,
             correlationID: correlationID
         )
         return ExperienceInteractiveStepResult(
@@ -2458,11 +2425,9 @@ actor ExperienceInteractiveScreen {
         let changes = result.changes.dropFirst(prefixCount)
         let effects = router.project(
             reportedEvents: [],
-            stateChanges: [],
             viewModelChanges: publishableViewModelChanges(Array(changes)),
             hostCommands: [],
             declaredEventNames: declaredEventNames,
-            validScreenIDs: validScreenIDs,
             correlationID: correlationID
         )
         return ExperienceInteractiveMutationResult(

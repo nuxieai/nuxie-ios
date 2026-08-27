@@ -272,7 +272,6 @@ final class EventLogDeliveryTests: AsyncSpec {
                 config.testingOverrides.suppressBackgroundWork = suppressBackgroundWork
                 let newLog = EventLog(
                     identity: MockIdentityService(),
-                    sessions: MockSessionService(),
                     dateProvider: MockDateProvider(),
                     apiClient: mockApi,
                     store: mockStore
@@ -1780,11 +1779,9 @@ final class EventLogDeliveryTests: AsyncSpec {
                         "$anon_distinct_id": "anon456"
                     ]
 
-                    var propertiesWithSession = properties
-                    propertiesWithSession["$session_id"] = "session456"
                     let event = TestEventBuilder(name: "button_clicked")
                         .withDistinctId("user123")
-                        .withProperties(propertiesWithSession)
+                        .withProperties(properties)
                         .withTimestamp(Date())
                         .build()
 

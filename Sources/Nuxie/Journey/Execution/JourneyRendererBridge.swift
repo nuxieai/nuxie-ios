@@ -416,22 +416,8 @@ extension JourneyRendererBridge: IntroEligibilityAuthorizationContextProviding {
   }
 }
 
-/// Pure mapping from the renderer's CloseReason to the dismissal
-/// notification payload and the `$screen_dismissed` method string.
+/// Pure mapping from the renderer's CloseReason to typed journey outcomes.
 enum JourneyDismissalMapping {
-  static func notificationReason(for reason: CloseReason) -> (reason: String, errorDescription: String?) {
-    switch reason {
-    case .userDismissed:
-      return ("user_dismissed", nil)
-    case .goalMet:
-      return ("goal_met", nil)
-    case .hostDismissed:
-      return ("host_dismissed", nil)
-    case .error(let error):
-      return ("error", error.localizedDescription)
-    }
-  }
-
   static func dismissMethod(for reason: CloseReason) -> String {
     ExperienceScreenDismissalMethod.value(for: reason)
   }

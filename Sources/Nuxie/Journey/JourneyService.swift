@@ -5,11 +5,10 @@ enum ResumeReason: Sendable {
   case start
   case timer
   case event(NuxieEvent)
-  case segmentChange
 
   var isReactive: Bool {
     switch self {
-    case .event, .segmentChange:
+    case .event:
       return true
     case .start, .timer:
       return false
@@ -1149,9 +1148,9 @@ actor JourneyService: JourneyServiceProtocol {
     persistJourney(state)
 
     switch state.exitPolicySnapshot?.mode {
-    case .onGoal, .onGoalOrStop:
+    case .onGoal:
       await completeJourney(journey, reason: .goalMet)
-    case .onStopMatching, .never, nil:
+    case .never, nil:
       break
     }
   }
@@ -2358,9 +2357,6 @@ actor JourneyService: JourneyServiceProtocol {
       )
     }
 
-    await postDismissNotification(for: journey, reason: reason)
-    guard await ownsExecutableJourney(journey, runner: runner) else { return }
-
     var state = await journey.snapshot()
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
@@ -2435,32 +2431,6 @@ actor JourneyService: JourneyServiceProtocol {
       hostDismissalRetryAuthorizations[journeyId] = journey
     }
     return terminalized
-  }
-
-  private func postDismissNotification(
-    for journey: Journey,
-    reason: CloseReason
-  ) async {
-    guard inMemoryJourneysById[journey.id] === journey else { return }
-    var userInfo: [String: Any] = [
-      "journeyId": journey.id,
-      "experienceId": journey.experienceId
-    ]
-    let state = await journey.snapshot()
-    guard inMemoryJourneysById[journey.id] === journey else { return }
-    if let screenId = state.executionState.currentScreenId {
-      userInfo["screenId"] = screenId
-    }
-    let mapped = JourneyDismissalMapping.notificationReason(for: reason)
-    userInfo["reason"] = mapped.reason
-    if let errorDescription = mapped.errorDescription {
-      userInfo["error"] = errorDescription
-    }
-    NotificationCenter.default.post(
-      name: .nuxieDismiss,
-      object: nil,
-      userInfo: userInfo
-    )
   }
 
   /// Host dismissal may legitimately finish under the journey's old identity,
@@ -3258,7 +3228,6 @@ actor JourneyService: JourneyServiceProtocol {
         profile: profileService,
         apiClient: api,
         dateProvider: dateProvider,
-        irRuntime: irRuntime,
         appActionHandler: appActionHandler,
         responseSessionModule: controlExperience.definition?.responseSchema.map { _ in
           ResponseSessionModule(
@@ -4587,8 +4556,6 @@ actor JourneyService: JourneyServiceProtocol {
       // tombstone while capture is suspended. Its teardown and trigger update
       // own the result; never continue completion accounting or emit twice.
       guard inMemoryJourneysById[journey.id] === journey else { return }
-      await postDismissNotification(for: journey, reason: .hostDismissed)
-      guard inMemoryJourneysById[journey.id] === journey else { return }
     }
 
     // The local terminal transition is already durable. Network abandonment
@@ -5402,8 +5369,7 @@ actor JourneyService: JourneyServiceProtocol {
       name: event.name,
       properties: Data(),
       timestamp: event.timestamp,
-      distinctId: event.distinctId,
-      sessionId: event.properties["$session_id"] as? String
+      distinctId: event.distinctId
     )
   }
 
@@ -5411,7 +5377,7 @@ actor JourneyService: JourneyServiceProtocol {
     let state = await journey.snapshot()
     let mode = state.exitPolicySnapshot?.mode ?? .never
 
-    if (mode == .onGoal || mode == .onGoalOrStop), state.convertedAt != nil {
+    if mode == .onGoal, state.convertedAt != nil {
       return .goalMet
     }
 

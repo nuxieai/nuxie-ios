@@ -417,10 +417,8 @@ final class ConformanceVectorTests: XCTestCase {
                         )
                     ),
                     resumeAt: resumeAt,
-                    condition: nil,
                     maxTimeMs: nil,
-                    startedAt: startedAt,
-                    resumeActions: nil
+                    startedAt: startedAt
                 )
                 pendingDeadlineAt = resumeAt
             }

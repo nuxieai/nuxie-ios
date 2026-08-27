@@ -28,7 +28,6 @@ final class EventLogTests: AsyncSpec {
 
                 log = EventLog(
                     identity: mockIdentity,
-                    sessions: MockSessionService(),
                     dateProvider: MockDateProvider(),
                     apiClient: mockApi,
                     store: mockStore
@@ -292,7 +291,6 @@ final class EventLogTests: AsyncSpec {
                 it("caps stored history at maxEventsStored") {
                     let cappedLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: mockApi,
                         store: mockStore,
@@ -318,7 +316,6 @@ final class EventLogTests: AsyncSpec {
                 it("never reaps rows still pending delivery") {
                     let cappedLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: mockApi,
                         store: mockStore,
@@ -347,7 +344,6 @@ final class EventLogTests: AsyncSpec {
                     let dateProvider = MockDateProvider(initialDate: firstOpen)
                     let firstLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: dateProvider,
                         apiClient: mockApi,
                         store: mockStore
@@ -362,7 +358,6 @@ final class EventLogTests: AsyncSpec {
                     dateProvider.advance(by: 86_400)
                     let relaunchedLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: dateProvider,
                         apiClient: mockApi,
                         store: mockStore
@@ -392,7 +387,6 @@ final class EventLogTests: AsyncSpec {
                     )
                     let firstLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(initialDate: firstOpen),
                         apiClient: mockApi,
                         store: mockStore
@@ -412,7 +406,6 @@ final class EventLogTests: AsyncSpec {
                     let evaluationTime = failedEvent.timestamp.addingTimeInterval(60)
                     let relaunchedLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(initialDate: evaluationTime),
                         apiClient: mockApi,
                         store: mockStore
@@ -457,11 +450,9 @@ final class EventLogTests: AsyncSpec {
                         properties: Data("not-json".utf8),
                         timestamp: now.addingTimeInterval(-60),
                         distinctId: mockIdentity.getDistinctId(),
-                        sessionId: nil
                     )]
                     let corruptLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(initialDate: now),
                         apiClient: mockApi,
                         store: mockStore
@@ -486,7 +477,6 @@ final class EventLogTests: AsyncSpec {
                     let now = Date(timeIntervalSince1970: 1_786_550_400)
                     let horizonLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(initialDate: now),
                         apiClient: mockApi,
                         store: mockStore
@@ -521,7 +511,6 @@ final class EventLogTests: AsyncSpec {
                     let now = Date(timeIntervalSince1970: 1_786_550_400)
                     let cappedLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(initialDate: now),
                         apiClient: mockApi,
                         store: mockStore,
@@ -576,7 +565,6 @@ final class EventLogTests: AsyncSpec {
                     let now = Date(timeIntervalSince1970: 1_786_550_400)
                     let saturatedLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(initialDate: now),
                         apiClient: mockApi,
                         store: mockStore,
@@ -614,7 +602,6 @@ final class EventLogTests: AsyncSpec {
                     let now = Date(timeIntervalSince1970: 1_786_550_400)
                     let failureLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(initialDate: now),
                         apiClient: mockApi,
                         store: mockStore
@@ -650,7 +637,6 @@ final class EventLogTests: AsyncSpec {
                     let now = Date(timeIntervalSince1970: 1_786_550_400)
                     let failureLog = EventLog(
                         identity: mockIdentity,
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(initialDate: now),
                         apiClient: mockApi,
                         store: mockStore
@@ -1068,7 +1054,6 @@ final class EventLogTests: AsyncSpec {
                     let transport = OrderedPreparedEventTransport()
                     let orderedLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: transport,
                         store: mockStore
@@ -1107,7 +1092,6 @@ final class EventLogTests: AsyncSpec {
                     let transport = OrderedPreparedEventTransport()
                     let orderedLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: transport,
                         store: mockStore
@@ -1171,7 +1155,6 @@ final class EventLogTests: AsyncSpec {
                     let transport = OrderedPreparedEventTransport()
                     let orderedLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: transport,
                         store: mockStore
@@ -1233,7 +1216,6 @@ final class EventLogTests: AsyncSpec {
                     )
                     let orderedLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: transport,
                         store: mockStore
@@ -1272,7 +1254,6 @@ final class EventLogTests: AsyncSpec {
                     let transport = DecisionPredecessorPreparedEventTransport()
                     let orderedLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: transport,
                         store: mockStore
@@ -1334,7 +1315,6 @@ final class EventLogTests: AsyncSpec {
                     let transport = FailedPredecessorPreparedEventTransport()
                     let orderedLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: transport,
                         store: mockStore
@@ -1373,7 +1353,6 @@ final class EventLogTests: AsyncSpec {
                     let transport = ScopedCancellationEventTransport()
                     let orderedLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: transport,
                         store: mockStore
@@ -1416,7 +1395,6 @@ final class EventLogTests: AsyncSpec {
                     let closingStore = MockEventStore()
                     let closingLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: transport,
                         store: closingStore
@@ -1444,7 +1422,6 @@ final class EventLogTests: AsyncSpec {
                     closingStore.pendingInsertDelayNanoseconds = 300_000_000
                     let closingLog = EventLog(
                         identity: MockIdentityService(),
-                        sessions: MockSessionService(),
                         dateProvider: MockDateProvider(),
                         apiClient: MockNuxieApi(),
                         store: closingStore

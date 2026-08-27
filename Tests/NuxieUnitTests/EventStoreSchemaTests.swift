@@ -30,7 +30,7 @@ final class EventStoreSchemaTests: XCTestCase {
         defer { sqlite3_close(database) }
 
         XCTAssertEqual(try userVersion(in: database), 1)
-        XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM pragma_table_info('events');", in: database), 8)
+        XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM pragma_table_info('events');", in: database), 7)
         XCTAssertEqual(
             try scalarInt(
                 "SELECT \"notnull\" FROM pragma_table_info('events') WHERE name = 'origin';",
@@ -73,7 +73,7 @@ final class EventStoreSchemaTests: XCTestCase {
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_events_%';",
                 in: database
             ),
-            8
+            6
         )
     }
 
@@ -266,7 +266,6 @@ final class EventStoreSchemaTests: XCTestCase {
               properties BLOB NOT NULL,
               timestamp INTEGER NOT NULL,
               user_id TEXT \(userIDIsRequired ? "NOT NULL" : ""),
-              session_id TEXT,
               delivery_state INTEGER NOT NULL DEFAULT 2,
               origin TEXT NOT NULL DEFAULT 'device'
             );
@@ -296,10 +295,8 @@ final class EventStoreSchemaTests: XCTestCase {
             ("idx_events_timestamp", "events(timestamp)"),
             ("idx_events_user_id", "events(user_id)"),
             ("idx_events_name", "events(name)"),
-            ("idx_events_session_id", "events(session_id)"),
             ("idx_events_user_name_time", "events(user_id, name, timestamp DESC)"),
             ("idx_events_user_time", "events(user_id, timestamp DESC)"),
-            ("idx_events_session_time", "events(session_id, timestamp DESC)"),
         ]
         for (name, definition) in indexes where name != omittedIndex {
             try execute("CREATE INDEX \(name) ON \(definition);", on: database)

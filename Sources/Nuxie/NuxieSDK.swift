@@ -128,7 +128,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       let lifecycleTracker = AppLifecycleTracker(eventSink: core.systemEvents)
       let lifecycleCoordinator = NuxieLifecycleCoordinator(
         lifecycleTracker: lifecycleTracker,
-        sessions: core.sessions,
         journeys: core.journeys,
         eventLog: core.eventLog,
         profile: core.profile,
@@ -632,13 +631,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         ))
     }
     
-    // Start a new session only when the user actually changed. Apps commonly
-    // call identify() with the same id on every launch; rotating the session
-    // each time fragments session analytics.
-    if hasDifferentDistinctId {
-      core.sessions.startSession()
-    }
-
     // Track $identify only when the user changed or there are user properties
     // to apply; a bare same-id re-identify is a no-op.
     let hasUserProperties = userProperties != nil || userPropertiesSetOnce != nil
@@ -691,10 +683,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         to: newDistinctId,
         migrateEvents: false
       ))
-
-    // Start new session on reset before transferring the operation lease to
-    // the asynchronous transition drain.
-    core.sessions.resetSession()
 
     let launched = run.launchFacadeTask { [operation] in
       defer { operation.finish() }
@@ -762,21 +750,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
     let distinctId = identityService.getDistinctId()
     return await eventLog.getEventsForUser(distinctId, limit: limit)
-  }
-
-  /// Get events from the current session
-  /// - Returns: Array of session events or empty array if storage unavailable
-  internal func getCurrentSessionEvents() async -> [StoredEvent] {
-    guard let operation = runningOperation() else { return [] }
-    defer { operation.finish() }
-    let run = operation.graph
-    let core = run.core
-    // Get current session ID
-    guard let sessionId = core.sessions.getSessionId(at: Date(), readOnly: true) else {
-      return []
-    }
-    
-    return await core.eventLog.getEvents(for: sessionId)
   }
 
   // MARK: - Private Methods

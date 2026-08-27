@@ -15,20 +15,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let recorder = AppActionDelegateRecorder()
         sdk.delegate = recorder
         defer { sdk.delegate = nil }
-        let retiredNotification = expectation(description: "retired notification is not posted")
-        retiredNotification.isInverted = true
-        let retiredNotificationName = Notification.Name(
-            ["com.nuxie.call", "Delegate"].joined()
-        )
-        let observer = NotificationCenter.default.addObserver(
-            forName: retiredNotificationName,
-            object: nil,
-            queue: .main
-        ) { _ in
-            retiredNotification.fulfill()
-        }
-        defer { NotificationCenter.default.removeObserver(observer) }
-
         let mocks = MockFactory.shared
         mocks.eventLog.reset()
         let runtime = try makeJourneyRunner(
@@ -79,8 +65,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             experienceVersion: "interactive-build",
             journeyId: runtime.journey.id
         ))
-        await fulfillment(of: [retiredNotification], timeout: 0.01)
-
     }
 
     func testSignedDynamicPurchaseFollowsSelectedProductToPlacement() async throws {
@@ -765,22 +749,22 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 value: .bytes(Data("canonical".utf8))
             ))
         )
-        let navigation = ExperienceInteractiveEffect(
+        let hostCommand = ExperienceInteractiveEffect(
             sequence: 2,
             correlationID: 0,
-            kind: .navigate(screenID: "next", transition: nil)
+            kind: .hostCommand(name: "custom", payload: .null)
         )
 
         XCTAssertEqual(
             ExperienceInteractiveStepDeliveryPlanner.items(
-                effects: [reported, viewModel, navigation],
+                effects: [reported, viewModel, hostCommand],
                 includesTextInputLayout: true
             ),
             [
                 .effect(reported),
                 .effect(viewModel),
                 .textInputLayout,
-                .effect(navigation),
+                .effect(hostCommand),
             ]
         )
     }
@@ -3130,11 +3114,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             delay: 0,
             properties: []
         )
-        let stateChange = ExperienceInteractiveStateChange(
-            layerIndex: 1,
-            coreType: 7,
-            globalID: 9
-        )
         let change = ExperienceInteractiveViewModelChange(
             origin: .runtime,
             correlationID: 77,
@@ -3144,21 +3123,18 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         let effects = router.project(
             reportedEvents: [reported],
-            stateChanges: [stateChange],
             viewModelChanges: [change],
             hostCommands: scriptedCommands,
             declaredEventNames: ["purchase_tapped", "selection_changed"],
-            validScreenIDs: ["screen_1", "screen_2"],
             correlationID: 42
         )
 
-        XCTAssertEqual(effects.map(\.sequence), Array(0...7))
-        XCTAssertEqual(effects.map(\.correlationID), [42, 42, 77, 42, 42, 42, 42, 42])
+        XCTAssertEqual(effects.map(\.sequence), Array(0...6))
+        XCTAssertEqual(effects.map(\.correlationID), [42, 77, 42, 42, 42, 42, 42])
         XCTAssertEqual(
             effects.map(\.kind),
             [
                 .reportedEvent(reported),
-                .stateChange(stateChange),
                 .viewModelChange(change),
                 .responseSet(field: "plan", value: .string("pro")),
                 .journeyEvent(name: "purchase_tapped", payload: Self.object([
@@ -3189,11 +3165,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ])
             )],
             declaredEventNames: [],
-            validScreenIDs: ["screen_1", "screen_2"],
             correlationID: 100
         )
         XCTAssertEqual(next, [ExperienceInteractiveEffect(
-            sequence: 8,
+            sequence: 7,
             correlationID: 100,
             kind: .rejectedHostCommand(
                 name: "$navigate",
@@ -3218,7 +3193,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ),
             ],
             declaredEventNames: [],
-            validScreenIDs: ["screen_1"],
             correlationID: 9
         )
 
@@ -3759,7 +3733,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 profile: mocks.profileService,
                 apiClient: mocks.nuxieApi,
                 dateProvider: mocks.dateProvider,
-                irRuntime: runtime,
                 appActionHandler: appActionHandler,
                 persistEntryActionClaim: { _ in true }
             ),

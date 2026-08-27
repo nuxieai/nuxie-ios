@@ -35,7 +35,6 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
             var storagePath: String!
             var config: NuxieConfiguration!
             var identity: MockIdentityService!
-            var sessions: SessionService!
             var dateProvider: SystemDateProvider!
 
             beforeEach {
@@ -49,14 +48,12 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 config.testingOverrides.retryCount = 1
                 config.testingOverrides.retryDelay = 0.01
                 identity = MockIdentityService()
-                sessions = SessionService()
                 dateProvider = SystemDateProvider()
 
                 api = MockNuxieApi()
 
                 eventLog = EventLog(
                     identity: identity,
-                    sessions: sessions,
                     dateProvider: dateProvider,
                     apiClient: api
                 )
@@ -107,7 +104,6 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 // "Session 2": fresh log over the SAME storage path.
                 let relaunchService = EventLog(
                     identity: identity,
-                    sessions: sessions,
                     dateProvider: dateProvider,
                     apiClient: api
                 )
@@ -169,7 +165,6 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 await api.setBatchError(nil)
                 let relaunchService = EventLog(
                     identity: identity,
-                    sessions: sessions,
                     dateProvider: dateProvider,
                     apiClient: api
                 )
@@ -210,7 +205,6 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 let replayRecorder = OrchestrationForwardingRecorder()
                 let relaunchService = EventLog(
                     identity: identity,
-                    sessions: sessions,
                     dateProvider: dateProvider,
                     apiClient: api
                 )

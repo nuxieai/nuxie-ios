@@ -3403,7 +3403,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let eventStore = MockEventStore()
         let eventLog = EventLog(
             identity: mocks.identityService,
-            sessions: MockSessionService(),
             dateProvider: mocks.dateProvider,
             apiClient: mocks.nuxieApi,
             store: eventStore

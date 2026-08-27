@@ -265,7 +265,6 @@ import UIKit
             let identity = IdentityService(customStoragePath: cacheRootURL)
             let eventLog = EventLog(
                 identity: identity,
-                sessions: SessionService(),
                 dateProvider: SystemDateProvider(),
                 apiClient: api
             )

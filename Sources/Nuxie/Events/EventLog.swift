@@ -283,7 +283,6 @@ protocol EventHistoryReading: AnyObject, Sendable {
     ascending: Bool,
     limit: Int
   ) async -> [StoredEvent]
-  func getEvents(for sessionId: String) async -> [StoredEvent]
 }
 
 /// Lossless storage seam used by IR. Unlike the application-facing history
@@ -467,7 +466,6 @@ protocol EventLogProtocol:
     ascending: Bool,
     limit: Int
   ) async -> [StoredEvent]
-  func getEvents(for sessionId: String) async -> [StoredEvent]
 
   // MARK: - Event Query Methods
 
@@ -615,10 +613,9 @@ actor EventLog: EventLogProtocol {
   // MARK: - Dependencies
 
   /// Constructor-injected collaborators (Phase 4c composition root). The
-  /// composition root builds identity/session/date/api before the log, so
+  /// composition root builds identity/date/api before the log, so
   /// there is no lazy resolution and no hidden ordering.
   private nonisolated let identityService: IdentityServiceProtocol
-  private nonisolated let sessionService: SessionServiceProtocol
   private nonisolated let dateProvider: DateProviderProtocol
   private let apiClient: EventTransport
 
@@ -699,7 +696,6 @@ actor EventLog: EventLogProtocol {
 
   public init(
     identity: IdentityServiceProtocol,
-    sessions: SessionServiceProtocol,
     dateProvider: DateProviderProtocol,
     apiClient: EventTransport,
     store: EventStoreProtocol? = nil,
@@ -708,7 +704,6 @@ actor EventLog: EventLogProtocol {
     cleanupCheckInterval: Int = 100
   ) {
     self.identityService = identity
-    self.sessionService = sessions
     self.dateProvider = dateProvider
     self.apiClient = apiClient
     self.store = store ?? SQLiteEventStore()
@@ -2472,18 +2467,7 @@ actor EventLog: EventLogProtocol {
   // MARK: - Enrichment
 
   private func buildEvent(from p: TrackPayload) async -> NuxieEvent? {
-    // Stage 1: Add session ID if not already present
-    var propertiesWithSession = p.properties
-    if propertiesWithSession["$session_id"] == nil {
-      // Get or create session ID and add to properties
-      if let sessionId = sessionService.getSessionId(at: Date(), readOnly: false) {
-        propertiesWithSession["$session_id"] = sessionId
-        // Touch session to update activity
-        sessionService.touchSession()
-      }
-    }
-
-    var finalProperties = await enrich(propertiesWithSession)
+    var finalProperties = await enrich(p.properties)
     finalProperties["$distinct_id"] = p.forcedDistinctId
 
     let nuxieEvent = NuxieEvent(
@@ -2516,16 +2500,7 @@ actor EventLog: EventLogProtocol {
   private func buildTriggerProperties(
     _ properties: sending [String: Any]?
   ) async -> sending [String: Any] {
-    var finalProperties = properties ?? [:]
-
-    if finalProperties["$session_id"] == nil {
-      if let sessionId = sessionService.getSessionId(at: Date(), readOnly: false) {
-        finalProperties["$session_id"] = sessionId
-        sessionService.touchSession()
-      }
-    }
-
-    return await enrich(finalProperties)
+    await enrich(properties ?? [:])
   }
 
   private func enrich(_ custom: sending [String: Any]) async -> sending [String: Any] {
@@ -3507,16 +3482,6 @@ actor EventLog: EventLogProtocol {
     }
   }
 
-  public func getEvents(for sessionId: String) async -> [StoredEvent] {
-    await ready.wait()
-    do {
-      return try await store.querySessionEvents(sessionId)
-    } catch {
-      LogError("Failed to get session events: \(error)")
-      return []
-    }
-  }
-
   func queryEventsForIR(
     _ distinctId: String,
     name: String,
@@ -3831,8 +3796,7 @@ actor EventLog: EventLogProtocol {
       name: event.name,
       properties: Data(),
       timestamp: event.timestamp,
-      distinctId: event.distinctId,
-      sessionId: event.properties["$session_id"] as? String
+      distinctId: event.distinctId
     )
   }
 

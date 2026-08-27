@@ -9,16 +9,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     /// Optional collaborators used to enrich mock events. When nil, static
     /// test defaults are used instead.
     private var _identity: IdentityServiceProtocol?
-    private var _sessions: SessionServiceProtocol?
     public var identity: IdentityServiceProtocol? {
         get { lock.withLock { _identity } }
         set { lock.withLock { _identity = newValue } }
     }
-    public var sessions: SessionServiceProtocol? {
-        get { lock.withLock { _sessions } }
-        set { lock.withLock { _sessions = newValue } }
-    }
-
     private var _routedEvents: [NuxieEvent] = []
     private var _trackedEvents: [(name: String, properties: [String: Any]?)] = []
     private var _eventHandlers: [(String, (NuxieEvent) -> Void)] = []
@@ -357,11 +351,6 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         lock.withLock { _journeyHandoffDeliveredHandler = handler }
     }
     
-    public func getEvents(for sessionId: String) async -> [StoredEvent] {
-        // Return all events for specified session (mock)
-        return await getRecentEvents(limit: routedEvents.count)
-    }
-    
     public func hasEvent(name: String, distinctId: String, since: Date?) async -> Bool {
         let events = lock.withLock { _routedEvents }
         let userEvents = events.filter { $0.distinctId == distinctId && $0.name == name }
@@ -507,9 +496,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _preparedTriggerResponseTasks.removeAll()
             _preparedTriggerResponseTail = nil
             _nextPreparedTriggerSequence = 0
-            // `identity` is wired once by MockFactory and survives resets;
-            // `sessions` is per-test opt-in, so restore the nil default.
-            _sessions = nil
+            // `identity` is wired once by MockFactory and survives resets.
             _routedEvents.removeAll()
             _trackedEvents.removeAll()
             _eventHandlers.removeAll()
@@ -831,16 +818,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     ) async -> sending [String: Any] {
         let handler = lock.withLock { _prepareTriggerPropertiesHandler }
         await handler?()
-        var finalProperties = properties ?? [:]
-
-        if finalProperties["$session_id"] == nil,
-           let sessions,
-           let sessionId = sessions.getSessionId(at: Date(), readOnly: false) {
-            finalProperties["$session_id"] = sessionId
-            sessions.touchSession()
-        }
-
-        return finalProperties
+        return properties ?? [:]
     }
 
     public func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent? {

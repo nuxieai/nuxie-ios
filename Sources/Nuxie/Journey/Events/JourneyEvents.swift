@@ -75,9 +75,9 @@ final class JourneyEvents: Sendable {
             : NSNull()
         let endOnGoal: Bool
         switch journey.exitPolicySnapshot?.mode {
-        case .onGoal, .onGoalOrStop:
+        case .onGoal:
             endOnGoal = true
-        case .onStopMatching, .never, nil:
+        case .never, nil:
             endOnGoal = false
         }
 

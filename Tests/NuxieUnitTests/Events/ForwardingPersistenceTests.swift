@@ -150,7 +150,6 @@ final class ForwardingPersistenceTests: XCTestCase {
     let store = MockEventStore()
     let log = EventLog(
       identity: MockIdentityService(),
-      sessions: MockSessionService(),
       dateProvider: MockDateProvider(initialDate: arrival),
       apiClient: MockNuxieApiForQueue(),
       store: store
@@ -510,7 +509,6 @@ final class ForwardingPersistenceTests: XCTestCase {
       "queryEventsForUser": 4,
       "queryPendingDelivery": 1,
       "queryRecentEvents": 1,
-      "querySessionEvents": 1,
       "queryStableCapture": 1,
       "queryUnresolvedJourneyOwnershipResponse": 2,
       "readOrInitializeHistoryCoverage": 1,
@@ -535,7 +533,6 @@ final class ForwardingPersistenceTests: XCTestCase {
   private func makeUnconfiguredLog(store: MockEventStore) -> EventLog {
     EventLog(
       identity: MockIdentityService(),
-      sessions: MockSessionService(),
       dateProvider: MockDateProvider(),
       apiClient: MockNuxieApiForQueue(),
       store: store

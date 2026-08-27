@@ -1,5 +1,20 @@
 import Foundation
 
+private struct JourneyDynamicCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        self.intValue = nil
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
+
 enum JourneyPendingActionKind: String, Codable, Sendable {
     case delay
     case timeWindow
@@ -76,13 +91,40 @@ enum JourneyContinuationResumeReason: String, Codable, Sendable {
     case start
     case timer
     case event
-    case segmentChange
 }
 
 struct JourneyContinuationResume: Codable, Sendable {
     let pending: JourneyPendingAction
     let reason: JourneyContinuationResumeReason
     let event: JourneyContinuationEvent?
+
+    private enum CodingKeys: String, CodingKey {
+        case pending, reason, event
+    }
+
+    init(
+        pending: JourneyPendingAction,
+        reason: JourneyContinuationResumeReason,
+        event: JourneyContinuationEvent?
+    ) {
+        self.pending = pending
+        self.reason = reason
+        self.event = event
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pending = try container.decode(JourneyPendingAction.self, forKey: .pending)
+        reason = try container.decode(JourneyContinuationResumeReason.self, forKey: .reason)
+        event = try container.decodeIfPresent(JourneyContinuationEvent.self, forKey: .event)
+        if reason == .event, event == nil {
+            throw DecodingError.dataCorruptedError(
+                forKey: .event,
+                in: container,
+                debugDescription: "event continuation requires its authored event"
+            )
+        }
+    }
 }
 
 /// Durable interpreter work that follows a pending action. The indirect
@@ -108,16 +150,21 @@ struct JourneyPendingAction: Codable, Sendable {
     public let actionIndex: Int
     public let kind: JourneyPendingActionKind
     public let resumeAt: Date?
-    public let condition: IREnvelope?
     public let journeyCondition: JourneyCondition?
     public let journeyWaitTrigger: JourneyWaitTrigger?
     public let maxTimeMs: Int?
     public let startedAt: Date
     public let responseVersion: UInt64?
     let allowsResponseVersionRefresh: Bool?
-    public let resumeActions: [JourneyAction]?
     let requiresTerminalTransfer: Bool?
     let continuation: [JourneyContinuationStep]?
+
+    private enum CodingKeys: String, CodingKey {
+        case handlerId, hostId, screenId, componentId, actionIndex, kind
+        case resumeAt, journeyCondition, journeyWaitTrigger, maxTimeMs, startedAt
+        case responseVersion, allowsResponseVersionRefresh
+        case requiresTerminalTransfer, continuation
+    }
 
     init(
         handlerId: String,
@@ -127,14 +174,12 @@ struct JourneyPendingAction: Codable, Sendable {
         actionIndex: Int,
         kind: JourneyPendingActionKind,
         resumeAt: Date?,
-        condition: IREnvelope?,
         journeyCondition: JourneyCondition? = nil,
         journeyWaitTrigger: JourneyWaitTrigger? = nil,
         maxTimeMs: Int?,
         startedAt: Date,
         responseVersion: UInt64? = nil,
         allowsResponseVersionRefresh: Bool? = nil,
-        resumeActions: [JourneyAction]?,
         requiresTerminalTransfer: Bool? = nil,
         continuation: [JourneyContinuationStep]? = nil
     ) {
@@ -145,38 +190,83 @@ struct JourneyPendingAction: Codable, Sendable {
         self.actionIndex = actionIndex
         self.kind = kind
         self.resumeAt = resumeAt
-        self.condition = condition
         self.journeyCondition = journeyCondition
         self.journeyWaitTrigger = journeyWaitTrigger
         self.maxTimeMs = maxTimeMs
         self.startedAt = startedAt
         self.responseVersion = responseVersion
         self.allowsResponseVersionRefresh = allowsResponseVersionRefresh
-        self.resumeActions = resumeActions
         self.requiresTerminalTransfer = requiresTerminalTransfer
         self.continuation = continuation
     }
 
-    func withResumeActions(_ actions: [JourneyAction]) -> JourneyPendingAction {
-        JourneyPendingAction(
-            handlerId: handlerId,
-            hostId: hostId,
-            screenId: screenId,
-            componentId: componentId,
-            actionIndex: actionIndex,
-            kind: kind,
-            resumeAt: resumeAt,
-            condition: condition,
-            journeyCondition: journeyCondition,
-            journeyWaitTrigger: journeyWaitTrigger,
-            maxTimeMs: maxTimeMs,
-            startedAt: startedAt,
-            responseVersion: responseVersion,
-            allowsResponseVersionRefresh: allowsResponseVersionRefresh,
-            resumeActions: actions,
-            requiresTerminalTransfer: requiresTerminalTransfer,
-            continuation: continuation
+    init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: JourneyDynamicCodingKey.self)
+        if let retiredKey = rawContainer.allKeys.first(where: {
+            $0.stringValue == "condition" || $0.stringValue == "resumeActions"
+        }) {
+            throw DecodingError.dataCorruptedError(
+                forKey: retiredKey,
+                in: rawContainer,
+                debugDescription: "retired pending-action continuation schema"
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        handlerId = try container.decode(String.self, forKey: .handlerId)
+        hostId = try container.decodeIfPresent(String.self, forKey: .hostId)
+        screenId = try container.decodeIfPresent(String.self, forKey: .screenId)
+        componentId = try container.decodeIfPresent(String.self, forKey: .componentId)
+        actionIndex = try container.decode(Int.self, forKey: .actionIndex)
+        kind = try container.decode(JourneyPendingActionKind.self, forKey: .kind)
+        resumeAt = try container.decodeIfPresent(Date.self, forKey: .resumeAt)
+        journeyCondition = try container.decodeIfPresent(
+            JourneyCondition.self,
+            forKey: .journeyCondition
         )
+        journeyWaitTrigger = try container.decodeIfPresent(
+            JourneyWaitTrigger.self,
+            forKey: .journeyWaitTrigger
+        )
+        maxTimeMs = try container.decodeIfPresent(Int.self, forKey: .maxTimeMs)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        responseVersion = try container.decodeIfPresent(UInt64.self, forKey: .responseVersion)
+        allowsResponseVersionRefresh = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .allowsResponseVersionRefresh
+        )
+        requiresTerminalTransfer = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .requiresTerminalTransfer
+        )
+        continuation = try container.decodeIfPresent(
+            [JourneyContinuationStep].self,
+            forKey: .continuation
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(handlerId, forKey: .handlerId)
+        try container.encodeIfPresent(hostId, forKey: .hostId)
+        try container.encodeIfPresent(screenId, forKey: .screenId)
+        try container.encodeIfPresent(componentId, forKey: .componentId)
+        try container.encode(actionIndex, forKey: .actionIndex)
+        try container.encode(kind, forKey: .kind)
+        try container.encodeIfPresent(resumeAt, forKey: .resumeAt)
+        try container.encodeIfPresent(journeyCondition, forKey: .journeyCondition)
+        try container.encodeIfPresent(journeyWaitTrigger, forKey: .journeyWaitTrigger)
+        try container.encodeIfPresent(maxTimeMs, forKey: .maxTimeMs)
+        try container.encode(startedAt, forKey: .startedAt)
+        try container.encodeIfPresent(responseVersion, forKey: .responseVersion)
+        try container.encodeIfPresent(
+            allowsResponseVersionRefresh,
+            forKey: .allowsResponseVersionRefresh
+        )
+        try container.encodeIfPresent(
+            requiresTerminalTransfer,
+            forKey: .requiresTerminalTransfer
+        )
+        try container.encodeIfPresent(continuation, forKey: .continuation)
     }
 
     func withContinuation(_ continuation: [JourneyContinuationStep]) -> JourneyPendingAction {
@@ -188,14 +278,12 @@ struct JourneyPendingAction: Codable, Sendable {
             actionIndex: actionIndex,
             kind: kind,
             resumeAt: resumeAt,
-            condition: condition,
             journeyCondition: journeyCondition,
             journeyWaitTrigger: journeyWaitTrigger,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt,
             responseVersion: responseVersion,
             allowsResponseVersionRefresh: allowsResponseVersionRefresh,
-            resumeActions: resumeActions,
             requiresTerminalTransfer: requiresTerminalTransfer,
             continuation: continuation
         )

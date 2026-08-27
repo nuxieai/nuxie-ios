@@ -24,7 +24,6 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private let transitionContinuation: AsyncStream<LifecycleTransition>.Continuation
   private var worker: Task<Void, Never>?
 
-  private let sessionService: SessionServiceProtocol
   private let journeyService: JourneyServiceProtocol
   private let eventLog: EventQueueLifecycle
   private let profileService: ProfileServiceProtocol
@@ -34,7 +33,6 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
 
   init(
     lifecycleTracker: AppLifecycleTracker,
-    sessions: SessionServiceProtocol,
     journeys: JourneyServiceProtocol,
     eventLog: EventQueueLifecycle,
     profile: ProfileServiceProtocol,
@@ -44,7 +42,6 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   ) {
     (self.transitions, self.transitionContinuation) = AsyncStream.makeStream()
     self.lifecycleTracker = lifecycleTracker
-    self.sessionService = sessions
     self.journeyService = journeys
     self.eventLog = eventLog
     self.profileService = profile
@@ -105,7 +102,6 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private func handle(_ transition: LifecycleTransition) async {
     switch transition {
     case .didEnterBackground:
-      sessionService.onAppDidEnterBackground()
       await experienceService.onAppDidEnterBackground()
       await journeyService.onAppDidEnterBackground()
       await eventLog.onAppDidEnterBackground()
@@ -120,7 +116,6 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       lifecycleTracker.trackAppForegrounded()
 
     case .didBecomeActive:
-      sessionService.onAppBecameActive()
       await eventLog.onAppBecameActive()
       // Expire or refresh resident profile authority before speculative
       // Experience preparation is allowed to resume from that authority.

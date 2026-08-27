@@ -42,13 +42,13 @@ final class EventSanitizerTests: QuickSpec {
                 it("should convert UUIDs to strings") {
                     let uuid = UUID()
                     let properties = [
-                        "session_id": uuid,
+                        "request_id": uuid,
                         "count": 42
                     ] as [String: Any]
                     
                     let sanitized = EventSanitizer.sanitizeDataTypes(properties)
                     
-                    expect(sanitized["session_id"] as? String).to(equal(uuid.uuidString))
+                    expect(sanitized["request_id"] as? String).to(equal(uuid.uuidString))
                     expect(sanitized["count"] as? Int).to(equal(42))
                 }
                 

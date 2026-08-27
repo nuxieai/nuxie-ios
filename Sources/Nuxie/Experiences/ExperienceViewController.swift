@@ -1922,15 +1922,6 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
 
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
-        didRequestNavigationTo screenID: String,
-        transition: Any?
-    ) {
-        guard acceptsRuntimeCallback(from: controller) else { return }
-        navigate(to: screenID, transition: transition)
-    }
-
-    func experienceScreenViewController(
-        _ controller: ExperienceScreenViewController,
         didPresentDrawable drawable: ExperienceRuntimePresentedDrawable,
         frameNumber: UInt64
     ) {

@@ -51,7 +51,6 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                 let captureStore = MockEventStore()
                 eventLog = EventLog(
                     identity: mocks.identityService,
-                    sessions: MockSessionService(),
                     dateProvider: mocks.dateProvider,
                     apiClient: mocks.nuxieApi,
                     store: captureStore
@@ -155,7 +154,6 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                 let captureStore = MockEventStore()
                 eventLog = EventLog(
                     identity: mocks.identityService,
-                    sessions: MockSessionService(),
                     dateProvider: mocks.dateProvider,
                     apiClient: mocks.nuxieApi,
                     store: captureStore
@@ -253,7 +251,6 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                 let captureStore = MockEventStore()
                 let configuredEventLog = EventLog(
                     identity: mocks.identityService,
-                    sessions: MockSessionService(),
                     dateProvider: mocks.dateProvider,
                     apiClient: mocks.nuxieApi,
                     store: captureStore
@@ -348,7 +345,6 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                 let captureStore = MockEventStore()
                 eventLog = EventLog(
                     identity: mocks.identityService,
-                    sessions: MockSessionService(),
                     dateProvider: mocks.dateProvider,
                     apiClient: mocks.nuxieApi,
                     store: captureStore

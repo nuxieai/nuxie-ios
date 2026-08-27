@@ -265,7 +265,6 @@ final class GoalEvaluatorTests: AsyncSpec {
                     properties: Data("not-json".utf8),
                     timestamp: anchor.addingTimeInterval(1),
                     distinctId: "user_1",
-                    sessionId: nil
                 )
                 let goal = GoalConfig(
                     kind: .event,

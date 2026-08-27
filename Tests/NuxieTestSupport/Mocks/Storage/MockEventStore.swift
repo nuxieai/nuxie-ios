@@ -135,7 +135,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     /// Deterministically holds a selected insert before its durable commit.
     /// Tests use this to interleave EventLog lanes without timing assumptions.
     public func suspendInsert(id: String) {
-        lock.withLock { _suspendedInsertIds.insert(id) }
+        _ = lock.withLock { _suspendedInsertIds.insert(id) }
     }
 
     public func resumeInsert(id: String) {
@@ -186,7 +186,6 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
 
     // Session tracking
-    private var _currentSessionId = UUID.v7().uuidString
 
     public init() {}
 
@@ -490,15 +489,6 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
-    public func querySessionEvents(_ sessionId: String) async throws -> [StoredEvent] {
-        try lock.withLock {
-            if _shouldFailQuery {
-                throw mockError(3, "Mock query error")
-            }
-            return _storedEvents.filter { $0.sessionId == sessionId }
-        }
-    }
-
     public func getEventCount() async throws -> Int {
         try lock.withLock {
             _getEventCountCallCount += 1
@@ -712,8 +702,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                         name: oldEvent.name,
                         properties: oldEvent.properties,
                         timestamp: oldEvent.timestamp,
-                        distinctId: toUserId,
-                        sessionId: oldEvent.sessionId
+                        distinctId: toUserId
                     )
                     reassignedCount += 1
                 }
@@ -755,27 +744,17 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _closeCallCount = 0
             _journeyOwnershipFenceRecordCallCount = 0
             _journeyOwnershipFenceWriteCount = 0
-            _currentSessionId = UUID.v7().uuidString
             return suspended
         }
         suspended.forEach { $0.resume() }
     }
 
-    public func setSessionId(_ sessionId: String) {
-        lock.withLock {
-            _currentSessionId = sessionId
-        }
-    }
-
     public func addTestEvent(name: String, distinctId: String = "test_user", properties: [String: Any] = [:], timestamp: Date = Date()) {
         lock.withLock {
-            var enrichedProps = properties
-            enrichedProps["$session_id"] = _currentSessionId
-
             let event = try! StoredEvent(
                 id: UUID.v7().uuidString,
                 name: name,
-                properties: enrichedProps,
+                properties: properties,
                 timestamp: timestamp,
                 distinctId: distinctId
             )

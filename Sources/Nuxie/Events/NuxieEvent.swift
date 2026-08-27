@@ -17,7 +17,7 @@ public struct NuxieEvent: @unchecked Sendable {
     /// User identifier (distinct ID)
     public let distinctId: String
     
-    /// Enriched event properties (includes $session_id when available)
+    /// Enriched event properties
     public let properties: [String: Any]
     
     /// Event timestamp
@@ -28,7 +28,7 @@ public struct NuxieEvent: @unchecked Sendable {
     ///   - id: Unique identifier (defaults to time-ordered UUID)
     ///   - name: Event name
     ///   - distinctId: User identifier
-    ///   - properties: Event properties (may include $session_id)
+    ///   - properties: Event properties
     ///   - timestamp: Event timestamp (defaults to now)
     public init(
         id: String = UUID.v7().uuidString,
