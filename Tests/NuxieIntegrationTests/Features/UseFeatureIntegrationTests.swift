@@ -1,7 +1,7 @@
 import Foundation
 import Quick
 import Nimble
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
 #endif
@@ -21,6 +21,7 @@ final class UseFeatureIntegrationTests: AsyncSpec {
 
                 // Setup SDK with test configuration and mock overrides
                 let config = NuxieConfiguration(apiKey: "test-api-key")
+                config.testingOverrides.suppressBackgroundWork = true
                 try? NuxieSDK.shared.setup(with: config, overrides: mocks.unitTestOverrides())
 
                 // Set a known distinct ID for tests
@@ -51,8 +52,10 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     var overrides = mocks.unitTestOverrides()
                     overrides.transactionObserver = transactionObserver
                     await NuxieSDK.shared.shutdown()
+                    let config = NuxieConfiguration(apiKey: "test-api-key")
+                    config.testingOverrides.suppressBackgroundWork = true
                     try NuxieSDK.shared.setup(
-                        with: NuxieConfiguration(apiKey: "test-api-key"),
+                        with: config,
                         overrides: overrides
                     )
                     mocks.identityService.setDistinctId("test-user-123")

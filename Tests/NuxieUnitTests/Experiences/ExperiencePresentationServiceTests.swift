@@ -754,6 +754,65 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
                     expect(service.isExperiencePresented).to(beFalse())
                 }
+                it("an invalid commit does not cancel a valid suspended presentation") { @MainActor in
+                    // Round-6 regression: commit validation must precede the attempt
+                    // generation advance, or an invalid request cancels a valid
+                    // suspended presentation.
+                    let flowId = "invalid-commit-no-supersede"
+                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
+                    let gate = ExperiencePresentationTestGate()
+                    mockVC.prepareForPresentationHandler = { await gate.wait() }
+                    mockExperienceService.mockViewControllers[flowId] = mockVC
+                    let validCommit = JourneyPendingPresentation(
+                        experienceId: "experience",
+                        experienceVersionId: flowId,
+                        releaseID: nil,
+                        presentationStyle: .fullScreen,
+                        screenId: "screen-selected",
+                        transition: nil,
+                        continuation: []
+                    )
+                    let validPresentation = Task { @MainActor in
+                        try await service.presentExperience(
+                            flowId,
+                            from: nil,
+                            runtimeDelegate: nil,
+                            colorSchemeMode: .light,
+                            commit: validCommit
+                        )
+                    }
+                    await gate.waitUntilSuspended()
+
+                    mockExperienceService.presentationCommitIsValid = false
+                    let invalidCommit = JourneyPendingPresentation(
+                        experienceId: "experience",
+                        experienceVersionId: flowId,
+                        releaseID: nil,
+                        presentationStyle: .fullScreen,
+                        screenId: "screen-selected",
+                        transition: nil,
+                        continuation: []
+                    )
+                    do {
+                        _ = try await service.presentExperience(
+                            flowId,
+                            from: nil,
+                            runtimeDelegate: nil,
+                            colorSchemeMode: .light,
+                            commit: invalidCommit
+                        )
+                        fail("expected superseded commit")
+                    } catch ExperiencePresentationError.presentationSuperseded {
+                        // Expected.
+                    }
+
+                    // The mock's validity flag is global; the valid call
+                    // re-validates after resuming, so restore it first.
+                    mockExperienceService.presentationCommitIsValid = true
+                    gate.resume()
+                    _ = try await validPresentation.value
+                    expect(service.isExperiencePresented).to(beTrue())
+                }
                 
                 it("should present view controller in window") { @MainActor in
                     // Setup
@@ -898,6 +957,62 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 expect(mockWindowProvider.createdWindows.first?.presentCalled).to(beTrue())
             }
 
+            it("shutdown invalidates and joins a presentation suspended before publication") { @MainActor in
+                let flowId = "shutdown-during-controller-acquisition"
+                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                let acquisitionGate = ExperiencePresentationTestGate()
+                let shutdownStarted = ExperiencePresentationTestSignal()
+                let suspendedExperiences = SuspendedViewControllerExperienceService(
+                    base: mockExperienceService,
+                    gate: acquisitionGate
+                )
+                service = ExperiencePresentationService(
+                    windowProvider: mockWindowProvider,
+                    experiences: suspendedExperiences,
+                    eventLog: mockEventLog,
+                    triggerBroker: TriggerBroker(),
+                    dateProvider: MockDateProvider()
+                )
+
+                let presentation = Task { @MainActor in
+                    PollingBox(try await service.presentExperience(
+                        flowId,
+                        from: nil,
+                        runtimeDelegate: recorder
+                    ))
+                }
+                await acquisitionGate.waitUntilSuspended()
+                let shutdown = Task { @MainActor in
+                    shutdownStarted.signal()
+                    await service.shutdownCurrentExperience()
+                }
+                await shutdownStarted.wait()
+                await Task.yield()
+
+                acquisitionGate.resume()
+                await shutdown.value
+
+                do {
+                    _ = try await presentation.value.value
+                    fail("the in-flight presentation should observe shutdown cancellation")
+                } catch is CancellationError {
+                    // Expected.
+                } catch {
+                    fail("expected CancellationError, received \(error)")
+                }
+                expect(mockWindowProvider.createdWindows).to(beEmpty())
+                expect(service.isExperiencePresented).to(beFalse())
+                expect(recorder.shellWasPresented).to(beFalse())
+                expect(recorder.cleanupCompleted).to(beFalse())
+                expect(recorder.shellTraceTokens).to(beEmpty())
+                expect(recorder.completedTraceTokens).to(beEmpty())
+                expect(recorder.hostDismissalStarted).to(beFalse())
+                expect(recorder.hostDismissalFinished).to(beFalse())
+                expect(recorder.ordinaryDismissalReasons).to(beEmpty())
+            }
+
             it("does not wait for an unrelated stale controller acquisition") { @MainActor in
                 let staleFlowId = "stale-controller-acquisition"
                 let currentFlowId = "current-during-stale-acquisition"
@@ -1027,6 +1142,31 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
 
                 recorder.hostDismissalResult = true
                 await service.dismissCurrentExperienceFromHost()
+
+                expect(service.isExperiencePresented).to(beFalse())
+                expect(window?.dismissCalled).to(beTrue())
+                expect(window?.destroyCalled).to(beTrue())
+                expect(mockVC.prepareForDismissalCallCount).to(equal(1))
+                expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
+            }
+
+            it("shutdown overrides retry-required host dismissal ownership") { @MainActor in
+                let flowId = "shutdown-host-dismiss-terminalization-retry"
+                let mockVC = MockExperienceViewController(
+                    mockExperienceVersionId: flowId
+                )
+                let recorder = ExperiencePresentationLifecycleRecorder()
+                recorder.hostDismissalResult = false
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                try! await service.presentExperience(
+                    flowId,
+                    from: nil,
+                    runtimeDelegate: recorder
+                )
+                let window = mockWindowProvider.createdWindows.first
+
+                await service.dismissCurrentExperienceFromHost()
+                await service.shutdownCurrentExperience()
 
                 expect(service.isExperiencePresented).to(beFalse())
                 expect(window?.dismissCalled).to(beTrue())

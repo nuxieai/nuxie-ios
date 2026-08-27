@@ -2,10 +2,9 @@ import Foundation
 
 /// Serializes construction and publication of a mutable SDK composition root.
 ///
-/// Setup is intentionally synchronous, so graph construction happens while
-/// this module owns its lock. Callers either observe the previous complete
-/// graph or the newly installed complete graph; no partial setup state is
-/// published.
+/// Setup reserves the starting state synchronously, constructs the graph
+/// outside the lock, and publishes the complete graph in one locked state
+/// transition. Every mutable lifecycle field is accessed under `lock`.
 final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Sendable {
     struct Snapshot: Sendable {
         let graph: Graph
@@ -44,42 +43,87 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
         }
     }
 
+    private final class StartingState: @unchecked Sendable {
+        var stopRequested = false
+        var completionWaiters: [CheckedContinuation<Void, Never>] = []
+        var installWaiters: [DispatchSemaphore] = []
+    }
+
     private final class ShutdownState: @unchecked Sendable {
         let running: RunningState
+        var ownerClaimed: Bool
         var operationDrainWaiters: [CheckedContinuation<Void, Never>] = []
         var completionWaiters: [CheckedContinuation<Void, Never>] = []
 
-        init(running: RunningState) {
+        init(running: RunningState, ownerClaimed: Bool) {
             self.running = running
+            self.ownerClaimed = ownerClaimed
         }
     }
 
     private enum State {
         case idle
+        case starting(StartingState)
         case running(RunningState)
-        case shuttingDown(ShutdownState)
+        case stopping(ShutdownState)
     }
 
     private enum ShutdownAction {
         case none
         case own(ShutdownState)
         case wait(ShutdownState)
+        case waitForStart(StartingState)
     }
 
     private let lock = NSLock()
     private var state: State = .idle
 
-    /// Builds and atomically installs one graph when idle.
-    ///
-    /// Returns false without evaluating `build` when another graph is already
-    /// installed. The lock covers construction so concurrent installers cannot
-    /// create duplicate graphs before either one publishes its result.
+    /// Builds and atomically installs one graph when idle. Construction runs
+    /// outside the lock while the explicit starting state rejects operations
+    /// and competing installers.
+    private enum InstallClaim {
+        case owns
+        case waitForActiveStart(DispatchSemaphore)
+        case alreadyInstalled
+    }
+
     @discardableResult
     func install(_ build: () throws -> Graph) rethrows -> Bool {
-        try lock.withLock {
-            guard case .idle = state else { return false }
-            state = .running(RunningState(graph: try build()))
+        let starting = StartingState()
+        let claim = lock.withLock { () -> InstallClaim in
+            switch state {
+            case .idle:
+                state = .starting(starting)
+                return .owns
+            case .starting(let active):
+                // A losing concurrent setup must not report completion before
+                // the winning graph is published (or abandoned); block this
+                // synchronous caller until the active start resolves, exactly
+                // like the previous locked construction did.
+                let waiter = DispatchSemaphore(value: 0)
+                active.installWaiters.append(waiter)
+                return .waitForActiveStart(waiter)
+            case .running, .stopping:
+                return .alreadyInstalled
+            }
+        }
+        switch claim {
+        case .owns:
+            break
+        case .waitForActiveStart(let waiter):
+            waiter.wait()
+            return false
+        case .alreadyInstalled:
+            return false
+        }
+
+        do {
+            let graph = try build()
+            finishStarting(starting, with: graph)
             return true
+        } catch {
+            abandonStarting(starting)
+            throw error
         }
     }
 
@@ -116,17 +160,25 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
     /// cannot install until teardown has completed.
     func shutdown(
         beforeDraining: @escaping @Sendable (Graph) async -> Void = { _ in },
+        afterWaitingForStart: @escaping @Sendable () async -> Void = {},
         _ tearDown: @escaping @Sendable (Graph) async -> Void
     ) async {
         let action = lock.withLock { () -> ShutdownAction in
             switch state {
             case .idle:
                 return .none
+            case .starting(let starting):
+                starting.stopRequested = true
+                return .waitForStart(starting)
             case .running(let running):
-                let shutdown = ShutdownState(running: running)
-                state = .shuttingDown(shutdown)
+                let shutdown = ShutdownState(running: running, ownerClaimed: true)
+                state = .stopping(shutdown)
                 return .own(shutdown)
-            case .shuttingDown(let shutdown):
+            case .stopping(let shutdown):
+                if !shutdown.ownerClaimed {
+                    shutdown.ownerClaimed = true
+                    return .own(shutdown)
+                }
                 return .wait(shutdown)
             }
         }
@@ -141,6 +193,73 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
             finish(shutdown)
         case .wait(let shutdown):
             await waitForCompletion(of: shutdown)
+        case .waitForStart(let starting):
+            await waitForStart(starting)
+            await afterWaitingForStart()
+            await shutdown(
+                beforeDraining: beforeDraining,
+                afterWaitingForStart: afterWaitingForStart,
+                tearDown
+            )
+        }
+    }
+
+    private func finishStarting(_ starting: StartingState, with graph: Graph) {
+        var installWaiters: [DispatchSemaphore] = []
+        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            guard case .starting(let active) = state, active === starting else {
+                return []
+            }
+            let running = RunningState(graph: graph)
+            if starting.stopRequested {
+                // Close admission atomically with publication. The first
+                // waiting shutdown caller claims teardown ownership.
+                state = .stopping(ShutdownState(
+                    running: running,
+                    ownerClaimed: false
+                ))
+            } else {
+                state = .running(running)
+            }
+            installWaiters = starting.installWaiters
+            starting.installWaiters.removeAll()
+            let waiters = starting.completionWaiters
+            starting.completionWaiters.removeAll()
+            return waiters
+        }
+        installWaiters.forEach { $0.signal() }
+        waiters.forEach { $0.resume() }
+    }
+
+    private func abandonStarting(_ starting: StartingState) {
+        var installWaiters: [DispatchSemaphore] = []
+        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            guard case .starting(let active) = state, active === starting else {
+                return []
+            }
+            state = .idle
+            installWaiters = starting.installWaiters
+            starting.installWaiters.removeAll()
+            let waiters = starting.completionWaiters
+            starting.completionWaiters.removeAll()
+            return waiters
+        }
+        installWaiters.forEach { $0.signal() }
+        waiters.forEach { $0.resume() }
+    }
+
+    private func waitForStart(_ starting: StartingState) async {
+        await withCheckedContinuation { continuation in
+            let alreadyFinished = lock.withLock { () -> Bool in
+                guard case .starting(let active) = state, active === starting else {
+                    return true
+                }
+                starting.completionWaiters.append(continuation)
+                return false
+            }
+            if alreadyFinished {
+                continuation.resume()
+            }
         }
     }
 
@@ -149,7 +268,7 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
             guard running.activeOperations > 0 else { return [] }
             running.activeOperations -= 1
             guard running.activeOperations == 0,
-                  case .shuttingDown(let shutdown) = state,
+                  case .stopping(let shutdown) = state,
                   shutdown.running === running else {
                 return []
             }
@@ -163,7 +282,7 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
     private func waitForOperations(of shutdown: ShutdownState) async {
         await withCheckedContinuation { continuation in
             let alreadyDrained = lock.withLock { () -> Bool in
-                guard case .shuttingDown(let active) = state, active === shutdown,
+                guard case .stopping(let active) = state, active === shutdown,
                       shutdown.running.activeOperations > 0 else {
                     return true
                 }
@@ -178,7 +297,7 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
 
     private func finish(_ shutdown: ShutdownState) {
         let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
-            guard case .shuttingDown(let active) = state, active === shutdown else {
+            guard case .stopping(let active) = state, active === shutdown else {
                 return []
             }
             state = .idle
@@ -192,7 +311,7 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
     private func waitForCompletion(of shutdown: ShutdownState) async {
         await withCheckedContinuation { continuation in
             let alreadyFinished = lock.withLock { () -> Bool in
-                guard case .shuttingDown(let active) = state, active === shutdown else {
+                guard case .stopping(let active) = state, active === shutdown else {
                     return true
                 }
                 shutdown.completionWaiters.append(continuation)
@@ -209,8 +328,10 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
 /// Keeping these values together lets every facade operation retain exactly
 /// one generation across suspension and lets shutdown drain that work before
 /// tearing down the same generation.
+/// @unchecked Sendable relies on immutable graph and task references plus the
+/// separately locked mutable state in `FacadeTaskRegistry`.
 final class NuxieSDKRun: @unchecked Sendable {
-    let configuration: NuxieConfiguration
+    let configuration: NuxieSetupConfiguration
     let core: NuxieCore
     let lifecycleCoordinator: NuxieLifecycleCoordinator
     let eventSystemSetupTask: Task<Void, Never>
@@ -221,7 +342,7 @@ final class NuxieSDKRun: @unchecked Sendable {
     private let facadeTasks: FacadeTaskRegistry
 
     init(
-        configuration: NuxieConfiguration,
+        configuration: NuxieSetupConfiguration,
         core: NuxieCore,
         lifecycleCoordinator: NuxieLifecycleCoordinator,
         eventSystemSetupTask: Task<Void, Never>,
@@ -266,6 +387,7 @@ final class NuxieSDKRun: @unchecked Sendable {
 
 /// Owns unstructured work launched by synchronous facade methods. Shutdown
 /// closes admission and obtains a stable task snapshot before service teardown.
+/// @unchecked Sendable relies on all mutable registry state being under `lock`.
 private final class FacadeTaskRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private let startBarrier: (@Sendable () async -> Void)?

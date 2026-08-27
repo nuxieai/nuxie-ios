@@ -468,9 +468,53 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
 
         let configuration = NuxieConfiguration(apiKey: "configuration-key")
         configuration.testingOverrides.retryDelay = 0
+        configuration.testingOverrides.suppressBackgroundWork = true
 
         try sdk.setup(with: configuration)
         XCTAssertTrue(sdk.isSetup)
+        await sdk.shutdown()
+    }
+
+    func testBackgroundWorkSuppressionRequiresAnExplicitTestingOverride() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+
+        let observer = MockTransactionObserver()
+        var overrides = mocks.unitTestOverrides()
+        overrides.transactionObserver = observer
+        let configuration = NuxieConfiguration(apiKey: "explicit-background-work-control")
+        configuration.testingOverrides.suppressBackgroundWork = true
+
+        try sdk.setup(with: configuration, overrides: overrides)
+        await sdk.waitForStartupTasks()
+
+        XCTAssertEqual(mocks.profileService.fetchCallCount, 0)
+        let observerStarted = await observer.startListeningCalled
+        XCTAssertFalse(observerStarted)
+        await sdk.shutdown()
+    }
+
+    func testBackgroundWorkRunsByDefaultWhenXCTestIsAttached() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+
+        let observer = MockTransactionObserver()
+        var overrides = mocks.unitTestOverrides()
+        overrides.transactionObserver = observer
+
+        try sdk.setup(
+            with: NuxieConfiguration(apiKey: "xctest-does-not-change-production-behavior"),
+            overrides: overrides
+        )
+        await sdk.waitForStartupTasks()
+
+        XCTAssertEqual(mocks.profileService.fetchCallCount, 1)
+        let observerStarted = await observer.startListeningCalled
+        XCTAssertTrue(observerStarted)
         await sdk.shutdown()
     }
 
@@ -480,7 +524,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         let mocks = MockFactory.shared
         await mocks.resetAll()
         try sdk.setup(
-            with: NuxieConfiguration(apiKey: "shutdown-lifecycle-key"),
+            with: configurationWithoutBackgroundWork(apiKey: "shutdown-lifecycle-key"),
             overrides: mocks.unitTestOverrides()
         )
 
@@ -488,6 +532,54 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
 
         XCTAssertFalse(sdk.isSetup)
         XCTAssertNil(sdk.core)
+    }
+
+    func testConcurrentFacadeLifecycleStressLeavesNoRunningGraphOrPresentation() async {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        let overrides = UncheckedSendable(mocks.unitTestOverrides())
+
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<80 {
+                switch index % 4 {
+                case 0:
+                    group.addTask {
+                        let configuration = NuxieConfiguration(
+                            apiKey: "concurrent-lifecycle-\(index)"
+                        )
+                        configuration.testingOverrides.suppressBackgroundWork = true
+                        try? sdk.setup(
+                            with: configuration,
+                            overrides: overrides.value
+                        )
+                    }
+                case 1:
+                    group.addTask {
+                        sdk.trigger("concurrent-lifecycle-trigger")
+                    }
+                case 2:
+                    group.addTask {
+                        sdk.identify("concurrent-user-\(index)")
+                    }
+                default:
+                    group.addTask {
+                        await sdk.shutdown()
+                    }
+                }
+            }
+        }
+
+        await sdk.shutdown()
+        sdk.trigger("post-shutdown-trigger")
+        sdk.identify("post-shutdown-user")
+        await Task.yield()
+
+        XCTAssertFalse(sdk.isSetup)
+        XCTAssertNil(sdk.core)
+        let isPresented = await mocks.experiencePresentationService.isExperiencePresented
+        XCTAssertFalse(isPresented)
     }
 
     func testShutdownWaitsForSuspendedPublicOperationBeforeReplacementSetup() async throws {
@@ -503,7 +595,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         firstOverrides.transactionObserver = firstObserver
 
         try sdk.setup(
-            with: NuxieConfiguration(apiKey: "first-lifecycle-key"),
+            with: configurationWithoutBackgroundWork(apiKey: "first-lifecycle-key"),
             overrides: firstOverrides
         )
 
@@ -537,7 +629,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         secondOverrides.api = secondAPI
         secondOverrides.transactionObserver = MockTransactionObserver()
         try sdk.setup(
-            with: NuxieConfiguration(apiKey: "second-lifecycle-key"),
+            with: configurationWithoutBackgroundWork(apiKey: "second-lifecycle-key"),
             overrides: secondOverrides
         )
         let replacementCore = try XCTUnwrap(sdk.core)
@@ -560,6 +652,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         overrides.triggers = trigger
         overrides.transactionObserver = observer
         let configuration = NuxieConfiguration(apiKey: "trigger-lifecycle-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
         configuration.beforeSend = { event in
             event.name.hasPrefix("$app_") ? nil : event
         }
@@ -605,6 +698,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         overrides.triggers = trigger
         overrides.transactionObserver = observer
         let configuration = NuxieConfiguration(apiKey: "trigger-and-wait-lifecycle-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
         configuration.beforeSend = { event in
             event.name.hasPrefix("$app_") ? nil : event
         }
@@ -658,6 +752,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         overrides.triggers = trigger
         overrides.transactionObserver = observer
         let configuration = NuxieConfiguration(apiKey: "pending-journey-lifecycle-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
         configuration.beforeSend = { event in
             event.name.hasPrefix("$app_") ? nil : event
         }
@@ -716,7 +811,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         overrides.experiences = experiences
         overrides.journeys = journeys
         try sdk.setup(
-            with: NuxieConfiguration(apiKey: "notification-lifecycle-key"),
+            with: configurationWithoutBackgroundWork(apiKey: "notification-lifecycle-key"),
             overrides: overrides
         )
 
@@ -836,6 +931,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         configuration.environment = .staging
         configuration.testingOverrides.flushAt = 7
         configuration.testingOverrides.featureCacheTTL = 42
+        configuration.testingOverrides.presentationDiagnosticsEnabled = true
         configuration.localeIdentifier = "en_US"
         configuration.purchaseHandlingMode = .observer
         let settings = NuxieRuntimeSettings(configuration: configuration)
@@ -844,12 +940,14 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         configuration.environment = .development
         configuration.testingOverrides.flushAt = 99
         configuration.testingOverrides.featureCacheTTL = 999
+        configuration.testingOverrides.presentationDiagnosticsEnabled = false
         configuration.localeIdentifier = "es_ES"
         configuration.purchaseHandlingMode = .full
 
         XCTAssertEqual(snapshot.environment, .staging)
         XCTAssertEqual(snapshot.internalConfiguration.flushAt, 7)
         XCTAssertEqual(snapshot.internalConfiguration.featureCacheTTL, 42)
+        XCTAssertTrue(snapshot.internalConfiguration.presentationDiagnosticsEnabled)
         XCTAssertEqual(settings.localeIdentifier(), "en_US")
         XCTAssertFalse(snapshot.testStoreEnabled)
         if case .observer = settings.purchaseHandlingMode() {} else {
@@ -891,6 +989,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
 
     func testRuntimeSettingsApplyOnlyThroughExplicitControls() async {
         let configuration = NuxieConfiguration(apiKey: "runtime-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
         let firstDelegate = MockPurchaseDelegate()
         let secondDelegate = MockPurchaseDelegate()
         configuration.localeIdentifier = "en_US"
@@ -926,6 +1025,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         let mocks = MockFactory.shared
         await mocks.resetAll()
         let configuration = NuxieConfiguration(apiKey: "runtime-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
         configuration.localeIdentifier = "en_US"
         var overrides = mocks.unitTestOverrides()
         overrides.profile = nil
@@ -960,5 +1060,11 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
             XCTAssertEqual(reason, expectedReason, file: file, line: line)
         }
         XCTAssertFalse(sdk.isSetup, file: file, line: line)
+    }
+
+    private func configurationWithoutBackgroundWork(apiKey: String) -> NuxieConfiguration {
+        let configuration = NuxieConfiguration(apiKey: apiKey)
+        configuration.testingOverrides.suppressBackgroundWork = true
+        return configuration
     }
 }

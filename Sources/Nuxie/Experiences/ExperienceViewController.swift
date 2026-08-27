@@ -436,6 +436,7 @@ class ExperienceViewController: NuxiePlatformViewController {
     var presentationRevealGeneration: UInt64 = 0
     private(set) var experienceContentIsHidden = true
     private let recoveryAffordanceDelay: TimeInterval
+    private let presentationDiagnosticsEnabled: Bool
     private var recoveryAffordanceTask: Task<Void, Never>?
     private var inFlightCommerceOperationCount = 0
     private var commerceOperationWaiters: [CheckedContinuation<Void, Never>] = []
@@ -465,6 +466,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         eventLog: EventCapturing,
         loadingTimeoutSeconds: TimeInterval = 15.0,
         recoveryAffordanceDelay: TimeInterval = 5.0,
+        presentationDiagnosticsEnabled: Bool = false,
         transactionService: TransactionService,
         productService: ProductService,
         systemEventSink: SystemEventSink
@@ -473,6 +475,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         self.productService = productService
         self.systemEventSink = systemEventSink
         self.recoveryAffordanceDelay = recoveryAffordanceDelay
+        self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         self.viewModel = ExperienceViewModel(
             experience: experience,
             artifactTelemetryContext: artifactTelemetryContext,
@@ -1109,6 +1112,7 @@ class ExperienceViewController: NuxiePlatformViewController {
                     experience: self.experience,
                     artifact: artifact,
                     initialScreenID: self.presentationInitialScreenID,
+                    presentationDiagnosticsEnabled: self.presentationDiagnosticsEnabled,
                     hostViewController: self,
                     screenDelegate: self,
                     onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in

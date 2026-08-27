@@ -1,9 +1,9 @@
 import Foundation
 
 /// Main entry point for the Nuxie SDK
-// @unchecked Sendable: the singleton facade's graph state is isolated by
-// SerializedSDKLifecycle. Delegate access retains its existing weak-reference
-// semantics and SDK services provide their own concurrency isolation.
+// @unchecked Sendable: all lifecycle state is isolated by
+// SerializedSDKLifecycle. The public delegate retains its existing weak
+// callback-slot semantics, and referenced SDK services own their isolation.
 public final class NuxieSDK: @unchecked Sendable {
 
   /// Shared singleton instance
@@ -15,10 +15,8 @@ public final class NuxieSDK: @unchecked Sendable {
 
   private let sdkLifecycle = SerializedSDKLifecycle<NuxieSDKRun>()
 
-  /// Configuration builder supplied to the current run (nil if unavailable).
-  /// Its values are snapshotted during setup; mutating it later does not
-  /// reconfigure the SDK. Use the explicit runtime controls below.
-  var configuration: NuxieConfiguration? {
+  /// Immutable configuration snapshot for the current run.
+  var configuration: NuxieSetupConfiguration? {
     sdkLifecycle.snapshot()?.graph.configuration
   }
 
@@ -57,7 +55,10 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   /// - Parameter configuration: Configuration object
   /// - Throws: NuxieError if configuration is invalid
   public func setup(with configuration: NuxieConfiguration) throws {
-    try setup(with: configuration, overrides: .init())
+    try setup(
+      with: configuration,
+      overrides: .init(presentationDiagnosticsEnabled: false)
+    )
   }
 
   /// Internal seam: tests inject mock services through `overrides`.
@@ -170,13 +171,11 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         await journeyService.initialize()
       }
 
-      let isTestEnvironment =
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
       var featureInfoDelegateTask: Task<Void, Never>?
       var profilePrefetchTask: Task<Void, Never>?
       var transactionObserverTask: Task<Void, Never>?
 
-      if !isTestEnvironment {
+      if !setupConfiguration.internalConfiguration.suppressBackgroundWork {
         // Wire up FeatureInfo delegate callback
         featureInfoDelegateTask = Task { @MainActor in
           guard !Task.isCancelled else { return }
@@ -207,7 +206,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       }
 
       return NuxieSDKRun(
-        configuration: configuration,
+        configuration: setupConfiguration,
         core: core,
         lifecycleCoordinator: lifecycleCoordinator,
         eventSystemSetupTask: eventSystemSetupTask,

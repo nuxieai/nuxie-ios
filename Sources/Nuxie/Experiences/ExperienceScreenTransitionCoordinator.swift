@@ -27,6 +27,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private let experience: Experience
     private let artifact: LoadedExperienceArtifact
     private let initialScreenID: String
+    private let presentationDiagnosticsEnabled: Bool
     private weak var screenDelegate: ExperienceScreenViewControllerDelegate?
     private let onPresentedScreenDismissed: (
         _ dismissedScreenId: String,
@@ -77,6 +78,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         experience: Experience,
         artifact: LoadedExperienceArtifact,
         initialScreenID: String? = nil,
+        presentationDiagnosticsEnabled: Bool = false,
         hostViewController: UIViewController,
         screenDelegate: ExperienceScreenViewControllerDelegate,
         onPresentedScreenDismissed: @escaping (
@@ -95,6 +97,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         self.experience = experience
         self.artifact = artifact
         self.initialScreenID = initialScreenID ?? artifact.renderPlan.entry.screenId
+        self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         self.hostViewController = hostViewController
         self.screenDelegate = screenDelegate
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
@@ -739,6 +742,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             artifact: screenArtifact,
             screen: screen,
             reduceMotion: reduceMotionEnabled,
+            presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
             delegate: screenDelegate
         )
         mountingControllersByScreenId[screenId] = controller
@@ -1139,13 +1143,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         activePresentedController.dismiss(animated: animated, completion: completion)
     }
 
-    private static var forceReduceMotionForTesting: Bool {
-        ProcessInfo.processInfo.arguments.contains("--nuxie-force-reduce-motion")
-            || ProcessInfo.processInfo.environment["NUXIE_FORCE_REDUCE_MOTION"] == "1"
-    }
-
     private var reduceMotionEnabled: Bool {
-        UIAccessibility.isReduceMotionEnabled || Self.forceReduceMotionForTesting
+        UIAccessibility.isReduceMotionEnabled
     }
 
     private func refreshReduceMotionState() async {

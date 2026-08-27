@@ -26,6 +26,7 @@ import UIKit
             urlSession: urlSession,
             initialScreenID: initialScreenID,
             initialNavigationStack: initialNavigationStack,
+            presentationDiagnosticsEnabled: false,
             statusObserver: statusObserver
         )
     }
@@ -43,6 +44,29 @@ import UIKit
         initialNavigationStack: [String] = [],
         statusObserver: (@MainActor (String) -> Void)? = nil
     ) throws -> UIViewController {
+        try makeViewController(
+            fixtureBaseURL: fixtureBaseURL,
+            cacheRootURL: cacheRootURL,
+            initialScreenID: initialScreenID,
+            initialNavigationStack: initialNavigationStack,
+            presentationDiagnosticsEnabled: true,
+            statusObserver: statusObserver
+        )
+    }
+
+    /// Builds a fixture view controller with explicit qualification diagnostics.
+    /// - Parameters:
+    ///   - presentationDiagnosticsEnabled: Enables qualification diagnostics
+    ///     for this explicitly constructed fixture host.
+    @MainActor
+    public static func makeViewController(
+        fixtureBaseURL: URL,
+        cacheRootURL: URL,
+        initialScreenID: String? = nil,
+        initialNavigationStack: [String] = [],
+        presentationDiagnosticsEnabled: Bool,
+        statusObserver: (@MainActor (String) -> Void)? = nil
+    ) throws -> UIViewController {
         let (profile, session) = try registeredFixtureProfile(at: fixtureBaseURL)
         return try makeViewController(
             profile: profile,
@@ -51,6 +75,7 @@ import UIKit
             urlSession: session,
             initialScreenID: initialScreenID,
             initialNavigationStack: initialNavigationStack,
+            presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
             statusObserver: statusObserver
         )
     }
@@ -67,6 +92,33 @@ import UIKit
         initialNavigationStack: [String] = [],
         statusObserver: (@MainActor (String) -> Void)? = nil
     ) throws -> UIViewController {
+        try makeViewController(
+            profileData: profileData,
+            cacheRootURL: cacheRootURL,
+            environment: environment,
+            urlSession: urlSession,
+            initialScreenID: initialScreenID,
+            initialNavigationStack: initialNavigationStack,
+            presentationDiagnosticsEnabled: true,
+            statusObserver: statusObserver
+        )
+    }
+
+    /// Builds a fixture view controller with explicit qualification diagnostics.
+    /// - Parameters:
+    ///   - presentationDiagnosticsEnabled: Enables qualification diagnostics
+    ///     for this explicitly constructed fixture host.
+    @MainActor
+    public static func makeViewController(
+        profileData: Data,
+        cacheRootURL: URL,
+        environment: Environment = .development,
+        urlSession: URLSession = .shared,
+        initialScreenID: String? = nil,
+        initialNavigationStack: [String] = [],
+        presentationDiagnosticsEnabled: Bool,
+        statusObserver: (@MainActor (String) -> Void)? = nil
+    ) throws -> UIViewController {
         guard profileData.count <= ExperienceReleaseDescriptorLimits.profileBytes else {
             throw ExperienceReleaseFixtureHostError.invalidProfile
         }
@@ -77,6 +129,7 @@ import UIKit
             urlSession: urlSession,
             initialScreenID: initialScreenID,
             initialNavigationStack: initialNavigationStack,
+            presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
             statusObserver: statusObserver
         )
     }
@@ -94,6 +147,7 @@ import UIKit
         urlSession: URLSession,
         initialScreenID: String?,
         initialNavigationStack: [String],
+        presentationDiagnosticsEnabled: Bool = false,
         statusObserver: (@MainActor (String) -> Void)?
     ) throws -> UIViewController {
         ExperienceReleaseFixtureLoadingViewController(
@@ -101,7 +155,8 @@ import UIKit
                 profile: profile,
                 cacheRootURL: cacheRootURL,
                 environment: environment,
-                urlSession: urlSession
+                urlSession: urlSession,
+                presentationDiagnosticsEnabled: presentationDiagnosticsEnabled
             ),
             initialScreenID: initialScreenID,
             initialNavigationStack: initialNavigationStack,
@@ -136,16 +191,19 @@ import UIKit
         let acquisitionStore: ExperienceReleaseAcquisitionStore
         let cacheRootURL: URL
         let environment: Environment
+        let presentationDiagnosticsEnabled: Bool
 
         init(
             profile: ExperienceReleaseProfile,
             cacheRootURL: URL,
             environment: Environment,
-            urlSession: URLSession
+            urlSession: URLSession,
+            presentationDiagnosticsEnabled: Bool = false
         ) throws {
             self.profile = profile
             self.cacheRootURL = cacheRootURL
             self.environment = environment
+            self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
             acquisitionStore = ExperienceReleaseAcquisitionStore(
                 cacheDirectory: cacheRootURL.appendingPathComponent(
                     "objects",
@@ -233,6 +291,7 @@ import UIKit
                 artifactLoader: artifactLoader,
                 artifactTelemetryContext: .from(experience: experience),
                 eventLog: eventLog,
+                presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
                 transactionService: transactionService,
                 productService: productService,
                 systemEventSink: systemEvents

@@ -35,6 +35,143 @@ final class HostDismissalTests: AsyncSpec {
         }
 
         describe("host dismissal") {
+            it("shutdown cancels in-flight response deliveries before joining wrappers") { @MainActor in
+                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+                serviceUnderTest = harness.service
+                _ = try await harness.startJourney(
+                    originEventId: "shutdown-delivery-cancel"
+                )
+
+                await harness.service.shutdown()
+
+                // The deadlock regression: shutdown must ask EventLog to
+                // cancel prepared response deliveries before awaiting the
+                // scoped response wrappers that block on their values.
+                expect(harness.mocks.eventLog.cancelPreparedResponseDeliveriesCallCount)
+                    .to(beGreaterThanOrEqualTo(1))
+            }
+
+            it("shutdown dismisses a live presentation and retires its journey runtime") { @MainActor in
+                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+                serviceUnderTest = harness.service
+                let journey = try await harness.startJourney(
+                    originEventId: "live-presentation-shutdown"
+                )
+                guard let delegate = harness.mocks.experiencePresentationService
+                    .currentRuntimeDelegate else {
+                    fail("expected the presentation's runtime delegate")
+                    return
+                }
+                expect(harness.mocks.experiencePresentationService.isExperiencePresented)
+                    .to(beTrue())
+
+                await harness.service.shutdown()
+
+                expect(harness.mocks.experiencePresentationService.isExperiencePresented)
+                    .to(beFalse())
+                expect(harness.mocks.experiencePresentationService.dismissCurrentExperienceCallCount)
+                    .to(equal(1))
+                let activeRunnerCount = await harness.service.activeRunnerCount
+                expect(activeRunnerCount).to(equal(0))
+
+                let trackedEventCount = harness.mocks.eventLog.trackedEvents.count
+                await delegate.experienceViewController(
+                    harness.controller,
+                    didChangeScreen: HostJourneyHarness.screenId
+                )
+                await harness.service.resumeJourney(journey)
+                expect(harness.mocks.eventLog.trackedEvents.count).to(equal(trackedEventCount))
+                let postShutdownJourney = await harness.service.startJourney(
+                    for: harness.experience,
+                    distinctId: harness.distinctId
+                )
+                expect(postShutdownJourney).to(beNil())
+                expect(harness.mocks.experiencePresentationService.presentExperienceCallCount)
+                    .to(equal(1))
+            }
+
+            it("drops an in-flight mailbox claim when shutdown begins") { @MainActor in
+                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+                serviceUnderTest = harness.service
+                await harness.service.initialize()
+
+                let journeyId = "mailbox-claim-across-shutdown"
+                let resumeAt = Date().addingTimeInterval(300)
+                let pending = JourneyPendingAction(
+                    handlerId: "mailbox-delay",
+                    screenId: nil,
+                    componentId: nil,
+                    actionIndex: 0,
+                    kind: .delay,
+                    resumeAt: resumeAt,
+                    condition: nil,
+                    maxTimeMs: nil,
+                    startedAt: Date(),
+                    resumeActions: nil
+                )
+                let mailbox = JourneyMailboxEntry(
+                    journeyId: journeyId,
+                    experienceId: harness.experience.id,
+                    experienceVersion: harness.experience.versionId,
+                    epoch: 0,
+                    stateVersion: JourneyStateEnvelope.currentVersion,
+                    envelope: JourneyStateEnvelope(
+                        context: [:],
+                        executionState: JourneyExecutionState(pendingAction: pending),
+                        snapshots: [:],
+                        responseSession: nil
+                    ),
+                    expiresAt: Date().addingTimeInterval(600)
+                )
+                harness.mocks.profileService.setProfileResponse(ProfileResponse(
+                    segments: [],
+                    mailbox: [mailbox]
+                ))
+                harness.mocks.eventLog.setTrackWithResponseResult(
+                    EventResponse(
+                        status: "ok",
+                        journeyClaim: .init(
+                            journeyId: journeyId,
+                            accepted: true,
+                            epoch: 1
+                        )
+                    ),
+                    for: JourneyEvents.journeyClaimed
+                )
+                let claimGate = HostDismissalAsyncGate()
+                harness.mocks.eventLog.prepareTriggerPropertiesHandler = {
+                    await claimGate.suspend()
+                }
+
+                let refresh = Task {
+                    try? await harness.mocks.profileService.refetchProfile(
+                        distinctId: harness.distinctId
+                    )
+                }
+                try await waitForHostDismissalGate(claimGate)
+
+                await harness.service.shutdown()
+                await claimGate.release()
+                _ = await refresh.value
+
+                expect(harness.store.loadJourney(id: journeyId)).to(beNil())
+                let reinserted = await harness.service.forwardingExperienceRef(
+                    for: journeyId
+                )
+                expect(reinserted).to(beNil())
+                expect(harness.mocks.sleepProvider.sleepCalls).to(beEmpty())
+                expect(harness.mocks.eventLog.trackForTriggerCalls.filter {
+                    $0.event == JourneyEvents.journeyClaimed
+                }).to(haveCount(1))
+
+                _ = try? await harness.mocks.profileService.refetchProfile(
+                    distinctId: harness.distinctId
+                )
+                expect(harness.mocks.eventLog.trackForTriggerCalls.filter {
+                    $0.event == JourneyEvents.journeyClaimed
+                }).to(haveCount(1))
+            }
+
             it("completes a pre-screen dismissal with host metadata") { @MainActor in
                 let harness = await HostJourneyHarness.make(definition: .singleScreen())
                 serviceUnderTest = harness.service
@@ -1357,6 +1494,7 @@ final class HostDismissalTests: AsyncSpec {
                 )
                 let configuration = NuxieConfiguration(apiKey: "host-dismiss-trigger")
                 configuration.testingOverrides.customStoragePath = storageURL
+                configuration.testingOverrides.suppressBackgroundWork = true
                 configuration.beforeSend = { event in
                     switch event.name {
                     case SystemEventNames.appInstalled, SystemEventNames.appUpdated,

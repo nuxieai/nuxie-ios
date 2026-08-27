@@ -983,6 +983,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
 
     // MARK: - Cleanup
 
+    public private(set) var cancelPreparedResponseDeliveriesCallCount = 0
+    public func cancelPreparedResponseDeliveries() async {
+        cancelPreparedResponseDeliveriesCallCount += 1
+    }
+
     public func close() async {
         // Mock implementation: just reset state
         reset()

@@ -23,6 +23,7 @@ struct SDKTestHarness {
 
         var config = NuxieConfiguration(apiKey: "test-key-\(testId)")
         config.testingOverrides.customStoragePath = storageURL
+        config.testingOverrides.suppressBackgroundWork = true
         config.environment = environment
         configure?(&config)
         if !trackLifecycleEvents {
