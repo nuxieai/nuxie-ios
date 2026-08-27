@@ -59,6 +59,39 @@
           "journeyId": null
         }
       }
+    },
+    {
+      "name": "nested object uses UTF-16 key ordering",
+      "action": {
+        "name": "inspect_key_order",
+        "payload": {
+          "object": {
+            "nested": {
+              "a10": 10,
+              "a2": 2,
+              "B": "uppercase",
+              "b": "lowercase",
+              "url": "https://nuxie.example/action"
+            }
+          }
+        },
+        "experience": {
+          "experienceId": "experience-3",
+          "experienceVersion": "version-3",
+          "journeyId": "journey-3"
+        }
+      },
+      "expect": {
+        "name": "inspect_key_order",
+        "payload": {
+          "object": "{\"nested\":{\"B\":\"uppercase\",\"a10\":10,\"a2\":2,\"b\":\"lowercase\",\"url\":\"https://nuxie.example/action\"}}"
+        },
+        "experience": {
+          "experienceId": "experience-3",
+          "experienceVersion": "version-3",
+          "journeyId": "journey-3"
+        }
+      }
     }
   ]
 }

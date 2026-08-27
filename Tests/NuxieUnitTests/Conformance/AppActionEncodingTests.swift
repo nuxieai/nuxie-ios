@@ -21,6 +21,7 @@ final class AppActionEncodingTests: XCTestCase {
             Set([
                 "resolved payload covers every scalar and nested containers",
                 "absent payload and optional identifiers remain null",
+                "nested object uses UTF-16 key ordering",
             ])
         )
 

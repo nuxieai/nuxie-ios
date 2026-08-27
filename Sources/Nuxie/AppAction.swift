@@ -93,10 +93,7 @@ extension AppActionValue {
             return .double(double)
         }
         guard JSONSerialization.isValidJSONObject(value),
-              let data = try? JSONSerialization.data(
-                withJSONObject: value,
-                options: [.sortedKeys, .withoutEscapingSlashes]
-              ) else {
+              let data = try? DeterministicJSONSerializer.data(withJSONObject: value) else {
             return nil
         }
         return .string(String(decoding: data, as: UTF8.self))
@@ -120,5 +117,58 @@ extension AppActionValue {
         values.reduce(into: [:]) { result, pair in
             result[pair.key] = resolved(pair.value)
         }
+    }
+}
+
+/// Compact JSON with object keys sorted recursively by raw UTF-16 code units.
+private enum DeterministicJSONSerializer {
+    enum SerializationError: Error {
+        case invalidJSONObject
+    }
+
+    static func data(withJSONObject value: Any) throws -> Data {
+        guard JSONSerialization.isValidJSONObject(value) else {
+            throw SerializationError.invalidJSONObject
+        }
+
+        var data = Data()
+        try append(value, to: &data)
+        return data
+    }
+
+    private static func append(_ value: Any, to data: inout Data) throws {
+        if let object = value as? [String: Any] {
+            data.append(0x7B) // {
+            for (index, key) in object.keys.sorted(by: utf16LessThan).enumerated() {
+                if index > 0 { data.append(0x2C) } // ,
+                try appendScalar(key, to: &data)
+                data.append(0x3A) // :
+                guard let member = object[key] else {
+                    throw SerializationError.invalidJSONObject
+                }
+                try append(member, to: &data)
+            }
+            data.append(0x7D) // }
+        } else if let array = value as? [Any] {
+            data.append(0x5B) // [
+            for (index, element) in array.enumerated() {
+                if index > 0 { data.append(0x2C) } // ,
+                try append(element, to: &data)
+            }
+            data.append(0x5D) // ]
+        } else {
+            try appendScalar(value, to: &data)
+        }
+    }
+
+    private static func appendScalar(_ value: Any, to data: inout Data) throws {
+        data.append(try JSONSerialization.data(
+            withJSONObject: value,
+            options: [.fragmentsAllowed, .withoutEscapingSlashes]
+        ))
+    }
+
+    private static func utf16LessThan(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf16.lexicographicallyPrecedes(rhs.utf16)
     }
 }
