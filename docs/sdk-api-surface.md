@@ -60,9 +60,6 @@ matching experiences, and may present UI.
 | --- | --- |
 | `trigger(_:properties:handler:)` | Fire-and-forget. The optional handler observes progressive `TriggerUpdate`s (experience decisions, journey lifecycle, and feature-access outcomes) for this trigger only. |
 | `triggerAndWait(_:properties:progress:) async -> TriggerResult` | Same, awaiting the terminal result. Its Testing-SPI wire encoding is pinned by `fixtures/encodings/trigger-result.json`. |
-| `flushEvents() async -> Bool` | Force delivery of the pending queue. |
-| `getQueuedEventCount() async -> Int` | Pending delivery-queue size. |
-| `pauseEventQueue() async` / `resumeEventQueue() async` | Suspend/resume automatic delivery (manual flush still works — identity ordering relies on it). |
 
 Trigger updates use experience and feature-access vocabulary throughout.
 `ExperienceRef` carries `experienceId`, `experienceVersion`, and an optional

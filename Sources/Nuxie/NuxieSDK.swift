@@ -888,6 +888,16 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     case cacheFirst
     /// Always ask the server (authoritative; use for critical operations).
     case remote
+
+    /// Canonical wrapper encoding pinned by
+    /// `fixtures/encodings/feature-usage.json`.
+    @_spi(Testing)
+    public var wireValue: String {
+      switch self {
+      case .cacheFirst: "cacheFirst"
+      case .remote: "remote"
+      }
+    }
   }
 
   /// Check whether the user has access to a feature.

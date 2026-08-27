@@ -1,0 +1,99 @@
+{
+  "suite": "encodings/feature-usage",
+  "version": 1,
+  "description": "Canonical wire encoding of FeatureUsageResult and the policy-aware FeatureAccess result shape RN/Flutter/Unity/UE/Godot bindings use for feature usage and hasFeature.",
+  "vectors": [
+    {
+      "name": "usage result preserves fractional counters and authoritative access",
+      "kind": "featureUsage",
+      "result": {
+        "success": true,
+        "featureId": "credits",
+        "amountUsed": 2.5,
+        "message": "usage recorded",
+        "usage": {
+          "current": 4.5,
+          "limit": 10.5,
+          "remaining": 6.25
+        },
+        "authoritativeAccess": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 7.5,
+          "type": "creditSystem"
+        }
+      },
+      "expect": {
+        "success": true,
+        "featureId": "credits",
+        "amountUsed": 2.5,
+        "message": "usage recorded",
+        "usage": {
+          "current": 4.5,
+          "limit": 10.5,
+          "remaining": 6.25
+        },
+        "authoritativeAccess": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 7.5,
+          "type": "creditSystem"
+        }
+      }
+    },
+    {
+      "name": "usage result pins absent optional fields",
+      "kind": "featureUsage",
+      "result": {
+        "success": false,
+        "featureId": "exports",
+        "amountUsed": 1.25,
+        "message": null,
+        "usage": null,
+        "authoritativeAccess": null
+      },
+      "expect": {
+        "success": false,
+        "featureId": "exports",
+        "amountUsed": 1.25,
+        "message": null,
+        "usage": null,
+        "authoritativeAccess": null
+      }
+    },
+    {
+      "name": "cache-first metered access preserves fractional balance",
+      "kind": "featureAccess",
+      "policy": "cacheFirst",
+      "access": {
+        "allowed": true,
+        "unlimited": false,
+        "balance": 3.5,
+        "type": "metered"
+      },
+      "expect": {
+        "allowed": true,
+        "unlimited": false,
+        "balance": 3.5,
+        "type": "metered"
+      }
+    },
+    {
+      "name": "remote boolean access pins a null balance",
+      "kind": "featureAccess",
+      "policy": "remote",
+      "access": {
+        "allowed": false,
+        "unlimited": false,
+        "balance": null,
+        "type": "boolean"
+      },
+      "expect": {
+        "allowed": false,
+        "unlimited": false,
+        "balance": null,
+        "type": "boolean"
+      }
+    }
+  ]
+}
