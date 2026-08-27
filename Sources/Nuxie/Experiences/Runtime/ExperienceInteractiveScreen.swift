@@ -176,6 +176,9 @@ struct ExperienceInteractiveHostCommand: Equatable, Sendable {
 }
 
 enum ExperienceInteractiveEffectKind: Equatable, Sendable {
+    /// A signed control invocation is distinguished at the native projection
+    /// boundary by its authored event name, never by an arbitrary payload key.
+    case controlAction(actionId: String, event: ExperienceInteractiveReportedEvent)
     case reportedEvent(ExperienceInteractiveReportedEvent)
     case viewModelChange(ExperienceInteractiveViewModelChange)
     case responseSet(field: String, value: ExperienceInteractiveValue)
@@ -339,6 +342,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         reportedEvents: [ExperienceInteractiveReportedEvent],
         viewModelChanges: [ExperienceInteractiveViewModelChange],
         hostCommands: [ExperienceInteractiveHostCommand],
+        controlActionIds: Set<String> = [],
         declaredEventNames: Set<String>,
         correlationID: UInt64
     ) -> [ExperienceInteractiveEffect] {
@@ -346,8 +350,12 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         staged.reserveCapacity(
             reportedEvents.count + viewModelChanges.count + hostCommands.count
         )
-        staged.append(contentsOf: reportedEvents.map {
-            .reportedEvent($0)
+        staged.append(contentsOf: reportedEvents.map { event in
+            if controlActionIds.contains(event.name) {
+                .controlAction(actionId: event.name, event: event)
+            } else {
+                .reportedEvent(event)
+            }
         })
         staged.append(contentsOf: viewModelChanges.map {
             .viewModelChange($0)
@@ -1573,6 +1581,7 @@ actor ExperienceInteractiveScreen {
     nonisolated let artboardBounds: CGRect
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
+    private let controlActionIds: Set<String>
     private let declaredEventNames: Set<String>
     private let textInputs: [String: NativeExperienceTextInput]
     private let imageIDsByName: [String: UInt64]
@@ -1601,6 +1610,7 @@ actor ExperienceInteractiveScreen {
         runtime: NuxieNativeRuntime,
         fontScope: ExperienceRuntimeFontScope,
         artboardBounds: CGRect,
+        controlActionIds: Set<String>,
         declaredEventNames: Set<String>,
         textInputs: [String: NativeExperienceTextInput],
         imageIDsByName: [String: UInt64],
@@ -1618,6 +1628,7 @@ actor ExperienceInteractiveScreen {
         self.runtime = runtime
         self.fontScope = fontScope
         self.artboardBounds = artboardBounds
+        self.controlActionIds = controlActionIds
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
         self.imageIDsByName = imageIDsByName
@@ -1760,6 +1771,9 @@ actor ExperienceInteractiveScreen {
                 width: manifestScreen.width,
                 height: manifestScreen.height
             ),
+            controlActionIds: payload.definition
+                .flatMap { $0.controlsByScreen[screenID] }
+                .map { Set($0.keys) } ?? [],
             declaredEventNames: Set(
                 payload.definition?.routes.keys.compactMap { key in
                     guard key.host == .screen(screenID) else { return nil }
@@ -1813,6 +1827,7 @@ actor ExperienceInteractiveScreen {
             reportedEvents: result.events.map(Self.reportedEvent),
             viewModelChanges: publishableViewModelChanges(result.viewModelChanges),
             hostCommands: result.hostCommands.map(Self.hostCommand),
+            controlActionIds: controlActionIds,
             declaredEventNames: declaredEventNames,
             correlationID: correlationID
         )

@@ -73,6 +73,7 @@ final class JourneyRendererBridge:
     activeScreenRun = accepted
       ? await journeyService.screenControlRunScope(journeyId: journeyId)
       : nil
+    await controller.configureScreenEmissionRun(activeScreenRun)
     return accepted
   }
 
@@ -180,6 +181,7 @@ final class JourneyRendererBridge:
     activeScreenRun = persisted
       ? await journeyService?.screenControlRunScope(journeyId: journeyId)
       : nil
+    await controller.configureScreenEmissionRun(activeScreenRun)
   }
 
   @MainActor
@@ -198,6 +200,7 @@ final class JourneyRendererBridge:
     activeScreenRun = persisted
       ? await journeyService?.screenControlRunScope(journeyId: journeyId)
       : nil
+    await controller.configureScreenEmissionRun(activeScreenRun)
   }
 
   func experienceViewController(
@@ -213,31 +216,14 @@ final class JourneyRendererBridge:
   @MainActor
   func experienceViewController(
     _ controller: ExperienceViewController,
-    didEmitEvent event: ExperienceRendererEvent
-  ) {
-    let controlScope = activeScreenRun
-    enqueuePresentationTrace { [journeyId] journeyService in
-      if event.name == ExperienceRendererEvent.controlActionEventName {
-        guard let invocation = event.controlActionInvocation,
-              let controlScope,
-              event.screenId == controlScope.screenId else {
-          LogWarning(
-            "JourneyRendererBridge: rejected malformed or inactive-screen control invocation for \(journeyId)"
-          )
-          return
-        }
-        await journeyService.handleRendererControlAction(
-          journeyId: journeyId,
-          scope: controlScope,
-          invocation: invocation
-        )
-        return
-      }
-      await journeyService.handleRendererEvent(
-        journeyId: journeyId,
-        event: event
-      )
+    didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+  ) async -> Bool {
+    guard batch.journeyId == journeyId,
+          let activeScreenRun,
+          batch.source.screenId == activeScreenRun.screenId else {
+      return false
     }
+    return await journeyService?.handleRendererScreenEmissionBatch(batch) ?? false
   }
 
   func experienceViewController(

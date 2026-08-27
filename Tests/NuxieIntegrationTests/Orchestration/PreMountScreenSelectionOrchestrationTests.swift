@@ -82,6 +82,101 @@ final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
                 }
             }
 
+            it("admits a typed renderer batch through the production journey bridge") { @MainActor in
+                let fixture = try ExperienceReleaseTestFixture.make()
+                let storageURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(
+                        "nuxie-renderer-batch-\(UUID().uuidString)",
+                        isDirectory: true
+                    )
+                storageURLs.append(storageURL)
+                let api = MockNuxieApi()
+                await api.setProfileResponse(ProfileResponse(
+                    segments: [],
+                    releases: .init(
+                        delivery: fixture.delivery,
+                        active: [fixture.entry],
+                        pinned: []
+                    )
+                ))
+                let presentation = MockExperiencePresentationService()
+                let core = try await makeCore(
+                    storageURL: storageURL,
+                    api: api,
+                    presentation: presentation
+                )
+                cores.append(core)
+
+                _ = try await core.profile.refetchProfile(
+                    distinctId: core.identity.getDistinctId()
+                )
+                let signedExperience = try await core.experiences
+                    .experienceForJourneyControl(
+                        experienceId: fixture.entry.locator.experienceId,
+                        versionId: fixture.entry.locator.experienceVersionId
+                    )
+                let controller = MockExperienceViewController(
+                    mockExperienceVersionId: fixture.entry.locator.experienceVersionId,
+                    mockExperience: signedExperience
+                )
+                presentation.defaultMockViewController = controller
+                core.eventLog.track(
+                    SystemEventNames.appOpened,
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                await core.eventLog.drain()
+
+                let service = try XCTUnwrap(core.journeys as? JourneyService)
+                let journey = try XCTUnwrap(presentation.lastPresentedJourney)
+                let bridge = try XCTUnwrap(controller.runtimeDelegate)
+                let didActivateInitialScreen = await bridge
+                    .experienceViewControllerWillActivateInitialScreen(
+                        controller
+                    )
+                expect(didActivateInitialScreen).to(beTrue())
+                let didDispatchInitialLifecycle = await bridge
+                    .experienceViewControllerWillDispatchInitialScreenLifecycle(
+                        controller,
+                        screenId: "screen_welcome"
+                    )
+                expect(didDispatchInitialLifecycle).to(beTrue())
+                await service.handleRuntimeReady(
+                    journeyId: journey.id,
+                    controller: controller
+                )
+
+                let runScope = await service.screenControlRunScope(journeyId: journey.id)
+                let scope = try XCTUnwrap(runScope)
+                expect(scope.screenId).to(equal("screen_welcome"))
+                await controller.publishScreenInput(.control(
+                    screenId: scope.screenId,
+                    invocation: ScreenActionInvocation(actionId: "continue"),
+                    additionalDrafts: []
+                ))
+                await core.eventLog.drain()
+                let completionSettled = await service.waitForJourneyCompletion(
+                    journeyId: journey.id
+                )
+                expect(completionSettled).to(beTrue())
+
+                let stored = await core.eventLog.getRecentEvents(limit: 100)
+                    .filter { $0.name == "continue" }
+                expect(stored).to(haveCount(1))
+                expect(stored.first?.id).toNot(beNil())
+                // The routed control event completes the fixture journey, so the
+                // durable trace is the completed marker, not an active snapshot.
+                // Live batch-receipt durability is pinned by the routing suite.
+                let terminalState = await journey.snapshot()
+                expect(terminalState.status).to(equal(.completed))
+                let completedDir = storageURL
+                    .appendingPathComponent("nuxie/journeys/completed")
+                let markers = (try? FileManager.default.subpathsOfDirectory(
+                    atPath: completedDir.path
+                )) ?? []
+                expect(markers.contains { $0.hasSuffix(".json") }).to(beTrue())
+            }
         }
     }
 

@@ -1864,11 +1864,6 @@ private final class ScreenDismissalOrderRuntimeDelegate: ExperienceRuntimeDelega
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitEvent event: ExperienceRendererEvent
-    ) {}
-
-    func experienceViewController(
-        _ controller: ExperienceViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     ) {}
 

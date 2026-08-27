@@ -227,7 +227,7 @@ actor JourneyRunner {
     /// Persists response retry markers through JourneyService's ownership and
     /// checkpoint coordination. Runner-local fallback writes must not bypass
     /// that boundary or they can resurrect stale journey state.
-    private let persistResponseRetryMarker: @Sendable (JourneySnapshot) async -> Bool
+    private let persistResponseRetryMarker: @Sendable () async -> Bool
     /// Persists the runner-owned entry claim before any authored action can
     /// produce a side effect. Production injects JourneyService's store-owned
     /// adapter; runner-only tests may acknowledge the in-memory checkpoint.
@@ -341,7 +341,7 @@ actor JourneyRunner {
         dateProvider: DateProviderProtocol,
         appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in },
         responseSessionModule: ResponseSessionModule? = nil,
-        persistResponseRetryMarker: @escaping @Sendable (JourneySnapshot) async -> Bool = { _ in true },
+        persistResponseRetryMarker: @escaping @Sendable () async -> Bool = { true },
         persistEntryActionClaim: @escaping @Sendable (JourneySnapshot) async -> Bool,
         emitsTransitionEvents: Bool = true
     ) {
@@ -1175,7 +1175,7 @@ actor JourneyRunner {
         guard let hostId = screenId ?? currentScreenId,
               !hostId.isEmpty else { return nil }
 
-        // Response emissions are consumed and persisted by ScreenEmissionRouter.
+        // Response emissions are consumed and persisted by the Journey runtime.
         // They are not ordinary Journey route events.
         guard event.name != SystemEventNames.responseSet,
               event.name != SystemEventNames.responseUnset else { return nil }
@@ -1193,7 +1193,7 @@ actor JourneyRunner {
         _ emission: ScreenEmission,
         screenId: String,
         field: String
-    ) async -> ScreenResponseEmissionResult {
+    ) async -> JourneyScreenResponseEmissionResult {
         guard await executionRemainsLive() else {
             return .rejected(message: "journey execution is no longer live")
         }
@@ -1358,25 +1358,31 @@ actor JourneyRunner {
         _ mutate: @Sendable (inout JourneySnapshot) -> Void
     ) async -> Bool {
         guard await executionRemainsLive() else { return false }
-        let versioned = await journey.versionedSnapshot()
-        // Do not introduce another suspension between the revision read and
-        // its CAS. Response projection callbacks legitimately advance the
-        // journey revision and would turn this write into a false failure.
-        guard lastMileEffectRemainsLive(), versioned.snapshot.status.isLive else {
-            return false
-        }
-        var updated = versioned.snapshot
-        mutate(&updated)
-        updated.updatedAt = dateProvider.now()
-        guard await journey.replace(updated, ifRevisionEquals: versioned.revision) else {
-            return false
-        }
-        guard await executionRemainsLive() else { return false }
-        guard await persistResponseRetryMarker(updated) else {
-            _ = await journey.replace(
-                versioned.snapshot,
-                ifRevisionEquals: versioned.revision + 1
+        guard lastMileEffectRemainsLive() else { return false }
+        let commit = await journey.update { state -> ResponseWriteStateCommit? in
+            guard state.status.isLive else { return nil }
+            let previousPendingWrites = state.pendingResponseFieldWrites
+            let previousRetryRequired = state.responseSessionRetryRequired
+            mutate(&state)
+            state.updatedAt = dateProvider.now()
+            return ResponseWriteStateCommit(
+                pendingWrites: state.pendingResponseFieldWrites,
+                retryRequired: state.responseSessionRetryRequired,
+                previousPendingWrites: previousPendingWrites,
+                previousRetryRequired: previousRetryRequired
             )
+        }
+        guard let commit else { return false }
+        guard await executionRemainsLive() else { return false }
+        guard await persistResponseRetryMarker() else {
+            await journey.update { state in
+                guard state.pendingResponseFieldWrites
+                        == commit.pendingWrites,
+                      state.responseSessionRetryRequired
+                        == commit.retryRequired else { return }
+                state.pendingResponseFieldWrites = commit.previousPendingWrites
+                state.responseSessionRetryRequired = commit.previousRetryRequired
+            }
             return false
         }
         return true
@@ -1399,6 +1405,21 @@ actor JourneyRunner {
             screenId: screenId,
             componentId: componentId,
             instanceId: instanceId,
+            admission: admission,
+            completionAuthoredEventId: nil
+        )
+    }
+
+    func dispatchAdmittedJourneyIngressEvent(
+        _ event: NuxieEvent,
+        admission: AcceptedScreenLocalRoute
+    ) async -> RunOutcome? {
+        await dispatchAdmittedEvent(
+            event,
+            hostId: JourneyDocument.journeyEventHostKey,
+            screenId: nil,
+            componentId: nil,
+            instanceId: nil,
             admission: admission,
             completionAuthoredEventId: nil
         )
@@ -3491,7 +3512,7 @@ actor JourneyRunner {
                     state.responseSessionRetryRequired = effectiveRequired
                     state.updatedAt = dateProvider.now()
                 }
-                _ = await persistResponseRetryMarker(await journey.snapshot())
+                _ = await persistResponseRetryMarker()
             }
         } else {
             await journey.update { state in
@@ -3499,7 +3520,7 @@ actor JourneyRunner {
                 state.responseSessionRetryRequired = effectiveRequired
                 state.updatedAt = dateProvider.now()
             }
-            _ = await persistResponseRetryMarker(await journey.snapshot())
+            _ = await persistResponseRetryMarker()
         }
     }
 
@@ -5150,4 +5171,11 @@ actor JourneyRunner {
             state.setContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment, value: dict, at: now)
         }
     }
+}
+
+private struct ResponseWriteStateCommit: Sendable {
+    let pendingWrites: [String: PendingResponseFieldWrite]
+    let retryRequired: Bool
+    let previousPendingWrites: [String: PendingResponseFieldWrite]
+    let previousRetryRequired: Bool
 }

@@ -25,18 +25,21 @@ actor ExperienceJourneyRunnerRuntimeBridge {
         _ = await runner.handleScreenChanged(screenId)
     }
 
-    func handleEvent(_ event: ExperienceRendererEvent) async {
-        let runtimeEvent = NuxieEvent(
-            name: event.name,
-            distinctId: distinctId,
-            properties: event.properties
-        )
-        _ = await runner.dispatchScreenEvent(
-            runtimeEvent,
-            screenId: event.screenId ?? currentScreenId,
-            componentId: event.componentId,
-            instanceId: event.instanceId
-        )
+    func handleBatch(_ batch: ScreenEmissionBatch) async {
+        for event in batch.emissions where !event.name.hasPrefix("$") {
+            let runtimeEvent = NuxieEvent(
+                id: event.id,
+                name: event.name,
+                distinctId: distinctId,
+                properties: event.payload.mapValues(\.foundationValue)
+            )
+            _ = await runner.dispatchScreenEvent(
+                runtimeEvent,
+                screenId: batch.source.screenId,
+                componentId: batch.source.componentId,
+                instanceId: batch.source.instanceId
+            )
+        }
     }
 
     func handleViewModelChange(_ change: ExperienceRendererViewModelChange) async {
@@ -86,24 +89,20 @@ final class ExperienceJourneyRunnerRuntimeDelegate: ExperienceRuntimeDelegate {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitEvent event: ExperienceRendererEvent
-    ) {
-        var payload = event.properties
-        payload["name"] = event.name
-        if let screenId = event.screenId {
-            payload["screenId"] = screenId
+        didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+    ) async -> Bool {
+        for event in batch.emissions {
+            let properties = event.payload.mapValues(\.foundationValue)
+            traceRecorder?.recordEvent(name: event.name, properties: properties)
+            onEvent?("renderer/event", [
+                "name": event.name,
+                "screenId": batch.source.screenId,
+                "componentId": batch.source.componentId as Any,
+                "instanceId": batch.source.instanceId as Any,
+            ].merging(properties) { _, value in value })
         }
-        if let componentId = event.componentId {
-            payload["componentId"] = componentId
-        }
-        if let instanceId = event.instanceId {
-            payload["instanceId"] = instanceId
-        }
-        traceRecorder?.recordEvent(name: event.name, properties: event.properties)
-        onEvent?("renderer/event", payload)
-        Task { [bridge] in
-            await bridge.handleEvent(event)
-        }
+        await bridge.handleBatch(batch)
+        return true
     }
 
     func experienceViewController(

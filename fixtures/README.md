@@ -38,6 +38,9 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `journeys/time-window`: identical Swift/server calendar decisions.
 - `journeys/experiment-resolution`: identical Swift/server assignment,
   fallback, freezing, and invalid-assignment decisions.
+- `journeys/screen-emission-runtime`: one typed control input becomes one
+  atomic emission batch, then preserves response state and Customer Event
+  identity through durable admission and replay.
 - `experience-release-profile-v1/profile.json`: delivery origins plus the
   active and pinned locator/envelope membership wire shape shared by SDKs.
 - `experience-release-descriptor/segment-trigger.json`: compiled segment
