@@ -586,7 +586,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             isDirectory: true
         )
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: cache) }
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: cache)
+        }
         let releaseStore = ExperienceReleaseAcquisitionStore(
             cacheDirectory: cache,
             urlSession: TestURLSessionProvider.createTestSession(),
@@ -650,6 +652,82 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(requests.paths, downloadedPaths)
         XCTAssertFalse(firstPreparation === secondPreparation)
         _ = try await liveScreen.step(elapsedSeconds: 0)
+    }
+
+    func testCapturedAdmissionResolvesItsCatalogAfterANewerGenerationCommits() async throws {
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures")
+        let firstProfile = try JSONDecoder().decode(
+            ExperienceReleaseProfile.self,
+            from: Data(contentsOf: fixtures.appendingPathComponent("scripted-resources/profile.json"))
+        )
+        let secondProfile = try JSONDecoder().decode(
+            ExperienceReleaseProfile.self,
+            from: Data(contentsOf: fixtures.appendingPathComponent("multi-screen/profile.json"))
+        )
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "routing-catalog-generation-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: cache)
+        }
+        let loader = ExperienceLoader(
+            productService: ProductService(),
+            releaseStore: ExperienceReleaseAcquisitionStore(
+                cacheDirectory: cache,
+                urlSession: TestURLSessionProvider.createTestSession(),
+                authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
+                supportedRuntime: ExperienceReleaseRuntime.current,
+                admission: ExperienceReleaseAdmission(
+                    store: InMemoryExperienceReleaseHighWaterStore()
+                )
+            )
+        )
+
+        let firstPrepared = try await loader.prepareReleaseProfile(firstProfile)
+        let committedFirstCatalog = try await loader.commitReleaseProfile(
+            firstPrepared,
+            generation: 1
+        )
+        let firstCatalog = try XCTUnwrap(committedFirstCatalog)
+        let firstReference = try XCTUnwrap(firstCatalog.references.first)
+        let capturedAdmission = ProfileTriggerAdmission(
+            effectiveExperienceReferences: firstCatalog.references,
+            activeExperienceReferences: firstCatalog.references,
+            userProperties: [:],
+            segmentMemberships: .empty,
+            routingCatalog: firstCatalog
+        )
+
+        let secondPrepared = try await loader.prepareReleaseProfile(secondProfile)
+        _ = try await loader.commitReleaseProfile(secondPrepared, generation: 2)
+
+        do {
+            _ = try await loader.experienceForJourneyControl(
+                experienceId: firstReference.experienceId,
+                versionId: firstReference.versionId
+            )
+            XCTFail("Expected the live loader catalog to have replaced generation 1")
+        } catch let error as ExperienceReleaseAcquisitionError {
+            XCTAssertEqual(error, .invalidProfileEntry)
+        }
+
+        let resolved = try await capturedAdmission.routingCatalog.experience(
+            experienceId: firstReference.experienceId,
+            versionId: firstReference.versionId
+        )
+        XCTAssertEqual(resolved.id, firstReference.experienceId)
+        XCTAssertEqual(resolved.versionId, firstReference.versionId)
+        XCTAssertEqual(capturedAdmission.routingCatalog.generation, 1)
+        guard case .event(let trigger)? = resolved.trigger else {
+            return XCTFail("Expected the captured generation's event trigger")
+        }
+        XCTAssertEqual(trigger.eventName, SystemEventNames.appOpened)
     }
 
     func testRepresentativeCorpusRecordsFirstScreenPreparationCPUAndMemory() async throws {

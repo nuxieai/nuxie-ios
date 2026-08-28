@@ -19,6 +19,32 @@ struct PreparedExperienceReleaseProfile: Sendable {
     }
 }
 
+/// Immutable authenticated behavior for one admitted profile generation.
+/// Routing keeps this value for the whole operation, so a newer profile can
+/// replace the loader's live catalog without invalidating in-flight lookups.
+struct ExperienceRoutingCatalog: Sendable {
+    let generation: UInt64
+    let references: [ExperienceReference]
+    private let resolve: @Sendable (String, String) async throws -> Experience
+
+    init(
+        generation: UInt64,
+        references: [ExperienceReference],
+        resolve: @escaping @Sendable (String, String) async throws -> Experience
+    ) {
+        self.generation = generation
+        self.references = references
+        self.resolve = resolve
+    }
+
+    func experience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience {
+        try await resolve(experienceId, versionId)
+    }
+}
+
 protocol ExperienceServiceProtocol: AnyObject, Sendable {
     /// Legacy low-level test/qualification entry point. ProfileService uses
     /// the generation-stamped prepare/commit pair below.
@@ -33,7 +59,7 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     func commitReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
         generation: UInt64
-    ) async throws -> [ExperienceReference]?
+    ) async throws -> ExperienceRoutingCatalog?
 
     func fetchExperience(id: String) async throws -> Experience
 
@@ -135,7 +161,8 @@ extension ExperienceServiceProtocol {
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
         let prepared = try await prepareReleaseProfile(profile)
-        return try await commitReleaseProfile(prepared, generation: 0)
+        let committed = try await commitReleaseProfile(prepared, generation: 0)
+        return profile == nil ? nil : committed?.references
     }
     func waitForWarmLoadsToSettle() async {}
     func suspendWarmLoads() async {}
@@ -155,10 +182,17 @@ extension ExperienceServiceProtocol {
     func commitReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
         generation: UInt64
-    ) async throws -> [ExperienceReference]? {
-        _ = prepared
-        _ = generation
-        return nil
+    ) async throws -> ExperienceRoutingCatalog? {
+        let references = prepared.references ?? []
+        return ExperienceRoutingCatalog(
+            generation: generation,
+            references: references
+        ) { [self] experienceId, versionId in
+            try await experienceForJourneyControl(
+                experienceId: experienceId,
+                versionId: versionId
+            )
+        }
     }
     func fetchExperience(
         experienceId: String,
@@ -305,7 +339,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     func commitReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
         generation: UInt64
-    ) async throws -> [ExperienceReference]? {
+    ) async throws -> ExperienceRoutingCatalog? {
         try await experienceLoader.commitReleaseProfile(prepared, generation: generation)
     }
 

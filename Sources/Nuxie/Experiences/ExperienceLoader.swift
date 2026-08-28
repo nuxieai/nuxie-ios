@@ -171,7 +171,7 @@ actor ExperienceLoader {
     func commitReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
         generation: UInt64
-    ) async throws -> [ExperienceReference]? {
+    ) async throws -> ExperienceRoutingCatalog? {
         guard generation >= latestProfileGeneration else { return nil }
         latestProfileGeneration = generation
         return try await installPreparedReleaseProfile(
@@ -187,13 +187,14 @@ actor ExperienceLoader {
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
         let prepared = try await prepareReleaseProfile(profile)
-        return try await installPreparedReleaseProfile(prepared, guardedBy: nil)
+        let committed = try await installPreparedReleaseProfile(prepared, guardedBy: nil)
+        return profile == nil ? nil : committed?.references
     }
 
     private func installPreparedReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
         guardedBy generation: UInt64?
-    ) async throws -> [ExperienceReference]? {
+    ) async throws -> ExperienceRoutingCatalog? {
 
         guard let catalog = prepared.catalog else {
             let authorityChanged = installProductAuthorityCatalog([:])
@@ -210,7 +211,11 @@ actor ExperienceLoader {
             preloadMetricsByRelease.removeAll()
             reportedPreloadMetricsByRelease.removeAll()
             if authorityChanged { await notifyProductAuthorityChanged() }
-            return nil
+            return makeRoutingCatalog(
+                generation: generation ?? latestProfileGeneration,
+                references: [],
+                releases: [:]
+            )
         }
         for rejection in catalog.rejections {
             LogError(
@@ -248,7 +253,11 @@ actor ExperienceLoader {
                 current, _ in current
             }
             if authorityChanged { await notifyProductAuthorityChanged() }
-            return catalog.references
+            return makeRoutingCatalog(
+                generation: generation ?? latestProfileGeneration,
+                references: catalog.references,
+                releases: installed
+            )
         }
 
         cancelWarmTasks()
@@ -271,7 +280,38 @@ actor ExperienceLoader {
         reportedPreloadMetricsByRelease.removeAll()
         beginWarming(installed.values)
         if authorityChanged { await notifyProductAuthorityChanged() }
-        return catalog.references
+        return makeRoutingCatalog(
+            generation: generation ?? latestProfileGeneration,
+            references: catalog.references,
+            releases: installed
+        )
+    }
+
+    private func makeRoutingCatalog(
+        generation: UInt64,
+        references: [ExperienceReference],
+        releases: [ExperienceVersionKey: AuthenticatedExperienceReleaseDefinition]
+    ) -> ExperienceRoutingCatalog {
+        ExperienceRoutingCatalog(
+            generation: generation,
+            references: references
+        ) { experienceId, versionId in
+            let key = ExperienceVersionKey(
+                experienceId: experienceId,
+                versionId: versionId
+            )
+            guard let release = releases[key],
+                  let assetBaseURL = URL(string: release.delivery.assetBaseUrl) else {
+                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+            }
+            return Experience(
+                behavior: release.behavior,
+                journey: release.journey,
+                definition: release.definition,
+                assetBaseURL: assetBaseURL,
+                authenticatedReleaseID: release.releaseID
+            )
+        }
     }
 
     func setProductAuthorityChangeHandler(

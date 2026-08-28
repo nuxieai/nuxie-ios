@@ -266,22 +266,45 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     public func commitReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
         generation: UInt64
-    ) async throws -> [ExperienceReference]? {
-        let accepted = withLock { () -> Bool in
-            guard generation >= _latestProfileGeneration else { return false }
+    ) async throws -> ExperienceRoutingCatalog? {
+        let committed = withLock { () -> (
+            references: [ExperienceReference],
+            experiences: [String: Experience],
+            fallback: Experience?
+        )? in
+            guard generation >= _latestProfileGeneration else { return nil }
             _latestProfileGeneration = generation
             _committedReleaseProfiles.append(prepared.profile)
-            return true
+            return (
+                prepared.references ?? [],
+                _mockExperiences,
+                _defaultMockExperience
+            )
         }
-        guard accepted else { return nil }
-        return prepared.references
+        guard let committed else { return nil }
+        return ExperienceRoutingCatalog(
+            generation: generation,
+            references: committed.references
+        ) { experienceId, versionId in
+            if let experience = committed.experiences[versionId],
+               experience.id == experienceId {
+                return experience
+            }
+            if let fallback = committed.fallback,
+               fallback.id == experienceId,
+               fallback.versionId == versionId {
+                return fallback
+            }
+            throw MockExperienceServiceError.experienceNotFound(versionId)
+        }
     }
 
     public func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
         let prepared = try await prepareReleaseProfile(profile)
-        return try await commitReleaseProfile(prepared, generation: 0)
+        let committed = try await commitReleaseProfile(prepared, generation: 0)
+        return profile == nil ? nil : committed?.references
     }
 
     public func removeExperiences(_ versionIds: [String]) async {

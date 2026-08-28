@@ -17,6 +17,9 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     private var _activeExperienceReferences: [ExperienceReference]?
     private var _triggerUserProperties: [String: AnyCodable] = [:]
     private var _triggerSegmentMemberships = SegmentMembershipSeed.empty
+    private var _routingCatalog: ExperienceRoutingCatalog?
+    private var _experienceResolver:
+        (@Sendable (String, String) async throws -> Experience)?
     private var _journeyMailboxHandler:
         (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     private var _onAppBecameActiveHandler: (@Sendable () async -> Void)?
@@ -52,6 +55,14 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     var onAppBecameActiveHandler: (@Sendable () async -> Void)? {
         get { lock.withLock { _onAppBecameActiveHandler } }
         set { lock.withLock { _onAppBecameActiveHandler = newValue } }
+    }
+    var experienceResolver: (@Sendable (String, String) async throws -> Experience)? {
+        get { lock.withLock { _experienceResolver } }
+        set { lock.withLock { _experienceResolver = newValue } }
+    }
+    var routingCatalog: ExperienceRoutingCatalog? {
+        get { lock.withLock { _routingCatalog } }
+        set { lock.withLock { _routingCatalog = newValue } }
     }
 
     public init() {
@@ -155,12 +166,19 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
         _ = distinctId
         return lock.withLock {
             guard let effective = _effectiveExperienceReferences,
-                  let active = _activeExperienceReferences else { return nil }
+                  let active = _activeExperienceReferences,
+                  let experienceResolver = _experienceResolver else { return nil }
+            let routingCatalog = _routingCatalog ?? ExperienceRoutingCatalog(
+                generation: 0,
+                references: effective,
+                resolve: experienceResolver
+            )
             return ProfileTriggerAdmission(
                 effectiveExperienceReferences: effective,
                 activeExperienceReferences: active,
                 userProperties: _triggerUserProperties,
-                segmentMemberships: _triggerSegmentMemberships
+                segmentMemberships: _triggerSegmentMemberships,
+                routingCatalog: routingCatalog
             )
         }
     }
@@ -176,6 +194,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             _activeExperienceReferences = nil
             _triggerUserProperties = [:]
             _triggerSegmentMemberships = .empty
+            _routingCatalog = nil
+            // The resolver is stable wiring owned by MockFactory.
             _journeyMailboxHandler = nil
             _onAppBecameActiveHandler = nil
         }

@@ -101,6 +101,103 @@ final class JourneyTriggerResultTests: AsyncSpec {
                 expect(error.code).to(equal(.triggerFailed))
             }
 
+            it("routes against the catalog generation captured by admission") {
+                let mocks = MockFactory.shared
+                await mocks.resetAll()
+
+                let admittedReference = ExperienceReference(
+                    experienceId: "admitted-experience",
+                    versionId: "admitted-version"
+                )
+                let admittedExperience = Experience(
+                    id: admittedReference.experienceId,
+                    versionId: admittedReference.versionId,
+                    name: "Admitted Generation",
+                    reentry: .everyTime,
+                    publishedAt: "2026-08-28T00:00:00Z",
+                    trigger: .event(EventTriggerConfig(
+                        eventName: "generation-pinned-trigger",
+                        condition: nil
+                    )),
+                    goal: nil,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil
+                )
+                mocks.experienceService.mockExperiences = [
+                    admittedReference.versionId: admittedExperience
+                ]
+                let admittedCatalog = try await mocks.experienceService.commitReleaseProfile(
+                    PreparedExperienceReleaseProfile(
+                        profile: nil,
+                        catalog: nil,
+                        references: [admittedReference]
+                    ),
+                    generation: 1
+                )
+                guard let admittedCatalog else {
+                    return fail("expected generation 1 to commit")
+                }
+                mocks.profileService.effectiveExperienceReferences = [admittedReference]
+                mocks.profileService.activeExperienceReferences = [admittedReference]
+                mocks.profileService.routingCatalog = admittedCatalog
+
+                let replacementReference = ExperienceReference(
+                    experienceId: "replacement-experience",
+                    versionId: "replacement-version"
+                )
+                let replacementExperience = Experience(
+                    id: replacementReference.experienceId,
+                    versionId: replacementReference.versionId,
+                    name: "Replacement Generation",
+                    reentry: .everyTime,
+                    publishedAt: "2026-08-28T00:00:01Z",
+                    trigger: nil,
+                    goal: nil,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil
+                )
+                mocks.experienceService.mockExperiences = [
+                    replacementReference.versionId: replacementExperience
+                ]
+                _ = try await mocks.experienceService.commitReleaseProfile(
+                    PreparedExperienceReleaseProfile(
+                        profile: nil,
+                        catalog: nil,
+                        references: [replacementReference]
+                    ),
+                    generation: 2
+                )
+
+                do {
+                    _ = try await mocks.experienceService.experienceForJourneyControl(
+                        experienceId: admittedReference.experienceId,
+                        versionId: admittedReference.versionId
+                    )
+                    return fail("expected the live catalog to have replaced generation 1")
+                } catch {
+                    // The captured admission is now the only authority that
+                    // can resolve the generation 1 trigger.
+                }
+
+                let service = mocks.makeJourneyService(journeyStore: mocks.journeyStore)
+                let results = await service.handleEventForTrigger(
+                    TestEventBuilder(name: "generation-pinned-trigger")
+                        .withDistinctId("generation-pinned-user")
+                        .build()
+                )
+
+                guard case .started(let journey) = results.first else {
+                    await mocks.resetAll()
+                    return fail("expected routing to start the admitted generation")
+                }
+                let snapshot = await journey.snapshot()
+                expect(snapshot.experienceId).to(equal(admittedReference.experienceId))
+                expect(results).to(haveCount(1))
+                await mocks.resetAll()
+            }
+
             it("pins one membership snapshot across trigger IR and journey creation") {
                 let mocks = MockFactory.shared
                 await mocks.resetAll()

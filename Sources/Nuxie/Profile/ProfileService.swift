@@ -70,16 +70,8 @@ extension ProfileServiceProtocol {
     func getTriggerAdmission(
         distinctId: String
     ) async -> ProfileTriggerAdmission? {
-        guard let effective = await getEffectiveExperienceReferences(distinctId: distinctId),
-              let active = await getActiveExperienceReferences(distinctId: distinctId) else {
-            return nil
-        }
-        return ProfileTriggerAdmission(
-            effectiveExperienceReferences: effective,
-            activeExperienceReferences: active,
-            userProperties: [:],
-            segmentMemberships: .empty
-        )
+        _ = distinctId
+        return nil
     }
     func setJourneyMailboxHandler(
         _ handler: (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
@@ -97,6 +89,7 @@ struct ProfileTriggerAdmission: Sendable {
     let activeExperienceReferences: [ExperienceReference]
     let userProperties: [String: AnyCodable]
     let segmentMemberships: SegmentMembershipSeed
+    let routingCatalog: ExperienceRoutingCatalog
 }
 
 /// Wrapper for cached profile data with metadata
@@ -540,10 +533,10 @@ internal actor ProfileService: ProfileServiceProtocol {
             guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
         }
 
-        let authoritative = try await experienceService.commitReleaseProfile(
+        guard let routingCatalog = try await experienceService.commitReleaseProfile(
             prepared,
             generation: generation
-        )
+        ) else { return false }
         guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
 
         let installedMembership = await segmentService.replaceSnapshot(
@@ -565,16 +558,17 @@ internal actor ProfileService: ProfileServiceProtocol {
         }
 
         guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
-        let nextEffective = authoritative ?? []
+        let nextEffective = routingCatalog.references
         let nextActive = activeReferences(
             in: profile,
-            authenticated: authoritative
+            authenticated: nextEffective
         )
         triggerAdmission = ProfileTriggerAdmission(
             effectiveExperienceReferences: nextEffective,
             activeExperienceReferences: nextActive,
             userProperties: identityService.getUserProperties().mapValues(AnyCodable.init),
-            segmentMemberships: profile.segmentMemberships.filtered(to: profile.segments)
+            segmentMemberships: profile.segmentMemberships.filtered(to: profile.segments),
+            routingCatalog: routingCatalog
         )
         cachedProfile = item
         LogDebug("Updated memory cache for \(NuxieLogger.shared.logDistinctID(distinctId))")
