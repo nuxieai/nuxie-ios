@@ -37,8 +37,9 @@ final class GoalEvaluatorTests: AsyncSpec {
 
         // Builds a fresh evaluator against the current mocks, mirroring the
         // lazy resolution the old container registration provided.
-        let makeGoalEvaluator: () -> GoalEvaluator = {
-            let segments = MockSegmentService()
+        func makeGoalEvaluator(
+            segments: MockSegmentService = MockSegmentService()
+        ) -> GoalEvaluator {
             let features = NoOpFeatureService()
             let irRuntime = IRRuntime(dateProvider: dateProvider)
             irRuntime.wire(
@@ -49,7 +50,6 @@ final class GoalEvaluatorTests: AsyncSpec {
             )
             return GoalEvaluator(
                 eventLog: eventLog,
-                segments: segments,
                 features: features,
                 identity: identityService,
                 dateProvider: dateProvider,
@@ -64,6 +64,160 @@ final class GoalEvaluatorTests: AsyncSpec {
         }
 
         describe("GoalEvaluator") {
+            it("keeps enrollment-time segment facts after the admitted profile changes") {
+                let segmentId = "enrolled-segment"
+                let enteredAt = Date(timeIntervalSince1970: 10)
+                let now = Date(timeIntervalSince1970: 20)
+                let segments = MockSegmentService()
+                identityService.setDistinctId("user_1")
+                dateProvider.setCurrentDate(now)
+
+                let goal = GoalConfig(
+                    kind: .segmentEnter,
+                    segmentId: segmentId,
+                    window: 100
+                )
+                let experience = Experience(
+                    id: "pinned-segment-campaign",
+                    versionId: "pinned-segment-flow",
+                    name: "Pinned segment",
+                    reentry: .everyTime,
+                    publishedAt: "2026-01-01T00:00:00Z",
+                    trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
+                    goal: goal,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil
+                )
+                let journey = JourneySnapshot(
+                    id: "pinned-segment-journey",
+                    experience: experience,
+                    distinctId: "user_1",
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: enteredAt,
+                        memberships: [
+                            SeededSegmentMembership(
+                                segmentId: segmentId,
+                                enteredAt: enteredAt
+                            )
+                        ]
+                    ),
+                    now: now
+                )
+                await segments.replaceSnapshot(
+                    .empty,
+                    definitions: [Segment(id: segmentId, name: "Enrolled")],
+                    for: "user_1"
+                )
+
+                let result = await makeGoalEvaluator(segments: segments)
+                    .isGoalMet(journey: journey)
+
+                expect(result.met).to(beTrue())
+            }
+
+            it("evaluates Segment IR against enrollment-time membership facts") {
+                let segmentId = "enrolled-segment"
+                let now = Date(timeIntervalSince1970: 20)
+                let goal = GoalConfig(
+                    kind: .attribute,
+                    attributeExpr: IREnvelope(
+                        ir_version: 1,
+                        engine_min: nil,
+                        compiled_at: nil,
+                        expr: .segment(op: "is_member", id: segmentId, within: nil)
+                    ),
+                    window: 100
+                )
+                let experience = Experience(
+                    id: "pinned-segment-ir-campaign",
+                    versionId: "pinned-segment-ir-flow",
+                    name: "Pinned Segment IR",
+                    reentry: .everyTime,
+                    publishedAt: "2026-01-01T00:00:00Z",
+                    trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
+                    goal: goal,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil
+                )
+                let journey = JourneySnapshot(
+                    id: "pinned-segment-ir-journey",
+                    experience: experience,
+                    distinctId: "user_1",
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: now,
+                        memberships: [
+                            SeededSegmentMembership(
+                                segmentId: segmentId,
+                                enteredAt: now
+                            )
+                        ]
+                    ),
+                    now: now
+                )
+
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey)
+
+                expect(result.met).to(beTrue())
+            }
+
+            it("uses enrollment-time segment facts inside event goal filters") {
+                let segmentId = "enrolled-segment"
+                let eventAt = Date(timeIntervalSince1970: 21)
+                identityService.setDistinctId("user_1")
+                await eventLog.route(
+                    TestEventBuilder(name: "purchase")
+                        .withDistinctId("user_1")
+                        .withTimestamp(eventAt)
+                        .build()
+                )
+                let goal = GoalConfig(
+                    kind: .event,
+                    eventName: "purchase",
+                    eventFilter: IREnvelope(
+                        ir_version: 1,
+                        engine_min: nil,
+                        compiled_at: nil,
+                        expr: .segment(op: "is_member", id: segmentId, within: nil)
+                    ),
+                    window: 100
+                )
+                let experience = Experience(
+                    id: "pinned-event-filter-campaign",
+                    versionId: "pinned-event-filter-flow",
+                    name: "Pinned event filter",
+                    reentry: .everyTime,
+                    publishedAt: "2026-01-01T00:00:00Z",
+                    trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
+                    goal: goal,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil
+                )
+                var journey = JourneySnapshot(
+                    id: "pinned-event-filter-journey",
+                    experience: experience,
+                    distinctId: "user_1",
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: eventAt,
+                        memberships: [
+                            SeededSegmentMembership(
+                                segmentId: segmentId,
+                                enteredAt: Date(timeIntervalSince1970: 10)
+                            )
+                        ]
+                    ),
+                    now: Date(timeIntervalSince1970: 20)
+                )
+                journey.conversionAnchorAt = Date(timeIntervalSince1970: 20)
+
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey)
+
+                expect(result.met).to(beTrue())
+                expect(result.at).to(equal(eventAt))
+            }
+
             it("uses the IR runtime clock for lifecycle event operators") {
                 let fixedNow = Date(timeIntervalSince1970: 200)
                 dateProvider.setCurrentDate(fixedNow)

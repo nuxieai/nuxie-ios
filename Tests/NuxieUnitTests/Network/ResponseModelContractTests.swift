@@ -74,7 +74,8 @@ final class ResponseModelContractTests: QuickSpec {
                     {
                       "campaigns": [],
                       "flows": [],
-                      "segments": []
+                      "segments": [],
+                      "segmentMemberships": {"evaluatedAt": null, "memberships": []}
                     }
                     """.utf8
                 )
@@ -82,6 +83,20 @@ final class ResponseModelContractTests: QuickSpec {
                 let response = try JSONDecoder().decode(ProfileResponse.self, from: data)
                 expect(response.releases).to(beNil())
                 expect(response.segments).to(beEmpty())
+            }
+
+            it("rejects a profile response without segment memberships") {
+                let data = Data(
+                    """
+                    {
+                      "segments": []
+                    }
+                    """.utf8
+                )
+
+                expect {
+                    try JSONDecoder().decode(ProfileResponse.self, from: data)
+                }.to(throwError())
             }
 
             it("decodes the top-level event id") {
@@ -175,6 +190,7 @@ final class ResponseModelContractTests: QuickSpec {
                     {
                       "experiences": [],
                       "segments": [],
+                      "segmentMemberships": {"evaluatedAt": null, "memberships": []},
                       "pinnedVersions": [],
                       "assetBaseUrl": "https://assets.example/sha256/",
                       "mailbox": [{
@@ -196,7 +212,9 @@ final class ResponseModelContractTests: QuickSpec {
                             "screenRouting": {},
                             "navigationStack": []
                           },
-                          "snapshots": {},
+                          "snapshots": {
+                            "segmentMemberships": {"evaluatedAt": null, "memberships": []}
+                          },
                           "responseSession": null
                         },
                         "expiresAt": "2026-07-26T18:04:11Z",
@@ -304,7 +322,7 @@ final class ResponseModelContractTests: QuickSpec {
                 expect(encoded?["flowState"]).to(beNil())
             }
 
-            it("decodes server segment seeds and treats unknown evaluation as server") {
+            it("decodes membership snapshots without reading compiled segment fields") {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 let data = Data(
@@ -333,8 +351,8 @@ final class ResponseModelContractTests: QuickSpec {
 
                 let response = try decoder.decode(ProfileResponse.self, from: data)
 
-                expect(response.segments.first?.evaluation).to(equal(.server))
-                expect(response.segmentMemberships?.memberships.first?.segmentId)
+                expect(response.segments.first?.id).to(equal("segment-1"))
+                expect(response.segmentMemberships.memberships.first?.segmentId)
                     .to(equal("segment-1"))
                 expect(response.facts).to(equal([]))
             }

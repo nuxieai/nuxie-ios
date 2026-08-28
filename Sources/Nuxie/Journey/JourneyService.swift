@@ -623,7 +623,7 @@ actor JourneyService: JourneyServiceProtocol {
     presentationAttempt: ExperiencePresentationAttempt?
   ) async -> Journey? {
     guard !isShutDown else { return nil }
-    let journey = Journey(experience: experience, distinctId: distinctId, now: dateProvider.now())
+    let journey = await makeEnrollmentJourney(experience: experience, distinctId: distinctId)
     if let originEventId {
       await journey.setContext("_origin_event_id", value: AnyCodable(originEventId), at: dateProvider.now())
     }
@@ -954,7 +954,7 @@ actor JourneyService: JourneyServiceProtocol {
         epoch: entry.epoch + 1
       ) else {
         LogWarning(
-          "JourneyService: refusing mailbox claim with an invalid conversion anchor for \(entry.journeyId)"
+          "JourneyService: refusing mailbox claim with an invalid state envelope for \(entry.journeyId)"
         )
         continue
       }
@@ -5831,6 +5831,16 @@ actor JourneyService: JourneyServiceProtocol {
       )
     }
     await discardLocalJourney(journey, terminalStatus: .cancelled)
+  }
+
+  private func makeEnrollmentJourney(experience: Experience, distinctId: String) async -> Journey {
+    let segmentMemberships = await segmentService.snapshot(for: distinctId)
+    return Journey(
+      experience: experience,
+      distinctId: distinctId,
+      segmentMemberships: segmentMemberships,
+      now: dateProvider.now()
+    )
   }
 
 }

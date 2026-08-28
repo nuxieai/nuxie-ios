@@ -146,8 +146,7 @@ extension IRRuntime.Config {
 extension IRRuntime {
   /// The standard four-adapter assembly over the live services. Every
   /// evaluation site uses this instead of hand-assembling adapters.
-  /// `segments` accepts an override so SegmentService can pass itself
-  /// (direct-constructed instances in tests are not the wired instance).
+  /// `segments` accepts a run-owned membership snapshot override.
   private func requireWired<T>(_ value: T?) -> T {
     guard let value else {
       fatalError("IRRuntime.wire(...) must be called before standardConfig")
@@ -162,7 +161,7 @@ extension IRRuntime {
     responseSession: ResponseSessionSnapshot? = nil,
     distinctId: String? = nil,
     additionalEvents: [StoredEvent] = [],
-    segments segmentService: SegmentServiceProtocol? = nil
+    segments segmentQueries: IRSegmentQueries? = nil
   ) -> Config {
     let evaluationNow = now ?? dateProvider.now()
     return Config(
@@ -175,8 +174,8 @@ extension IRRuntime {
         additionalEvents: additionalEvents,
         now: { evaluationNow }
       ),
-      segments: IRSegmentQueriesAdapter(
-        segmentService: segmentService ?? requireWired(wiredSegments)
+      segments: segmentQueries ?? IRSegmentQueriesAdapter(
+        segmentService: requireWired(wiredSegments)
       ),
       features: IRFeatureQueriesAdapter(featureService: requireWired(wiredFeatures)),
       journeyId: journeyId,

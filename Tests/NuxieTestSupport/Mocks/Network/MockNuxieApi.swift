@@ -105,16 +105,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     }
 
     private static func makeDefaultProfileResponse() -> ProfileResponse {
-        let segment = Segment(
-            id: "segment-1",
-            name: "Test Segment",
-            condition: IREnvelope(
-                ir_version: 1,
-                engine_min: nil,
-                compiled_at: nil,
-                expr: .bool(true)  // Simple test expression
-            )
-        )
+        let segment = Segment(id: "segment-1", name: "Test Segment")
         
         return ProfileResponse(
             segments: [segment],

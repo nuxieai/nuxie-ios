@@ -1,48 +1,52 @@
 {
-  "distinctId": "user-1",
   "definitions": [
     { "id": "segment-a", "name": "Segment A" },
     { "id": "segment-b", "name": "Segment B" }
   ],
   "timeline": [
     {
-      "generation": 1,
-      "seed": null,
-      "expectedMembershipIds": [],
-      "expectedEnteredIds": [],
-      "expectedExitedIds": []
-    },
-    {
-      "generation": 2,
-      "seed": {
-        "evaluatedAt": "2026-07-22T18:04:11Z",
-        "memberships": [
-          { "segmentId": "segment-a", "enteredAt": "2026-05-02T09:12:00Z" },
-          { "segmentId": "unknown", "enteredAt": "2026-05-02T09:12:00Z" }
-        ]
+      "distinctId": "user-1",
+      "profile": {
+        "segmentMemberships": {
+          "evaluatedAt": "2026-07-22T18:04:11Z",
+          "memberships": [
+            { "segmentId": "segment-a", "enteredAt": "2026-05-02T09:12:00Z" },
+            { "segmentId": "unknown", "enteredAt": "2026-05-02T09:12:00Z" }
+          ]
+        }
       },
-      "expectedMembershipIds": ["segment-a"],
-      "expectedEnteredIds": ["segment-a"],
-      "expectedExitedIds": []
+      "accepted": true,
+      "expectedMembershipIds": ["segment-a"]
     },
     {
-      "generation": 3,
-      "seed": {
-        "evaluatedAt": "2026-07-22T18:05:11Z",
-        "memberships": [
-          { "segmentId": "segment-b", "enteredAt": "2026-06-01T10:00:00Z" }
-        ]
+      "distinctId": "user-1",
+      "profile": {},
+      "accepted": false,
+      "expectedMembershipIds": ["segment-a"]
+    },
+    {
+      "distinctId": "user-1",
+      "profile": {
+        "segmentMemberships": {
+          "evaluatedAt": "2026-07-22T18:06:11Z",
+          "memberships": []
+        }
       },
-      "expectedMembershipIds": ["segment-b"],
-      "expectedEnteredIds": ["segment-b"],
-      "expectedExitedIds": ["segment-a"]
+      "accepted": true,
+      "expectedMembershipIds": []
     },
     {
-      "generation": 4,
-      "seed": { "evaluatedAt": "2026-07-22T18:06:11Z", "memberships": [] },
-      "expectedMembershipIds": [],
-      "expectedEnteredIds": [],
-      "expectedExitedIds": ["segment-b"]
+      "distinctId": "user-2",
+      "profile": {
+        "segmentMemberships": {
+          "evaluatedAt": "2026-07-22T18:07:11Z",
+          "memberships": [
+            { "segmentId": "segment-b", "enteredAt": "2026-06-01T10:00:00Z" }
+          ]
+        }
+      },
+      "accepted": true,
+      "expectedMembershipIds": ["segment-b"]
     }
   ]
 }

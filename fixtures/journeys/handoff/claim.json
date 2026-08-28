@@ -20,7 +20,9 @@
         "screenRouting": {},
         "navigationStack": []
       },
-      "snapshots": {},
+      "snapshots": {
+        "segmentMemberships": {"evaluatedAt": null, "memberships": []}
+      },
       "responseSession": null
     },
     "expiresAt": "2026-07-26T00:00:00Z"
@@ -75,7 +77,9 @@
               },
               "navigationStack": []
             },
-            "snapshots": {},
+            "snapshots": {
+              "segmentMemberships": {"evaluatedAt": null, "memberships": []}
+            },
             "responseSession": null
           }
         }
@@ -112,7 +116,9 @@
               },
               "navigationStack": []
             },
-            "snapshots": {},
+            "snapshots": {
+              "segmentMemberships": {"evaluatedAt": null, "memberships": []}
+            },
             "responseSession": null
           }
         }

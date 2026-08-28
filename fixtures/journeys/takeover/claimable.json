@@ -30,7 +30,9 @@
           "responseVersion": 4
         }
       },
-      "snapshots": {},
+      "snapshots": {
+        "segmentMemberships": {"evaluatedAt": null, "memberships": []}
+      },
       "responseSession": {
         "responseId": "rsp_fdf96a130d4da11a334943fddeae435c692b09f043d68c86a2c0298edbe8def7",
         "journeyId": "journey-takeover-1",

@@ -31,7 +31,6 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     // Note: journeyService stays lazily resolved in run(_:) to avoid the
     // JourneyService cycle until the final 4c slice.
     private let profileService: ProfileServiceProtocol
-    private let segmentService: SegmentServiceProtocol
     private let eventLog: EventIdentityMigrating
     private let featureService: FeatureServiceProtocol
     private let experienceService: ExperienceServiceProtocol
@@ -41,14 +40,12 @@ final class UserTransitionCoordinator: @unchecked Sendable {
 
     init(
         profile: ProfileServiceProtocol,
-        segments: SegmentServiceProtocol,
         eventLog: EventIdentityMigrating,
         features: FeatureServiceProtocol,
         experiences: ExperienceServiceProtocol,
         journeysProvider: @escaping @Sendable () -> JourneyServiceProtocol
     ) {
         self.profileService = profile
-        self.segmentService = segments
         self.eventLog = eventLog
         self.featureService = features
         self.experienceService = experiences
@@ -100,10 +97,8 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         // 2. Per-user state transitions, in dependency order, uncancellable.
         if transition.kind == .reset {
             await profileService.clearCache(distinctId: transition.from)
-            await segmentService.clearSegments(for: transition.from)
         }
         await profileService.handleUserChange(from: transition.from, to: transition.to)
-        await segmentService.handleUserChange(from: transition.from, to: transition.to)
         await journeysProvider().handleUserChange(from: transition.from, to: transition.to)
 
         switch transition.kind {

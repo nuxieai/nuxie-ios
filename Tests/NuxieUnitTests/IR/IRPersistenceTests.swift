@@ -38,25 +38,24 @@ final class IRPersistenceTests: AsyncSpec {
         }
 
         describe("cached profile persistence") {
-            it("encodes and decodes profile responses containing IR") {
+            it("encodes and decodes profile responses containing membership snapshots") {
                 let cachedProfile = CachedProfile(
                     response: ProfileResponse(
                         segments: [
-                            Segment(
-                                id: "segment_1",
-                                name: "High Intent",
-                                condition: makeEnvelope(.eventsCount(
-                                    name: "paywall_viewed",
-                                    since: .timeAgo(duration: .duration(86_400)),
-                                    until: .timeNow,
-                                    within: nil,
-                                    where_: .pred(op: "eq", key: "screen", value: .string("premium"))
-                                ))
-                            ),
+                            Segment(id: "segment_1", name: "High Intent"),
                         ],
                         userProperties: nil,
                         experiments: nil,
-                        features: nil
+                        features: nil,
+                        segmentMemberships: SegmentMembershipSeed(
+                            evaluatedAt: nil,
+                            memberships: [
+                                SeededSegmentMembership(
+                                    segmentId: "segment_1",
+                                    enteredAt: Date(timeIntervalSince1970: 1_723_700_000)
+                                )
+                            ]
+                        )
                     ),
                     distinctId: "user_1",
                     cachedAt: Date(timeIntervalSince1970: 1_723_780_000)
@@ -67,7 +66,8 @@ final class IRPersistenceTests: AsyncSpec {
 
                 expect(decoded.distinctId).to(equal("user_1"))
                 expect(decoded.response.segments).to(haveCount(1))
-                expect(decoded.response.segments[0].condition).to(equal(cachedProfile.response.segments[0].condition))
+                expect(decoded.response.segmentMemberships)
+                    .to(equal(cachedProfile.response.segmentMemberships))
             }
         }
 

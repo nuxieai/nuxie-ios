@@ -65,16 +65,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
 
                 mocks.identityService.setDistinctId("user-1")
                 let enteredAt = Date(timeIntervalSince1970: 1_746_178_320)
-                let segment = Segment(
-                    id: "segment-1",
-                    name: "Purchasers",
-                    condition: IREnvelope(
-                        ir_version: 1,
-                        engine_min: nil,
-                        compiled_at: nil,
-                        expr: .bool(true)
-                    )
-                )
+                let segment = Segment(id: "segment-1", name: "Purchasers")
                 await mocks.nuxieApi.setProfileResponse(ProfileResponse(
                     segments: [segment],
                     segmentMemberships: SegmentMembershipSeed(
@@ -93,6 +84,40 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                 await service.clearAllCache()
             }
 
+            it("clears membership when an admitted profile contains an explicit empty snapshot") {
+                let mocks = MockFactory.shared
+                await mocks.resetAll()
+
+                let distinctId = "empty-snapshot-user"
+                let segment = Segment(id: "segment-1", name: "Purchasers")
+                let realSegmentService = SegmentService()
+                mocks.identityService.setDistinctId(distinctId)
+                await mocks.nuxieApi.setProfileResponse(ProfileResponse(
+                    segments: [segment],
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: nil,
+                        memberships: [
+                            SeededSegmentMembership(
+                                segmentId: segment.id,
+                                enteredAt: Date(timeIntervalSince1970: 1_746_178_320)
+                            )
+                        ]
+                    )
+                ))
+                let service = makeService(mocks, segments: realSegmentService)
+                _ = try await service.refetchProfile(distinctId: distinctId)
+
+                await mocks.nuxieApi.setProfileResponse(ProfileResponse(
+                    segments: [segment],
+                    segmentMemberships: .empty
+                ))
+                _ = try await service.refetchProfile(distinctId: distinctId)
+
+                await expect { await realSegmentService.isInSegment(segment.id) }
+                    .to(beFalse())
+                await service.clearAllCache()
+            }
+
             it("preserves historical entry time for entered_within after a fresh install") {
                 let mocks = MockFactory.shared
                 await mocks.resetAll()
@@ -105,17 +130,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                 mocks.identityService.setDistinctId(distinctId)
                 await mocks.nuxieApi.setProfileResponse(ProfileResponse(
                     segments: [
-                        Segment(
-                            id: segmentId,
-                            name: "Recent purchasers",
-                            condition: IREnvelope(
-                                ir_version: 1,
-                                engine_min: nil,
-                                compiled_at: nil,
-                                expr: .bool(true)
-                            ),
-                            evaluation: .server
-                        )
+                        Segment(id: segmentId, name: "Recent purchasers")
                     ],
                     segmentMemberships: SegmentMembershipSeed(
                         evaluatedAt: now,
@@ -126,7 +141,8 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                 ))
                 let service = makeService(mocks, segments: realSegmentService)
 
-                await expect { await realSegmentService.getCurrentMemberships() }.to(beEmpty())
+                await expect { await realSegmentService.snapshot(for: distinctId).memberships }
+                    .to(beEmpty())
                 _ = try await service.refetchProfile(distinctId: distinctId)
 
                 let adapter = IRSegmentQueriesAdapter(segmentService: realSegmentService)
@@ -141,7 +157,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                 await expect { await realSegmentService.enteredAt(segmentId) }.to(equal(enteredAt))
                 expect(withinHour).to(beTrue())
                 expect(withinTenMinutes).to(beFalse())
-                await realSegmentService.clearSegments(for: distinctId)
+                await realSegmentService.clearSnapshot(for: distinctId)
                 await service.clearAllCache()
             }
         }

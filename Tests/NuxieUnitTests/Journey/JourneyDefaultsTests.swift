@@ -69,6 +69,23 @@ final class JourneyDefaultsTests: QuickSpec {
                 expect(journey.conversionAnchor).to(equal(.journeyStart))
             }
 
+            it("rejects a handoff without membership facts atomically") {
+                var journey = JourneySnapshot(
+                    experience: makeExperience(),
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                var envelope = journey.stateEnvelope()
+                envelope.snapshots.removeValue(forKey: "segmentMemberships")
+                envelope.context["untrusted"] = AnyCodable(true)
+
+                let applied = journey.applyStateEnvelope(envelope, epoch: 4)
+
+                expect(applied).to(beFalse())
+                expect(journey.epoch).to(equal(0))
+                expect(journey.context["untrusted"]).to(beNil())
+            }
+
             it("refreshes the anchor when a last_experience_shown journey is presented") {
                 var journey = JourneySnapshot(
                     experience: makeExperience(),

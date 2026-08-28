@@ -147,7 +147,6 @@ public final class MockFactory: @unchecked Sendable {
         )
         let goalEvaluator = GoalEvaluator(
             eventLog: eventLog,
-            segments: segmentService,
             features: features,
             identity: identityService,
             dateProvider: dateProvider,

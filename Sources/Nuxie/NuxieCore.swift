@@ -229,7 +229,6 @@ final class NuxieCore: @unchecked Sendable {
     )
     let goalEvaluator = overrides.goalEvaluator ?? GoalEvaluator(
       eventLog: eventLog,
-      segments: segments,
       features: features,
       identity: identity,
       dateProvider: dateProvider,
@@ -323,7 +322,6 @@ final class NuxieCore: @unchecked Sendable {
     }
     let userTransitions = overrides.userTransitions ?? UserTransitionCoordinator(
       profile: profile,
-      segments: segments,
       eventLog: eventLog,
       features: features,
       experiences: experiences,

@@ -360,9 +360,7 @@ internal actor ProfileService: ProfileServiceProtocol {
 
             await handleProfileUpdate(
                 cached.response,
-                for: distinctId,
-                previousProfile: nil,
-                generation: 0
+                for: distinctId
             )
 
             // Periodic background refresh keeps the cache warm.
@@ -375,7 +373,6 @@ internal actor ProfileService: ProfileServiceProtocol {
         do {
             let locale = effectiveLocale
             let cached = cachedProfileForDistinctId(distinctId)
-            let previousProfile = cached?.response
             let validator = cached?.locale == locale ? cached?.validator : nil
             let generation = beginProfileRequest()
             let result = try await api.fetchProfile(
@@ -401,16 +398,20 @@ internal actor ProfileService: ProfileServiceProtocol {
                 }
 
                 LogInfo("Network fetch succeeded; updating cache (locale: \(locale))")
-                _ = try await updateCache(
+                let admitted = try await updateCache(
                     profile: fresh,
                     distinctId: distinctId,
                     validator: nextValidator,
-                    locale: locale
+                    locale: locale,
+                    generation: generation
                 )
+                guard admitted else {
+                    LogDebug("Discarding stale profile generation \(generation) after authentication")
+                    return fresh
+                }
                 await handleProfileUpdate(
                     fresh,
                     for: distinctId,
-                    previousProfile: previousProfile,
                     generation: generation
                 )
                 return fresh
@@ -479,8 +480,9 @@ internal actor ProfileService: ProfileServiceProtocol {
         profile: ProfileResponse,
         distinctId: String,
         validator: ProfileCacheValidator?,
-        locale: String
-    ) async throws -> [ExperienceReference] {
+        locale: String,
+        generation: UInt64
+    ) async throws -> Bool {
         let item = CachedProfile(
             response: profile,
             distinctId: distinctId,
@@ -490,6 +492,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         )
 
         let authoritative = try await experienceService.replaceReleaseProfile(profile.releases)
+        guard generation == latestAppliedGeneration else { return false }
         let nextEffective = authoritative ?? []
         effectiveExperienceReferences = nextEffective
         activeExperienceReferences = activeReferences(
@@ -510,7 +513,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         
         // Start refresh timer
         startRefreshTimer()
-        return nextEffective
+        return true
     }
 
     /// Start or restart the periodic refresh timer
@@ -690,6 +693,10 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Handle user change - clear old cache and load new
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
         LogInfo("User changed from \(NuxieLogger.shared.logDistinctID(oldDistinctId)) to \(NuxieLogger.shared.logDistinctID(newDistinctId))")
+
+        // Profile admission owns the membership read snapshot. Clear the old identity before
+        // attempting disk or network admission for the replacement identity.
+        await segmentService.clearSnapshot(for: oldDistinctId)
         
         // Clear memory cache
         cachedProfile = nil
@@ -736,7 +743,6 @@ internal actor ProfileService: ProfileServiceProtocol {
             await handleProfileUpdate(
                 cached.response,
                 for: newDistinctId,
-                previousProfile: nil,
                 generation: generation
             )
             
@@ -765,9 +771,12 @@ internal actor ProfileService: ProfileServiceProtocol {
     private func handleProfileUpdate(
         _ profile: ProfileResponse,
         for distinctId: String,
-        previousProfile: ProfileResponse?,
-        generation: UInt64
+        generation: UInt64? = nil
     ) async {
+        guard generation == nil || generation == latestAppliedGeneration else {
+            LogDebug("Discarding stale admitted profile generation \(generation ?? 0)")
+            return
+        }
         
         // Update user properties from server if present
         if let userProps = profile.userProperties {
@@ -777,14 +786,16 @@ internal actor ProfileService: ProfileServiceProtocol {
             LogInfo("Updated \(propsDict.count) user properties from server")
         }
         
-        // Definitions and membership seed are one generation-stamped server snapshot.
-        await segmentService.updateSegments(profile.segments, for: distinctId)
-        _ = await segmentService.applySeed(
+        guard generation == nil || generation == latestAppliedGeneration else {
+            LogDebug("Discarding stale segment membership generation \(generation ?? 0)")
+            return
+        }
+        await segmentService.replaceSnapshot(
             profile.segmentMemberships,
-            generation: generation,
-            distinctId: distinctId
+            definitions: profile.segments,
+            for: distinctId
         )
-        LogInfo("Applied \(profile.segments.count) server segment definitions for user \(NuxieLogger.shared.logDistinctID(distinctId))")
+        LogInfo("Admitted segment membership snapshot for user \(NuxieLogger.shared.logDistinctID(distinctId))")
 
         if let facts = profile.facts, !facts.isEmpty {
             await eventLog.commitServerFacts(facts, distinctId: distinctId)

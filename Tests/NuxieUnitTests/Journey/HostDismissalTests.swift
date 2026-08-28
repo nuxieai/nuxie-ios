@@ -325,7 +325,11 @@ final class HostDismissalTests: AsyncSpec {
                     envelope: JourneyStateEnvelope(
                         context: [:],
                         executionState: JourneyExecutionState(pendingAction: pending),
-                        snapshots: [:],
+                        snapshots: [
+                            "segmentMemberships": AnyCodable([
+                                "memberships": []
+                            ] as [String: Any])
+                        ],
                         responseSession: nil
                     ),
                     expiresAt: Date().addingTimeInterval(600)

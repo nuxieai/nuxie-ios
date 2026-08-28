@@ -27,7 +27,9 @@
           },
           "navigationStack": []
         },
-        "snapshots": {},
+        "snapshots": {
+          "segmentMemberships": {"evaluatedAt": null, "memberships": []}
+        },
         "responseSession": null
       }
     }
