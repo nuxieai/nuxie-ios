@@ -148,7 +148,7 @@ NuxieSDK.shared.identify(
 )
 ```
 
-Trigger events (optionally observe experience and feature-access updates):
+Trigger events (optionally observe experience and journey updates):
 
 ```swift
 NuxieSDK.shared.trigger(
@@ -162,8 +162,8 @@ Task {
     properties: ["feature": "pro_filters"]
   ) { update in
     switch update {
-    case .featureAccess(.allowed):
-      print("Unlocked")
+    case .decision(.journeyStarted(let experience)):
+      print("Started \(experience.experienceId)")
     case .decision(.noMatch):
       break
     case .error(let error):
@@ -186,7 +186,7 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 - `NuxieSDK.shared.setup(with:)`: initialize the SDK (call once).
 - `NuxieSDK.shared.identify(_:userProperties:userPropertiesSetOnce:)`: identify a user and set traits.
 - `NuxieSDK.shared.trigger(_:properties:)`: trigger events without observing updates.
-- `NuxieSDK.shared.trigger(_:properties:handler:)`: trigger events with experience and feature-access updates.
+- `NuxieSDK.shared.trigger(_:properties:handler:)`: trigger events with experience and journey updates.
 - `NuxieSDK.shared.reset(keepAnonymousId:)`: clear identity (e.g., logout).
 - `NuxieSDK.shared.version`: current SDK version string.
 - `NuxieSDK.shared.getDistinctId()`: current distinct ID (identified or anonymous).

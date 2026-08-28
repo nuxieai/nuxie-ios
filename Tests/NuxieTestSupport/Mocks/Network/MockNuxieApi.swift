@@ -44,6 +44,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var fetchProfileWithTimeoutCallCount = 0
     public var sendBatchCallCount = 0
     public var trackEventCallCount = 0
+    public var checkFeatureCallCount = 0
 
     public var lastTimeoutUsed: TimeInterval?
     public private(set) var lastProfileLocale: String?
@@ -312,6 +313,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         requiredBalance: Double?,
         entityId: String?
     ) async throws -> FeatureCheckResult {
+        checkFeatureCallCount += 1
         if let checkFeatureResponse {
             return checkFeatureResponse
         }
@@ -413,6 +415,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         fetchProfileWithTimeoutCallCount = 0
         sendBatchCallCount = 0
         trackEventCallCount = 0
+        checkFeatureCallCount = 0
         trackEventCalls = []
         lastTimeoutUsed = nil
         lastProfileLocale = nil

@@ -1659,11 +1659,7 @@ final class HostDismissalTests: AsyncSpec {
                 let triggerService = TriggerService(
                     eventLog: harness.mocks.eventLog,
                     journeys: harness.service,
-                    features: features,
-                    experiencePresentation: harness.mocks.experiencePresentationService,
-                    featureInfo: featureInfo,
                     triggerBroker: harness.mocks.triggerBroker,
-                    sleepProvider: harness.mocks.sleepProvider,
                     dateProvider: harness.mocks.dateProvider
                 )
 

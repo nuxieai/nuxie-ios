@@ -59,23 +59,10 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                     configuration: NuxieConfiguration(apiKey: "test-api-key")
                 )
 
-                let featureInfo = FeatureInfo()
-                let features = FeatureService(
-                    api: mocks.nuxieApi,
-                    identity: mocks.identityService,
-                    profile: mocks.profileService,
-                    dateProvider: mocks.dateProvider,
-                    featureInfo: featureInfo,
-                    cacheTTL: 300
-                )
                 let trigger = TriggerService(
                     eventLog: eventLog,
                     journeys: journeys,
-                    features: features,
-                    experiencePresentation: mocks.experiencePresentationService,
-                    featureInfo: featureInfo,
                     triggerBroker: mocks.triggerBroker,
-                    sleepProvider: mocks.sleepProvider,
                     dateProvider: mocks.dateProvider
                 )
                 let eventId = "purchase-completed:cold-transaction"
@@ -163,22 +150,10 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                     event.name == "$purchase_completed" ? nil : event
                 }
                 try await eventLog.configure(configuration: configuration)
-                let featureInfo = FeatureInfo()
                 let trigger = TriggerService(
                     eventLog: eventLog,
                     journeys: journeys,
-                    features: FeatureService(
-                        api: mocks.nuxieApi,
-                        identity: mocks.identityService,
-                        profile: mocks.profileService,
-                        dateProvider: mocks.dateProvider,
-                        featureInfo: featureInfo,
-                        cacheTTL: 300
-                    ),
-                    experiencePresentation: mocks.experiencePresentationService,
-                    featureInfo: featureInfo,
                     triggerBroker: mocks.triggerBroker,
-                    sleepProvider: mocks.sleepProvider,
                     dateProvider: mocks.dateProvider
                 )
 
@@ -259,26 +234,13 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                 try await configuredEventLog.configure(
                     configuration: NuxieConfiguration(apiKey: "test-api-key")
                 )
-                let featureInfo = FeatureInfo()
-                let features = FeatureService(
-                    api: mocks.nuxieApi,
-                    identity: mocks.identityService,
-                    profile: mocks.profileService,
-                    dateProvider: mocks.dateProvider,
-                    featureInfo: featureInfo,
-                    cacheTTL: 300
-                )
                 @Sendable func makeTrigger(
                     _ journeyService: JourneyService
                 ) -> TriggerService {
                     TriggerService(
                         eventLog: configuredEventLog,
                         journeys: journeyService,
-                        features: features,
-                        experiencePresentation: mocks.experiencePresentationService,
-                        featureInfo: featureInfo,
                         triggerBroker: mocks.triggerBroker,
-                        sleepProvider: mocks.sleepProvider,
                         dateProvider: mocks.dateProvider
                     )
                 }
@@ -364,11 +326,7 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                 let trigger = TriggerService(
                     eventLog: eventLog,
                     journeys: journeys,
-                    features: features,
-                    experiencePresentation: mocks.experiencePresentationService,
-                    featureInfo: featureInfo,
                     triggerBroker: mocks.triggerBroker,
-                    sleepProvider: mocks.sleepProvider,
                     dateProvider: mocks.dateProvider
                 )
                 let eventSink = TriggerSystemEventSink { trigger }

@@ -71,32 +71,20 @@ actor TriggerService: TriggerServiceProtocol {
   // Constructor-injected collaborators (Phase 4c composition root).
   private let eventLog: EventTriggerTracking
   private let journeyService: JourneyServiceProtocol
-  private let featureService: FeatureServiceProtocol
-  private let experiencePresentationService: ExperiencePresentationServiceProtocol
   private let triggerBroker: TriggerBrokerProtocol
-  private let sleepProvider: SleepProviderProtocol
   private let dateProvider: DateProviderProtocol
-  private let featureInfo: FeatureInfo
   private let presentationTrace: ExperiencePresentationTraceRecording
 
   init(
     eventLog: EventTriggerTracking,
     journeys: JourneyServiceProtocol,
-    features: FeatureServiceProtocol,
-    experiencePresentation: ExperiencePresentationServiceProtocol,
-    featureInfo: FeatureInfo,
     triggerBroker: TriggerBrokerProtocol,
-    sleepProvider: SleepProviderProtocol,
     dateProvider: DateProviderProtocol,
     presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace()
   ) {
     self.eventLog = eventLog
     self.journeyService = journeys
-    self.featureService = features
-    self.experiencePresentationService = experiencePresentation
-    self.featureInfo = featureInfo
     self.triggerBroker = triggerBroker
-    self.sleepProvider = sleepProvider
     self.dateProvider = dateProvider
     self.presentationTrace = presentationTrace
   }
@@ -174,7 +162,7 @@ actor TriggerService: TriggerServiceProtocol {
     }
     defer { presentationTraceContext?.completeTriggerRouting() }
     do {
-      let (nuxieEvent, response) = try await eventLog.trackForTrigger(
+      let (nuxieEvent, _) = try await eventLog.trackForTrigger(
         event,
         properties: properties
       )
@@ -187,17 +175,6 @@ actor TriggerService: TriggerServiceProtocol {
           at: dateProvider.now()
         )
       }
-      let gatePlan = response.gatePlan()
-      let mode = mode(for: gatePlan)
-      let hasDirectExperienceGate: Bool = {
-        guard let gatePlan,
-              case .showFlow = gatePlan.decision,
-              gatePlan.flowId != nil else {
-          return false
-        }
-        return true
-      }()
-
       let broker = triggerBroker
       let journeyStartFlag = LockedFlag()
       let journeyErrorFlag = LockedFlag()
@@ -210,9 +187,9 @@ actor TriggerService: TriggerServiceProtocol {
           case .allowedImmediate, .deniedImmediate, .noMatch:
             return true
           case .suppressed:
-            return gatePlan == nil && !journeyStartFlag.get() && !journeyErrorFlag.get()
-          case .experienceShown(let ref):
-            return hasDirectExperienceGate && ref.journeyId == nil
+            return !journeyStartFlag.get() && !journeyErrorFlag.get()
+          case .experienceShown:
+            return false
           default:
             return false
           }
@@ -224,7 +201,7 @@ actor TriggerService: TriggerServiceProtocol {
             return false
           }
         case .journey:
-          return mode == .experience
+          return true
         }
       }
 
@@ -258,24 +235,11 @@ actor TriggerService: TriggerServiceProtocol {
         return
       }
 
-      if gatePlan == nil && emittedJourneyDecision {
+      if emittedJourneyDecision {
         return
       }
 
-      if hasStartedJourney && mode == .experience {
-        return
-      }
-
-      if let gatePlan {
-        await handleGatePlan(
-          gatePlan,
-          eventId: eventId,
-          ownerDistinctId: nuxieEvent.distinctId,
-          presentationAttempt: presentationAttempt
-        )
-      } else {
-        await broker.emit(eventId: eventId, update: .decision(.noMatch))
-      }
+      await broker.emit(eventId: eventId, update: .decision(.noMatch))
     } catch is EventBeforeSendDropError {
       await MainActor.run {
         handler(.decision(.noMatch))
@@ -289,24 +253,6 @@ actor TriggerService: TriggerServiceProtocol {
   }
 
   // MARK: - Decisions
-
-  private enum TriggerMode: Equatable {
-    case immediate
-    case experience
-    case requireFeature
-  }
-
-  private func mode(for plan: GatePlan?) -> TriggerMode {
-    guard let plan else { return .experience }
-    switch plan.decision {
-    case .allow, .deny:
-      return .immediate
-    case .showFlow:
-      return .experience
-    case .requireFeature:
-      return .requireFeature
-    }
-  }
 
   private func emitJourneyDecisions(
     results: [JourneyTriggerResult],
@@ -335,229 +281,6 @@ actor TriggerService: TriggerServiceProtocol {
     }
 
     return emitted
-  }
-
-  private func handleGatePlan(
-    _ plan: GatePlan,
-    eventId: String,
-    ownerDistinctId: String,
-    presentationAttempt: ExperiencePresentationAttempt?
-  ) async {
-    switch plan.decision {
-    case .allow:
-      await triggerBroker.emit(eventId: eventId, update: .decision(.allowedImmediate))
-    case .deny:
-      await triggerBroker.emit(eventId: eventId, update: .decision(.deniedImmediate))
-    case .showFlow:
-      await handleShowExperience(
-        plan,
-        eventId: eventId,
-        ownerDistinctId: ownerDistinctId,
-        presentationAttempt: presentationAttempt
-      )
-    case .requireFeature:
-      await handleRequireFeature(
-        plan,
-        eventId: eventId,
-        ownerDistinctId: ownerDistinctId,
-        presentationAttempt: presentationAttempt
-      )
-    }
-  }
-
-  private func handleShowExperience(
-    _ plan: GatePlan,
-    eventId: String,
-    ownerDistinctId: String,
-    presentationAttempt: ExperiencePresentationAttempt?
-  ) async {
-    guard let experienceVersionId = plan.flowId else {
-      await triggerBroker.emit(
-        eventId: eventId,
-        update: .error(TriggerError(
-          code: .experienceMissing,
-          message: "Missing experience version for show_flow decision"
-        ))
-      )
-      return
-    }
-    await presentExperience(
-      experienceVersionId: experienceVersionId,
-      eventId: eventId,
-      ownerDistinctId: ownerDistinctId,
-      presentationAttempt: presentationAttempt
-    )
-  }
-
-  private func handleRequireFeature(
-    _ plan: GatePlan,
-    eventId: String,
-    ownerDistinctId: String,
-    presentationAttempt: ExperiencePresentationAttempt?
-  ) async {
-    guard let featureId = plan.featureId else {
-      await triggerBroker.emit(
-        eventId: eventId,
-        update: .error(TriggerError(
-          code: .featureMissing,
-          message: "Missing featureId for require_feature decision"
-        ))
-      )
-      return
-    }
-
-    if plan.policy == .cacheOnly {
-      let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
-      if GatePlanEvaluation.hasAccess(cached, requiredBalance: plan.requiredBalance) {
-        await triggerBroker.emit(eventId: eventId, update: .featureAccess(.allowed))
-      } else {
-        await triggerBroker.emit(eventId: eventId, update: .featureAccess(.denied))
-      }
-      return
-    }
-
-    do {
-      let access = try await featureService.checkWithCache(
-        featureId: featureId,
-        requiredBalance: plan.requiredBalance,
-        entityId: plan.entityId,
-        forceRefresh: false
-      )
-      if GatePlanEvaluation.hasAccess(access, requiredBalance: plan.requiredBalance) {
-        await triggerBroker.emit(eventId: eventId, update: .featureAccess(.allowed))
-        return
-      }
-    } catch {
-      LogWarning("TriggerService: feature check failed \(error)")
-    }
-
-    await triggerBroker.emit(eventId: eventId, update: .featureAccess(.pending))
-
-    if let experienceVersionId = plan.flowId {
-      await presentExperience(
-        experienceVersionId: experienceVersionId,
-        eventId: eventId,
-        ownerDistinctId: ownerDistinctId,
-        presentationAttempt: presentationAttempt
-      )
-    }
-
-    let timeoutMs = plan.timeoutMs ?? 30_000
-    let allowed = await waitForFeatureAccess(
-      featureId: featureId,
-      requiredBalance: plan.requiredBalance,
-      timeoutMs: timeoutMs
-    )
-
-    if allowed {
-      await triggerBroker.emit(eventId: eventId, update: .featureAccess(.allowed))
-    } else {
-      await triggerBroker.emit(
-        eventId: eventId,
-        update: .error(TriggerError(
-          code: .featureAccessTimeout,
-          message: "Timed out waiting for feature access"
-        ))
-      )
-    }
-  }
-
-  // MARK: - Feature Access Waiting
-
-  private func waitForFeatureAccess(
-    featureId: String,
-    requiredBalance: Double?,
-    timeoutMs: Int
-  ) async -> Bool {
-    let timeoutSeconds = max(Double(timeoutMs) / 1000.0, 0.1)
-    let deadline = dateProvider.date(byAddingTimeInterval: timeoutSeconds, to: dateProvider.now())
-    let interval: TimeInterval = 0.35
-    var attempts = 0
-    let maxAttempts = max(Int(timeoutSeconds / interval) + 2, 1)
-
-    while dateProvider.now() < deadline && attempts < maxAttempts {
-      let access = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
-      if GatePlanEvaluation.hasAccess(access, requiredBalance: requiredBalance) {
-        return true
-      }
-
-      do {
-        try await sleepProvider.sleep(for: interval)
-      } catch {
-        break
-      }
-      attempts += 1
-    }
-
-    return false
-  }
-
-  private func presentExperience(
-    experienceVersionId: String,
-    eventId: String,
-    ownerDistinctId: String,
-    presentationAttempt: ExperiencePresentationAttempt?
-  ) async {
-    do {
-      let runtimeDelegate: DirectExperiencePresentationTraceDelegate?
-      if let presentationAttempt {
-        let requestedAt = ExperiencePresentationTimestamp.now(
-          wallClock: dateProvider.now()
-        )
-        ExperiencePresentationTraceContext(
-          attempt: presentationAttempt,
-          recorder: presentationTrace
-        ).recordPresentationRequested(
-          experienceVersionId: experienceVersionId,
-          route: .direct,
-          at: requestedAt
-        )
-        runtimeDelegate = await MainActor.run {
-          DirectExperiencePresentationTraceDelegate(
-            attempt: presentationAttempt,
-            trace: presentationTrace,
-            dateProvider: dateProvider
-          )
-        }
-      } else {
-        runtimeDelegate = nil
-      }
-      // The gate-plan path presents without a journey; register ownership so
-      // an identity change tears this presentation down (UNIV-2659).
-      await journeyService.registerDetachedPresentationOwner(
-        distinctId: ownerDistinctId
-      )
-      let controller = try await experiencePresentationService.presentExperience(
-        experienceVersionId,
-        from: nil,
-        runtimeDelegate: runtimeDelegate
-      )
-      let experience = await MainActor.run { controller.experience }
-      let ref = ExperienceRef(
-        experienceId: experience.id,
-        experienceVersion: experience.versionId,
-        journeyId: nil
-      )
-      await triggerBroker.emit(eventId: eventId, update: .decision(.experienceShown(ref)))
-    } catch {
-      if let presentationAttempt {
-        presentationTrace.record(
-          attempt: presentationAttempt,
-          stage: .presentationFailed(
-            route: .direct,
-            errorCode: ExperiencePresentationTraceContext.errorCode(for: error)
-          ),
-          at: dateProvider.now()
-        )
-      }
-      await triggerBroker.emit(
-        eventId: eventId,
-        update: .error(TriggerError(
-          code: .experiencePresentFailed,
-          message: error.localizedDescription
-        ))
-      )
-    }
   }
 
 }

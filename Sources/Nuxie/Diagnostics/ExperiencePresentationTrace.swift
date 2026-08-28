@@ -99,7 +99,6 @@ struct ExperiencePresentationAttempt: Equatable, Sendable {
 }
 
 enum ExperiencePresentationRoute: String, Equatable, Sendable {
-    case direct
     case journey
 }
 

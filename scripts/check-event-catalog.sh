@@ -115,7 +115,7 @@ is_allowlisted_catalog_site() {
 # catalog, so removing any one expected emitter entry fails closed.
 catalog_event_emitters_for_indirect_emission_site() {
   case "$1" in
-    'Sources/Nuxie/Journey/JourneyService.swift:3062')
+    'Sources/Nuxie/Journey/JourneyService.swift:3020')
       # The permission mapper stages exactly these six cataloged result names.
       printf '%s\t%s\n' \
         '$notifications_denied' "$1" \
@@ -153,14 +153,14 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$permission_denied' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:871' \
         '$permission_granted' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:871'
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:3168')
+    'Sources/Nuxie/Journey/JourneyService.swift:3117')
       # The scoped milestone stage is constructed from $journey_milestone.
       printf '%s\t%s\n' '$journey_milestone' "$1"
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:3609')
+    'Sources/Nuxie/Journey/JourneyService.swift:3438')
       # The indirect scoped call forwards the fixed denial staged and cataloged at this site.
       printf '%s\t%s\n' \
-        '$permission_denied' 'Sources/Nuxie/Journey/JourneyService.swift:3609'
+        '$permission_denied' 'Sources/Nuxie/Journey/JourneyService.swift:3438'
       ;;
     'Sources/Nuxie/Events/EventLog.swift:1951')
       # JourneyDownFact.Event has exactly these three cataloged raw values.
@@ -221,13 +221,13 @@ is_allowlisted_indirect_emission_site() {
       # Stable-capture wrappers forward names; their concrete scoped producers are cataloged.
       return 0
       ;;
-    'Sources/Nuxie/Events/TriggerService.swift:177')
+    'Sources/Nuxie/Events/TriggerService.swift:165')
       # TriggerService forwards public event names; reserved SDK callers are checked upstream.
       return 0
       ;;
     'Sources/Nuxie/Events/TriggerService.swift:40' \
-      | 'Sources/Nuxie/Events/TriggerService.swift:123' \
-      | 'Sources/Nuxie/Events/TriggerService.swift:155')
+      | 'Sources/Nuxie/Events/TriggerService.swift:111' \
+      | 'Sources/Nuxie/Events/TriggerService.swift:143')
       # Capture protocol/service layers forward names; concrete event-sink callers are checked upstream.
       return 0
       ;;
@@ -236,15 +236,15 @@ is_allowlisted_indirect_emission_site() {
       # Runtime role adapters forward names; concrete event-sink capture and captureOnly calls are checked.
       return 0
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:3176')
+    'Sources/Nuxie/Journey/JourneyService.swift:3125')
       # This history-only write reuses the milestone stage cataloged by its scoped producer.
       return 0
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:3168')
+    'Sources/Nuxie/Journey/JourneyService.swift:3117')
       # This direct scoped send reuses the milestone stage cataloged by its scoped producer.
       return 0
       ;;
-    'Sources/Nuxie/Journey/JourneyService.swift:5845')
+    'Sources/Nuxie/Journey/JourneyService.swift:5465')
       # The scoped helper forwards stages whose finite producers are checked at their call sites.
       return 0
       ;;
@@ -313,9 +313,9 @@ $app_opened\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:73
 $app_updated\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:53
 $customer_updated\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3541
 $event_sent\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3411
-$event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:3309
-$event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4294
-$event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4451
+$event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:3237
+$event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4079
+$event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4218
 $experience_artifact_load_failed\tprocessCapture\tSources/Nuxie/Experiences/ExperienceViewModel.swift:370
 $experience_artifact_load_succeeded\tprocessCapture\tSources/Nuxie/Experiences/ExperienceViewModel.swift:352
 $experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:864
@@ -327,32 +327,32 @@ $experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/J
 $feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1105
 $feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1176
 $identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:643
-$journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:977
-$journey_converted\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5746
+$journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:950
+$journey_converted\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5366
 $journey_converted\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1951
 $journey_effect_completed\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1951
 $journey_effect_requested\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:4186
-$journey_enrolled\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:672
-$journey_exited\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5121
-$journey_exited\tcaptureStableSystemEvent\tSources/Nuxie/Journey/JourneyService.swift:5301
-$journey_exited\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:6235
-$journey_handoff\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:4748
+$journey_enrolled\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:645
+$journey_exited\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:4885
+$journey_exited\tcaptureStableSystemEvent\tSources/Nuxie/Journey/JourneyService.swift:5065
+$journey_exited\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5823
+$journey_handoff\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:4512
 $journey_milestone\ttrackWithResponse\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3503
-$journey_milestone\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3168
-$journey_parked\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4971
+$journey_milestone\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3117
+$journey_parked\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4735
 $journey_superseded\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1951
-$journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1375
-$journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1427
+$journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1353
+$journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1405
 $journey_transition\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:1897
 $journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:2725
-$notifications_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3062
+$notifications_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3020
 $notifications_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
-$notifications_enabled\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3062
+$notifications_enabled\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3020
 $notifications_enabled\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
-$permission_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3062
-$permission_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3609
+$permission_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3020
+$permission_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3438
 $permission_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
-$permission_granted\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3062
+$permission_granted\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3020
 $permission_granted\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
 $products_unavailable\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:995
 $purchase_cancelled\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2174
@@ -381,9 +381,9 @@ $restore_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewContro
 $restore_no_purchases\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:1194
 $screen_dismissed\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:764
 $screen_shown\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:701
-$tracking_authorized\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3062
+$tracking_authorized\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3020
 $tracking_authorized\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
-$tracking_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3062
+$tracking_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3020
 $tracking_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871'
 
 lane_source_pattern() {
@@ -417,18 +417,18 @@ lane_source_pattern() {
 
 direct_before_send_policy() {
   case "$1|$2" in
-    '$journey_claimed|Sources/Nuxie/Journey/JourneyService.swift:977' \
-      | '$journey_handoff|Sources/Nuxie/Journey/JourneyService.swift:4748' \
-      | '$journey_milestone|Sources/Nuxie/Journey/JourneyService.swift:3168')
+    '$journey_claimed|Sources/Nuxie/Journey/JourneyService.swift:950' \
+      | '$journey_handoff|Sources/Nuxie/Journey/JourneyService.swift:4512' \
+      | '$journey_milestone|Sources/Nuxie/Journey/JourneyService.swift:3117')
       printf '%s' exempt
       ;;
-    '$notifications_denied|Sources/Nuxie/Journey/JourneyService.swift:3062' \
-      | '$notifications_enabled|Sources/Nuxie/Journey/JourneyService.swift:3062' \
-      | '$permission_denied|Sources/Nuxie/Journey/JourneyService.swift:3062' \
-      | '$permission_denied|Sources/Nuxie/Journey/JourneyService.swift:3609' \
-      | '$permission_granted|Sources/Nuxie/Journey/JourneyService.swift:3062' \
-      | '$tracking_authorized|Sources/Nuxie/Journey/JourneyService.swift:3062' \
-      | '$tracking_denied|Sources/Nuxie/Journey/JourneyService.swift:3062')
+    '$notifications_denied|Sources/Nuxie/Journey/JourneyService.swift:3020' \
+      | '$notifications_enabled|Sources/Nuxie/Journey/JourneyService.swift:3020' \
+      | '$permission_denied|Sources/Nuxie/Journey/JourneyService.swift:3020' \
+      | '$permission_denied|Sources/Nuxie/Journey/JourneyService.swift:3438' \
+      | '$permission_granted|Sources/Nuxie/Journey/JourneyService.swift:3020' \
+      | '$tracking_authorized|Sources/Nuxie/Journey/JourneyService.swift:3020' \
+      | '$tracking_denied|Sources/Nuxie/Journey/JourneyService.swift:3020')
       printf '%s' governed
       ;;
     *)
@@ -455,7 +455,7 @@ while IFS=$'\t' read -r event_name production_lane emitter; do
   source_path="${emitter%:*}"
   source_line="${emitter##*:}"
   source_radius=5
-  if [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:3168" ]]; then
+  if [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:3117" ]]; then
     # The milestone name is staged here and reaches trackScopedEvent later in
     # the same function after local journey evaluation.
     source_radius=64
@@ -463,8 +463,8 @@ while IFS=$'\t' read -r event_name production_lane emitter; do
     # The accepted /i/event response is converted into the exact prepared
     # history event at the end of the same useFeature operation.
     source_radius=80
-  elif [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:977" \
-      || "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:4748" ]]; then
+  elif [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:950" \
+      || "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:4512" ]]; then
     source_radius=8
   elif [[ "$emitter" == Sources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:* ]]; then
     source_radius=10
@@ -494,7 +494,7 @@ while IFS=$'\t' read -r event_name production_lane emitter; do
       status=1
     fi
 
-    if [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:3168" ]]; then
+    if [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:3117" ]]; then
       if ! grep -Fq 'trackScopedEvent(stage, properties: properties)' \
           <<< "$(sed -n "${first_line},${last_line}p" "$source_path")" \
           || ! rg -Uq 'private func trackScopedEvent[(][[:space:][:print:]]*applyBeforeSend: Bool = false' \
@@ -754,7 +754,7 @@ while IFS=$'\t' read -r event_name constant event_status emitter; do
 
   if [[ "$token_found" != true
       && "$constant" == "JourneyEvents.journeyMilestone"
-      && "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:3168" ]] \
+      && "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:3117" ]] \
       && rg -Fq -- 'name: JourneyEvents.journeyMilestone' \
         Sources/Nuxie/Journey/JourneyService.swift; then
     # The scoped path stages the exact milestone name before the generic

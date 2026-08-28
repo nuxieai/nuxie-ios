@@ -25,7 +25,7 @@ Sources/Nuxie/
 ├── Events/                 # EventLog actor (capture → enrich → persist →
 │                           #   durable batched delivery → query, committed-
 │                           #   events subscriptions), SQLiteEventStore,
-│                           #   TriggerService/TriggerBroker (gating),
+│                           #   TriggerService/TriggerBroker (journey routing),
 │                           #   NuxieContextBuilder, EventSanitizer
 ├── Profile/                # ProfileService (/profile fetch + cache + apply)
 ├── Segments/               # SegmentService (IR-evaluated membership)

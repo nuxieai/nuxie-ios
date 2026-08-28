@@ -337,18 +337,6 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(published?.balance).to(beNil())
                 expect(allCached["exports"]?.allowed).to(beTrue())
                 expect(allCached["exports"]?.balance).to(beNil())
-                expect(
-                    GatePlanEvaluation.hasAccess(
-                        published,
-                        requiredBalance: 2
-                    )
-                ).to(beTrue())
-                expect(
-                    GatePlanEvaluation.hasAccess(
-                        published,
-                        requiredBalance: nil
-                    )
-                ).to(beFalse())
                 expect(exactRequirement.allowed).to(beTrue())
                 expect(exactRequirement.balance).to(beNil())
                 expect(defaultRequirement.allowed).to(beFalse())

@@ -658,7 +658,7 @@ final class ConformanceVectorTests: XCTestCase {
             now: Date(timeIntervalSince1970: 0)
         )
         journey.epoch = try XCTUnwrap(expectedProperties["epoch"] as? Int)
-        journey.applyStateEnvelope(envelope, epoch: journey.epoch)
+        _ = journey.applyStateEnvelope(envelope, epoch: journey.epoch)
 
         XCTAssertEqual(
             JourneyEvents.journeyHandoff,

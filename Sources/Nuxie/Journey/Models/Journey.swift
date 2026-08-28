@@ -1113,8 +1113,23 @@ struct JourneySnapshot: Codable, Sendable {
         )
     }
 
-    /// Applies claimed state and advances the local ownership epoch.
-    public mutating func applyStateEnvelope(_ envelope: JourneyStateEnvelope, epoch: Int) {
+    /// Applies valid claimed state and advances the local ownership epoch.
+    @discardableResult
+    public mutating func applyStateEnvelope(
+        _ envelope: JourneyStateEnvelope,
+        epoch: Int
+    ) -> Bool {
+        let claimedConversionAnchor: ConversionAnchor?
+        if let encodedAnchor = envelope.snapshots["conversionAnchor"] {
+            guard let value = encodedAnchor.value as? String,
+                  let anchor = ConversionAnchor(rawValue: value) else {
+                return false
+            }
+            claimedConversionAnchor = anchor
+        } else {
+            claimedConversionAnchor = nil
+        }
+
         stateVersion = envelope.stateVersion
         self.epoch = epoch
         context = envelope.context
@@ -1136,14 +1151,14 @@ struct JourneySnapshot: Codable, Sendable {
         if let value = envelope.snapshots["conversionWindow"]?.value as? Double {
             conversionWindow = value
         }
-        if let value = envelope.snapshots["conversionAnchor"]?.value as? String,
-           let anchor = ConversionAnchor(rawValue: value) {
-            conversionAnchor = anchor
+        if let claimedConversionAnchor {
+            conversionAnchor = claimedConversionAnchor
         }
         if let value = envelope.snapshots["conversionAnchorAt"]?.value as? String,
            let date = Self.executionDate(value) {
             conversionAnchorAt = date
         }
+        return true
     }
 
     private static func snapshotValue<T: Encodable>(_ value: T) -> AnyCodable? {
@@ -1326,7 +1341,11 @@ final class Journey: Sendable {
         await snapshot().stateEnvelope()
     }
 
-    public func applyStateEnvelope(_ envelope: JourneyStateEnvelope, epoch: Int) async {
+    @discardableResult
+    public func applyStateEnvelope(
+        _ envelope: JourneyStateEnvelope,
+        epoch: Int
+    ) async -> Bool {
         await update { state in
             state.applyStateEnvelope(envelope, epoch: epoch)
         }

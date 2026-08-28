@@ -1259,10 +1259,8 @@ final class TrackWithResponseTests: AsyncSpec {
                         properties: ["screen": "home"]
                     )
 
-                    // The degraded response carries no gate plan: callers
-                    // evaluate journeys/segments from the local event.
+                    // Callers evaluate journeys/segments from the local event.
                     expect(response.status).to(equal("offline"))
-                    expect(response.gatePlan()).to(beNil())
                     expect(response.eventId).to(equal(event.id))
                     expect(event.name).to(equal("trigger_event"))
                     expect(event.properties["screen"] as? String).to(equal("home"))

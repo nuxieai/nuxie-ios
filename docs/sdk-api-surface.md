@@ -58,15 +58,13 @@ matching experiences, and may present UI.
 
 | Entry point | Semantics |
 | --- | --- |
-| `trigger(_:properties:handler:)` | Fire-and-forget. The optional handler observes progressive `TriggerUpdate`s (experience decisions, journey lifecycle, and feature-access outcomes) for this trigger only. |
+| `trigger(_:properties:handler:)` | Fire-and-forget. The optional handler observes progressive `TriggerUpdate`s (experience decisions and journey lifecycle) for this trigger only. |
 | `triggerAndWait(_:properties:progress:) async -> TriggerResult` | Same, awaiting the terminal result. Its Testing-SPI wire encoding is pinned by `fixtures/encodings/trigger-result.json`. |
 
-Trigger updates use experience and feature-access vocabulary throughout.
 `ExperienceRef` carries `experienceId`, `experienceVersion`, and an optional
 `journeyId`; `JourneyUpdate` carries the completed journey identity.
-`TriggerUpdate.featureAccess` contains a `FeatureAccessUpdate`, whose
-`.allowed` outcome has no source payload. `TriggerResult` remains
-`.noMatch`, `.allowed`, `.denied`, `.journeyCompleted`, or `.error`.
+`TriggerResult` reports `.noMatch`, `.journeyCompleted`, or `.error` for the
+current journey-routing path.
 `TriggerError.code` is a typed `TriggerError.Code`.
 
 Designer-authored Run App Action steps arrive through

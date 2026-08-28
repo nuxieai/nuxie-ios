@@ -159,7 +159,6 @@ actor JourneyService: JourneyServiceProtocol {
   private struct PendingScreenEvent: Sendable {
     let journeyId: String
     let event: NuxieEvent
-    let commit: PreparedTriggerCommit
     let excludedExperienceId: String?
   }
 
@@ -173,15 +172,13 @@ actor JourneyService: JourneyServiceProtocol {
 
   private let journeyStore: JourneyStoreProtocol
 
-  // Constructor-injected collaborators (Phase 4c composition root). The two
-  // MainActor-isolated collaborators (experiencePresentationService, featureInfo)
+  // Constructor-injected collaborators (Phase 4c composition root).
   private let experienceService: ExperienceServiceProtocol
   private let experiencePresentationService: ExperiencePresentationServiceProtocol
   private let profileService: ProfileServiceProtocol
   private let identityService: IdentityServiceProtocol
   private let segmentService: SegmentServiceProtocol
   private let featureService: FeatureServiceProtocol
-  private let featureInfo: FeatureInfo
   private let eventLog: JourneyEventAccess
   private let triggerBroker: TriggerBrokerProtocol
   private let dateProvider: DateProviderProtocol
@@ -213,14 +210,6 @@ actor JourneyService: JourneyServiceProtocol {
   private var claimingJourneyIds: Set<String> = []
   private var admissionsInProgress: Set<AdmissionKey> = []
   private var restoredPresentationRetriesInProgress: Set<String> = []
-  private var scopedAuthoredResponseTasks: [UUID: Task<Void, Never>] = [:]
-  private var scopedAuthoredResponseOwners: [UUID: String] = [:]
-  private var retiringResponseDistinctIds: Set<String> = []
-  private var scopedAuthoredResponseTail: (id: UUID, task: Task<Void, Never>)?
-  private var scopedAuthoredOutcomeDepth = 0
-  private var nextScopedAuthoredResponseToSchedule: UInt64 = 0
-  private var pendingScopedAuthoredResponses: [UInt64: PendingScopedAuthoredResponse] = [:]
-  private var directlyHandledPreparedResponseSequences: Set<UInt64> = []
   /// Events whose Journey effects were routed but whose exactly-once receipt
   /// could not be persisted. A retry commits only the missing receipt, then
   /// releases the original decisions without replaying Journey effects.
@@ -241,7 +230,6 @@ actor JourneyService: JourneyServiceProtocol {
     segments: SegmentServiceProtocol,
     features: FeatureServiceProtocol,
     experiencePresentation: ExperiencePresentationServiceProtocol,
-    featureInfo: FeatureInfo,
     eventLog: JourneyEventAccess,
     triggerBroker: TriggerBrokerProtocol,
     dateProvider: DateProviderProtocol,
@@ -256,7 +244,6 @@ actor JourneyService: JourneyServiceProtocol {
     self.journeyStore = journeyStore
     self.experienceService = experiences
     self.experiencePresentationService = experiencePresentation
-    self.featureInfo = featureInfo
     self.profileService = profile
     self.identityService = identity
     self.segmentService = segments
@@ -490,13 +477,8 @@ actor JourneyService: JourneyServiceProtocol {
     // disconnects EventLog's mailbox-pending refresh path in ProfileService.
     await profileService.setJourneyMailboxHandler(nil)
 
-    // Cancel deliveries before presentation or runner teardown. Joining a
-    // scoped response wrapper can block on its EventLog delivery future, so
-    // release those futures before waiting for the wrappers.
+    // Cancel deliveries before presentation or runner teardown.
     await eventLog.cancelPreparedResponseDeliveries(for: nil)
-    let responseTasks = Array(scopedAuthoredResponseTasks.values)
-    responseTasks.forEach { $0.cancel() }
-    for task in responseTasks { await task.value }
 
     // A renderer delivery can be waiting for a response write while
     // presentation teardown waits for that delivery to settle. Close every
@@ -517,12 +499,6 @@ actor JourneyService: JourneyServiceProtocol {
     let completionWaiters = journeyCompletionWaiters.values.flatMap { $0 }
     journeyCompletionWaiters.removeAll()
     completionWaiters.forEach { $0.resume(returning: false) }
-    scopedAuthoredResponseTasks.removeAll()
-    scopedAuthoredResponseOwners.removeAll()
-    retiringResponseDistinctIds.removeAll()
-    scopedAuthoredResponseTail = nil
-    pendingScopedAuthoredResponses.removeAll()
-    directlyHandledPreparedResponseSequences.removeAll()
     hostDismissalRetryAuthorizations.removeAll()
     screenControlRuntimes.removeAll()
     pendingScreenEvents.removeAll()
@@ -543,9 +519,6 @@ actor JourneyService: JourneyServiceProtocol {
   public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
     guard !isShutDown else { return }
     LogInfo("JourneyService handling user change from \(NuxieLogger.shared.logDistinctID(oldDistinctId)) to \(NuxieLogger.shared.logDistinctID(newDistinctId))")
-    retiringResponseDistinctIds.insert(oldDistinctId)
-    defer { retiringResponseDistinctIds.remove(oldDistinctId) }
-
     await cancelOldCustomerResponseWork(oldDistinctId: oldDistinctId)
     guard !isShutDown else { return }
 
@@ -1006,10 +979,15 @@ actor JourneyService: JourneyServiceProtocol {
         now: now
       )
       guard !isShutDown else { return }
-      await claimed.applyStateEnvelope(
+      guard await claimed.applyStateEnvelope(
         entry.envelope,
         epoch: acknowledgement.epoch
-      )
+      ) else {
+        LogWarning(
+          "JourneyService: mailbox claim carried an invalid conversion anchor for \(entry.journeyId)"
+        )
+        continue
+      }
       guard !isShutDown else { return }
       let claimedState = await claimed.update { state in
         state.resumePoint = entry.resumePoint
@@ -2222,7 +2200,7 @@ actor JourneyService: JourneyServiceProtocol {
       if (record.phase == .admitted || record.phase == .routeExecuting),
          pendingScreenEvents[acceptance.event.id] == nil,
          let event = restoredScreenEvent(from: record) {
-        let commit = await eventLog.commitPreparedTriggerEvent(event)
+        _ = await eventLog.commitPreparedTriggerEvent(event)
         guard await ownsExecutableJourney(journey, runner: runner) else {
           throw EventRoutingError.eventRoutingFailed
         }
@@ -2230,7 +2208,6 @@ actor JourneyService: JourneyServiceProtocol {
         pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
           journeyId: sourceJourneyId,
           event: event,
-          commit: commit,
           excludedExperienceId: record.excludedExperienceId
         )
       }
@@ -2343,11 +2320,10 @@ actor JourneyService: JourneyServiceProtocol {
       claimedEffectPaths: [],
       pendingAuthoredEvents: []
     )
-    let commit: PreparedTriggerCommit
     do {
-      commit = try await runner.withScreenPresentationMutationLock { [weak self] in
+      try await runner.withScreenPresentationMutationLock { [weak self] in
         guard let self else { throw EventRoutingError.eventRoutingFailed }
-        return try await self.commitScreenCustomerEventAdmission(
+        try await self.commitScreenCustomerEventAdmission(
           record: record,
           prepared: prepared,
           journey: journey,
@@ -2365,7 +2341,6 @@ actor JourneyService: JourneyServiceProtocol {
     pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
       journeyId: sourceJourneyId,
       event: prepared,
-      commit: commit,
       excludedExperienceId: acceptance.excludeExperienceId
     )
     return ScreenCustomerEventAdmission(
@@ -2380,7 +2355,7 @@ actor JourneyService: JourneyServiceProtocol {
     journey: Journey,
     runner: JourneyRunner,
     screenBatch: ScreenEmissionBatch?
-  ) async throws -> PreparedTriggerCommit {
+  ) async throws {
     try await requireActiveScreenEmissionFence(screenBatch)
     guard await persistScreenEventRecord(
       record,
@@ -2393,12 +2368,11 @@ actor JourneyService: JourneyServiceProtocol {
       throw EventRoutingError.eventRoutingFailed
     }
     try await requireActiveScreenEmissionFence(screenBatch)
-    let commit = await eventLog.commitPreparedTriggerEvent(prepared)
+    _ = await eventLog.commitPreparedTriggerEvent(prepared)
     guard await ownsExecutableJourney(journey, runner: runner) else {
       throw EventRoutingError.eventRoutingFailed
     }
     try await requireActiveScreenEmissionFence(screenBatch)
-    return commit
   }
 
   private func rollbackScreenCustomerEventAdmission(
@@ -2507,21 +2481,6 @@ actor JourneyService: JourneyServiceProtocol {
       runner: runner,
       sourceCompleted: sourceCompleted
     ) else { return }
-    let response = await pending.commit.response.value
-    guard await ownsScopedCallbackContinuation(
-      journey,
-      runner: runner,
-      sourceCompleted: sourceCompleted
-    ) else { return }
-    await handleScopedGatePlan(
-      response.gatePlan(),
-      sourceJourney: sourceCompleted ? nil : journey,
-      sourceExperience: sourceCompleted
-        ? nil
-        : sourceScopedGoalExperience(for: journey, experiences: experiences),
-      sourceDistinctId: exactEvent.distinctId
-    )
-    markPreparedResponseSequenceHandledDirectly(pending.commit.sequence)
     _ = await updateScreenEventPhase(
       event.id,
       phase: .finished,
@@ -2758,12 +2717,11 @@ actor JourneyService: JourneyServiceProtocol {
         continue
       }
       guard let event = restoredScreenEvent(from: record) else { continue }
-      let commit = await eventLog.commitPreparedTriggerEvent(event)
+      _ = await eventLog.commitPreparedTriggerEvent(event)
       guard await ownsExecutableJourney(journey, runner: runner) else { return }
       pendingScreenEvents[record.sourceEvent.id] = PendingScreenEvent(
         journeyId: journeyId,
         event: event,
-        commit: commit,
         excludedExperienceId: record.excludedExperienceId
       )
       if (record.phase == .admitted || record.phase == .routeExecuting),
@@ -3059,7 +3017,7 @@ actor JourneyService: JourneyServiceProtocol {
     await completeDeferredDismissIfReady(journeyId: journeyId)
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
-    let (trackedEvent, response) = await trackScopedEvent(
+    let (trackedEvent, _) = await trackScopedEvent(
       stage,
       properties: scopedProperties,
       persistToHistory: true,
@@ -3084,15 +3042,6 @@ actor JourneyService: JourneyServiceProtocol {
       )
       guard await ownsExecutableJourney(journey, runner: runner) else { return }
     }
-    await handleScopedGatePlan(
-      response?.gatePlan(),
-      sourceJourney: journey,
-      sourceExperience: sourceScopedGoalExperience(
-        for: journey,
-        experiences: experiences ?? cachedExperiences
-      ),
-      sourceDistinctId: scopedEvent.distinctId
-    )
   }
 
   func handleScopedMilestoneEvent(
@@ -3165,7 +3114,7 @@ actor JourneyService: JourneyServiceProtocol {
       ) else { return }
     }
 
-    let (trackedEvent, response) = await trackScopedEvent(stage, properties: properties)
+    let (trackedEvent, _) = await trackScopedEvent(stage, properties: properties)
     guard await ownsScopedCallbackContinuation(
       journey,
       runner: runner,
@@ -3190,10 +3139,6 @@ actor JourneyService: JourneyServiceProtocol {
       runner: runner,
       sourceCompleted: sourceJourneyCompleted
     ) else { return }
-    let resolvedSourceExperience = sourceScopedGoalExperience(
-      for: journey,
-      experiences: experiences ?? cachedExperiences
-    )
     var sourceJourneyStillCompleted = sourceJourneyCompleted
     if !sourceJourneyStillCompleted {
       sourceJourneyStillCompleted = await processSourceScopedGoalJourneyEvent(
@@ -3221,29 +3166,12 @@ actor JourneyService: JourneyServiceProtocol {
         sourceCompleted: sourceJourneyStillCompleted
       ) else { return }
     }
-    await handleScopedGatePlan(
-      response?.gatePlan(),
-      sourceJourney: sourceJourneyStillCompleted ? nil : journey,
-      sourceExperience: resolvedSourceExperience,
-      sourceDistinctId: scopedEvent.distinctId
-    )
   }
 
   private struct CommittedScopedAuthoredEvent {
     let authored: JourneyRunner.AuthoredEvent
     let commit: PreparedTriggerCommit
     let eventSentProperties: [String: Any]
-  }
-
-  private struct RoutedScopedAuthoredEvent {
-    let commit: PreparedTriggerCommit
-    let sourceCompleted: Bool
-    let experiences: [Experience]?
-  }
-
-  private struct PendingScopedAuthoredResponse {
-    let routed: RoutedScopedAuthoredEvent
-    let sourceJourney: Journey
   }
 
   private func commitScopedAuthoredEvent(
@@ -3330,7 +3258,6 @@ actor JourneyService: JourneyServiceProtocol {
     guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
     let commit = await eventLog.commitPreparedTriggerEvent(preparedEvent)
     guard await ownsExecutableJourney(journey, runner: runner) else {
-      markPreparedResponseSequenceHandledDirectly(commit.sequence)
       return nil
     }
     return CommittedScopedAuthoredEvent(
@@ -3344,13 +3271,8 @@ actor JourneyService: JourneyServiceProtocol {
     _ committedAuthoredEvent: CommittedScopedAuthoredEvent,
     sourceJourney journey: Journey,
     runner: JourneyRunner
-  ) async -> RoutedScopedAuthoredEvent {
-    let aborted = RoutedScopedAuthoredEvent(
-      commit: committedAuthoredEvent.commit,
-      sourceCompleted: true,
-      experiences: nil
-    )
-    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+  ) async {
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let journeyId = journey.id
     let authored = committedAuthoredEvent.authored
     let committed = committedAuthoredEvent.commit
@@ -3360,7 +3282,7 @@ actor JourneyService: JourneyServiceProtocol {
     let cachedExperiences = await getAllExperiences(
       for: confirmedEvent.distinctId
     )
-    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let sourceCompleted = if belongsToSourceIdentity {
       await processSourceScopedGoalJourneyEvent(
         journey,
@@ -3372,9 +3294,9 @@ actor JourneyService: JourneyServiceProtocol {
     } else {
       false
     }
-    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     let sourceState = await journey.snapshot()
-    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     if belongsToSourceIdentity,
        !sourceCompleted,
        sourceState.status.isLive {
@@ -3435,16 +3357,16 @@ actor JourneyService: JourneyServiceProtocol {
       } else {
         outcome = await runner.dispatchEventTrigger(confirmedEvent)
       }
-      guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       await handleOutcome(outcome, journey: journey, runner: runner)
-      guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
     }
 
     let otherJourneyIds = Set(
       await getActiveJourneys(for: confirmedEvent.distinctId).map(\.id)
         .filter { $0 != journey.id }
     )
-    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     if !otherJourneyIds.isEmpty {
       await processActiveJourneys(
         for: confirmedEvent,
@@ -3454,7 +3376,7 @@ actor JourneyService: JourneyServiceProtocol {
         ),
         restrictedToJourneyIds: otherJourneyIds
       )
-      guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
     }
 
     let experiences = if let cachedExperiences {
@@ -3462,108 +3384,15 @@ actor JourneyService: JourneyServiceProtocol {
     } else {
       await getAllExperiences(for: confirmedEvent.distinctId)
     }
-    guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+    guard await ownsExecutableJourney(journey, runner: runner) else { return }
     if let experiences {
       await startAndProcessMatchingJourneys(
         for: confirmedEvent,
         transientEvent: transientEvent,
         experiences: experiences
       )
-      guard await ownsExecutableJourney(journey, runner: runner) else { return aborted }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
     }
-    return RoutedScopedAuthoredEvent(
-      commit: committed,
-      sourceCompleted: !belongsToSourceIdentity || sourceCompleted,
-      experiences: experiences
-    )
-  }
-
-  private func handleScopedAuthoredResponse(
-    _ routed: RoutedScopedAuthoredEvent,
-    sourceJourney journey: Journey
-  ) async {
-    let response = await routed.commit.response.value
-    guard !Task.isCancelled, !isShutDown else { return }
-    await handleScopedGatePlan(
-      response.gatePlan(),
-      sourceJourney: routed.sourceCompleted || inMemoryJourneysById[journey.id] !== journey
-        ? nil
-        : journey,
-      sourceExperience: sourceScopedGoalExperience(
-        for: journey,
-        experiences: routed.experiences
-      ),
-      sourceDistinctId: journey.distinctId
-    )
-  }
-
-  private func stageScopedAuthoredResponse(
-    _ routed: RoutedScopedAuthoredEvent,
-    sequence: UInt64,
-    sourceJourney journey: Journey
-  ) {
-    pendingScopedAuthoredResponses[sequence] = PendingScopedAuthoredResponse(
-      routed: routed,
-      sourceJourney: journey
-    )
-  }
-
-  private func scheduleReadyScopedAuthoredResponses() {
-    guard !isShutDown, scopedAuthoredOutcomeDepth == 0 else { return }
-    while true {
-      if let pending = pendingScopedAuthoredResponses.removeValue(
-        forKey: nextScopedAuthoredResponseToSchedule
-      ) {
-        nextScopedAuthoredResponseToSchedule += 1
-        scheduleScopedAuthoredResponse(pending)
-        continue
-      }
-      if directlyHandledPreparedResponseSequences.remove(
-        nextScopedAuthoredResponseToSchedule
-      ) != nil {
-        nextScopedAuthoredResponseToSchedule += 1
-        continue
-      }
-      return
-    }
-  }
-
-  private func markPreparedResponseSequenceHandledDirectly(_ sequence: UInt64) {
-    guard !isShutDown else { return }
-    directlyHandledPreparedResponseSequences.insert(sequence)
-    scheduleReadyScopedAuthoredResponses()
-  }
-
-  private func scheduleScopedAuthoredResponse(
-    _ pending: PendingScopedAuthoredResponse
-  ) {
-    guard !isShutDown,
-          !retiringResponseDistinctIds.contains(
-            pending.sourceJourney.distinctId
-          ) else { return }
-    let previousTask = scopedAuthoredResponseTail?.task
-    let taskId = UUID()
-    let task = Task { [weak self] in
-      await previousTask?.value
-      guard let self else { return }
-      if !Task.isCancelled {
-        await self.handleScopedAuthoredResponse(
-          pending.routed,
-          sourceJourney: pending.sourceJourney
-        )
-      }
-      await self.finishScopedAuthoredResponseTask(id: taskId)
-    }
-    scopedAuthoredResponseTasks[taskId] = task
-    scopedAuthoredResponseOwners[taskId] = pending.sourceJourney.distinctId
-    scopedAuthoredResponseTail = (taskId, task)
-  }
-
-  private func finishScopedAuthoredResponseTask(id: UUID) {
-    scopedAuthoredResponseTasks.removeValue(forKey: id)
-    scopedAuthoredResponseOwners.removeValue(forKey: id)
-    guard scopedAuthoredResponseTail?.id == id else { return }
-    scopedAuthoredResponseTail = nil
   }
 
   func handleUnsupportedScopedRequestPermission(
@@ -3606,7 +3435,7 @@ actor JourneyService: JourneyServiceProtocol {
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
     let trackingPropertiesBox = UncheckedSendable(unsupportedProperties)
-    let (_, response) = await trackScopedEvent(
+    _ = await trackScopedEvent(
       stage,
       properties: trackingPropertiesBox.value,
       persistToHistory: true,
@@ -3614,12 +3443,6 @@ actor JourneyService: JourneyServiceProtocol {
     )
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
 
-    await handleScopedGatePlan(
-      response?.gatePlan(),
-      sourceJourney: journey,
-      sourceExperience: nil,
-      sourceDistinctId: distinctId
-    )
   }
 
   // MARK: - Helpers
@@ -3715,15 +3538,6 @@ actor JourneyService: JourneyServiceProtocol {
     state = await journey.snapshot()
     guard await ownsExecutableJourney(journey, runner: runner) else { return true }
     return !state.status.isLive
-  }
-
-  private func sourceScopedGoalExperience(
-    for journey: Journey,
-    experiences: [Experience]?
-  ) -> Experience? {
-    experiences?.first(where: {
-      $0.id == journey.experienceId && $0.versionId == journey.experienceVersion
-    })
   }
 
   private enum RunnerStimulus {
@@ -4224,13 +4038,6 @@ actor JourneyService: JourneyServiceProtocol {
   ) async {
     guard let runner = expectedRunner ?? experienceRunners[journey.id],
           await ownsExecutableJourney(journey, runner: runner) else { return }
-    var holdsScopedAuthoredResponseScheduling = false
-    defer {
-      if holdsScopedAuthoredResponseScheduling {
-        scopedAuthoredOutcomeDepth -= 1
-      }
-      scheduleReadyScopedAuthoredResponses()
-    }
     let authoredEvents = await runner.takeAuthoredEvents()
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
     for authoredEvent in authoredEvents {
@@ -4243,64 +4050,42 @@ actor JourneyService: JourneyServiceProtocol {
         guard await ownsExecutableJourney(journey, runner: runner) else { return }
         continue
       }
-      guard await ownsExecutableJourney(journey, runner: runner) else {
-        markPreparedResponseSequenceHandledDirectly(event.commit.sequence)
-        return
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
+      if event.authored.screenRouteAdmissionId != nil {
+        let claim = await claimScreenAuthoredEventRouting(
+          event.authored.id,
+          journey: journey
+        )
+        guard claim == .claimed else {
+          continue
+        }
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
       }
-        if !holdsScopedAuthoredResponseScheduling {
-          scopedAuthoredOutcomeDepth += 1
-          holdsScopedAuthoredResponseScheduling = true
-        }
-        if event.authored.screenRouteAdmissionId != nil {
-          let claim = await claimScreenAuthoredEventRouting(
-            event.authored.id,
-            journey: journey
-          )
-          guard claim == .claimed else {
-            // Every committed event allocates a prepared-response sequence. A
-            // failed/no-op durable claim leaves recovery as the routing owner,
-            // so retire this attempt's sequence rather than blocking its tail.
-            markPreparedResponseSequenceHandledDirectly(event.commit.sequence)
-            continue
-          }
-          guard await ownsExecutableJourney(journey, runner: runner) else {
-            markPreparedResponseSequenceHandledDirectly(event.commit.sequence)
-            return
-          }
-        }
-        let routed = await routeCommittedScopedAuthoredEvent(
-          event,
-          sourceJourney: journey,
-          runner: runner
-        )
-        guard await ownsExecutableJourney(journey, runner: runner) else {
-          markPreparedResponseSequenceHandledDirectly(event.commit.sequence)
-          return
-        }
-        stageScopedAuthoredResponse(
-          routed,
-          sequence: event.commit.sequence,
-          sourceJourney: journey
-        )
-        if event.authored.screenRouteAdmissionId != nil {
-          await markScreenAuthoredEventRouted(event.authored.id, journey: journey)
-          guard await ownsExecutableJourney(journey, runner: runner) else { return }
-        }
-        // Expose the rider only after the authored event has completed local
-        // routing. Production EventLog subscribers may run as soon as capture
-        // commits, so queueing it during the commit phase can invert the
-        // journey-visible order even when durable history is ordered.
-        eventLog.track(
-          JourneyEvents.eventSent,
-          properties: event.eventSentProperties,
-          userProperties: nil,
-          userPropertiesSetOnce: nil,
-          distinctIdOverride: journey.distinctId
-        )
-        if event.authored.screenRouteAdmissionId != nil {
-          await removeDurableScreenAuthoredEvent(event.authored.id, journey: journey)
-          guard await ownsExecutableJourney(journey, runner: runner) else { return }
-        }
+      await routeCommittedScopedAuthoredEvent(
+        event,
+        sourceJourney: journey,
+        runner: runner
+      )
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
+      if event.authored.screenRouteAdmissionId != nil {
+        await markScreenAuthoredEventRouted(event.authored.id, journey: journey)
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
+      }
+      // Expose the rider only after the authored event has completed local
+      // routing. Production EventLog subscribers may run as soon as capture
+      // commits, so queueing it during the commit phase can invert the
+      // journey-visible order even when durable history is ordered.
+      eventLog.track(
+        JourneyEvents.eventSent,
+        properties: event.eventSentProperties,
+        userProperties: nil,
+        userPropertiesSetOnce: nil,
+        distinctIdOverride: journey.distinctId
+      )
+      if event.authored.screenRouteAdmissionId != nil {
+        await removeDurableScreenAuthoredEvent(event.authored.id, journey: journey)
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
+      }
     }
 
     guard await ownsExecutableJourney(journey, runner: runner) else { return }
@@ -4399,10 +4184,7 @@ actor JourneyService: JourneyServiceProtocol {
         await removeDurableScreenAuthoredEvent(stored.id, journey: journey)
         continue
       }
-      guard await ownsExecutableJourney(journey, runner: runner) else {
-        markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
-        return
-      }
+      guard await ownsExecutableJourney(journey, runner: runner) else { return }
       let shouldRoute: Bool
       switch stored.phase {
       case .intent, .prepared:
@@ -4412,40 +4194,25 @@ actor JourneyService: JourneyServiceProtocol {
         )
         guard claim == .claimed else {
           // Keep the durable authored event for a later recovery pass. The
-          // idempotent EventLog commit can be retried, but this attempt's
-          // response sequence must not stall unrelated prepared responses.
-          markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
+          // idempotent EventLog commit can be retried.
           continue
         }
-        guard await ownsExecutableJourney(journey, runner: runner) else {
-          markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
-          return
-        }
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
         shouldRoute = true
       case .routingClaimed:
         shouldRoute = true
       case .routed, .dropped:
         shouldRoute = false
       }
-      let routed: RoutedScopedAuthoredEvent
       if shouldRoute {
-        routed = await routeCommittedScopedAuthoredEvent(
+        await routeCommittedScopedAuthoredEvent(
           committed,
           sourceJourney: journey,
           runner: runner
         )
-        guard await ownsExecutableJourney(journey, runner: runner) else {
-          markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
-          return
-        }
+        guard await ownsExecutableJourney(journey, runner: runner) else { return }
         await markScreenAuthoredEventRouted(stored.id, journey: journey)
         guard await ownsExecutableJourney(journey, runner: runner) else { return }
-      } else {
-        routed = RoutedScopedAuthoredEvent(
-          commit: committed.commit,
-          sourceCompleted: false,
-          experiences: nil
-        )
       }
       eventLog.track(
         JourneyEvents.eventSent,
@@ -4454,9 +4221,6 @@ actor JourneyService: JourneyServiceProtocol {
         userPropertiesSetOnce: nil,
         distinctIdOverride: journey.distinctId
       )
-      await handleScopedAuthoredResponse(routed, sourceJourney: journey)
-      guard await ownsExecutableJourney(journey, runner: runner) else { return }
-      markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
       await removeDurableScreenAuthoredEvent(stored.id, journey: journey)
     }
   }
@@ -5554,150 +5318,6 @@ actor JourneyService: JourneyServiceProtocol {
     }
   }
 
-  private func closeSourceJourneyBeforeScopedGateExperienceIfNeeded(
-    journey: Journey?,
-    runner: JourneyRunner?,
-    experience _: Experience?
-  ) async -> Bool? {
-    guard let journey else { return false }
-    guard let runner,
-          await ownsExecutableJourney(journey, runner: runner) else { return nil }
-    let state = await journey.snapshot()
-    guard await ownsExecutableJourney(journey, runner: runner),
-          state.status.isLive else { return nil }
-    let presentedJourneyId = await experiencePresentationService.presentedJourneyId
-    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
-    guard presentedJourneyId == journey.id else { return false }
-
-    let closeReason: CloseReason = state.convertedAt != nil ? .goalMet : .userDismissed
-    let controller = await runner.viewController
-    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
-    if let controller {
-      await controller.prepareForDismissal(reason: closeReason)
-      guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
-      await handleRuntimeDismiss(
-        journeyId: journey.id,
-        reason: closeReason,
-        controller: controller
-      )
-      guard await ownsScopedCallbackContinuation(
-        journey,
-        runner: runner,
-        sourceCompleted: true
-      ) else { return nil }
-      await experiencePresentationService.dismissCurrentExperience(reason: closeReason)
-      guard await ownsScopedCallbackContinuation(
-        journey,
-        runner: runner,
-        sourceCompleted: true
-      ) else { return nil }
-      return true
-    }
-
-    await experiencePresentationService.dismissCurrentExperience(reason: closeReason)
-    guard await ownsExecutableJourney(journey, runner: runner) else { return nil }
-    await completeJourney(
-      journey,
-      reason: dismissalExitReason(for: closeReason),
-      dismissedBy: dismissalSource(for: closeReason)
-    )
-    guard await ownsScopedCallbackContinuation(
-      journey,
-      runner: runner,
-      sourceCompleted: true
-    ) else { return nil }
-    return true
-  }
-
-  private func handleScopedGatePlan(
-    _ plan: GatePlan?,
-    sourceJourney: Journey? = nil,
-    sourceExperience: Experience? = nil,
-    sourceDistinctId: String
-  ) async {
-    guard !isShutDown, let plan else { return }
-    let sourceRunner: JourneyRunner?
-    if let sourceJourney {
-      guard let runner = experienceRunners[sourceJourney.id],
-            await ownsExecutableJourney(sourceJourney, runner: runner) else { return }
-      sourceRunner = runner
-    } else {
-      sourceRunner = nil
-    }
-
-    func sourceRemainsAuthorized(completed: Bool = false) async -> Bool {
-      guard !isShutDown else { return false }
-      guard let sourceJourney else { return true }
-      guard let sourceRunner else { return false }
-      return await ownsScopedCallbackContinuation(
-        sourceJourney,
-        runner: sourceRunner,
-        sourceCompleted: completed
-      )
-    }
-
-    func closeSource() async -> Bool? {
-      await closeSourceJourneyBeforeScopedGateExperienceIfNeeded(
-        journey: sourceJourney,
-        runner: sourceRunner,
-        experience: sourceExperience
-      )
-    }
-
-    switch plan.decision {
-    case .allow, .deny:
-      return
-
-    case .showFlow:
-      guard let experienceVersionId = plan.flowId else { return }
-      guard let sourceCompleted = await closeSource(),
-            await sourceRemainsAuthorized(completed: sourceCompleted) else { return }
-      guard !isShutDown else { return }
-      await presentDetachedExperience(
-        experienceVersionId,
-        ownerDistinctId: sourceDistinctId
-      )
-
-    case .requireFeature:
-      guard let featureId = plan.featureId else { return }
-
-      if plan.policy == .cacheOnly {
-        let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
-        guard await sourceRemainsAuthorized() else { return }
-        if GatePlanEvaluation.hasAccess(cached, requiredBalance: plan.requiredBalance) {
-          return
-        }
-        return
-      } else {
-        let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
-        guard await sourceRemainsAuthorized() else { return }
-        if let cached,
-           GatePlanEvaluation.hasAccess(cached, requiredBalance: plan.requiredBalance) {
-          return
-        }
-
-        if let access = try? await featureService.checkWithCache(
-          featureId: featureId,
-          requiredBalance: plan.requiredBalance,
-          entityId: plan.entityId,
-          forceRefresh: false
-        ), GatePlanEvaluation.hasAccess(access, requiredBalance: plan.requiredBalance) {
-          return
-        }
-        guard await sourceRemainsAuthorized() else { return }
-      }
-
-      guard let experienceVersionId = plan.flowId else { return }
-      guard let sourceCompleted = await closeSource(),
-            await sourceRemainsAuthorized(completed: sourceCompleted) else { return }
-      guard !isShutDown else { return }
-      await presentDetachedExperience(
-        experienceVersionId,
-        ownerDistinctId: sourceDistinctId
-      )
-    }
-  }
-
   // MARK: - Goals + Exit Policy
 
   private func evaluateGoalIfNeeded(
@@ -6181,40 +5801,8 @@ actor JourneyService: JourneyServiceProtocol {
     detachedPresentationOwnerDistinctId = distinctId
   }
 
-  private func presentDetachedExperience(
-    _ experienceVersionId: String,
-    ownerDistinctId: String
-  ) async {
-    detachedPresentationOwnerDistinctId = ownerDistinctId
-    do {
-      _ = try await experiencePresentationService.presentExperience(
-        experienceVersionId,
-        from: nil,
-        runtimeDelegate: nil
-      )
-    } catch {
-      if detachedPresentationOwnerDistinctId == ownerDistinctId {
-        detachedPresentationOwnerDistinctId = nil
-      }
-    }
-  }
-
   private func cancelOldCustomerResponseWork(oldDistinctId: String) async {
-    let retiredSequences = pendingScopedAuthoredResponses.compactMap {
-      $0.value.sourceJourney.distinctId == oldDistinctId ? $0.key : nil
-    }
-    retiredSequences.forEach { pendingScopedAuthoredResponses.removeValue(forKey: $0) }
-    directlyHandledPreparedResponseSequences.formUnion(retiredSequences)
-    scheduleReadyScopedAuthoredResponses()
     await eventLog.cancelPreparedResponseDeliveries(for: oldDistinctId)
-    let oldTaskIds = Set(scopedAuthoredResponseOwners.compactMap {
-      $0.value == oldDistinctId ? $0.key : nil
-    })
-    let responseTasks = scopedAuthoredResponseTasks.compactMap {
-      oldTaskIds.contains($0.key) ? $0.value : nil
-    }
-    responseTasks.forEach { $0.cancel() }
-    for task in responseTasks { await task.value }
   }
 
   private func teardownOldCustomerJourney(_ journey: Journey) async {
