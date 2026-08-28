@@ -73,15 +73,18 @@ struct FeatureUseCommand: Codable, Sendable {
   struct DurableResult: Codable, Sendable {
     let response: EventResponse
     var reconciliation: Reconciliation?
-    let persistedAt: Date?
+    let balanceAuthority: FeatureBalanceAuthority
+    let persistedAt: Date
 
     init(
       response: EventResponse,
       reconciliation: Reconciliation?,
-      persistedAt: Date? = nil
+      balanceAuthority: FeatureBalanceAuthority,
+      persistedAt: Date
     ) {
       self.response = response
       self.reconciliation = reconciliation
+      self.balanceAuthority = balanceAuthority
       self.persistedAt = persistedAt
     }
   }
@@ -117,10 +120,14 @@ struct FeatureUseCommand: Codable, Sendable {
   let setUsage: Bool
   let metadata: [String: AnyCodable]?
   let createdAt: Date
+  /// Journal-owned capture order. Unlike `createdAt`, this cannot move
+  /// backwards when the device wall clock changes.
+  let appendSequence: UInt64
   /// Durable lower bound for when the server could have produced a response
   /// to the first delivery. Retries reuse it when they may surface that cached
   /// response instead of treating the retry receipt time as fresh authority.
   var firstDeliveryAttemptAt: Date? = nil
+  var firstDeliveryBalanceAuthority: FeatureBalanceAuthority? = nil
   var result: DurableResult?
 
   func matches(
@@ -211,6 +218,7 @@ final class FeatureUseCommandStore: FeatureUseCommandStoring, @unchecked Sendabl
 
 enum FeatureUseCommandError: Error, Equatable {
   case invalidStoreVersion(Int)
+  case appendSequenceExhausted
   case reconciliationNotDurable
 }
 
@@ -230,6 +238,7 @@ actor FeatureUseCommandQueue {
   private let recoveryTaskGate: FeatureRecoveryTaskGating?
 
   private var commands: [FeatureUseCommand]?
+  private var nextAppendSequence: UInt64?
   private var inFlight: [String: Task<FeatureUsageResult, Error>] = [:]
   private var recoveryOwnedOperationIds: Set<String> = []
   private var foregroundJoinedRecoveryIds: Set<String> = []
@@ -289,6 +298,9 @@ actor FeatureUseCommandQueue {
     }) {
       command = existing
     } else {
+      guard let appendSequence = nextAppendSequence else {
+        throw FeatureUseCommandError.appendSequenceExhausted
+      }
       command = FeatureUseCommand(
         operationId: UUID.v7().uuidString,
         distinctId: distinctId,
@@ -298,6 +310,7 @@ actor FeatureUseCommandQueue {
         setUsage: setUsage,
         metadata: encodedMetadata,
         createdAt: dateProvider.now(),
+        appendSequence: appendSequence,
         result: nil
       )
       var updated = commands ?? []
@@ -308,6 +321,9 @@ actor FeatureUseCommandQueue {
       } ?? false
       guard admitted else { throw CancellationError() }
       commands = updated
+      nextAppendSequence = appendSequence < UInt64.max
+        ? appendSequence + 1
+        : nil
     }
 
     if recoveryOwnedOperationIds.contains(command.operationId),
@@ -381,11 +397,16 @@ actor FeatureUseCommandQueue {
 
   private func loadIfNeeded() throws {
     if commands == nil {
-      commands = try store.load().sorted {
-        if $0.createdAt == $1.createdAt {
-          return $0.operationId < $1.operationId
-        }
-        return $0.createdAt < $1.createdAt
+      let loaded = try store.load().sorted {
+        $0.appendSequence < $1.appendSequence
+      }
+      commands = loaded
+      if let lastAppendSequence = loaded.last?.appendSequence {
+        nextAppendSequence = lastAppendSequence < UInt64.max
+          ? lastAppendSequence + 1
+          : nil
+      } else {
+        nextAppendSequence = 1
       }
     }
   }
@@ -431,15 +452,20 @@ actor FeatureUseCommandQueue {
     guard var command = commands?.first(where: { $0.operationId == operationId }) else {
       throw CancellationError()
     }
+    let featureId = command.featureId
 
     if command.result == nil {
       let isFirstDeliveryAttempt = command.firstDeliveryAttemptAt == nil
       if isFirstDeliveryAttempt {
+        let firstDeliveryBalanceAuthority = await MainActor.run {
+          featureInfo.balanceAuthority(for: featureId)
+        }
         try performRecoveryDurableWrite(
           operationId: operationId,
           admission: recoveryAdmission
         ) {
           command.firstDeliveryAttemptAt = dateProvider.now()
+          command.firstDeliveryBalanceAuthority = firstDeliveryBalanceAuthority
           try replaceAndPersist(command)
         }
       }
@@ -454,6 +480,7 @@ actor FeatureUseCommandQueue {
         )
       } catch {
         let disposition = deliveryDisposition(for: error)
+        let retiredApplicationKey = applicationKey(for: command)
         try performRecoveryDurableWrite(
           operationId: operationId,
           admission: recoveryAdmission
@@ -462,18 +489,41 @@ actor FeatureUseCommandQueue {
             try removeAndPersist(operationId: operationId)
           }
         }
+        if disposition == .terminalPoison || disposition == .split {
+          try await reconcileAvailableCommands(
+            for: retiredApplicationKey,
+            reportingFailureFor: operationId,
+            recoveryAdmission: nil
+          )
+        }
         throw error
+      }
+      let responseBalanceAuthority: FeatureBalanceAuthority
+      if isFirstDeliveryAttempt {
+        responseBalanceAuthority = await MainActor.run {
+          featureInfo.balanceAuthority(for: featureId)
+        }
+      } else if let firstDeliveryBalanceAuthority =
+        command.firstDeliveryBalanceAuthority {
+        responseBalanceAuthority = firstDeliveryBalanceAuthority
+      } else {
+        throw NuxieNetworkError.invalidResponse
       }
       try performRecoveryDurableWrite(
         operationId: operationId,
         admission: recoveryAdmission
       ) {
+        let responsePersistedAt = isFirstDeliveryAttempt
+          ? dateProvider.now()
+          : command.firstDeliveryAttemptAt
+        guard let responsePersistedAt else {
+          throw NuxieNetworkError.invalidResponse
+        }
         command.result = .init(
           response: response,
           reconciliation: nil,
-          persistedAt: isFirstDeliveryAttempt
-            ? dateProvider.now()
-            : command.firstDeliveryAttemptAt
+          balanceAuthority: responseBalanceAuthority,
+          persistedAt: responsePersistedAt
         )
         try replaceAndPersist(command)
       }
@@ -519,12 +569,11 @@ actor FeatureUseCommandQueue {
       admission: recoveryAdmission
     )
     let featureId = command.featureId
-    let responsePersistedAt = durableResult.persistedAt
     _ = await MainActor.run {
       featureInfo.applyCommandBalanceIfFresh(
         featureId,
         balance: remaining,
-        responsePersistedAt: responsePersistedAt
+        responseAuthority: durableResult.balanceAuthority
       )
     }
   }

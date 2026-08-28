@@ -150,12 +150,17 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                         setUsage: false,
                         metadata: ["model": AnyCodable("study-review")],
                         createdAt: createdAt,
+                        appendSequence: 1,
                         result: .init(
                             response: EventResponse(
                                 status: "ok",
                                 usage: .init(current: 6, limit: 10, remaining: 4)
                             ),
                             reconciliation: nil,
+                            balanceAuthority: FeatureBalanceAuthority(
+                                epoch: UUID(),
+                                generation: 0
+                            ),
                             persistedAt: createdAt
                         )
                     )
@@ -219,6 +224,7 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                     setUsage: false,
                     metadata: nil,
                     createdAt: Date(timeIntervalSince1970: 1_788_000_200),
+                    appendSequence: 1,
                     result: nil
                 )
                 let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
@@ -268,9 +274,14 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                         setUsage: false,
                         metadata: nil,
                         createdAt: Date(timeIntervalSince1970: 1_788_000_300),
+                        appendSequence: 1,
                         result: .init(
                             response: response,
                             reconciliation: nil,
+                            balanceAuthority: FeatureBalanceAuthority(
+                                epoch: UUID(),
+                                generation: 0
+                            ),
                             persistedAt: Date(timeIntervalSince1970: 1_788_000_300)
                         )
                     ),
@@ -283,9 +294,14 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                         setUsage: false,
                         metadata: nil,
                         createdAt: Date(timeIntervalSince1970: 1_788_000_301),
+                        appendSequence: 2,
                         result: .init(
                             response: response,
                             reconciliation: nil,
+                            balanceAuthority: FeatureBalanceAuthority(
+                                epoch: UUID(),
+                                generation: 0
+                            ),
                             persistedAt: Date(timeIntervalSince1970: 1_788_000_301)
                         )
                     ),
@@ -314,18 +330,20 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
 
                 let pendingCount = try await stack.core.featureUseCommands.pendingCount()
                 expect(pendingCount).to(equal(0))
-                let mirroredIds = Set(
-                    await stack.eventLog.getRecentEvents(limit: 20)
-                        .filter { $0.name == SystemEventNames.featureUsed }
-                        .map(\.id)
-                )
-                expect(mirroredIds).to(equal(Set([oldOperationId, currentOperationId])))
-                let forwardedIds = Set(await forwarding.snapshot())
-                expect(forwardedIds).to(equal(Set([oldOperationId, currentOperationId])))
+                let mirroredIds = await stack.eventLog.getRecentEvents(limit: 20)
+                    .filter { $0.name == SystemEventNames.featureUsed }
+                    .map(\.id)
+                expect(mirroredIds.count).to(equal(2))
+                expect(Set(mirroredIds)).to(equal(Set([oldOperationId, currentOperationId])))
+                let forwardedIds = await forwarding.snapshot()
+                expect(forwardedIds.count).to(equal(2))
+                expect(Set(forwardedIds)).to(equal(Set([oldOperationId, currentOperationId])))
                 let balance = await MainActor.run {
                     stack.core.featureInfo.balance("ai_generations")
                 }
-                expect(balance).to(equal(3))
+                // Both responses predate this process. The newly admitted
+                // profile balance has newer authority and must win.
+                expect(balance).to(equal(5))
                 let featureSends = await api.sentEvents.filter {
                     $0.name == SystemEventNames.featureUsed
                 }

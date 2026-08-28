@@ -1,6 +1,11 @@
 import Combine
 import Foundation
 
+struct FeatureBalanceAuthority: Codable, Equatable, Sendable {
+    let epoch: UUID
+    let generation: UInt64
+}
+
 /// Observable object for reactive feature access in SwiftUI
 ///
 /// Use this in SwiftUI views to reactively update when features change:
@@ -30,10 +35,12 @@ public final class FeatureInfo: ObservableObject {
     /// Callback for delegate notifications (set by NuxieSDK)
     internal var onFeatureChange: ((_ featureId: String, _ oldValue: FeatureAccess?, _ newValue: FeatureAccess) -> Void)?
 
-    /// Wall-clock admission fence for the latest profile-owned Feature
-    /// snapshot. Durable command responses carry the same clock domain so a
-    /// replay cannot project an older balance over a newer profile.
-    private var latestProfileSnapshotAdmissionAt: Date?
+    /// Per-feature authority fence shared by profiles, real-time checks, and
+    /// purchase/authoritative-use updates. The epoch distinguishes process
+    /// lifetimes and the generation never resets while this projection lives,
+    /// so neither clock rollback nor identity cycling can make a replay fresh.
+    private let balanceAuthorityEpoch = UUID()
+    private var balanceAuthorityGenerations: [String: UInt64] = [:]
 
     // MARK: - Init
 
@@ -76,6 +83,13 @@ public final class FeatureInfo: ObservableObject {
     /// Update all features (called internally when profile/features refresh)
     /// - Parameter features: Dictionary of feature ID to FeatureAccess
     internal func update(_ features: [String: FeatureAccess]) {
+        for featureId in features.keys {
+            advanceAuthority(for: featureId)
+        }
+        publish(features)
+    }
+
+    private func publish(_ features: [String: FeatureAccess]) {
         let oldFeatures = all
 
         // Notify delegate for each changed feature
@@ -96,28 +110,30 @@ public final class FeatureInfo: ObservableObject {
         _ features: [String: FeatureAccess],
         admittedAt: Date
     ) {
-        if let latestProfileSnapshotAdmissionAt {
-            self.latestProfileSnapshotAdmissionAt = max(
-                latestProfileSnapshotAdmissionAt,
-                admittedAt
-            )
-        } else {
-            latestProfileSnapshotAdmissionAt = admittedAt
-        }
+        _ = admittedAt
         update(features)
+    }
+
+    internal func balanceAuthority(for featureId: String) -> FeatureBalanceAuthority {
+        FeatureBalanceAuthority(
+            epoch: balanceAuthorityEpoch,
+            generation: balanceAuthorityGenerations[featureId] ?? 0
+        )
     }
 
     @discardableResult
     internal func applyCommandBalanceIfFresh(
         _ featureId: String,
         balance: Double,
-        responsePersistedAt: Date?
+        responseAuthority: FeatureBalanceAuthority
     ) -> Bool {
-        if let latestProfileSnapshotAdmissionAt {
-            guard let responsePersistedAt,
-                  latestProfileSnapshotAdmissionAt <= responsePersistedAt else {
-                return false
-            }
+        let currentGeneration = balanceAuthorityGenerations[featureId] ?? 0
+        if responseAuthority.epoch == balanceAuthorityEpoch {
+            guard currentGeneration <= responseAuthority.generation else { return false }
+        } else {
+            // A response from an earlier process may apply only when this
+            // process has not admitted any authoritative state for the key.
+            guard currentGeneration == 0 else { return false }
         }
         setBalance(featureId, balance: balance)
         return true
@@ -127,7 +143,15 @@ public final class FeatureInfo: ObservableObject {
     /// - Parameters:
     ///   - featureId: The feature identifier
     ///   - access: The updated feature access
-    internal func update(_ featureId: String, access: FeatureAccess) {
+    internal func update(
+        _ featureId: String,
+        access: FeatureAccess
+    ) {
+        advanceAuthority(for: featureId)
+        publish(featureId, access: access)
+    }
+
+    private func publish(_ featureId: String, access: FeatureAccess) {
         let oldAccess = all[featureId]
 
         // Notify delegate if changed
@@ -145,7 +169,6 @@ public final class FeatureInfo: ObservableObject {
     /// Clear all cached features
     internal func clear() {
         all = [:]
-        latestProfileSnapshotAdmissionAt = nil
     }
 
     /// Decrement the balance for a feature (for local UI feedback after usage)
@@ -164,14 +187,14 @@ public final class FeatureInfo: ObservableObject {
             type: access.type
         )
 
-        update(featureId, access: newAccess)
+        publish(featureId, access: newAccess)
     }
 
     /// Set the balance for a feature (after server confirmation)
     /// - Parameters:
     ///   - featureId: The feature identifier
     ///   - balance: The new balance from server
-    internal func setBalance(_ featureId: String, balance: Double) {
+    private func setBalance(_ featureId: String, balance: Double) {
         guard let access = all[featureId] else { return }
 
         let newAccess = FeatureAccess.withBalance(
@@ -180,7 +203,9 @@ public final class FeatureInfo: ObservableObject {
             type: access.type
         )
 
-        update(featureId, access: newAccess)
+        // Command responses are already ordered by the durable projection
+        // queue. Publishing one must not make its younger same-key tail stale.
+        publish(featureId, access: newAccess)
     }
 
     // MARK: - Private Methods
@@ -191,5 +216,9 @@ public final class FeatureInfo: ObservableObject {
         lhs.unlimited == rhs.unlimited &&
         lhs.balance == rhs.balance &&
         lhs.type == rhs.type
+    }
+
+    private func advanceAuthority(for featureId: String) {
+        balanceAuthorityGenerations[featureId, default: 0] &+= 1
     }
 }
