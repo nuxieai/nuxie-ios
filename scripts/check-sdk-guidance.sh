@@ -54,8 +54,8 @@ for removed_api in startNewSession endSession resetSession 'setSessionId('; do
 done
 
 for removed_trigger_surface in '.featureAccess(' '.allowedImmediate' '.deniedImmediate'; do
-  if grep -R -Fq "$removed_trigger_surface" Examples; then
-    fail "example mentions removed trigger surface: $removed_trigger_surface"
+  if grep -R -Fq "$removed_trigger_surface" Examples README.md docs/sdk-api-surface.md; then
+    fail "public guidance mentions removed trigger surface: $removed_trigger_surface"
   fi
 done
 if grep -Fq 'journey lifecycle, feature access' Sources/Nuxie/NuxieSDK.swift; then
