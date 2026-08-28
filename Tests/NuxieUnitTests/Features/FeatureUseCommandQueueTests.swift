@@ -104,6 +104,151 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 expect(history).to(beEmpty())
             }
 
+            it("keeps a newer profile balance when an accepted timeout is retried") {
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_045)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                await api.configureTrackEventResponse(
+                    status: "ok",
+                    usage: .init(current: 6, limit: 10, remaining: 4)
+                )
+                await api.setAcceptedTrackEventTimeouts(1)
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let featureInfo = FeatureInfo()
+                let date = MockDateProvider(initialDate: createdAt)
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: featureInfo,
+                    dateProvider: date,
+                    store: store
+                )
+
+                await expect {
+                    try await queue.use(
+                        distinctId: "feature-customer",
+                        featureId: "ai_generations",
+                        amount: 1,
+                        entityId: "project-freshness",
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }.to(throwError(NuxieNetworkError.timeout))
+
+                date.advance(by: 1)
+                let profileAdmissionAt = date.now()
+                await MainActor.run {
+                    featureInfo.admitProfileSnapshot(
+                        [
+                            "ai_generations": .withBalance(
+                                5,
+                                unlimited: false,
+                                type: .creditSystem
+                            ),
+                        ],
+                        admittedAt: profileAdmissionAt
+                    )
+                }
+                date.advance(by: 1)
+
+                let result = try await queue.use(
+                    distinctId: "feature-customer",
+                    featureId: "ai_generations",
+                    amount: 1,
+                    entityId: "project-freshness",
+                    setUsage: false,
+                    metadata: nil
+                )
+
+                expect(result.success).to(beTrue())
+                expect(result.usage?.remaining).to(equal(4))
+                let balance = await MainActor.run {
+                    featureInfo.balance("ai_generations")
+                }
+                expect(balance).to(equal(5))
+                expect(try store.load()).to(beEmpty())
+                let featureSends = await api.sentEvents.filter {
+                    $0.name == SystemEventNames.featureUsed
+                }
+                expect(featureSends.count).to(equal(2))
+                expect(Set(featureSends.map(\.id)).count).to(equal(1))
+                let uniqueAcceptedCount = await api.uniqueAcceptedTrackEventCount
+                expect(uniqueAcceptedCount).to(equal(1))
+            }
+
+            it("applies a first response produced after a profile admission") {
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_047)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                await api.configureTrackEventResponse(
+                    status: "ok",
+                    usage: .init(current: 6, limit: 10, remaining: 4)
+                )
+                await api.suspendNextFeatureTrackEvent()
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let featureInfo = FeatureInfo()
+                let date = MockDateProvider(initialDate: createdAt)
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: featureInfo,
+                    dateProvider: date,
+                    store: store
+                )
+
+                let usage = Task {
+                    try await queue.use(
+                        distinctId: "feature-customer",
+                        featureId: "ai_generations",
+                        amount: 1,
+                        entityId: "project-first-response",
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }
+                await api.waitForSuspendedFeatureTrackEvent()
+
+                date.advance(by: 1)
+                let profileAdmissionAt = date.now()
+                await MainActor.run {
+                    featureInfo.admitProfileSnapshot(
+                        [
+                            "ai_generations": .withBalance(
+                                5,
+                                unlimited: false,
+                                type: .creditSystem
+                            ),
+                        ],
+                        admittedAt: profileAdmissionAt
+                    )
+                }
+                date.advance(by: 1)
+                await api.resumeSuspendedFeatureTrackEvent()
+
+                let result = try await usage.value
+
+                expect(result.success).to(beTrue())
+                let balance = await MainActor.run {
+                    featureInfo.balance("ai_generations")
+                }
+                expect(balance).to(equal(4))
+                expect(try store.load()).to(beEmpty())
+            }
+
             it("allows exactly one identical foreground call to join recovery") {
                 let operationId = UUID.v7().uuidString
                 let createdAt = Date(timeIntervalSince1970: 1_788_000_050)
@@ -202,6 +347,166 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 expect(uniqueAcceptedCount).to(equal(2))
                 let completedPendingCount = try await queue.pendingCount()
                 expect(completedPendingCount).to(equal(0))
+            }
+
+            it("applies same-target commands in capture order") {
+                let oldOperationId = UUID.v7().uuidString
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_055)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                try store.save([
+                    FeatureUseCommand(
+                        operationId: oldOperationId,
+                        distinctId: "feature-customer",
+                        featureId: "ai_generations",
+                        amount: 7,
+                        entityId: "project-ordered",
+                        setUsage: true,
+                        metadata: nil,
+                        createdAt: createdAt,
+                        result: nil
+                    ),
+                ])
+
+                let api = MockNuxieApi()
+                await api.configureTrackEventResponse(
+                    status: "ok",
+                    usage: .init(current: 8, limit: 10, remaining: 2)
+                )
+                await api.suspendNextFeatureTrackEvent()
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let eventLog = MockEventLog()
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: eventLog,
+                    featureInfo: FeatureInfo(),
+                    dateProvider: MockDateProvider(initialDate: createdAt.addingTimeInterval(1)),
+                    store: store
+                )
+
+                let recovery = Task { await queue.recover() }
+                await api.waitForSuspendedFeatureTrackEvent()
+
+                identity.suspendNextDistinctIdRead()
+                let foreground = Task {
+                    try await queue.use(
+                        distinctId: "feature-customer",
+                        featureId: "ai_generations",
+                        amount: 1,
+                        entityId: "project-ordered",
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }
+                await identity.waitForSuspendedDistinctIdRead()
+                identity.resumeSuspendedDistinctIdRead()
+
+                let foregroundResult = try await foreground.value
+
+                let pendingWhileOldIsSuspended = try await queue.pendingCount()
+                expect(pendingWhileOldIsSuspended).to(equal(2))
+                let sentWhileOldIsSuspended = await api.sentEvents.filter {
+                    $0.name == SystemEventNames.featureUsed
+                }
+                let newOperationId = try unwrap(
+                    sentWhileOldIsSuspended.first { $0.id != oldOperationId }?.id
+                )
+                let appliedWhileOldIsSuspended = await api.appliedFeatureTrackEventIds
+                expect(appliedWhileOldIsSuspended).to(equal([newOperationId]))
+                expect(eventLog.routedEvents).to(beEmpty())
+
+                await api.resumeSuspendedFeatureTrackEvent()
+                await recovery.value
+
+                expect(foregroundResult.success).to(beTrue())
+                let appliedOperationIds = await api.appliedFeatureTrackEventIds
+                expect(appliedOperationIds)
+                    .to(equal([newOperationId, oldOperationId]))
+                expect(eventLog.routedEvents.map(\.id))
+                    .to(equal([oldOperationId, newOperationId]))
+                expect(try store.load()).to(beEmpty())
+            }
+
+            it("delivers younger same-target commands past a retryable failure") {
+                let firstOperationId = UUID.v7().uuidString
+                let blockedOperationId = UUID.v7().uuidString
+                let independentOperationId = UUID.v7().uuidString
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_057)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                try store.save([
+                    FeatureUseCommand(
+                        operationId: firstOperationId,
+                        distinctId: "feature-customer",
+                        featureId: "ai_generations",
+                        amount: 7,
+                        entityId: "project-ordered",
+                        setUsage: true,
+                        metadata: nil,
+                        createdAt: createdAt,
+                        result: nil
+                    ),
+                    FeatureUseCommand(
+                        operationId: blockedOperationId,
+                        distinctId: "feature-customer",
+                        featureId: "ai_generations",
+                        amount: 1,
+                        entityId: "project-ordered",
+                        setUsage: false,
+                        metadata: nil,
+                        createdAt: createdAt.addingTimeInterval(1),
+                        result: nil
+                    ),
+                    FeatureUseCommand(
+                        operationId: independentOperationId,
+                        distinctId: "feature-customer",
+                        featureId: "video_exports",
+                        amount: 1,
+                        entityId: "project-ordered",
+                        setUsage: false,
+                        metadata: nil,
+                        createdAt: createdAt.addingTimeInterval(2),
+                        result: nil
+                    ),
+                ])
+
+                let api = MockNuxieApi()
+                await api.configureTrackEventFailure(
+                    error: NuxieNetworkError.httpError(
+                        statusCode: 500,
+                        message: "retry later"
+                    )
+                )
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: FeatureInfo(),
+                    dateProvider: MockDateProvider(initialDate: createdAt),
+                    store: store
+                )
+
+                await queue.recover()
+
+                let featureSends = await api.sentEvents.filter {
+                    $0.name == SystemEventNames.featureUsed
+                }
+                expect(featureSends.map(\.id))
+                    .to(equal([firstOperationId, blockedOperationId, independentOperationId]))
+                expect(try store.load().map(\.operationId))
+                    .to(equal([firstOperationId, blockedOperationId, independentOperationId]))
             }
 
             it("does not admit recovery side effects when cancellation wins before task start") {
@@ -381,6 +686,67 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                     $0.name == SystemEventNames.featureUsed
                 }
                 expect(featureSends).to(beEmpty())
+                let pendingCount = try await relaunchedQueue.pendingCount()
+                expect(pendingCount).to(equal(0))
+            }
+
+            it("retires feature-not-found without replaying it") {
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_095)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                await api.configureTrackEventFailure(
+                    error: NuxieNetworkError.httpError(
+                        statusCode: 404,
+                        message: "Feature not found"
+                    )
+                )
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: FeatureInfo(),
+                    dateProvider: MockDateProvider(initialDate: createdAt),
+                    store: store
+                )
+
+                await expect {
+                    try await queue.use(
+                        distinctId: "feature-customer",
+                        featureId: "missing_feature",
+                        amount: 1,
+                        entityId: nil,
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }.to(throwError { error in
+                    let networkError = error as? NuxieNetworkError
+                    expect(networkError?.httpStatusCode).to(equal(404))
+                    expect(networkError?.errorDescription).to(contain("Feature not found"))
+                })
+                expect(try store.load()).to(beEmpty())
+
+                let relaunchedApi = MockNuxieApi()
+                let relaunchedQueue = FeatureUseCommandQueue(
+                    api: relaunchedApi,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: FeatureInfo(),
+                    dateProvider: MockDateProvider(initialDate: createdAt),
+                    store: store
+                )
+                await relaunchedQueue.recover()
+
+                let replayedFeatureSends = await relaunchedApi.sentEvents.filter {
+                    $0.name == SystemEventNames.featureUsed
+                }
+                expect(replayedFeatureSends).to(beEmpty())
                 let pendingCount = try await relaunchedQueue.pendingCount()
                 expect(pendingCount).to(equal(0))
             }

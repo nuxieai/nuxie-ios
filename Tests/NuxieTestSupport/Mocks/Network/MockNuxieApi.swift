@@ -47,6 +47,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var trackEventCallCount = 0
     public var checkFeatureCallCount = 0
     private var acceptedTrackEventIds: Set<String> = []
+    public private(set) var appliedFeatureTrackEventIds: [String] = []
     private var shouldSuspendNextFeatureTrackEvent = false
     private var suspendedFeatureTrackEvent: (
         id: UUID,
@@ -353,14 +354,18 @@ public actor MockNuxieApi: NuxieApiProtocol {
         if event.name == SystemEventNames.featureUsed,
            acceptedTrackEventTimeouts > 0 {
             acceptedTrackEventTimeouts -= 1
-            acceptedTrackEventIds.insert(event.id)
+            if acceptedTrackEventIds.insert(event.id).inserted {
+                appliedFeatureTrackEventIds.append(event.id)
+            }
             throw NuxieNetworkError.timeout
         }
 
         let response = trackEventResponse ?? EventResponse(status: "success")
         if event.name == SystemEventNames.featureUsed,
            response.status == "ok" || response.status == "success" {
-            acceptedTrackEventIds.insert(event.id)
+            if acceptedTrackEventIds.insert(event.id).inserted {
+                appliedFeatureTrackEventIds.append(event.id)
+            }
         }
         return response
     }
@@ -481,6 +486,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         trackEventCallCount = 0
         checkFeatureCallCount = 0
         acceptedTrackEventIds.removeAll()
+        appliedFeatureTrackEventIds.removeAll()
         trackEventCalls = []
         lastTimeoutUsed = nil
         lastProfileLocale = nil

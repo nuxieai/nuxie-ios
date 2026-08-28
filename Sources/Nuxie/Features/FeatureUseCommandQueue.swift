@@ -63,6 +63,12 @@ private struct FeatureUseCommandFile: Codable {
   var commands: [FeatureUseCommand]
 }
 
+private struct FeatureUseApplicationKey: Hashable, Sendable {
+  let distinctId: String
+  let featureId: String
+  let entityId: String?
+}
+
 struct FeatureUseCommand: Codable, Sendable {
   struct DurableResult: Codable, Sendable {
     let response: EventResponse
@@ -111,6 +117,10 @@ struct FeatureUseCommand: Codable, Sendable {
   let setUsage: Bool
   let metadata: [String: AnyCodable]?
   let createdAt: Date
+  /// Durable lower bound for when the server could have produced a response
+  /// to the first delivery. Retries reuse it when they may surface that cached
+  /// response instead of treating the retry receipt time as fresh authority.
+  var firstDeliveryAttemptAt: Date? = nil
   var result: DurableResult?
 
   func matches(
@@ -223,6 +233,7 @@ actor FeatureUseCommandQueue {
   private var inFlight: [String: Task<FeatureUsageResult, Error>] = [:]
   private var recoveryOwnedOperationIds: Set<String> = []
   private var foregroundJoinedRecoveryIds: Set<String> = []
+  private var reconcilingApplicationKeys: Set<FeatureUseApplicationKey> = []
   private var isClosed = false
 
   init(
@@ -263,7 +274,8 @@ actor FeatureUseCommandQueue {
       // An overlapping identical public call is a new consumption. A durable
       // command recovered from an earlier attempt remains joinable while its
       // relaunch recovery is in flight.
-      (!inFlight.keys.contains(candidate.operationId)
+      candidate.result == nil
+        && (!inFlight.keys.contains(candidate.operationId)
         || (recoveryOwnedOperationIds.contains(candidate.operationId)
           && !foregroundJoinedRecoveryIds.contains(candidate.operationId)))
         && candidate.matches(
@@ -345,7 +357,7 @@ actor FeatureUseCommandQueue {
         // tail for the currently active identity.
         continue
       } catch {
-        let disposition = EventDeliveryPolicy.disposition(for: error)
+        let disposition = deliveryDisposition(for: error)
         if disposition == .terminalPoison || disposition == .split {
           LogWarning("Feature command \(operationId) retired after terminal rejection: \(error)")
         } else {
@@ -421,6 +433,16 @@ actor FeatureUseCommandQueue {
     }
 
     if command.result == nil {
+      let isFirstDeliveryAttempt = command.firstDeliveryAttemptAt == nil
+      if isFirstDeliveryAttempt {
+        try performRecoveryDurableWrite(
+          operationId: operationId,
+          admission: recoveryAdmission
+        ) {
+          command.firstDeliveryAttemptAt = dateProvider.now()
+          try replaceAndPersist(command)
+        }
+      }
       let response: EventResponse
       do {
         try admitRecoverySideEffect(
@@ -431,7 +453,7 @@ actor FeatureUseCommandQueue {
           transportEvent(for: command, name: SystemEventNames.featureUsed)
         )
       } catch {
-        let disposition = EventDeliveryPolicy.disposition(for: error)
+        let disposition = deliveryDisposition(for: error)
         try performRecoveryDurableWrite(
           operationId: operationId,
           admission: recoveryAdmission
@@ -449,7 +471,9 @@ actor FeatureUseCommandQueue {
         command.result = .init(
           response: response,
           reconciliation: nil,
-          persistedAt: dateProvider.now()
+          persistedAt: isFirstDeliveryAttempt
+            ? dateProvider.now()
+            : command.firstDeliveryAttemptAt
         )
         try replaceAndPersist(command)
       }
@@ -472,38 +496,11 @@ actor FeatureUseCommandQueue {
     }
 
     let result = makeUsageResult(command: command, response: durableResult.response)
-
-    if isAccepted(durableResult.response) {
-      try await applyBalanceIfFresh(
-        command: command,
-        durableResult: durableResult,
-        recoveryAdmission: recoveryAdmission
-      )
-
-      if let mirror = durableResult.reconciliation?.mirror {
-        try admitRecoverySideEffect(
-          operationId: operationId,
-          admission: recoveryAdmission
-        )
-        let isDurable = await eventLog.storePreparedEventInHistory(
-          mirror.event(operationId: command.operationId)
-        )
-        try admitRecoverySideEffect(
-          operationId: operationId,
-          admission: recoveryAdmission
-        )
-        guard isDurable else {
-          throw FeatureUseCommandError.reconciliationNotDurable
-        }
-      }
-    }
-
-    try performRecoveryDurableWrite(
-      operationId: operationId,
-      admission: recoveryAdmission
-    ) {
-      try removeAndPersist(operationId: operationId)
-    }
+    try await reconcileAvailableCommands(
+      for: applicationKey(for: command),
+      reportingFailureFor: operationId,
+      recoveryAdmission: recoveryAdmission
+    )
     guard identity.getDistinctId() == command.distinctId else {
       throw CancellationError()
     }
@@ -523,13 +520,99 @@ actor FeatureUseCommandQueue {
     )
     let featureId = command.featureId
     let responsePersistedAt = durableResult.persistedAt
-    await MainActor.run {
+    _ = await MainActor.run {
       featureInfo.applyCommandBalanceIfFresh(
         featureId,
         balance: remaining,
         responsePersistedAt: responsePersistedAt
       )
     }
+  }
+
+  private func reconcileAvailableCommands(
+    for key: FeatureUseApplicationKey,
+    reportingFailureFor operationId: String,
+    recoveryAdmission: FeatureRecoveryAdmission?
+  ) async throws {
+    guard reconcilingApplicationKeys.insert(key).inserted else { return }
+    defer { reconcilingApplicationKeys.remove(key) }
+
+    while let command = commands?.first(where: { applicationKey(for: $0) == key }) {
+      guard let durableResult = command.result,
+            !isAccepted(durableResult.response)
+              || durableResult.reconciliation != nil
+      else { return }
+
+      do {
+        try await reconcile(
+          command: command,
+          durableResult: durableResult,
+          recoveryAdmission: recoveryAdmission
+        )
+      } catch {
+        if command.operationId == operationId { throw error }
+        LogWarning(
+          "Feature command \(command.operationId) remains pending reconciliation: \(error)"
+        )
+        return
+      }
+    }
+  }
+
+  private func reconcile(
+    command: FeatureUseCommand,
+    durableResult: FeatureUseCommand.DurableResult,
+    recoveryAdmission: FeatureRecoveryAdmission?
+  ) async throws {
+    if isAccepted(durableResult.response) {
+      try await applyBalanceIfFresh(
+        command: command,
+        durableResult: durableResult,
+        recoveryAdmission: recoveryAdmission
+      )
+
+      if let mirror = durableResult.reconciliation?.mirror {
+        try admitRecoverySideEffect(
+          operationId: command.operationId,
+          admission: recoveryAdmission
+        )
+        let isDurable = await eventLog.storePreparedEventInHistory(
+          mirror.event(operationId: command.operationId)
+        )
+        // This prepared mirror is the local-history copy of SystemEventNames.featureUsed.
+        try admitRecoverySideEffect(
+          operationId: command.operationId,
+          admission: recoveryAdmission
+        )
+        guard isDurable else {
+          throw FeatureUseCommandError.reconciliationNotDurable
+        }
+      }
+    }
+
+    try performRecoveryDurableWrite(
+      operationId: command.operationId,
+      admission: recoveryAdmission
+    ) {
+      try removeAndPersist(operationId: command.operationId)
+    }
+  }
+
+  private func applicationKey(for command: FeatureUseCommand) -> FeatureUseApplicationKey {
+    FeatureUseApplicationKey(
+      distinctId: command.distinctId,
+      featureId: command.featureId,
+      entityId: command.entityId
+    )
+  }
+
+  private func deliveryDisposition(for error: Error) -> EventDeliveryDisposition {
+    if (error as? NuxieNetworkError)?.httpStatusCode == 404 {
+      // `/i/event` uses 404 specifically for a missing Feature. The command has
+      // no authority to apply and must not become valid through later replay.
+      return .terminalPoison
+    }
+    return EventDeliveryPolicy.disposition(for: error)
   }
 
   private func admitRecoverySideEffect(

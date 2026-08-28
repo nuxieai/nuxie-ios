@@ -39,7 +39,7 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 }
             }
 
-            it("retries an accepted-but-timed-out command after relaunch with one operation id") {
+            it("retries an accepted timeout without overwriting a newer profile balance") {
                 let api = MockNuxieApi()
                 await api.configureTrackEventResponse(
                     status: "ok",
@@ -89,6 +89,7 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 expect(firstPendingCount).to(equal(1))
                 await firstStack.kill()
                 first = nil
+                date.advance(by: 1)
 
                 relaunched = try await OrchestrationStack.boot(
                     storageURL: storageURL,
@@ -127,7 +128,7 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 let balance = await MainActor.run {
                     relaunchedStack.core.featureInfo.balance("ai_generations")
                 }
-                expect(balance).to(equal(4))
+                expect(balance).to(equal(5))
             }
 
             it("keeps a newer profile balance while reconciling a durable response once") {
