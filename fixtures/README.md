@@ -16,6 +16,9 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `events/delivery-disposition`: retry/auth/split/poison classification,
   all-or-nothing partial-ack validation, and poison-event isolation without
   disturbing valid neighbors.
+- `events/generated-control-routing`: reserved generated native interaction
+  identity resolves only to an exact signed control, never from an ordinary
+  analytics event's payload.
 - `golden-journey`: the minimal synchronous-enrollment journey vocabulary.
 - `journeys/handoff`: server→device mailbox claim plus device→server
   `$journey_handoff` property shape, direction, epoch 0/1 encoding,
