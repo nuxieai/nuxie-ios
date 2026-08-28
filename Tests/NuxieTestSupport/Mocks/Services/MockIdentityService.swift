@@ -8,15 +8,44 @@ import Foundation
 /// (identify/reset scenarios), so every access is lock-guarded.
 public final class MockIdentityService: IdentityServiceProtocol, @unchecked Sendable {
     private let lock = NSLock()
+    private let distinctIdReadSuspended = DispatchSemaphore(value: 0)
+    private let distinctIdReadResume = DispatchSemaphore(value: 0)
     private var _distinctId = "test-user"
     private var _anonymousId = "test-anonymous-id"
     private var _userProperties: [String: Any] = [:]
     private var _isUserIdentified = true
+    private var _shouldSuspendNextDistinctIdRead = false
 
     public init() {}
 
     public func getDistinctId() -> String {
-        lock.withLock { _distinctId }
+        let shouldSuspend = lock.withLock {
+            let shouldSuspend = _shouldSuspendNextDistinctIdRead
+            _shouldSuspendNextDistinctIdRead = false
+            return shouldSuspend
+        }
+        if shouldSuspend {
+            distinctIdReadSuspended.signal()
+            distinctIdReadResume.wait()
+        }
+        return lock.withLock { _distinctId }
+    }
+
+    public func suspendNextDistinctIdRead() {
+        lock.withLock { _shouldSuspendNextDistinctIdRead = true }
+    }
+
+    public func waitForSuspendedDistinctIdRead() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { [distinctIdReadSuspended] in
+                distinctIdReadSuspended.wait()
+                continuation.resume()
+            }
+        }
+    }
+
+    public func resumeSuspendedDistinctIdRead() {
+        distinctIdReadResume.signal()
     }
 
     public func getRawDistinctId() -> String? {

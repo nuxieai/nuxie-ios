@@ -102,7 +102,7 @@ is_allowlisted_catalog_site() {
     '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1956' \
       | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1956' \
       | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1956' \
-      | '$feature_used|Sources/Nuxie/Features/FeatureUseCommandQueue.swift:300')
+      | '$feature_used|Sources/Nuxie/Features/FeatureUseCommandQueue.swift:359')
       return 0
       ;;
     *)
@@ -169,8 +169,8 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$journey_effect_completed' "$1" \
         '$journey_superseded' "$1"
       ;;
-    'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:300' \
-      | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:328' \
+    'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:359' \
+      | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:415' \
       | 'Sources/Nuxie/NuxieSDK.swift:1128')
       # The accepted direct-response feature event keeps its authoritative id
       # when it is copied into delivered local history.
@@ -322,8 +322,8 @@ $experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentat
 $experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3306
 $experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3265
 $experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3322
-$feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:300
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:328
+$feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:359
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:415
 $feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1128
 $identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:650
 $journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:984

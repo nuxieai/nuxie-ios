@@ -1,6 +1,21 @@
 import CryptoKit
 import Foundation
 
+private final class FeatureRecoveryCancellation {
+  private let lock = NSLock()
+  private var cancelled = false
+
+  var isCancelled: Bool {
+    lock.withLock { cancelled }
+  }
+
+  func cancel() {
+    lock.withLock { cancelled = true }
+  }
+}
+
+extension FeatureRecoveryCancellation: @unchecked Sendable {}
+
 private struct FeatureUseCommandFile: Codable {
   static let currentVersion = 1
 
@@ -154,6 +169,8 @@ actor FeatureUseCommandQueue {
 
   private var commands: [FeatureUseCommand]?
   private var inFlight: [String: Task<FeatureUsageResult, Error>] = [:]
+  private var recoveryOwnedOperationIds: Set<String> = []
+  private var foregroundJoinedRecoveryIds: Set<String> = []
   private var isClosed = false
 
   init(
@@ -186,10 +203,11 @@ actor FeatureUseCommandQueue {
 
     let command: FeatureUseCommand
     if let existing = commands?.first(where: { candidate in
-      // An overlapping identical public call is a new consumption. Only a
-      // quiescent durable command from an earlier ambiguous attempt is an
-      // implicit retry candidate.
-      !inFlight.keys.contains(candidate.operationId)
+      // An overlapping identical public call is a new consumption. A durable
+      // command recovered from an earlier attempt remains joinable while its
+      // relaunch recovery is in flight.
+      (!inFlight.keys.contains(candidate.operationId)
+        || recoveryOwnedOperationIds.contains(candidate.operationId))
         && candidate.matches(
         distinctId: distinctId,
         featureId: featureId,
@@ -218,13 +236,26 @@ actor FeatureUseCommandQueue {
       commands = updated
     }
 
+    if recoveryOwnedOperationIds.contains(command.operationId),
+       inFlight[command.operationId] != nil {
+      foregroundJoinedRecoveryIds.insert(command.operationId)
+    }
     return try await execute(operationId: command.operationId)
   }
 
-  /// Retries every durable command in capture order. Errors leave the command
-  /// intact for foreground, explicit-call, or next-launch recovery.
+  /// Retries every durable command in capture order. Retryable errors leave
+  /// the command intact; terminal poison is durably retired.
   func recover() async {
-    guard !isClosed else { return }
+    let cancellation = FeatureRecoveryCancellation()
+    await withTaskCancellationHandler {
+      await recover(cancellation: cancellation)
+    } onCancel: {
+      cancellation.cancel()
+    }
+  }
+
+  private func recover(cancellation: FeatureRecoveryCancellation) async {
+    guard !Task.isCancelled, !cancellation.isCancelled, !isClosed else { return }
     do {
       try loadIfNeeded()
     } catch {
@@ -233,16 +264,29 @@ actor FeatureUseCommandQueue {
     }
 
     for operationId in (commands ?? []).map(\.operationId) {
+      guard !Task.isCancelled, !cancellation.isCancelled, !isClosed else { return }
+      recoveryOwnedOperationIds.insert(operationId)
+      defer {
+        recoveryOwnedOperationIds.remove(operationId)
+        foregroundJoinedRecoveryIds.remove(operationId)
+      }
       do {
-        _ = try await execute(operationId: operationId)
+        _ = try await execute(
+          operationId: operationId,
+          recoveryCancellation: cancellation
+        )
       } catch is CancellationError {
-        if Task.isCancelled || isClosed { return }
+        if Task.isCancelled || cancellation.isCancelled || isClosed { return }
         // Identity-change reconciliation removes the old command and reports
         // cancellation to its original caller. It must not strand the ordered
         // tail for the currently active identity.
         continue
       } catch {
-        LogWarning("Feature command \(operationId) remains pending: \(error)")
+        if EventDeliveryPolicy.disposition(for: error) == .terminalPoison {
+          LogWarning("Feature command \(operationId) retired after terminal rejection: \(error)")
+        } else {
+          LogWarning("Feature command \(operationId) remains pending: \(error)")
+        }
       }
     }
   }
@@ -270,14 +314,20 @@ actor FeatureUseCommandQueue {
     }
   }
 
-  private func execute(operationId: String) async throws -> FeatureUsageResult {
+  private func execute(
+    operationId: String,
+    recoveryCancellation: FeatureRecoveryCancellation? = nil
+  ) async throws -> FeatureUsageResult {
     if let existing = inFlight[operationId] {
       return try await existing.value
     }
 
     let task = Task { [weak self] () throws -> FeatureUsageResult in
       guard let self else { throw CancellationError() }
-      return try await self.attempt(operationId: operationId)
+      return try await self.attempt(
+        operationId: operationId,
+        recoveryCancellation: recoveryCancellation
+      )
     }
     inFlight[operationId] = task
     do {
@@ -290,14 +340,39 @@ actor FeatureUseCommandQueue {
     }
   }
 
-  private func attempt(operationId: String) async throws -> FeatureUsageResult {
+  private func attempt(
+    operationId: String,
+    recoveryCancellation: FeatureRecoveryCancellation?
+  ) async throws -> FeatureUsageResult {
     guard !isClosed else { throw CancellationError() }
+    try ensureRecoveryAdmission(
+      operationId: operationId,
+      cancellation: recoveryCancellation
+    )
     guard var command = commands?.first(where: { $0.operationId == operationId }) else {
       throw CancellationError()
     }
 
     if command.result == nil {
-      let response = try await api.trackEvent(transportEvent(for: command))
+      let response: EventResponse
+      do {
+        response = try await api.trackEvent(
+          transportEvent(for: command, name: SystemEventNames.featureUsed)
+        )
+      } catch {
+        try ensureRecoveryAdmission(
+          operationId: operationId,
+          cancellation: recoveryCancellation
+        )
+        if EventDeliveryPolicy.disposition(for: error) == .terminalPoison {
+          try removeAndPersist(operationId: operationId)
+        }
+        throw error
+      }
+      try ensureRecoveryAdmission(
+        operationId: operationId,
+        cancellation: recoveryCancellation
+      )
       command.result = .init(response: response, reconciliation: nil)
       try replaceAndPersist(command)
     }
@@ -308,6 +383,10 @@ actor FeatureUseCommandQueue {
 
     if isAccepted(durableResult.response), durableResult.reconciliation == nil {
       let mirror = await acceptedMirror(for: command, response: durableResult.response)
+      try ensureRecoveryAdmission(
+        operationId: operationId,
+        cancellation: recoveryCancellation
+      )
       durableResult.reconciliation = .init(mirror: mirror)
       command.result = durableResult
       try replaceAndPersist(command)
@@ -318,6 +397,10 @@ actor FeatureUseCommandQueue {
     if isAccepted(durableResult.response) {
       if identity.getDistinctId() == command.distinctId,
          let remaining = durableResult.response.usage?.remaining {
+        try ensureRecoveryAdmission(
+          operationId: operationId,
+          cancellation: recoveryCancellation
+        )
         let featureId = command.featureId
         await MainActor.run {
           featureInfo.setBalance(featureId, balance: remaining)
@@ -325,14 +408,27 @@ actor FeatureUseCommandQueue {
       }
 
       if let mirror = durableResult.reconciliation?.mirror {
-        guard await eventLog.storePreparedEventInHistory(
+        try ensureRecoveryAdmission(
+          operationId: operationId,
+          cancellation: recoveryCancellation
+        )
+        let isDurable = await eventLog.storePreparedEventInHistory(
           mirror.event(operationId: command.operationId)
-        ) else {
+        )
+        try ensureRecoveryAdmission(
+          operationId: operationId,
+          cancellation: recoveryCancellation
+        )
+        guard isDurable else {
           throw FeatureUseCommandError.reconciliationNotDurable
         }
       }
     }
 
+    try ensureRecoveryAdmission(
+      operationId: operationId,
+      cancellation: recoveryCancellation
+    )
     try removeAndPersist(operationId: operationId)
     guard identity.getDistinctId() == command.distinctId else {
       throw CancellationError()
@@ -340,7 +436,21 @@ actor FeatureUseCommandQueue {
     return result
   }
 
-  private func transportEvent(for command: FeatureUseCommand) -> NuxieEvent {
+  private func ensureRecoveryAdmission(
+    operationId: String,
+    cancellation: FeatureRecoveryCancellation?
+  ) throws {
+    guard !isClosed else { throw CancellationError() }
+    guard let cancellation, cancellation.isCancelled else { return }
+    guard foregroundJoinedRecoveryIds.contains(operationId) else {
+      throw CancellationError()
+    }
+  }
+
+  private func transportEvent(
+    for command: FeatureUseCommand,
+    name: String
+  ) -> NuxieEvent {
     var properties: [String: Any] = [
       "feature_extId": command.featureId,
       "value": command.amount,
@@ -352,7 +462,7 @@ actor FeatureUseCommandQueue {
     }
     return NuxieEvent(
       id: command.operationId,
-      name: SystemEventNames.featureUsed,
+      name: name,
       distinctId: command.distinctId,
       properties: properties,
       timestamp: command.createdAt
