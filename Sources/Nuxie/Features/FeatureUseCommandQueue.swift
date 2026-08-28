@@ -12,9 +12,49 @@ private final class FeatureRecoveryCancellation {
   func cancel() {
     lock.withLock { cancelled = true }
   }
+
+  func claim() -> FeatureRecoveryAdmission? {
+    lock.withLock {
+      guard !cancelled else { return nil }
+      return FeatureRecoveryAdmission(cancellation: self)
+    }
+  }
+
+  fileprivate func admit() throws {
+    try lock.withLock {
+      guard !cancelled else { throw CancellationError() }
+    }
+  }
+
+  fileprivate func perform<T>(_ work: () throws -> T) throws -> T {
+    try lock.withLock {
+      guard !cancelled else { throw CancellationError() }
+      return try work()
+    }
+  }
 }
 
 extension FeatureRecoveryCancellation: @unchecked Sendable {}
+
+private final class FeatureRecoveryAdmission: @unchecked Sendable {
+  private let cancellation: FeatureRecoveryCancellation
+
+  fileprivate init(cancellation: FeatureRecoveryCancellation) {
+    self.cancellation = cancellation
+  }
+
+  func admit() throws {
+    try cancellation.admit()
+  }
+
+  func perform<T>(_ work: () throws -> T) throws -> T {
+    try cancellation.perform(work)
+  }
+}
+
+protocol FeatureRecoveryTaskGating: Sendable {
+  func waitForRecoveryTaskAdmission() async
+}
 
 private struct FeatureUseCommandFile: Codable {
   static let currentVersion = 1
@@ -166,6 +206,7 @@ actor FeatureUseCommandQueue {
   private let featureInfo: FeatureInfo
   private let dateProvider: DateProviderProtocol
   private let store: FeatureUseCommandStoring
+  private let recoveryTaskGate: FeatureRecoveryTaskGating?
 
   private var commands: [FeatureUseCommand]?
   private var inFlight: [String: Task<FeatureUsageResult, Error>] = [:]
@@ -179,7 +220,8 @@ actor FeatureUseCommandQueue {
     eventLog: EventLogProtocol,
     featureInfo: FeatureInfo,
     dateProvider: DateProviderProtocol,
-    store: FeatureUseCommandStoring
+    store: FeatureUseCommandStoring,
+    recoveryTaskGate: FeatureRecoveryTaskGating? = nil
   ) {
     self.api = api
     self.identity = identity
@@ -187,6 +229,7 @@ actor FeatureUseCommandQueue {
     self.featureInfo = featureInfo
     self.dateProvider = dateProvider
     self.store = store
+    self.recoveryTaskGate = recoveryTaskGate
   }
 
   func use(
@@ -207,7 +250,8 @@ actor FeatureUseCommandQueue {
       // command recovered from an earlier attempt remains joinable while its
       // relaunch recovery is in flight.
       (!inFlight.keys.contains(candidate.operationId)
-        || recoveryOwnedOperationIds.contains(candidate.operationId))
+        || (recoveryOwnedOperationIds.contains(candidate.operationId)
+          && !foregroundJoinedRecoveryIds.contains(candidate.operationId)))
         && candidate.matches(
         distinctId: distinctId,
         featureId: featureId,
@@ -244,7 +288,7 @@ actor FeatureUseCommandQueue {
   }
 
   /// Retries every durable command in capture order. Retryable errors leave
-  /// the command intact; terminal poison is durably retired.
+  /// the command intact; terminal command failures are durably retired.
   func recover() async {
     let cancellation = FeatureRecoveryCancellation()
     await withTaskCancellationHandler {
@@ -265,6 +309,7 @@ actor FeatureUseCommandQueue {
 
     for operationId in (commands ?? []).map(\.operationId) {
       guard !Task.isCancelled, !cancellation.isCancelled, !isClosed else { return }
+      guard let admission = cancellation.claim() else { return }
       recoveryOwnedOperationIds.insert(operationId)
       defer {
         recoveryOwnedOperationIds.remove(operationId)
@@ -273,7 +318,7 @@ actor FeatureUseCommandQueue {
       do {
         _ = try await execute(
           operationId: operationId,
-          recoveryCancellation: cancellation
+          recoveryAdmission: admission
         )
       } catch is CancellationError {
         if Task.isCancelled || cancellation.isCancelled || isClosed { return }
@@ -282,7 +327,8 @@ actor FeatureUseCommandQueue {
         // tail for the currently active identity.
         continue
       } catch {
-        if EventDeliveryPolicy.disposition(for: error) == .terminalPoison {
+        let disposition = EventDeliveryPolicy.disposition(for: error)
+        if disposition == .terminalPoison || disposition == .split {
           LogWarning("Feature command \(operationId) retired after terminal rejection: \(error)")
         } else {
           LogWarning("Feature command \(operationId) remains pending: \(error)")
@@ -316,7 +362,7 @@ actor FeatureUseCommandQueue {
 
   private func execute(
     operationId: String,
-    recoveryCancellation: FeatureRecoveryCancellation? = nil
+    recoveryAdmission: FeatureRecoveryAdmission? = nil
   ) async throws -> FeatureUsageResult {
     if let existing = inFlight[operationId] {
       return try await existing.value
@@ -324,9 +370,12 @@ actor FeatureUseCommandQueue {
 
     let task = Task { [weak self] () throws -> FeatureUsageResult in
       guard let self else { throw CancellationError() }
+      if recoveryAdmission != nil {
+        await self.recoveryTaskGate?.waitForRecoveryTaskAdmission()
+      }
       return try await self.attempt(
         operationId: operationId,
-        recoveryCancellation: recoveryCancellation
+        recoveryAdmission: recoveryAdmission
       )
     }
     inFlight[operationId] = task
@@ -342,12 +391,12 @@ actor FeatureUseCommandQueue {
 
   private func attempt(
     operationId: String,
-    recoveryCancellation: FeatureRecoveryCancellation?
+    recoveryAdmission: FeatureRecoveryAdmission?
   ) async throws -> FeatureUsageResult {
     guard !isClosed else { throw CancellationError() }
-    try ensureRecoveryAdmission(
+    try admitRecoverySideEffect(
       operationId: operationId,
-      cancellation: recoveryCancellation
+      admission: recoveryAdmission
     )
     guard var command = commands?.first(where: { $0.operationId == operationId }) else {
       throw CancellationError()
@@ -356,25 +405,32 @@ actor FeatureUseCommandQueue {
     if command.result == nil {
       let response: EventResponse
       do {
+        try admitRecoverySideEffect(
+          operationId: operationId,
+          admission: recoveryAdmission
+        )
         response = try await api.trackEvent(
           transportEvent(for: command, name: SystemEventNames.featureUsed)
         )
       } catch {
-        try ensureRecoveryAdmission(
+        let disposition = EventDeliveryPolicy.disposition(for: error)
+        try performRecoveryDurableWrite(
           operationId: operationId,
-          cancellation: recoveryCancellation
-        )
-        if EventDeliveryPolicy.disposition(for: error) == .terminalPoison {
-          try removeAndPersist(operationId: operationId)
+          admission: recoveryAdmission
+        ) {
+          if disposition == .terminalPoison || disposition == .split {
+            try removeAndPersist(operationId: operationId)
+          }
         }
         throw error
       }
-      try ensureRecoveryAdmission(
+      try performRecoveryDurableWrite(
         operationId: operationId,
-        cancellation: recoveryCancellation
-      )
-      command.result = .init(response: response, reconciliation: nil)
-      try replaceAndPersist(command)
+        admission: recoveryAdmission
+      ) {
+        command.result = .init(response: response, reconciliation: nil)
+        try replaceAndPersist(command)
+      }
     }
 
     guard var durableResult = command.result else {
@@ -383,13 +439,14 @@ actor FeatureUseCommandQueue {
 
     if isAccepted(durableResult.response), durableResult.reconciliation == nil {
       let mirror = await acceptedMirror(for: command, response: durableResult.response)
-      try ensureRecoveryAdmission(
+      try performRecoveryDurableWrite(
         operationId: operationId,
-        cancellation: recoveryCancellation
-      )
-      durableResult.reconciliation = .init(mirror: mirror)
-      command.result = durableResult
-      try replaceAndPersist(command)
+        admission: recoveryAdmission
+      ) {
+        durableResult.reconciliation = .init(mirror: mirror)
+        command.result = durableResult
+        try replaceAndPersist(command)
+      }
     }
 
     let result = makeUsageResult(command: command, response: durableResult.response)
@@ -397,9 +454,9 @@ actor FeatureUseCommandQueue {
     if isAccepted(durableResult.response) {
       if identity.getDistinctId() == command.distinctId,
          let remaining = durableResult.response.usage?.remaining {
-        try ensureRecoveryAdmission(
+        try admitRecoverySideEffect(
           operationId: operationId,
-          cancellation: recoveryCancellation
+          admission: recoveryAdmission
         )
         let featureId = command.featureId
         await MainActor.run {
@@ -408,16 +465,16 @@ actor FeatureUseCommandQueue {
       }
 
       if let mirror = durableResult.reconciliation?.mirror {
-        try ensureRecoveryAdmission(
+        try admitRecoverySideEffect(
           operationId: operationId,
-          cancellation: recoveryCancellation
+          admission: recoveryAdmission
         )
         let isDurable = await eventLog.storePreparedEventInHistory(
           mirror.event(operationId: command.operationId)
         )
-        try ensureRecoveryAdmission(
+        try admitRecoverySideEffect(
           operationId: operationId,
-          cancellation: recoveryCancellation
+          admission: recoveryAdmission
         )
         guard isDurable else {
           throw FeatureUseCommandError.reconciliationNotDurable
@@ -425,26 +482,37 @@ actor FeatureUseCommandQueue {
       }
     }
 
-    try ensureRecoveryAdmission(
+    try performRecoveryDurableWrite(
       operationId: operationId,
-      cancellation: recoveryCancellation
-    )
-    try removeAndPersist(operationId: operationId)
+      admission: recoveryAdmission
+    ) {
+      try removeAndPersist(operationId: operationId)
+    }
     guard identity.getDistinctId() == command.distinctId else {
       throw CancellationError()
     }
     return result
   }
 
-  private func ensureRecoveryAdmission(
+  private func admitRecoverySideEffect(
     operationId: String,
-    cancellation: FeatureRecoveryCancellation?
+    admission: FeatureRecoveryAdmission?
   ) throws {
     guard !isClosed else { throw CancellationError() }
-    guard let cancellation, cancellation.isCancelled else { return }
-    guard foregroundJoinedRecoveryIds.contains(operationId) else {
-      throw CancellationError()
+    guard !foregroundJoinedRecoveryIds.contains(operationId) else { return }
+    try admission?.admit()
+  }
+
+  private func performRecoveryDurableWrite<T>(
+    operationId: String,
+    admission: FeatureRecoveryAdmission?,
+    _ write: () throws -> T
+  ) throws -> T {
+    guard !isClosed else { throw CancellationError() }
+    guard !foregroundJoinedRecoveryIds.contains(operationId), let admission else {
+      return try write()
     }
+    return try admission.perform(write)
   }
 
   private func transportEvent(

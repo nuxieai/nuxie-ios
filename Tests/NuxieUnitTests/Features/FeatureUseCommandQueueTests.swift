@@ -6,6 +6,40 @@ import Quick
 @testable import NuxieTestSupport
 #endif
 
+private actor SuspendedFeatureRecoveryTaskGate {
+    private var isEntered = false
+    private var isOpen = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var gateWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitForRecoveryTaskAdmission() async {
+        isEntered = true
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            gateWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard !isEntered else { return }
+        await withCheckedContinuation { continuation in
+            entryWaiters.append(continuation)
+        }
+    }
+
+    func open() {
+        isOpen = true
+        let waiters = gateWaiters
+        gateWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
+extension SuspendedFeatureRecoveryTaskGate: FeatureRecoveryTaskGating {}
+
 final class FeatureUseCommandQueueTests: AsyncSpec {
     override class func spec() {
         describe("feature use command queue") {
@@ -22,7 +56,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 }
             }
 
-            it("joins an identical foreground retry to recovery already in flight") {
+            it("allows exactly one identical foreground call to join recovery") {
                 let operationId = UUID.v7().uuidString
                 let createdAt = Date(timeIntervalSince1970: 1_788_000_050)
                 let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
@@ -66,7 +100,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 await api.waitForSuspendedFeatureTrackEvent()
 
                 identity.suspendNextDistinctIdRead()
-                let foreground = Task {
+                let joinedForeground = Task {
                     try await queue.use(
                         featureId: "ai_generations",
                         amount: 1,
@@ -82,22 +116,94 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 // recovery or persisted a second command before this returns.
                 let joinedPendingCount = try await queue.pendingCount()
                 expect(joinedPendingCount).to(equal(1))
+
+                identity.suspendNextDistinctIdRead()
+                let newForeground = Task {
+                    try await queue.use(
+                        featureId: "ai_generations",
+                        amount: 1,
+                        entityId: "project-recovery-race",
+                        setUsage: false,
+                        metadata: ["model": "study-review"]
+                    )
+                }
+                await identity.waitForSuspendedDistinctIdRead()
+                identity.resumeSuspendedDistinctIdRead()
+
                 await api.resumeSuspendedFeatureTrackEvent()
 
                 await recovery.value
-                let foregroundResult = try await foreground.value
-                expect(foregroundResult.success).to(beTrue())
-                expect(foregroundResult.featureId).to(equal("ai_generations"))
-                expect(foregroundResult.usage?.remaining).to(equal(4))
+                let joinedResult = try await joinedForeground.value
+                let newResult = try await newForeground.value
+                expect(joinedResult.success).to(beTrue())
+                expect(newResult.success).to(beTrue())
+                expect(joinedResult.featureId).to(equal("ai_generations"))
+                expect(newResult.featureId).to(equal("ai_generations"))
+                expect(joinedResult.usage?.remaining).to(equal(4))
+                expect(newResult.usage?.remaining).to(equal(4))
 
                 let featureSends = await api.sentEvents.filter {
                     $0.name == SystemEventNames.featureUsed
                 }
-                expect(featureSends.map(\.id)).to(equal([operationId]))
+                expect(featureSends.count).to(equal(2))
+                expect(Set(featureSends.map(\.id)).count).to(equal(2))
+                expect(featureSends.map(\.id)).to(contain(operationId))
                 let uniqueAcceptedCount = await api.uniqueAcceptedTrackEventCount
-                expect(uniqueAcceptedCount).to(equal(1))
+                expect(uniqueAcceptedCount).to(equal(2))
                 let completedPendingCount = try await queue.pendingCount()
                 expect(completedPendingCount).to(equal(0))
+            }
+
+            it("does not admit recovery side effects when cancellation wins before task start") {
+                let operationId = UUID.v7().uuidString
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_060)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                let command = FeatureUseCommand(
+                    operationId: operationId,
+                    distinctId: "feature-customer",
+                    featureId: "ai_generations",
+                    amount: 1,
+                    entityId: "project-cancel-admission",
+                    setUsage: false,
+                    metadata: nil,
+                    createdAt: createdAt,
+                    result: nil
+                )
+                try store.save([command])
+
+                let gate = SuspendedFeatureRecoveryTaskGate()
+                let api = MockNuxieApi()
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: FeatureInfo(),
+                    dateProvider: MockDateProvider(initialDate: createdAt),
+                    store: store,
+                    recoveryTaskGate: gate
+                )
+
+                let recovery = Task { await queue.recover() }
+                await gate.waitUntilEntered()
+                recovery.cancel()
+                await gate.open()
+                await recovery.value
+
+                let featureSends = await api.sentEvents.filter {
+                    $0.name == SystemEventNames.featureUsed
+                }
+                expect(featureSends).to(beEmpty())
+                expect(try store.load().map(\.operationId)).to(equal([operationId]))
+                expect(try store.load().first?.result).to(beNil())
+                let pendingCount = try await queue.pendingCount()
+                expect(pendingCount).to(equal(1))
             }
 
             it("stops recovery admission when cancellation races a successful response") {
@@ -224,6 +330,64 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                     $0.name == SystemEventNames.featureUsed
                 }
                 expect(featureSends).to(beEmpty())
+                let pendingCount = try await relaunchedQueue.pendingCount()
+                expect(pendingCount).to(equal(0))
+            }
+
+            it("durably retires an oversized singleton command and surfaces its failure") {
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_100)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                await api.configureTrackEventFailure(
+                    error: NuxieNetworkError.httpError(
+                        statusCode: 413,
+                        message: "feature command is too large"
+                    )
+                )
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: FeatureInfo(),
+                    dateProvider: MockDateProvider(initialDate: createdAt),
+                    store: store
+                )
+
+                await expect {
+                    try await queue.use(
+                        featureId: "ai_generations",
+                        amount: 1,
+                        entityId: "project-oversized",
+                        setUsage: false,
+                        metadata: ["payload": "oversized"]
+                    )
+                }.to(throwError { error in
+                    expect((error as? NuxieNetworkError)?.httpStatusCode).to(equal(413))
+                })
+                expect(try store.load()).to(beEmpty())
+
+                let relaunchedApi = MockNuxieApi()
+                let relaunchedQueue = FeatureUseCommandQueue(
+                    api: relaunchedApi,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: FeatureInfo(),
+                    dateProvider: MockDateProvider(initialDate: createdAt),
+                    store: store
+                )
+                await relaunchedQueue.recover()
+
+                let relaunchedFeatureSends = await relaunchedApi.sentEvents.filter {
+                    $0.name == SystemEventNames.featureUsed
+                }
+                expect(relaunchedFeatureSends).to(beEmpty())
                 let pendingCount = try await relaunchedQueue.pendingCount()
                 expect(pendingCount).to(equal(0))
             }
