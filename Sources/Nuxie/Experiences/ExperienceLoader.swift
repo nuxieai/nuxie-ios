@@ -122,6 +122,7 @@ actor ExperienceLoader {
     private var activePreloadAccounting: ActivePreloadAccounting?
     private var warmLoadsPermanentlySuspended = false
     private var warmLoadsPausedForBackground = false
+    private var latestProfileGeneration: UInt64 = 0
 
     private let productService: ProductService
     private let storeProductResolver: StoreProductResolver
@@ -157,10 +158,44 @@ actor ExperienceLoader {
         self.testStoreEnabled = testStoreEnabled
     }
 
+    func prepareReleaseProfile(
+        _ profile: ExperienceReleaseProfile?
+    ) async throws -> PreparedExperienceReleaseProfile {
+        guard let profile else {
+            return PreparedExperienceReleaseProfile(profile: nil, catalog: nil)
+        }
+        let catalog = try await releaseStore.authenticateProfile(profile)
+        return PreparedExperienceReleaseProfile(profile: profile, catalog: catalog)
+    }
+
+    func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64
+    ) async throws -> [ExperienceReference]? {
+        guard generation >= latestProfileGeneration else { return nil }
+        latestProfileGeneration = generation
+        return try await installPreparedReleaseProfile(
+            prepared,
+            guardedBy: generation
+        )
+    }
+
+    /// Direct loader tests and low-level qualification hosts do not own a
+    /// ProfileService generation. Production profile admission uses the
+    /// generation-stamped prepare/commit pair above.
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
-        guard let profile else {
+        let prepared = try await prepareReleaseProfile(profile)
+        return try await installPreparedReleaseProfile(prepared, guardedBy: nil)
+    }
+
+    private func installPreparedReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        guardedBy generation: UInt64?
+    ) async throws -> [ExperienceReference]? {
+
+        guard let catalog = prepared.catalog else {
             let authorityChanged = installProductAuthorityCatalog([:])
             cancelWarmTasks()
             finishPreloadAccounting(cancelled: true)
@@ -171,13 +206,12 @@ actor ExperienceLoader {
             productMappingsByReleaseAndStoreID.removeAll()
             preparedReleasesByVersion.removeAll()
             await interactivePreparationCache.removeAll()
+            guard generation == nil || generation == latestProfileGeneration else { return nil }
             preloadMetricsByRelease.removeAll()
             reportedPreloadMetricsByRelease.removeAll()
             if authorityChanged { await notifyProductAuthorityChanged() }
             return nil
         }
-
-        let catalog = try await releaseStore.authenticateProfile(profile)
         for rejection in catalog.rejections {
             LogError(
                 """
@@ -232,6 +266,7 @@ actor ExperienceLoader {
         await interactivePreparationCache.retainPreparations(
             for: Set(installed.values.map { $0.releaseID.descriptorSHA256 })
         )
+        guard generation == nil || generation == latestProfileGeneration else { return nil }
         preloadMetricsByRelease.removeAll()
         reportedPreloadMetricsByRelease.removeAll()
         beginWarming(installed.values)

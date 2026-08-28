@@ -26,6 +26,11 @@ protocol ProfileServiceProtocol: AnyObject, Sendable {
         distinctId: String
     ) async -> [ExperienceReference]?
 
+    /// One atomically published generation for trigger routing.
+    func getTriggerAdmission(
+        distinctId: String
+    ) async -> ProfileTriggerAdmission?
+
     /// Clear cached profile for user
     func clearCache(distinctId: String) async
 
@@ -62,6 +67,20 @@ extension ProfileServiceProtocol {
     ) async -> [ExperienceReference]? {
         nil
     }
+    func getTriggerAdmission(
+        distinctId: String
+    ) async -> ProfileTriggerAdmission? {
+        guard let effective = await getEffectiveExperienceReferences(distinctId: distinctId),
+              let active = await getActiveExperienceReferences(distinctId: distinctId) else {
+            return nil
+        }
+        return ProfileTriggerAdmission(
+            effectiveExperienceReferences: effective,
+            activeExperienceReferences: active,
+            userProperties: [:],
+            segmentMemberships: .empty
+        )
+    }
     func setJourneyMailboxHandler(
         _ handler: (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     ) async {}
@@ -71,6 +90,13 @@ extension ProfileServiceProtocol {
     func refetchProfile() async throws -> ProfileResponse {
         try await refetchProfile(distinctId: nil)
     }
+}
+
+struct ProfileTriggerAdmission: Sendable {
+    let effectiveExperienceReferences: [ExperienceReference]
+    let activeExperienceReferences: [ExperienceReference]
+    let userProperties: [String: AnyCodable]
+    let segmentMemberships: SegmentMembershipSeed
 }
 
 /// Wrapper for cached profile data with metadata
@@ -152,8 +178,11 @@ internal actor ProfileService: ProfileServiceProtocol {
 
     // Memory cache for instant access
     private var cachedProfile: CachedProfile?
-    private var effectiveExperienceReferences: [ExperienceReference] = []
-    private var activeExperienceReferences: [ExperienceReference] = []
+    /// Nil means no complete catalog generation has been admitted yet. An
+    /// admitted empty catalog is represented by a non-nil snapshot whose
+    /// reference arrays are empty; durable commerce recovery depends on that
+    /// distinction.
+    private var triggerAdmission: ProfileTriggerAdmission?
     
     // Disk cache for persistence
     private let diskCache: any CachedProfileStore
@@ -161,7 +190,6 @@ internal actor ProfileService: ProfileServiceProtocol {
     // Background refresh timer
     private var refreshTimer: Task<Void, Never>?
     private var nextProfileGeneration: UInt64 = 0
-    private var latestAppliedGeneration: UInt64 = 0
     private var journeyMailboxHandler:
         (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     private var mailboxRefreshInFlight = false
@@ -331,40 +359,32 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Load profile from disk cache into memory on startup
     private func loadFromDisk() async {
         let distinctId = identityService.getDistinctId()
+        let generation = beginProfileRequest()
         if let cached = await diskCache.retrieve(forKey: distinctId, allowStale: true) {
+            guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
             guard isFresh(cached) else {
                 LogDebug("Discarding expired cached profile before admission")
-                await discardInvalidCachedProfileAndRefresh(distinctId: distinctId)
+                await discardInvalidCachedProfileAndRefresh(
+                    distinctId: distinctId,
+                    generation: generation
+                )
                 return
             }
-            let authoritative: [ExperienceReference]?
             do {
-                authoritative = try await experienceService.replaceReleaseProfile(
-                    cached.response.releases
+                _ = try await admitProfile(
+                    cached,
+                    generation: generation,
+                    persistToDisk: false
                 )
             } catch {
                 LogError("Cached release profile authentication failed: \(error)")
-                if identityService.getDistinctId() == distinctId {
-                    await experienceService.clearCache()
-                }
-                await discardInvalidCachedProfileAndRefresh(distinctId: distinctId)
+                guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
+                await discardInvalidCachedProfileAndRefresh(
+                    distinctId: distinctId,
+                    generation: generation
+                )
                 return
             }
-            effectiveExperienceReferences = authoritative ?? []
-            activeExperienceReferences = activeReferences(
-                in: cached.response,
-                authenticated: authoritative
-            )
-            self.cachedProfile = cached
-            LogDebug("Loaded profile from disk (age: \(Int(cached.cachedAt.timeIntervalSinceNow * -1 / 60))m)")
-
-            await handleProfileUpdate(
-                cached.response,
-                for: distinctId
-            )
-
-            // Periodic background refresh keeps the cache warm.
-            startRefreshTimer()
         }
     }
 
@@ -392,28 +412,27 @@ internal actor ProfileService: ProfileServiceProtocol {
             }
             switch result {
             case .modified(let fresh, let nextValidator):
-                guard claimProfileGeneration(generation) else {
+                guard isCurrentAdmission(generation, distinctId: distinctId) else {
                     LogDebug("Discarding stale profile generation \(generation)")
                     return fresh
                 }
 
                 LogInfo("Network fetch succeeded; updating cache (locale: \(locale))")
-                let admitted = try await updateCache(
-                    profile: fresh,
-                    distinctId: distinctId,
-                    validator: nextValidator,
-                    locale: locale,
-                    generation: generation
+                let admitted = try await admitProfile(
+                    CachedProfile(
+                        response: fresh,
+                        distinctId: distinctId,
+                        cachedAt: dateProvider.now(),
+                        validator: nextValidator,
+                        locale: locale
+                    ),
+                    generation: generation,
+                    persistToDisk: true
                 )
                 guard admitted else {
                     LogDebug("Discarding stale profile generation \(generation) after authentication")
                     return fresh
                 }
-                await handleProfileUpdate(
-                    fresh,
-                    for: distinctId,
-                    generation: generation
-                )
                 return fresh
 
             case .notModified:
@@ -423,7 +442,7 @@ internal actor ProfileService: ProfileServiceProtocol {
                       cached.locale == locale else {
                     throw NuxieNetworkError.invalidResponse
                 }
-                guard claimProfileGeneration(generation) else {
+                guard isCurrentAdmission(generation, distinctId: distinctId) else {
                     LogDebug("Discarding stale profile generation \(generation)")
                     return cached.response
                 }
@@ -435,12 +454,16 @@ internal actor ProfileService: ProfileServiceProtocol {
                     validator: validator,
                     locale: locale
                 )
-                cachedProfile = refreshed
                 do {
                     try await diskCache.store(refreshed, forKey: distinctId)
                 } catch {
                     LogWarning("Failed to revalidate disk cache: \(error)")
                 }
+                guard isCurrentAdmission(generation, distinctId: distinctId) else {
+                    LogDebug("Discarding stale profile generation \(generation) after revalidation")
+                    return cached.response
+                }
+                cachedProfile = refreshed
                 startRefreshTimer()
                 LogInfo("Cached profile revalidated (locale: \(locale))")
                 return refreshed.response
@@ -465,54 +488,107 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// An unauthentic signed disk snapshot is not a usable offline fallback.
     /// Remove it before fetching so later startup readers cannot repeatedly
     /// encounter the same poison entry or observe stale release authority.
-    private func discardInvalidCachedProfileAndRefresh(distinctId: String) async {
+    private func discardInvalidCachedProfileAndRefresh(
+        distinctId: String,
+        generation: UInt64
+    ) async {
         await diskCache.remove(forKey: distinctId)
-        guard identityService.getDistinctId() == distinctId else { return }
+        guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
         cachedProfile = nil
-        effectiveExperienceReferences = []
-        activeExperienceReferences = []
-        await experienceService.clearCache()
+        triggerAdmission = nil
+        let clearedReleases = try? await experienceService.prepareReleaseProfile(nil)
+        guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
+        if let clearedReleases {
+            _ = try? await experienceService.commitReleaseProfile(
+                clearedReleases,
+                generation: generation
+            )
+        }
+        guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
+        _ = await segmentService.replaceSnapshot(
+            .empty,
+            definitions: [],
+            for: distinctId,
+            profileGeneration: generation
+        )
+        guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
         await refreshInBackground(distinctId: distinctId)
     }
 
-    /// Update both memory and disk cache (write-through)
-    private func updateCache(
-        profile: ProfileResponse,
-        distinctId: String,
-        validator: ProfileCacheValidator?,
-        locale: String,
-        generation: UInt64
+    /// Stages every suspending dependency before publishing the in-memory
+    /// profile. Generation-stamped collaborators reject late older commits;
+    /// the final synchronous block is the sole observable admission point.
+    private func admitProfile(
+        _ item: CachedProfile,
+        generation: UInt64,
+        persistToDisk: Bool
     ) async throws -> Bool {
-        let item = CachedProfile(
-            response: profile,
-            distinctId: distinctId,
-            cachedAt: dateProvider.now(),
-            validator: validator,
-            locale: locale
-        )
+        let profile = item.response
+        let distinctId = item.distinctId
+        guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
 
-        let authoritative = try await experienceService.replaceReleaseProfile(profile.releases)
-        guard generation == latestAppliedGeneration else { return false }
+        let prepared = try await experienceService.prepareReleaseProfile(profile.releases)
+        guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+
+        if persistToDisk {
+            do {
+                try await diskCache.store(item, forKey: distinctId)
+                LogDebug("Updated disk cache for \(NuxieLogger.shared.logDistinctID(distinctId))")
+            } catch {
+                LogWarning("Failed to update disk cache: \(error)")
+            }
+            guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+        }
+
+        let authoritative = try await experienceService.commitReleaseProfile(
+            prepared,
+            generation: generation
+        )
+        guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+
+        let installedMembership = await segmentService.replaceSnapshot(
+            profile.segmentMemberships,
+            definitions: profile.segments,
+            for: distinctId,
+            profileGeneration: generation
+        )
+        guard installedMembership,
+              isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+
+        if let userProps = profile.userProperties {
+            let properties = Dictionary(uniqueKeysWithValues: userProps.map { ($0.key, $0.value.value) })
+            guard identityService.setUserProperties(
+                properties,
+                ifCurrentDistinctIdMatches: distinctId
+            ) else { return false }
+            LogInfo("Updated \(properties.count) user properties from server")
+        }
+
+        guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
         let nextEffective = authoritative ?? []
-        effectiveExperienceReferences = nextEffective
-        activeExperienceReferences = activeReferences(
+        let nextActive = activeReferences(
             in: profile,
             authenticated: authoritative
         )
-        // Update memory immediately
-        self.cachedProfile = item
+        triggerAdmission = ProfileTriggerAdmission(
+            effectiveExperienceReferences: nextEffective,
+            activeExperienceReferences: nextActive,
+            userProperties: identityService.getUserProperties().mapValues(AnyCodable.init),
+            segmentMemberships: profile.segmentMemberships.filtered(to: profile.segments)
+        )
+        cachedProfile = item
         LogDebug("Updated memory cache for \(NuxieLogger.shared.logDistinctID(distinctId))")
-        
-        // Write to disk (awaited to keep cache state consistent)
-        do {
-            try await diskCache.store(item, forKey: distinctId)
-            LogDebug("Updated disk cache for \(NuxieLogger.shared.logDistinctID(distinctId))")
-        } catch {
-            LogWarning("Failed to update disk cache: \(error)")
-        }
-        
-        // Start refresh timer
+        LogInfo("Admitted segment membership snapshot for user \(NuxieLogger.shared.logDistinctID(distinctId))")
         startRefreshTimer()
+
+        if let facts = profile.facts, !facts.isEmpty {
+            await eventLog.commitServerFacts(facts, distinctId: distinctId)
+            guard isCurrentAdmission(generation, distinctId: distinctId) else { return true }
+        }
+        if let mailbox = profile.mailbox, !mailbox.isEmpty {
+            await journeyMailboxHandler?(mailbox, distinctId)
+            guard isCurrentAdmission(generation, distinctId: distinctId) else { return true }
+        }
         return true
     }
 
@@ -567,7 +643,7 @@ internal actor ProfileService: ProfileServiceProtocol {
               dateProvider.timeIntervalSince(cachedProfile.cachedAt) < cacheTTL else {
             return nil
         }
-        return effectiveExperienceReferences
+        return triggerAdmission?.effectiveExperienceReferences
     }
 
     func getActiveExperienceReferences(
@@ -579,14 +655,26 @@ internal actor ProfileService: ProfileServiceProtocol {
               dateProvider.timeIntervalSince(cachedProfile.cachedAt) < cacheTTL else {
             return nil
         }
-        return activeExperienceReferences
+        return triggerAdmission?.activeExperienceReferences
+    }
+
+    func getTriggerAdmission(
+        distinctId: String
+    ) async -> ProfileTriggerAdmission? {
+        await awaitInitialDiskLoad()
+        guard let cachedProfile,
+              cachedProfile.distinctId == distinctId,
+              dateProvider.timeIntervalSince(cachedProfile.cachedAt) < cacheTTL else {
+            return nil
+        }
+        return triggerAdmission
     }
 
     func clearCache(distinctId: String) async {
+        _ = beginProfileRequest()
         // Clear memory
         cachedProfile = nil
-        effectiveExperienceReferences = []
-        activeExperienceReferences = []
+        triggerAdmission = nil
         
         // Clear disk
         await diskCache.remove(forKey: distinctId)
@@ -599,10 +687,10 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     func clearAllCache() async {
+        _ = beginProfileRequest()
         // Clear memory
         cachedProfile = nil
-        effectiveExperienceReferences = []
-        activeExperienceReferences = []
+        triggerAdmission = nil
         
         // Clear disk
         await diskCache.clearAll()
@@ -649,7 +737,11 @@ internal actor ProfileService: ProfileServiceProtocol {
         let distinctId = identityService.getDistinctId()
         guard isFresh(cached) else {
             LogDebug("Discarding expired resident profile before refresh")
-            await discardInvalidCachedProfileAndRefresh(distinctId: distinctId)
+            let generation = beginProfileRequest()
+            await discardInvalidCachedProfileAndRefresh(
+                distinctId: distinctId,
+                generation: generation
+            )
             return
         }
         
@@ -693,65 +785,75 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Handle user change - clear old cache and load new
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
         LogInfo("User changed from \(NuxieLogger.shared.logDistinctID(oldDistinctId)) to \(NuxieLogger.shared.logDistinctID(newDistinctId))")
+        let generation = beginProfileRequest()
+
+        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+        cachedProfile = nil
+        triggerAdmission = nil
+        refreshTimer?.cancel()
+        refreshTimer = nil
 
         // Profile admission owns the membership read snapshot. Clear the old identity before
         // attempting disk or network admission for the replacement identity.
-        await segmentService.clearSnapshot(for: oldDistinctId)
-        
-        // Clear memory cache
-        cachedProfile = nil
-        
-        // Cancel refresh timer
-        refreshTimer?.cancel()
-        refreshTimer = nil
-        
+        _ = await segmentService.replaceSnapshot(
+            .empty,
+            definitions: [],
+            for: newDistinctId,
+            profileGeneration: generation
+        )
+        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+
         // Clear old user's disk cache
         await diskCache.remove(forKey: oldDistinctId)
+        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
 
-        await experienceService.clearCache()
+        let clearedReleases = try? await experienceService.prepareReleaseProfile(nil)
+        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+        if let clearedReleases {
+            _ = try? await experienceService.commitReleaseProfile(
+                clearedReleases,
+                generation: generation
+            )
+        }
+        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
         
         // Try to load new user's cache from disk
         if let cached = await diskCache.retrieve(forKey: newDistinctId, allowStale: true) {
+            guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
             guard isFresh(cached) else {
                 LogDebug("Discarding expired cached profile before user-change admission")
-                await discardInvalidCachedProfileAndRefresh(distinctId: newDistinctId)
+                await discardInvalidCachedProfileAndRefresh(
+                    distinctId: newDistinctId,
+                    generation: generation
+                )
                 return
             }
-            let authoritative: [ExperienceReference]?
             do {
-                authoritative = try await experienceService.replaceReleaseProfile(
-                    cached.response.releases
+                let admitted = try await admitProfile(
+                    cached,
+                    generation: generation,
+                    persistToDisk: false
                 )
+                guard admitted else { return }
             } catch {
                 LogError("Cached release profile authentication failed: \(error)")
-                if identityService.getDistinctId() == newDistinctId {
-                    await experienceService.clearCache()
-                }
-                await discardInvalidCachedProfileAndRefresh(distinctId: newDistinctId)
+                guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+                await discardInvalidCachedProfileAndRefresh(
+                    distinctId: newDistinctId,
+                    generation: generation
+                )
                 return
             }
-            effectiveExperienceReferences = authoritative ?? []
-            activeExperienceReferences = activeReferences(
-                in: cached.response,
-                authenticated: authoritative
-            )
-            self.cachedProfile = cached
             LogDebug("Loaded new user's profile from disk")
-
-            let generation = beginProfileRequest()
-            _ = claimProfileGeneration(generation)
-            await handleProfileUpdate(
-                cached.response,
-                for: newDistinctId,
-                generation: generation
-            )
             
             // Refresh if stale
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
             if age > backgroundRefreshAge {
+                guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
                 await refreshInBackground(distinctId: newDistinctId)
             }
         } else {
+            guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
             // No cache for new user, fetch fresh
             await refreshInBackground(distinctId: newDistinctId)
         }
@@ -768,53 +870,14 @@ internal actor ProfileService: ProfileServiceProtocol {
         dateProvider.timeIntervalSince(cached.cachedAt) < cacheTTL
     }
     
-    private func handleProfileUpdate(
-        _ profile: ProfileResponse,
-        for distinctId: String,
-        generation: UInt64? = nil
-    ) async {
-        guard generation == nil || generation == latestAppliedGeneration else {
-            LogDebug("Discarding stale admitted profile generation \(generation ?? 0)")
-            return
-        }
-        
-        // Update user properties from server if present
-        if let userProps = profile.userProperties {
-            var propsDict: [String: Any] = [:]
-            for (k, v) in userProps { propsDict[k] = v.value }
-            identityService.setUserProperties(propsDict)
-            LogInfo("Updated \(propsDict.count) user properties from server")
-        }
-        
-        guard generation == nil || generation == latestAppliedGeneration else {
-            LogDebug("Discarding stale segment membership generation \(generation ?? 0)")
-            return
-        }
-        await segmentService.replaceSnapshot(
-            profile.segmentMemberships,
-            definitions: profile.segments,
-            for: distinctId
-        )
-        LogInfo("Admitted segment membership snapshot for user \(NuxieLogger.shared.logDistinctID(distinctId))")
-
-        if let facts = profile.facts, !facts.isEmpty {
-            await eventLog.commitServerFacts(facts, distinctId: distinctId)
-        }
-
-        if let mailbox = profile.mailbox, !mailbox.isEmpty {
-            await journeyMailboxHandler?(mailbox, distinctId)
-        }
-    }
-
     private func beginProfileRequest() -> UInt64 {
         nextProfileGeneration &+= 1
         return nextProfileGeneration
     }
 
-    private func claimProfileGeneration(_ generation: UInt64) -> Bool {
-        guard generation >= latestAppliedGeneration else { return false }
-        latestAppliedGeneration = generation
-        return true
+    private func isCurrentAdmission(_ generation: UInt64, distinctId: String) -> Bool {
+        generation == nextProfileGeneration
+            && identityService.getDistinctId() == distinctId
     }
 
 }

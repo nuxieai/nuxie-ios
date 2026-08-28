@@ -8,6 +8,15 @@ protocol SegmentServiceProtocol: AnyObject, Sendable {
         definitions: [Segment],
         for distinctId: String
     ) async
+    /// Installs a profile-owned snapshot only if its generation is not older
+    /// than the snapshot already admitted by that ProfileService.
+    @discardableResult
+    func replaceSnapshot(
+        _ snapshot: SegmentMembershipSeed,
+        definitions: [Segment],
+        for distinctId: String,
+        profileGeneration: UInt64
+    ) async -> Bool
     /// Returns the admitted snapshot only when it belongs to the requested identity.
     func snapshot(for distinctId: String) async -> SegmentMembershipSeed
     /// Clears the admitted snapshot when it belongs to this identity.
@@ -18,6 +27,20 @@ protocol SegmentServiceProtocol: AnyObject, Sendable {
     func enteredAt(_ segmentId: String) async -> Date?
 }
 
+extension SegmentServiceProtocol {
+    @discardableResult
+    func replaceSnapshot(
+        _ snapshot: SegmentMembershipSeed,
+        definitions: [Segment],
+        for distinctId: String,
+        profileGeneration: UInt64
+    ) async -> Bool {
+        _ = profileGeneration
+        await replaceSnapshot(snapshot, definitions: definitions, for: distinctId)
+        return true
+    }
+}
+
 /// Exposes only the membership value admitted with the current profile.
 ///
 /// There is deliberately no independent persistence, expiry policy, evaluator, or change
@@ -25,6 +48,7 @@ protocol SegmentServiceProtocol: AnyObject, Sendable {
 actor SegmentService: SegmentServiceProtocol {
     private var activeDistinctId: String?
     private var admittedSnapshot = SegmentMembershipSeed.empty
+    private var latestProfileGeneration: UInt64 = 0
 
     func replaceSnapshot(
         _ snapshot: SegmentMembershipSeed,
@@ -33,6 +57,19 @@ actor SegmentService: SegmentServiceProtocol {
     ) async {
         activeDistinctId = distinctId
         admittedSnapshot = snapshot.filtered(to: definitions)
+    }
+
+    func replaceSnapshot(
+        _ snapshot: SegmentMembershipSeed,
+        definitions: [Segment],
+        for distinctId: String,
+        profileGeneration: UInt64
+    ) async -> Bool {
+        guard profileGeneration >= latestProfileGeneration else { return false }
+        latestProfileGeneration = profileGeneration
+        activeDistinctId = distinctId
+        admittedSnapshot = snapshot.filtered(to: definitions)
+        return true
     }
 
     func snapshot(for distinctId: String) async -> SegmentMembershipSeed {
@@ -58,7 +95,7 @@ actor SegmentService: SegmentServiceProtocol {
 extension SegmentMembershipSeed {
     static let empty = SegmentMembershipSeed(evaluatedAt: nil, memberships: [])
 
-    fileprivate func filtered(to definitions: [Segment]) -> SegmentMembershipSeed {
+    func filtered(to definitions: [Segment]) -> SegmentMembershipSeed {
         let deliveredIds = Set(definitions.map(\.id))
         var earliestById: [String: SeededSegmentMembership] = [:]
         for membership in memberships where deliveredIds.contains(membership.segmentId) {

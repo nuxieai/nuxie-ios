@@ -161,13 +161,14 @@ extension IRRuntime {
     responseSession: ResponseSessionSnapshot? = nil,
     distinctId: String? = nil,
     additionalEvents: [StoredEvent] = [],
+    user userProps: IRUserProps? = nil,
     segments segmentQueries: IRSegmentQueries? = nil
   ) -> Config {
     let evaluationNow = now ?? dateProvider.now()
     return Config(
       now: evaluationNow,
       event: event,
-      user: IRUserPropsAdapter(identityService: requireWired(wiredIdentity)),
+      user: userProps ?? IRUserPropsAdapter(identityService: requireWired(wiredIdentity)),
       events: IREventQueriesAdapter(
         eventLog: requireWired(wiredEventLog),
         distinctId: distinctId,

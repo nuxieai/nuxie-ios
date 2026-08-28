@@ -273,6 +273,36 @@ final class IRPersistenceTests: AsyncSpec {
                 expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
             }
 
+            it("rejects a pre-membership v3 snapshot through the version gate") {
+                let journey = JourneySnapshot(
+                    id: "journey_pre_membership_v3",
+                    experience: makeExperience(),
+                    distinctId: "user_1",
+                    now: Date()
+                )
+                let store = JourneyStore(
+                    customStoragePath: tempRoot,
+                    dateProvider: SystemDateProvider()
+                )
+                try store.saveJourney(journey)
+                let file = try onlyActiveJourneyFile()
+                var object = try JSONSerialization.jsonObject(
+                    with: Data(contentsOf: file)
+                ) as! [String: Any]
+                object["stateVersion"] = 3
+                object.removeValue(forKey: "segmentMemberships")
+                try JSONSerialization.data(withJSONObject: object).write(
+                    to: file,
+                    options: .atomic
+                )
+
+                expect(store.loadJourney(id: journey.id)).to(beNil())
+                expect(store.loadActiveJourneys()).to(beEmpty())
+                // Unsupported versions are retained for a future compatible
+                // SDK, proving decoding never classified this as corruption.
+                expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
+            }
+
             it("rejects versionless journey snapshots") {
                 let journey = JourneySnapshot(
                     id: "journey_versionless",

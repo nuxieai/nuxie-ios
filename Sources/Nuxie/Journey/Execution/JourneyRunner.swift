@@ -209,7 +209,6 @@ actor JourneyRunner {
     // Constructor-injected collaborators.
     private let eventLog: JourneyRunnerEventAccess
     private let identityService: IdentityServiceProtocol
-    private let segmentService: SegmentServiceProtocol
     private let featureService: FeatureServiceProtocol
     private let profileService: ProfileServiceProtocol
     private let apiClient: ResponseWriting
@@ -335,7 +334,6 @@ actor JourneyRunner {
         viewController: ExperienceViewController? = nil,
         eventLog: JourneyRunnerEventAccess,
         identity: IdentityServiceProtocol,
-        segments: SegmentServiceProtocol,
         features: FeatureServiceProtocol,
         profile: ProfileServiceProtocol,
         apiClient: ResponseWriting,
@@ -356,7 +354,6 @@ actor JourneyRunner {
         self.experience = experience
         self.eventLog = eventLog
         self.identityService = identity
-        self.segmentService = segments
         self.featureService = features
         self.profileService = profile
         self.apiClient = apiClient

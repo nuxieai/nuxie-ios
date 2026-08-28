@@ -50,8 +50,6 @@ private actor FlowShownBeforeJourneyDecisionService: JourneyServiceProtocol {
         return [.started(journey)]
     }
 
-    func handleSegmentChange(distinctId: String, segments: Set<String>) async {}
-
     func getActiveJourneys(for distinctId: String) async -> [Journey] {
         []
     }

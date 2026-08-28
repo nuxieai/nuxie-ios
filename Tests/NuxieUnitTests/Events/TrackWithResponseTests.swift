@@ -1360,8 +1360,6 @@ private final class RoutingJourneyStartService: JourneyServiceProtocol {
         []
     }
 
-    func handleSegmentChange(distinctId: String, segments: Set<String>) async {}
-
     func getActiveJourneys(for distinctId: String) async -> [Journey] {
         []
     }

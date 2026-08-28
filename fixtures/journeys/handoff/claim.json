@@ -5,9 +5,9 @@
     "experienceId": "experience-1",
     "experienceVersion": "flow-version-1",
     "epoch": 4,
-    "stateVersion": 3,
+    "stateVersion": 4,
     "envelope": {
-      "stateVersion": 3,
+      "stateVersion": 4,
       "context": {
         "source": "server"
       },
@@ -60,7 +60,7 @@
           "epoch": 0,
           "direction": "device_to_server",
           "envelope": {
-            "stateVersion": 3,
+            "stateVersion": 4,
             "context": {},
             "executionState": {
               "plane": "device",
@@ -99,7 +99,7 @@
           "epoch": 1,
           "direction": "device_to_server",
           "envelope": {
-            "stateVersion": 3,
+            "stateVersion": 4,
             "context": {},
             "executionState": {
               "plane": "device",

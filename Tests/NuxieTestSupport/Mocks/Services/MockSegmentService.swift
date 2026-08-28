@@ -5,6 +5,7 @@ import Foundation
 public actor MockSegmentService: SegmentServiceProtocol {
     private var activeDistinctId: String?
     private var admittedSnapshot = SegmentMembershipSeed.empty
+    private var latestProfileGeneration: UInt64 = 0
 
     public init() {}
 
@@ -21,6 +22,18 @@ public actor MockSegmentService: SegmentServiceProtocol {
                 deliveredIds.contains($0.segmentId)
             }
         )
+    }
+
+    public func replaceSnapshot(
+        _ snapshot: SegmentMembershipSeed,
+        definitions: [Segment],
+        for distinctId: String,
+        profileGeneration: UInt64
+    ) async -> Bool {
+        guard profileGeneration >= latestProfileGeneration else { return false }
+        latestProfileGeneration = profileGeneration
+        await replaceSnapshot(snapshot, definitions: definitions, for: distinctId)
+        return true
     }
 
     public func snapshot(for distinctId: String) async -> SegmentMembershipSeed {
@@ -44,6 +57,7 @@ public actor MockSegmentService: SegmentServiceProtocol {
     public func reset() async {
         activeDistinctId = nil
         admittedSnapshot = .empty
+        latestProfileGeneration = 0
     }
 
     public func setMembership(_ segmentId: String, isMember: Bool) async {

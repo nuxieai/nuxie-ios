@@ -7,9 +7,9 @@
     "experienceId": "experience-1",
     "experienceVersion": "flow-version-1",
     "epoch": 4,
-    "stateVersion": 3,
+    "stateVersion": 4,
     "envelope": {
-      "stateVersion": 3,
+      "stateVersion": 4,
       "context": {
         "answer": 3
       },

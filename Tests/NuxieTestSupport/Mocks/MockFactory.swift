@@ -125,6 +125,7 @@ public final class MockFactory: @unchecked Sendable {
         presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace(),
         restoredPresentationAttempt: ExperiencePresentationAttempt? = nil,
         responseWriter: ResponseWriting? = nil,
+        segments suppliedSegments: SegmentServiceProtocol? = nil,
         features suppliedFeatures: FeatureServiceProtocol? = nil,
         featureInfo suppliedFeatureInfo: FeatureInfo? = nil
     ) -> JourneyService {
@@ -139,10 +140,11 @@ public final class MockFactory: @unchecked Sendable {
             featureInfo: featureInfo,
             cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
+        let segments = suppliedSegments ?? segmentService
         irRuntime.wire(
             identity: identityService,
             eventLog: eventLog,
-            segments: segmentService,
+            segments: segments,
             features: features
         )
         let goalEvaluator = GoalEvaluator(
@@ -157,7 +159,7 @@ public final class MockFactory: @unchecked Sendable {
             experiences: experienceService,
             profile: profileService,
             identity: identityService,
-            segments: segmentService,
+            segments: segments,
             features: features,
             experiencePresentation: experiencePresentation ?? experiencePresentationService,
             eventLog: eventLog,

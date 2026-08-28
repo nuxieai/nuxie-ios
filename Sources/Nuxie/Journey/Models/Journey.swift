@@ -754,7 +754,7 @@ struct JourneyExecutionState: Codable, Sendable {
 /// persistence.
 struct JourneyStateEnvelope: Codable, Sendable {
     /// Latest state-envelope schema version understood by this SDK.
-    public static let currentVersion = 3
+    public static let currentVersion = 4
 
     /// Schema version checked before applying the envelope.
     public let stateVersion: Int

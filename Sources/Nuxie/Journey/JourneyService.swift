@@ -608,11 +608,19 @@ actor JourneyService: JourneyServiceProtocol {
       return nil
     }
 
+    let segmentMemberships: SegmentMembershipSeed
+    if let admission = await profileService.getTriggerAdmission(distinctId: distinctId) {
+      segmentMemberships = admission.segmentMemberships
+    } else {
+      segmentMemberships = await segmentService.snapshot(for: distinctId)
+    }
+
     return await startJourneyInternal(
       for: experience,
       distinctId: distinctId,
       originEventId: originEventId,
-      presentationAttempt: nil
+      presentationAttempt: nil,
+      segmentMemberships: segmentMemberships
     )
   }
 
@@ -620,10 +628,15 @@ actor JourneyService: JourneyServiceProtocol {
     for experience: Experience,
     distinctId: String,
     originEventId: String? = nil,
-    presentationAttempt: ExperiencePresentationAttempt?
+    presentationAttempt: ExperiencePresentationAttempt?,
+    segmentMemberships: SegmentMembershipSeed
   ) async -> Journey? {
     guard !isShutDown else { return nil }
-    let journey = await makeEnrollmentJourney(experience: experience, distinctId: distinctId)
+    let journey = makeEnrollmentJourney(
+      experience: experience,
+      distinctId: distinctId,
+      segmentMemberships: segmentMemberships
+    )
     if let originEventId {
       await journey.setContext("_origin_event_id", value: AnyCodable(originEventId), at: dateProvider.now())
     }
@@ -813,8 +826,11 @@ actor JourneyService: JourneyServiceProtocol {
         recorder: presentationTrace
       )
     }
+    guard let admission = await profileService.getTriggerAdmission(
+      distinctId: event.distinctId
+    ) else { return requiresDurableReceipt ? nil : [] }
     guard let experiences = await getAllExperiences(
-      for: event.distinctId,
+      references: admission.effectiveExperienceReferences,
       presentationTraceContext: traceContext,
       requireCompleteCatalog: requiresDurableReceipt
     ) else { return requiresDurableReceipt ? nil : [] }
@@ -822,7 +838,8 @@ actor JourneyService: JourneyServiceProtocol {
     let results = await startJourneysMatchingEvent(
       event,
       experiences: experiences,
-      presentationAttempt: presentationAttempt
+      presentationAttempt: presentationAttempt,
+      admissionSnapshot: admission
     )
     guard !isShutDown else { return [] }
     let startedJourneyIDs = Set(results.compactMap { result -> String? in
@@ -3589,7 +3606,6 @@ actor JourneyService: JourneyServiceProtocol {
         capturesSendEvents: controlExperience.authenticatedReleaseID != nil,
         eventLog: eventLog,
         identity: identityService,
-        segments: segmentService,
         features: featureService,
         profile: profileService,
         apiClient: api,
@@ -5189,14 +5205,23 @@ actor JourneyService: JourneyServiceProtocol {
   private func startJourneysMatchingEvent(
     _ event: NuxieEvent,
     experiences: [Experience],
-    presentationAttempt: ExperiencePresentationAttempt?
+    presentationAttempt: ExperiencePresentationAttempt?,
+    admissionSnapshot: ProfileTriggerAdmission? = nil
   ) async -> [JourneyTriggerResult] {
     var results: [JourneyTriggerResult] = []
-    let activeReferences = Set(
-      await profileService.getActiveExperienceReferences(
-        distinctId: event.distinctId
-      ) ?? []
-    )
+    let admission: ProfileTriggerAdmission
+    if let admissionSnapshot {
+      admission = admissionSnapshot
+    } else if let current = await profileService.getTriggerAdmission(
+      distinctId: event.distinctId
+    ) {
+      admission = current
+    } else {
+      return []
+    }
+    let segmentMemberships = admission.segmentMemberships
+    let userProperties = IRUserPropertySnapshot(properties: admission.userProperties)
+    let activeReferences = Set(admission.activeExperienceReferences)
     guard !isShutDown else { return [] }
 
     for experience in experiences {
@@ -5204,7 +5229,12 @@ actor JourneyService: JourneyServiceProtocol {
         experienceId: experience.id,
         versionId: experience.versionId
       )) else { continue }
-      guard await shouldTriggerFromEvent(experience: experience, event: event) else { continue }
+      guard await shouldTriggerFromEvent(
+        experience: experience,
+        event: event,
+        userProperties: userProperties,
+        segmentMemberships: segmentMemberships
+      ) else { continue }
       guard !isShutDown else { return results }
 
       let admissionKey = AdmissionKey(
@@ -5228,7 +5258,8 @@ actor JourneyService: JourneyServiceProtocol {
         for: experience,
         distinctId: event.distinctId,
         originEventId: event.id,
-        presentationAttempt: presentationAttempt
+        presentationAttempt: presentationAttempt,
+        segmentMemberships: segmentMemberships
       ) {
         results.append(.started(journey))
       } else {
@@ -5703,6 +5734,18 @@ actor JourneyService: JourneyServiceProtocol {
     guard let references = await profileService.getEffectiveExperienceReferences(
       distinctId: distinctId
     ) else { return nil }
+    return await getAllExperiences(
+      references: references,
+      presentationTraceContext: presentationTraceContext,
+      requireCompleteCatalog: requireCompleteCatalog
+    )
+  }
+
+  private func getAllExperiences(
+    references: [ExperienceReference],
+    presentationTraceContext: ExperiencePresentationTraceContext? = nil,
+    requireCompleteCatalog: Bool = false
+  ) async -> [Experience]? {
     var experiences: [Experience] = []
     for reference in references {
       if let experience = await loadAuthenticatedExperience(
@@ -5741,7 +5784,12 @@ actor JourneyService: JourneyServiceProtocol {
 
   // MARK: - Trigger Evaluation
 
-  private func shouldTriggerFromEvent(experience: Experience, event: NuxieEvent) async -> Bool {
+  private func shouldTriggerFromEvent(
+    experience: Experience,
+    event: NuxieEvent,
+    userProperties: IRUserPropertySnapshot,
+    segmentMemberships: SegmentMembershipSeed
+  ) async -> Bool {
     guard let trigger = experience.trigger else {
       return false
     }
@@ -5749,13 +5797,23 @@ actor JourneyService: JourneyServiceProtocol {
     case .event(let config):
       guard config.eventName == event.name else { return false }
       if let condition = config.condition {
-        return await evalConditionIR(condition, event: event)
+        return await evalConditionIR(
+          condition,
+          event: event,
+          userProperties: userProperties,
+          segmentMemberships: segmentMemberships
+        )
       }
       return true
     }
   }
 
-  private func evalConditionIR(_ envelope: IREnvelope?, event: NuxieEvent? = nil) async -> Bool {
+  private func evalConditionIR(
+    _ envelope: IREnvelope?,
+    event: NuxieEvent? = nil,
+    userProperties: IRUserPropertySnapshot,
+    segmentMemberships: SegmentMembershipSeed
+  ) async -> Bool {
     guard let envelope else { return true }
 
     // engine_min gate: an envelope compiled for a newer engine is skipped
@@ -5765,7 +5823,11 @@ actor JourneyService: JourneyServiceProtocol {
       return false
     }
 
-    let config = irRuntime.standardConfig(event: event)
+    let config = irRuntime.standardConfig(
+      event: event,
+      user: userProperties,
+      segments: segmentMemberships
+    )
 
     return await irRuntime.eval(envelope, config)
   }
@@ -5833,8 +5895,11 @@ actor JourneyService: JourneyServiceProtocol {
     await discardLocalJourney(journey, terminalStatus: .cancelled)
   }
 
-  private func makeEnrollmentJourney(experience: Experience, distinctId: String) async -> Journey {
-    let segmentMemberships = await segmentService.snapshot(for: distinctId)
+  private func makeEnrollmentJourney(
+    experience: Experience,
+    distinctId: String,
+    segmentMemberships: SegmentMembershipSeed
+  ) -> Journey {
     return Journey(
       experience: experience,
       distinctId: distinctId,

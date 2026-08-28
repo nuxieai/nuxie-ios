@@ -3804,7 +3804,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 experience: base,
                 eventLog: mocks.eventLog,
                 identity: mocks.identityService,
-                segments: mocks.segmentService,
                 features: features,
                 profile: mocks.profileService,
                 apiClient: mocks.nuxieApi,

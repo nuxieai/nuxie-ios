@@ -3,9 +3,36 @@ import Foundation
 import UIKit
 #endif
 
+struct PreparedExperienceReleaseProfile: Sendable {
+    let profile: ExperienceReleaseProfile?
+    let catalog: AuthenticatedExperienceReleaseCatalog?
+    let references: [ExperienceReference]?
+
+    init(
+        profile: ExperienceReleaseProfile?,
+        catalog: AuthenticatedExperienceReleaseCatalog?,
+        references: [ExperienceReference]? = nil
+    ) {
+        self.profile = profile
+        self.catalog = catalog
+        self.references = references ?? catalog?.references
+    }
+}
+
 protocol ExperienceServiceProtocol: AnyObject, Sendable {
+    /// Legacy low-level test/qualification entry point. ProfileService uses
+    /// the generation-stamped prepare/commit pair below.
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfile?
+    ) async throws -> [ExperienceReference]?
+
+    func prepareReleaseProfile(
+        _ profile: ExperienceReleaseProfile?
+    ) async throws -> PreparedExperienceReleaseProfile
+
+    func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64
     ) async throws -> [ExperienceReference]?
 
     func fetchExperience(id: String) async throws -> Experience
@@ -104,6 +131,12 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
 }
 
 extension ExperienceServiceProtocol {
+    func replaceReleaseProfile(
+        _ profile: ExperienceReleaseProfile?
+    ) async throws -> [ExperienceReference]? {
+        let prepared = try await prepareReleaseProfile(profile)
+        return try await commitReleaseProfile(prepared, generation: 0)
+    }
     func waitForWarmLoadsToSettle() async {}
     func suspendWarmLoads() async {}
     func onAppDidEnterBackground() async {}
@@ -114,9 +147,19 @@ extension ExperienceServiceProtocol {
     func setProductAuthorityChangeHandler(
         _ handler: @escaping @Sendable () async -> Void
     ) { _ = handler }
-    func replaceReleaseProfile(
+    func prepareReleaseProfile(
         _ profile: ExperienceReleaseProfile?
-    ) async throws -> [ExperienceReference]? { nil }
+    ) async throws -> PreparedExperienceReleaseProfile {
+        PreparedExperienceReleaseProfile(profile: profile, catalog: nil)
+    }
+    func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64
+    ) async throws -> [ExperienceReference]? {
+        _ = prepared
+        _ = generation
+        return nil
+    }
     func fetchExperience(
         experienceId: String,
         versionId: String,
@@ -251,6 +294,19 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         if let memoryPressureObserver {
             NotificationCenter.default.removeObserver(memoryPressureObserver)
         }
+    }
+
+    func prepareReleaseProfile(
+        _ profile: ExperienceReleaseProfile?
+    ) async throws -> PreparedExperienceReleaseProfile {
+        try await experienceLoader.prepareReleaseProfile(profile)
+    }
+
+    func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64
+    ) async throws -> [ExperienceReference]? {
+        try await experienceLoader.commitReleaseProfile(prepared, generation: generation)
     }
 
     func replaceReleaseProfile(
