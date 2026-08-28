@@ -3213,7 +3213,108 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         ])
     }
 
-    func testRouterUsesSignedEventNameForControlsAndNeverInfersFromActionIdPayload() {
+    func testRouterRoutesGeneratedInteractionToItsExactSignedControl() throws {
+        let (actionId, generated) = try generatedControlFixture()
+        let ordinary = ExperienceInteractiveReportedEvent(
+            localIndex: 1, coreType: 128, name: "analytics_event", url: "",
+            target: "", delay: 0, properties: generated.properties
+        )
+        var router = ExperienceInteractiveEffectRouter()
+        let effects = router.project(
+            reportedEvents: [generated, ordinary], viewModelChanges: [],
+            hostCommands: [], controlActionIds: [actionId],
+            declaredEventNames: [], correlationID: 42
+        )
+        XCTAssertEqual(effects, [
+            ExperienceInteractiveEffect(
+                sequence: 0, correlationID: 42,
+                kind: .controlAction(actionId: actionId, event: generated)
+            ),
+            ExperienceInteractiveEffect(
+                sequence: 1, correlationID: 42, kind: .reportedEvent(ordinary)
+            ),
+        ])
+        XCTAssertEqual(router.nextSequence, 2)
+    }
+
+    func testRouterRejectsMalformedOrUnsignedGeneratedControlsWithoutDroppingSiblings() throws {
+        let (actionId, generated) = try generatedControlFixture()
+        var malformed = [[ExperienceInteractiveField]]()
+        for key in ["nuxieTrigger", "actionId", "componentId", "instanceId"] {
+            if key != "instanceId" {
+                malformed.append(generated.properties.filter { $0.key != key })
+            }
+            for value in [ExperienceInteractiveValue.bytes(Data()), .number(1), .bytes(Data([0xff]))] {
+                malformed.append(generated.properties.map {
+                    $0.key == key ? ExperienceInteractiveField(key: key, value: value) : $0
+                })
+            }
+            malformed.append(generated.properties + [
+                ExperienceInteractiveField(key: key, value: .string("duplicate"))
+            ])
+        }
+        malformed.append(generated.properties.map {
+            $0.key == "actionId"
+                ? ExperienceInteractiveField(key: $0.key, value: .string("unsigned")) : $0
+        })
+        var candidates = malformed.map {
+            ExperienceInteractiveReportedEvent(
+                localIndex: 0, coreType: 128, name: generated.name, url: "",
+                target: "", delay: 0, properties: $0
+            )
+        }
+        for (coreType, url, target) in [(UInt32(131), "", ""), (128, "https://example.com", ""), (128, "", "_blank")] {
+            candidates.append(ExperienceInteractiveReportedEvent(
+                localIndex: 0, coreType: coreType, name: generated.name,
+                url: url, target: target, delay: 0, properties: generated.properties
+            ))
+        }
+        let sibling = ExperienceInteractiveReportedEvent(
+            localIndex: 1, coreType: 128, name: "after", url: "", target: "",
+            delay: 0, properties: []
+        )
+        for candidate in candidates {
+            var router = ExperienceInteractiveEffectRouter()
+            let effects = router.project(
+                reportedEvents: [candidate, sibling], viewModelChanges: [],
+                hostCommands: [], controlActionIds: [actionId],
+                declaredEventNames: [], correlationID: 7
+            )
+            XCTAssertEqual(effects.count, 2)
+            guard case .rejectedHostCommand(let name, _) = effects[0].kind else {
+                XCTFail("Malformed generated interaction was not rejected: \(candidate)")
+                continue
+            }
+            XCTAssertEqual(name, generated.name)
+            XCTAssertEqual(effects[1], ExperienceInteractiveEffect(
+                sequence: 1, correlationID: 7, kind: .reportedEvent(sibling)
+            ))
+        }
+    }
+
+    private func generatedControlFixture() throws -> (String, ExperienceInteractiveReportedEvent) {
+        struct Fixture: Decodable {
+            struct Property: Decodable { let key: String; let value: String }
+            let signedActionId: String
+            let eventName: String
+            let properties: [Property]
+        }
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/events/generated-control-routing.json")
+        ))
+        return (fixture.signedActionId, ExperienceInteractiveReportedEvent(
+            localIndex: 0, coreType: 128, name: fixture.eventName, url: "",
+            target: "", delay: 0, properties: fixture.properties.map {
+                // Native event string properties cross the ABI as UTF-8 bytes.
+                ExperienceInteractiveField(key: $0.key, value: .bytes(Data($0.value.utf8)))
+            }
+        ))
+    }
+
+    func testRouterUsesSignedEventNameForControlsAndNeverInfersFromOrdinaryActionIdPayload() {
         var router = ExperienceInteractiveEffectRouter()
         let ordinary = ExperienceInteractiveReportedEvent(
             localIndex: 0,

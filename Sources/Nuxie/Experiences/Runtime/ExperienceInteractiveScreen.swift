@@ -177,7 +177,8 @@ struct ExperienceInteractiveHostCommand: Equatable, Sendable {
 
 enum ExperienceInteractiveEffectKind: Equatable, Sendable {
     /// A signed control invocation is distinguished at the native projection
-    /// boundary by its authored event name, never by an arbitrary payload key.
+    /// boundary by its authored event name or the compiler's reserved generated
+    /// interaction envelope, never by an ordinary event's arbitrary payload key.
     case controlAction(actionId: String, event: ExperienceInteractiveReportedEvent)
     case reportedEvent(ExperienceInteractiveReportedEvent)
     case viewModelChange(ExperienceInteractiveViewModelChange)
@@ -351,11 +352,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
             reportedEvents.count + viewModelChanges.count + hostCommands.count
         )
         staged.append(contentsOf: reportedEvents.map { event in
-            if controlActionIds.contains(event.name) {
-                .controlAction(actionId: event.name, event: event)
-            } else {
-                .reportedEvent(event)
-            }
+            interpret(event, controlActionIds: controlActionIds)
         })
         staged.append(contentsOf: viewModelChanges.map {
             .viewModelChange($0)
@@ -383,6 +380,49 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         }
         nextSequence += UInt64(effects.count)
         return effects
+    }
+
+    private func interpret(
+        _ event: ExperienceInteractiveReportedEvent,
+        controlActionIds: Set<String>
+    ) -> ExperienceInteractiveEffectKind {
+        guard event.name == "Nuxie Interaction" else {
+            return controlActionIds.contains(event.name)
+                ? .controlAction(actionId: event.name, event: event)
+                : .reportedEvent(event)
+        }
+
+        // The publisher's generated listener carries its signed control ID in
+        // this reserved envelope. Do not infer controls from analytics payloads
+        // or let ambiguous property keys reach the downstream dictionary adapter.
+        let keys = event.properties.map(\.key)
+        guard event.coreType == 128, event.url.isEmpty, event.target.isEmpty,
+              Set(keys).count == keys.count else {
+            return .rejectedHostCommand(name: event.name, reason: "invalid generated control envelope")
+        }
+        let fields = Dictionary(uniqueKeysWithValues: event.properties.map { ($0.key, $0.value) })
+        for key in ["nuxieTrigger", "actionId", "componentId"] +
+            (fields["instanceId"] == nil ? [] : ["instanceId"]) {
+            guard let value = Self.generatedIdentityString(fields[key]),
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return .rejectedHostCommand(name: event.name, reason: "invalid generated control identity")
+            }
+        }
+        guard let actionId = Self.generatedIdentityString(fields["actionId"]),
+              controlActionIds.contains(actionId) else {
+            return .rejectedHostCommand(name: event.name, reason: "undeclared generated control action")
+        }
+        return .controlAction(actionId: actionId, event: event)
+    }
+
+    private static func generatedIdentityString(_ value: ExperienceInteractiveValue?) -> String? {
+        // Native string fields are lossless ABI bytes; unlike String(decoding:),
+        // this initializer rejects invalid UTF-8 instead of repairing identity.
+        switch value {
+        case .string(let value): value
+        case .bytes(let value): String(data: value, encoding: .utf8)
+        default: nil
+        }
     }
 
     private func interpret(

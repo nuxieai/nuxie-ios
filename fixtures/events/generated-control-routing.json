@@ -1,0 +1,13 @@
+{
+  "suite": "events/generated-control-routing",
+  "version": 1,
+  "description": "The publisher's reserved native event invokes only its exact signed control. Ordinary events never infer control authority from actionId. Identity fields remain ordered and lossless.",
+  "signedActionId": "experiences_conformance_cta_action",
+  "eventName": "Nuxie Interaction",
+  "properties": [
+    { "key": "nuxieTrigger", "value": "press" },
+    { "key": "actionId", "value": "experiences_conformance_cta_action" },
+    { "key": "componentId", "value": "experiences_conformance_cta" },
+    { "key": "instanceId", "value": "repeat-instance-1" }
+  ]
+}
