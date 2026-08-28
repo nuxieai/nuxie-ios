@@ -247,7 +247,6 @@ final class NuxieCore: @unchecked Sendable {
       segments: segments,
       features: features,
       experiencePresentation: experiencePresentation,
-      featureInfo: featureInfo,
       eventLog: eventLog,
       triggerBroker: triggerBroker,
       dateProvider: dateProvider,
@@ -262,11 +261,7 @@ final class NuxieCore: @unchecked Sendable {
     let triggers = overrides.triggers ?? TriggerService(
       eventLog: eventLog,
       journeys: journeys,
-      features: features,
-      experiencePresentation: experiencePresentation,
-      featureInfo: featureInfo,
       triggerBroker: triggerBroker,
-      sleepProvider: sleepProvider,
       dateProvider: dateProvider,
       presentationTrace: presentationTrace
     )

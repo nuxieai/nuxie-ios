@@ -169,9 +169,9 @@ struct HistoryView: View {
             NuxieSDK.shared.trigger(Constants.eventCSVExportGated, properties: [
                 "entry_count": moodStore.count,
                 "source": "history_toolbar"
-            ]) { [self] update in
-                handleTriggerUpdate(update) {
-                    self.performCSVExport()
+            ]) { update in
+                Task { @MainActor in
+                    handleTriggerUpdate(update)
                 }
             }
         }
@@ -187,7 +187,9 @@ struct HistoryView: View {
             "total_entries": moodStore.count,
             "source": "history_screen"
         ]) { update in
-            handleTriggerUpdate(update)
+            Task { @MainActor in
+                handleTriggerUpdate(update)
+            }
         }
     }
 
@@ -221,28 +223,22 @@ struct HistoryView: View {
     // MARK: - Nuxie Flow Handling
 
     /// Handles the result of a tracked event that may trigger a flow
-    private func handleTriggerUpdate(_ update: TriggerUpdate, onAllowed: (() -> Void)? = nil) {
+    private func handleTriggerUpdate(_ update: TriggerUpdate) {
         switch update {
-        case .featureAccess(let featureAccess):
-            switch featureAccess {
-            case .allowed:
-                onAllowed?()
-            case .denied:
-                errorMessage = "This is a Pro feature"
-                showingError = true
-            case .pending:
-                break
-            }
-        case .decision(let decision):
-            if case .noMatch = decision {
-                errorMessage = "This is a Pro feature"
-                showingError = true
-            }
+        case .decision(.journeyStarted(let experience)):
+            print("[MoodLog] Journey started for experience \(experience.experienceId)")
+        case .decision(.experienceShown(let experience)):
+            print("[MoodLog] Experience shown: \(experience.experienceId)")
+        case .decision(.suppressed(let reason)):
+            print("[MoodLog] Journey suppressed: \(reason)")
+        case .decision(.noMatch):
+            errorMessage = "No upgrade experience is configured for this event."
+            showingError = true
+        case .journey(let journey):
+            print("[MoodLog] Journey \(journey.journeyId) finished: \(journey.exitReason.rawValue)")
         case .error(let error):
             errorMessage = error.message
             showingError = true
-        case .journey:
-            break
         }
     }
 }

@@ -691,7 +691,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         await mocks.resetAll()
         let startBarrier = FacadeTaskStartBarrier()
         let trigger = SuspendingFacadeTrigger(
-            updateBeforeSuspending: .decision(.allowedImmediate)
+            updateBeforeSuspending: .decision(.noMatch)
         )
         let observer = SuspendingTransactionObserver()
         var overrides = mocks.unitTestOverrides()
@@ -726,7 +726,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         await startBarrier.release()
         await trigger.waitUntilStarted()
         let triggerResult = await result.value
-        XCTAssertEqual(triggerResult, .allowed)
+        XCTAssertEqual(triggerResult, .noMatch)
 
         let completedAfterEarlyResult = await completion.isComplete()
         XCTAssertFalse(completedAfterEarlyResult)

@@ -1682,9 +1682,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         let goal = try lifecycle.goal.map(goalConfig)
         let conversionAnchor: String
         switch lifecycle.conversionAnchor {
-        case "journey_start": conversionAnchor = "journey_start"
-        case "last_experience_shown": conversionAnchor = "last_flow_shown"
-        case "last_experience_interaction": conversionAnchor = "last_flow_interaction"
+        case "journey_start", "last_experience_shown", "last_experience_interaction":
+            conversionAnchor = lifecycle.conversionAnchor
         default: throw ExperienceReleaseAcquisitionError.invalidProfileEntry
         }
         let identity = descriptor.identity

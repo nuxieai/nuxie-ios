@@ -1122,9 +1122,9 @@ actor EventLog: EventLogProtocol {
   /// redeliverable no matter what the transport does. A successful `/i/event`
   /// round trip acks the row; a failed round trip leaves it pending, stages
   /// it on the delivery queue, and returns a degraded offline response
-  /// (`gatePlan() == nil`) so callers route journeys/segments from the local
-  /// event and cached config — network failure degrades freshness, never
-  /// function.
+  /// with no server decision fields so callers route journeys/segments from
+  /// the local event and cached config — network failure degrades freshness,
+  /// never function.
   public func trackForTrigger(
     _ event: String,
     properties: sending [String: Any]? = nil,

@@ -32,7 +32,7 @@ final class IRPersistenceTests: AsyncSpec {
                     window: 86_400
                 ),
                 exitPolicy: ExitPolicy(mode: .onGoal),
-                conversionAnchor: "last_flow_shown",
+                conversionAnchor: "last_experience_shown",
                 experienceType: "paywall"
             )
         }

@@ -6,37 +6,6 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
-private final class RoutingClaimFailingJourneyStore: MockJourneyStore, @unchecked Sendable {
-    private let failureLock = NSLock()
-    private var failNextRoutingClaim = false
-
-    func failNextAuthoredRoutingClaim() {
-        failureLock.lock()
-        failNextRoutingClaim = true
-        failureLock.unlock()
-    }
-
-    public override func saveJourney(_ journey: JourneySnapshot) throws {
-        failureLock.lock()
-        let shouldFail = failNextRoutingClaim
-            && journey.executionState.screenRouting.eventRecords.values.contains { record in
-                record.pendingAuthoredEvents.contains { $0.phase == .routingClaimed }
-            }
-        if shouldFail {
-            failNextRoutingClaim = false
-        }
-        failureLock.unlock()
-        if shouldFail {
-            throw NSError(
-                domain: "RoutingClaimFailingJourneyStore",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Injected routing-claim save failure"]
-            )
-        }
-        try super.saveJourney(journey)
-    }
-}
-
 private struct ScreenEmissionRuntimeFixture: Decodable {
     struct Run: Decodable {
         let screenId: String
@@ -695,30 +664,27 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
-        func gatePlanResponse(flowId: String) -> EventResponse {
-            EventResponse(
-                status: "ok",
-                payload: ["gate": AnyCodable([
-                    "decision": "show_flow",
-                    "flowId": flowId,
-                ])]
-            )
-        }
-
-        func featureGatePlanResponse(
-            featureId: String,
-            requiredBalance: Double,
-            flowId: String
-        ) -> EventResponse {
+        func legacyGateResponse(flowId: String) -> EventResponse {
             EventResponse(
                 status: "ok",
                 payload: ["gate": AnyCodable([
                     "decision": "require_feature",
-                    "featureId": featureId,
-                    "requiredBalance": requiredBalance,
+                    "featureId": "legacy-feature",
+                    "requiredBalance": 1,
                     "flowId": flowId,
                     "policy": "hard",
                 ])]
+            )
+        }
+
+        func unwrappedLegacyShowFlowResponse(flowId: String) -> EventResponse {
+            EventResponse(
+                status: "ok",
+                payload: [
+                    "decision": AnyCodable("show_flow"),
+                    "flowId": AnyCodable(flowId),
+                    "policy": AnyCodable("hard"),
+                ]
             )
         }
 
@@ -2204,9 +2170,9 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 .to(contain("nested_route_ran"))
         }
 
-        it("applies a source gate plan before a nested authored-event gate plan") {
-            let sourceFlow = "source-gate-flow"
-            let nestedFlow = "nested-gate-flow"
+        it("ignores legacy gate payloads across scoped authored-event routing") {
+            let sourceFlow = "legacy-source-flow"
+            let nestedFlow = "legacy-nested-flow"
             let experience = signedExperience(definition: renamedRouteDefinition())
             guard let journey = await start(experience) else {
                 fail("expected signed journey")
@@ -2223,11 +2189,11 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 )
             }
             mocks.eventLog.setTrackWithResponseResult(
-                gatePlanResponse(flowId: sourceFlow),
+                unwrappedLegacyShowFlowResponse(flowId: sourceFlow),
                 for: "renamed_submit"
             )
             mocks.eventLog.setTrackWithResponseResult(
-                gatePlanResponse(flowId: nestedFlow),
+                legacyGateResponse(flowId: nestedFlow),
                 for: "renamed_route_ran"
             )
 
@@ -2237,144 +2203,13 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 invocation: ScreenActionInvocation(actionId: "submit")
             )
 
-            await expect {
-                mocks.experiencePresentationService.presentedExperiences
-                    .map(\.experienceVersionId)
-                    .filter { $0 == sourceFlow || $0 == nestedFlow }
-            }.toEventually(equal([sourceFlow, nestedFlow]), timeout: .seconds(2))
-        }
-
-        it("accepts an exact authoritative opaque feature gate without showing its fallback") {
-            let fallbackFlow = "opaque-gate-fallback"
-            let experience = signedExperience(definition: renamedRouteDefinition())
-            guard let journey = await start(experience) else {
-                fail("expected signed journey")
-                return
-            }
-            mocks.eventLog.preparedTriggerBeforeSend = { event in
-                guard event.name == "original_submit" else { return event }
-                return NuxieEvent(
-                    id: event.id,
-                    name: "renamed_submit",
-                    distinctId: event.distinctId,
-                    properties: event.properties,
-                    timestamp: event.timestamp
-                )
-            }
-            mocks.eventLog.setTrackWithResponseResult(
-                featureGatePlanResponse(
-                    featureId: "exports",
-                    requiredBalance: 2,
-                    flowId: fallbackFlow
-                ),
-                for: "renamed_submit"
-            )
-            await featureService.applyAuthoritativeUse(
-                FeatureCheckResult(
-                    customerId: distinctId,
-                    featureId: "credit_wallet",
-                    requiredBalance: 2,
-                    code: "feature_found",
-                    allowed: true,
-                    unlimited: false,
-                    balance: 8,
-                    type: .creditSystem,
-                    preview: nil
-                ),
-                requestedFeatureId: "exports",
-                distinctId: distinctId,
-                entityId: nil
-            )
-            await featureService.syncFeatureInfo()
-            let published = await MainActor.run {
-                featureInfo.feature("exports")
-            }
-            expect(published?.allowed).to(beTrue())
-            expect(published?.balance).to(beNil())
-            await mocks.nuxieApi.setCheckFeatureResponse(
-                FeatureCheckResult(
-                    customerId: distinctId,
-                    featureId: "exports",
-                    requiredBalance: 2,
-                    code: "insufficient_balance",
-                    allowed: false,
-                    unlimited: false,
-                    balance: 0,
-                    type: .metered,
-                    preview: nil
-                )
-            )
-
-            await emitRendererControlAction(
-                journeyId: journey.id,
-                screenId: "screen-1",
-                invocation: ScreenActionInvocation(actionId: "submit")
-            )
-
-            expect(mocks.experiencePresentationService.presentedExperiences.map(\.experienceVersionId))
-                .toNot(contain(fallbackFlow))
-        }
-
-        it("rejects an ordinary metered feature gate with no visible balance") {
-            let fallbackFlow = "ordinary-gate-fallback"
-            let experience = signedExperience(definition: renamedRouteDefinition())
-            guard let journey = await start(experience) else {
-                fail("expected signed journey")
-                return
-            }
-            mocks.eventLog.preparedTriggerBeforeSend = { event in
-                guard event.name == "original_submit" else { return event }
-                return NuxieEvent(
-                    id: event.id,
-                    name: "renamed_submit",
-                    distinctId: event.distinctId,
-                    properties: event.properties,
-                    timestamp: event.timestamp
-                )
-            }
-            mocks.eventLog.setTrackWithResponseResult(
-                featureGatePlanResponse(
-                    featureId: "exports",
-                    requiredBalance: 2,
-                    flowId: fallbackFlow
-                ),
-                for: "renamed_submit"
-            )
-            let info = featureInfo!
-            await MainActor.run {
-                info.update([
-                    "exports": FeatureAccess(
-                        allowed: true,
-                        unlimited: false,
-                        balance: nil,
-                        type: .metered
-                    )
-                ])
-            }
-            await mocks.nuxieApi.setCheckFeatureResponse(
-                FeatureCheckResult(
-                    customerId: distinctId,
-                    featureId: "exports",
-                    requiredBalance: 2,
-                    code: "insufficient_balance",
-                    allowed: false,
-                    unlimited: false,
-                    balance: 0,
-                    type: .metered,
-                    preview: nil
-                )
-            )
-
-            await emitRendererControlAction(
-                journeyId: journey.id,
-                screenId: "screen-1",
-                invocation: ScreenActionInvocation(actionId: "submit")
-            )
-
-            await expect {
-                mocks.experiencePresentationService.presentedExperiences
-                    .map(\.experienceVersionId)
-            }.toEventually(contain(fallbackFlow), timeout: .seconds(2))
+            expect(mocks.eventLog.routedEvents.map(\.name))
+                .to(contain("renamed_route_ran", "nested_route_ran"))
+            expect(mocks.experiencePresentationService.presentedExperiences
+                .map(\.experienceVersionId))
+                .toNot(contain(sourceFlow, nestedFlow))
+            let featureChecks = await mocks.nuxieApi.checkFeatureCallCount
+            expect(featureChecks).to(equal(0))
         }
 
         it("does not re-enroll the source experience from its own generated event") {
@@ -2443,65 +2278,6 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(Array(routing.pendingBatches.keys)).to(beEmpty())
             expect(routing.lastProcessedBatchSequence).to(equal(0))
             expect(routing.batchReceipts["0"]?.result.status).to(equal(.drained))
-        }
-
-        it("keeps a failed authored routing claim recoverable without blocking later responses") {
-            let claimFailingStore = RoutingClaimFailingJourneyStore()
-            store = claimFailingStore
-            service = mocks.makeJourneyService(journeyStore: store)
-            let experience = signedExperience(definition: renamedRouteDefinition())
-            guard let journey = await start(experience) else {
-                fail("expected signed journey")
-                return
-            }
-            mocks.eventLog.preparedTriggerBeforeSend = { event in
-                guard event.name == "original_submit" else { return event }
-                return NuxieEvent(
-                    id: event.id,
-                    name: "renamed_submit",
-                    distinctId: event.distinctId,
-                    properties: event.properties,
-                    timestamp: event.timestamp
-                )
-            }
-            mocks.eventLog.setTrackWithResponseResult(
-                gatePlanResponse(flowId: "authored-response-flow"),
-                for: "renamed_route_ran"
-            )
-            claimFailingStore.failNextAuthoredRoutingClaim()
-
-            await emitRendererControlAction(
-                journeyId: journey.id,
-                screenId: "screen-1",
-                invocation: ScreenActionInvocation(actionId: "submit")
-            )
-
-            let failed = await journey.snapshot()
-            expect(failed.executionState.screenRouting.eventRecords.values
-                .flatMap(\.pendingAuthoredEvents)).toNot(beEmpty())
-            expect(mocks.experiencePresentationService.presentedExperiences.filter {
-                $0.experienceVersionId == "authored-response-flow"
-            })
-                .to(beEmpty())
-
-            await emitRendererControlAction(
-                journeyId: journey.id,
-                screenId: "screen-1",
-                invocation: ScreenActionInvocation(actionId: "submit")
-            )
-
-            await expect {
-                mocks.experiencePresentationService.presentedExperiences.filter {
-                    $0.experienceVersionId == "authored-response-flow"
-                }.count
-            }.toEventually(equal(1), timeout: .seconds(2))
-
-            await restartAndRecover(experience)
-
-            await expect {
-                store.loadJourney(id: journey.id)?.executionState.screenRouting
-                    .eventRecords.values.flatMap(\.pendingAuthoredEvents) ?? []
-            }.toEventually(beEmpty(), timeout: .seconds(2))
         }
 
         it("does not recreate a screen routing snapshot after its journey exits") {

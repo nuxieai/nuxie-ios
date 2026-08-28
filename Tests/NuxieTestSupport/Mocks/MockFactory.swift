@@ -161,7 +161,6 @@ public final class MockFactory: @unchecked Sendable {
             segments: segmentService,
             features: features,
             experiencePresentation: experiencePresentation ?? experiencePresentationService,
-            featureInfo: featureInfo,
             eventLog: eventLog,
             triggerBroker: triggerBroker,
             dateProvider: dateProvider,

@@ -105,8 +105,8 @@ enum ConversionAnchor: String, Codable, Sendable {
     case journeyStart = "journey_start"
     
     /// Anchor to last experience shown (default)
-    case lastExperienceShown = "last_flow_shown"
+    case lastExperienceShown = "last_experience_shown"
     
     /// Anchor to the last authored experience interaction.
-    case lastExperienceInteraction = "last_flow_interaction"
+    case lastExperienceInteraction = "last_experience_interaction"
 }

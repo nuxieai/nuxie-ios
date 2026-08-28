@@ -106,15 +106,18 @@ Button("Go Pro") {
 
 func handleTriggerUpdate(_ update: TriggerUpdate) {
     switch update {
-    case .featureAccess(.allowed):
-        // Feature access is allowed.
-        break
+    case .decision(.journeyStarted(let experience)):
+        print("Started journey for \(experience.experienceId)")
+    case .decision(.experienceShown(let experience)):
+        print("Presented \(experience.experienceId)")
     case .decision(.noMatch):
         break
+    case .decision(.suppressed(let reason)):
+        print("Journey suppressed: \(reason)")
+    case .journey(let journey):
+        print("Journey finished: \(journey.exitReason.rawValue)")
     case .error(let error):
         print("Trigger failed: \(error.message)")
-    default:
-        break
     }
 }
 ```

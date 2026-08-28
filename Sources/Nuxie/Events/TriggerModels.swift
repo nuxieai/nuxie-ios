@@ -4,8 +4,6 @@ import Foundation
 /// Progressive updates emitted by `trigger(...)`.
 public enum TriggerUpdate: Equatable, Sendable {
   case decision(TriggerDecision)
-  /// Feature-access evaluation progressed or reached a terminal outcome.
-  case featureAccess(FeatureAccessUpdate)
   case journey(JourneyUpdate)
   case error(TriggerError)
 }
@@ -18,18 +16,6 @@ public enum TriggerDecision: Equatable, Sendable {
   case journeyStarted(ExperienceRef)
   /// The matched experience was successfully presented.
   case experienceShown(ExperienceRef)
-  case allowedImmediate
-  case deniedImmediate
-}
-
-/// Feature-access updates for gated experiences.
-public enum FeatureAccessUpdate: Equatable, Sendable {
-  /// Feature access is still being evaluated.
-  case pending
-  /// Feature access is allowed.
-  case allowed
-  /// Feature access is denied.
-  case denied
 }
 
 /// Stable identity for an experience selected by a trigger.
@@ -106,14 +92,6 @@ public struct TriggerError: Error, Equatable, Sendable {
     case notConfigured = "not_configured"
     /// Trigger processing failed.
     case triggerFailed = "trigger_failed"
-    /// The trigger response did not identify an experience to present.
-    case experienceMissing = "experience_missing"
-    /// The trigger response did not identify a feature to evaluate.
-    case featureMissing = "feature_missing"
-    /// Feature access was not granted before the configured timeout.
-    case featureAccessTimeout = "feature_access_timeout"
-    /// The selected experience could not be presented.
-    case experiencePresentFailed = "experience_present_failed"
   }
 
   /// The stable machine-readable error code.
@@ -133,11 +111,7 @@ public struct TriggerError: Error, Equatable, Sendable {
 public enum TriggerResult: Equatable, Sendable {
   /// No experience matched; the event was tracked.
   case noMatch
-  /// Feature access is allowed.
-  case allowed
-  /// Access denied.
-  case denied
-  /// A journey ran to completion without a feature-access decision.
+  /// A journey ran to completion.
   case journeyCompleted(JourneyUpdate)
   /// The trigger failed.
   case error(TriggerError)
@@ -149,10 +123,6 @@ public enum TriggerResult: Equatable, Sendable {
     switch self {
     case .noMatch:
       return ["result": "no_match"]
-    case .allowed:
-      return ["result": "allowed"]
-    case .denied:
-      return ["result": "denied"]
     case .journeyCompleted(let update):
       return [
         "result": "journey_completed",

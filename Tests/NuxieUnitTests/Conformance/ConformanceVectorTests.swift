@@ -180,10 +180,6 @@ final class ConformanceVectorTests: XCTestCase {
             switch kind {
             case "noMatch":
                 result = .noMatch
-            case "allowed":
-                result = .allowed
-            case "denied":
-                result = .denied
             case "journeyCompleted":
                 result = .journeyCompleted(JourneyUpdate(
                     journeyId: vector.result["journey_id"]?.value as? String ?? "",
@@ -658,7 +654,7 @@ final class ConformanceVectorTests: XCTestCase {
             now: Date(timeIntervalSince1970: 0)
         )
         journey.epoch = try XCTUnwrap(expectedProperties["epoch"] as? Int)
-        journey.applyStateEnvelope(envelope, epoch: journey.epoch)
+        _ = journey.applyStateEnvelope(envelope, epoch: journey.epoch)
 
         XCTAssertEqual(
             JourneyEvents.journeyHandoff,
