@@ -7,13 +7,15 @@ import Nimble
 #endif
 
 private actor FeatureCommandForwardingRecorder {
-    private var ids: [String] = []
+    private var events: [NuxieEvent] = []
 
     func record(_ event: DurableForwardingEvent) {
-        ids.append(event.event.id)
+        events.append(event.event)
     }
 
-    func snapshot() -> [String] { ids }
+    func snapshot() -> [String] { events.map(\.id) }
+
+    func eventSnapshot() -> [NuxieEvent] { events }
 }
 
 /// Durable Feature-command coverage over the production composition root and
@@ -268,6 +270,12 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                     FeatureUseCommand(
                         operationId: oldOperationId,
                         distinctId: "old-customer",
+                        identity: IdentitySnapshot(
+                            distinctId: "old-customer",
+                            userId: "old-customer",
+                            anonymousId: "old-anonymous",
+                            isIdentified: true
+                        ),
                         featureId: "ai_generations",
                         amount: 1,
                         entityId: nil,
@@ -288,6 +296,12 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                     FeatureUseCommand(
                         operationId: currentOperationId,
                         distinctId: "current-customer",
+                        identity: IdentitySnapshot(
+                            distinctId: "current-customer",
+                            userId: "current-customer",
+                            anonymousId: "current-anonymous",
+                            isIdentified: true
+                        ),
                         featureId: "ai_generations",
                         amount: 1,
                         entityId: nil,
@@ -324,6 +338,25 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                     ],
                     forwardingHandler: { event in
                         await forwarding.record(event)
+                    },
+                    configure: { configuration in
+                        configuration.beforeSend = { event in
+                            var properties = event.properties
+                            properties["before_send_distinct_id"] =
+                                event.properties["$distinct_id"]
+                            properties["before_send_user_id"] = event.properties["$user_id"]
+                            properties["before_send_anonymous_id"] =
+                                event.properties["$anonymous_id"]
+                            properties["before_send_is_identified"] =
+                                event.properties["$is_identified"]
+                            return NuxieEvent(
+                                id: event.id,
+                                name: event.name,
+                                distinctId: event.distinctId,
+                                properties: properties,
+                                timestamp: event.timestamp
+                            )
+                        }
                     }
                 )
                 let stack = try unwrap(relaunched)
@@ -335,9 +368,42 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                     .map(\.id)
                 expect(mirroredIds.count).to(equal(2))
                 expect(Set(mirroredIds)).to(equal(Set([oldOperationId, currentOperationId])))
+                let oldMirrorCandidate = await stack.eventLog.getRecentEvents(limit: 20)
+                    .first { $0.id == oldOperationId }
+                let oldMirror = try unwrap(oldMirrorCandidate)
+                expect(oldMirror.distinctId).to(equal("old-customer"))
+                let oldMirrorProperties = oldMirror.getPropertiesDict()
+                expect(oldMirrorProperties["$distinct_id"] as? String).to(equal("old-customer"))
+                expect(oldMirrorProperties["$user_id"] as? String).to(equal("old-customer"))
+                expect(oldMirrorProperties["$anonymous_id"] as? String).to(equal("old-anonymous"))
+                expect(oldMirrorProperties["$is_identified"] as? Bool).to(beTrue())
+                expect(oldMirrorProperties["before_send_distinct_id"] as? String)
+                    .to(equal("old-customer"))
+                expect(oldMirrorProperties["before_send_user_id"] as? String)
+                    .to(equal("old-customer"))
+                expect(oldMirrorProperties["before_send_anonymous_id"] as? String)
+                    .to(equal("old-anonymous"))
+                expect(oldMirrorProperties["before_send_is_identified"] as? Bool).to(beTrue())
                 let forwardedIds = await forwarding.snapshot()
                 expect(forwardedIds.count).to(equal(2))
                 expect(Set(forwardedIds)).to(equal(Set([oldOperationId, currentOperationId])))
+                let oldForwardedCandidate = await forwarding.eventSnapshot()
+                    .first { $0.id == oldOperationId }
+                let oldForwarded = try unwrap(oldForwardedCandidate)
+                expect(oldForwarded.distinctId).to(equal("old-customer"))
+                expect(oldForwarded.properties["$distinct_id"] as? String)
+                    .to(equal("old-customer"))
+                expect(oldForwarded.properties["$user_id"] as? String).to(equal("old-customer"))
+                expect(oldForwarded.properties["$anonymous_id"] as? String)
+                    .to(equal("old-anonymous"))
+                expect(oldForwarded.properties["$is_identified"] as? Bool).to(beTrue())
+                expect(oldForwarded.properties["before_send_distinct_id"] as? String)
+                    .to(equal("old-customer"))
+                expect(oldForwarded.properties["before_send_user_id"] as? String)
+                    .to(equal("old-customer"))
+                expect(oldForwarded.properties["before_send_anonymous_id"] as? String)
+                    .to(equal("old-anonymous"))
+                expect(oldForwarded.properties["before_send_is_identified"] as? Bool).to(beTrue())
                 let balance = await MainActor.run {
                     stack.core.featureInfo.balance("ai_generations")
                 }

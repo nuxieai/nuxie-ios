@@ -114,6 +114,7 @@ struct FeatureUseCommand: Codable, Sendable {
 
   let operationId: String
   let distinctId: String
+  let identity: IdentitySnapshot
   let featureId: String
   let amount: Double
   let entityId: String?
@@ -129,6 +130,41 @@ struct FeatureUseCommand: Codable, Sendable {
   var firstDeliveryAttemptAt: Date? = nil
   var firstDeliveryBalanceAuthority: FeatureBalanceAuthority? = nil
   var result: DurableResult?
+
+  init(
+    operationId: String,
+    distinctId: String,
+    identity: IdentitySnapshot? = nil,
+    featureId: String,
+    amount: Double,
+    entityId: String?,
+    setUsage: Bool,
+    metadata: [String: AnyCodable]?,
+    createdAt: Date,
+    appendSequence: UInt64,
+    firstDeliveryAttemptAt: Date? = nil,
+    firstDeliveryBalanceAuthority: FeatureBalanceAuthority? = nil,
+    result: DurableResult?
+  ) {
+    self.operationId = operationId
+    self.distinctId = distinctId
+    self.identity = identity ?? IdentitySnapshot(
+      distinctId: distinctId,
+      userId: distinctId,
+      anonymousId: distinctId,
+      isIdentified: true
+    )
+    self.featureId = featureId
+    self.amount = amount
+    self.entityId = entityId
+    self.setUsage = setUsage
+    self.metadata = metadata
+    self.createdAt = createdAt
+    self.appendSequence = appendSequence
+    self.firstDeliveryAttemptAt = firstDeliveryAttemptAt
+    self.firstDeliveryBalanceAuthority = firstDeliveryBalanceAuthority
+    self.result = result
+  }
 
   func matches(
     distinctId: String,
@@ -301,26 +337,28 @@ actor FeatureUseCommandQueue {
       guard let appendSequence = nextAppendSequence else {
         throw FeatureUseCommandError.appendSequenceExhausted
       }
-      command = FeatureUseCommand(
-        operationId: UUID.v7().uuidString,
-        distinctId: distinctId,
-        featureId: featureId,
-        amount: amount,
-        entityId: entityId,
-        setUsage: setUsage,
-        metadata: encodedMetadata,
-        createdAt: dateProvider.now(),
-        appendSequence: appendSequence,
-        result: nil
-      )
-      var updated = commands ?? []
-      updated.append(command)
-      let admitted = try identity.performIfCurrentDistinctIdMatches(distinctId) {
+      let admitted = try identity.performIfCurrentDistinctIdMatches(distinctId) { identitySnapshot in
+        let command = FeatureUseCommand(
+          operationId: UUID.v7().uuidString,
+          distinctId: distinctId,
+          identity: identitySnapshot,
+          featureId: featureId,
+          amount: amount,
+          entityId: entityId,
+          setUsage: setUsage,
+          metadata: encodedMetadata,
+          createdAt: dateProvider.now(),
+          appendSequence: appendSequence,
+          result: nil
+        )
+        var updated = commands ?? []
+        updated.append(command)
         try store.save(updated)
-        return true
-      } ?? false
-      guard admitted else { throw CancellationError() }
-      commands = updated
+        return (command, updated)
+      }
+      guard let admitted else { throw CancellationError() }
+      command = admitted.0
+      commands = admitted.1
       nextAppendSequence = appendSequence < UInt64.max
         ? appendSequence + 1
         : nil
@@ -570,7 +608,8 @@ actor FeatureUseCommandQueue {
     )
     let featureId = command.featureId
     _ = await MainActor.run {
-      featureInfo.applyCommandBalanceIfFresh(
+      guard identity.getDistinctId() == command.distinctId else { return false }
+      return featureInfo.applyCommandBalanceIfFresh(
         featureId,
         balance: remaining,
         responseAuthority: durableResult.balanceAuthority
@@ -722,25 +761,41 @@ actor FeatureUseCommandQueue {
       properties["metadata"] = metadata.mapValues(\.value)
     }
     let enriched = await eventLog.prepareTriggerProperties(properties)
+    let pinnedProperties = applying(command.identity, to: enriched)
     let original = NuxieEvent(
       id: command.operationId,
       name: SystemEventNames.featureUsed,
-      distinctId: command.distinctId,
-      properties: enriched,
+      distinctId: command.identity.distinctId,
+      properties: pinnedProperties,
       timestamp: command.createdAt
     )
     guard let transformed = await eventLog.applyBeforeSend(to: original) else {
       return nil
     }
-    var transformedProperties = transformed.properties
-    transformedProperties["$distinct_id"] = command.distinctId
+    let transformedProperties = applying(command.identity, to: transformed.properties)
     return FeatureUseCommand.Mirror(
       name: transformed.name,
       forwardingName: SystemEventNames.featureUsed,
-      distinctId: command.distinctId,
+      distinctId: command.identity.distinctId,
       properties: transformedProperties.mapValues(AnyCodable.init),
       timestamp: command.createdAt
     )
+  }
+
+  private func applying(
+    _ identity: IdentitySnapshot,
+    to properties: [String: Any]
+  ) -> [String: Any] {
+    var properties = properties
+    properties["$distinct_id"] = identity.distinctId
+    properties["$anonymous_id"] = identity.anonymousId
+    properties["$is_identified"] = identity.isIdentified
+    if let userId = identity.userId {
+      properties["$user_id"] = userId
+    } else {
+      properties.removeValue(forKey: "$user_id")
+    }
+    return properties
   }
 
   private func replaceAndPersist(_ command: FeatureUseCommand) throws {

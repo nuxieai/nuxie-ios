@@ -15,24 +15,34 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
     private var _userProperties: [String: Any] = [:]
     private var _isUserIdentified = true
     private var _shouldSuspendNextDistinctIdRead = false
+    private var _shouldSuspendNextDistinctIdReadAfterSnapshot = false
 
     public init() {}
 
     public func getDistinctId() -> String {
-        let shouldSuspend = lock.withLock {
+        let read: (shouldSuspend: Bool, snapshot: String?) = lock.withLock {
+            if _shouldSuspendNextDistinctIdReadAfterSnapshot {
+                _shouldSuspendNextDistinctIdReadAfterSnapshot = false
+                return (shouldSuspend: true, snapshot: _distinctId)
+            }
             let shouldSuspend = _shouldSuspendNextDistinctIdRead
             _shouldSuspendNextDistinctIdRead = false
-            return shouldSuspend
+            return (shouldSuspend: shouldSuspend, snapshot: nil)
         }
-        if shouldSuspend {
+        if read.shouldSuspend {
             distinctIdReadSuspended.signal()
             distinctIdReadResume.wait()
         }
+        if let snapshot = read.snapshot { return snapshot }
         return lock.withLock { _distinctId }
     }
 
     public func suspendNextDistinctIdRead() {
         lock.withLock { _shouldSuspendNextDistinctIdRead = true }
+    }
+
+    func suspendNextDistinctIdReadAfterSnapshot() {
+        lock.withLock { _shouldSuspendNextDistinctIdReadAfterSnapshot = true }
     }
 
     public func waitForSuspendedDistinctIdRead() async {
@@ -110,11 +120,16 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
 
     public func performIfCurrentDistinctIdMatches<T>(
         _ expectedDistinctId: String,
-        _ work: () throws -> T
+        _ work: (IdentitySnapshot) throws -> T
     ) rethrows -> T? {
         try lock.withLock {
             guard _distinctId == expectedDistinctId else { return nil }
-            return try work()
+            return try work(IdentitySnapshot(
+                distinctId: _distinctId,
+                userId: _isUserIdentified ? _distinctId : nil,
+                anonymousId: _anonymousId,
+                isIdentified: _isUserIdentified
+            ))
         }
     }
 

@@ -46,11 +46,16 @@ final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchec
     }
     func performIfCurrentDistinctIdMatches<T>(
         _ expectedDistinctId: String,
-        _ work: () throws -> T
+        _ work: (IdentitySnapshot) throws -> T
     ) rethrows -> T? {
         try lock.withLock {
             guard distinctId == expectedDistinctId else { return nil }
-            return try work()
+            return try work(IdentitySnapshot(
+                distinctId: distinctId,
+                userId: distinctId,
+                anonymousId: anonymousId,
+                isIdentified: true
+            ))
         }
     }
     func setOnceUserProperties(_ properties: [String: Any]) {

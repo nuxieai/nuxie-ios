@@ -40,6 +40,17 @@ private actor SuspendedFeatureRecoveryTaskGate {
 
 extension SuspendedFeatureRecoveryTaskGate: FeatureRecoveryTaskGating {}
 
+private final class FeatureChangeRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _count = 0
+
+    var count: Int { lock.withLock { _count } }
+
+    func record() {
+        lock.withLock { _count += 1 }
+    }
+}
+
 final class FeatureUseCommandQueueTests: AsyncSpec {
     override class func spec() {
         describe("feature use command queue") {
@@ -141,6 +152,13 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         metadata: nil
                     )
                 }.to(throwError(NuxieNetworkError.timeout))
+                let capturedIdentity = try unwrap(try store.load().first?.identity)
+                expect(capturedIdentity).to(equal(IdentitySnapshot(
+                    distinctId: "feature-customer",
+                    userId: "feature-customer",
+                    anonymousId: "test-anonymous-id",
+                    isIdentified: true
+                )))
 
                 date.advance(by: -1)
                 let profileAdmissionAt = date.now()
@@ -329,6 +347,71 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 }
                 expect(balance).to(equal(4))
                 expect(try store.load()).to(beEmpty())
+            }
+
+            it("does not publish an old balance when identity changes after its check") {
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_048)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                await api.configureTrackEventResponse(
+                    status: "ok",
+                    usage: .init(current: 6, limit: 10, remaining: 4)
+                )
+                await api.suspendNextFeatureTrackEvent()
+                let identity = MockIdentityService()
+                identity.setDistinctId("old-customer")
+                let featureInfo = FeatureInfo()
+                let changes = FeatureChangeRecorder()
+                await MainActor.run {
+                    featureInfo.update([
+                        "ai_generations": .withBalance(
+                            10,
+                            unlimited: false,
+                            type: .creditSystem
+                        ),
+                    ])
+                    featureInfo.onFeatureChange = { _, _, _ in changes.record() }
+                }
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: featureInfo,
+                    dateProvider: MockDateProvider(initialDate: createdAt),
+                    store: store
+                )
+
+                let usage = Task {
+                    try await queue.use(
+                        distinctId: "old-customer",
+                        featureId: "ai_generations",
+                        amount: 1,
+                        entityId: "project-identity-hop",
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }
+                await api.waitForSuspendedFeatureTrackEvent()
+                identity.suspendNextDistinctIdReadAfterSnapshot()
+                await api.resumeSuspendedFeatureTrackEvent()
+                await identity.waitForSuspendedDistinctIdRead()
+
+                identity.setDistinctId("current-customer")
+                identity.resumeSuspendedDistinctIdRead()
+
+                await expect { try await usage.value }.to(throwError { error in
+                    expect(error).to(beAKindOf(CancellationError.self))
+                })
+                let balance = await MainActor.run {
+                    featureInfo.balance("ai_generations")
+                }
+                expect(balance).to(equal(10))
+                expect(changes.count).to(equal(0))
             }
 
             it("allows exactly one identical foreground call to join recovery") {

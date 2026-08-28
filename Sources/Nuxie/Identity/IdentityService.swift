@@ -1,6 +1,15 @@
 import CryptoKit
 import Foundation
 
+struct IdentitySnapshot {
+  let distinctId: String
+  let userId: String?
+  let anonymousId: String
+  let isIdentified: Bool
+}
+
+extension IdentitySnapshot: Codable, Equatable, Sendable {}
+
 /// Protocol for managing user identity state
 protocol IdentityServiceProtocol: Sendable {
   /// Get the current distinct ID (returns distinct ID if identified, anonymous ID if not)
@@ -42,10 +51,11 @@ protocol IdentityServiceProtocol: Sendable {
   ) -> Bool
 
   /// Atomically performs a synchronous mutation only while the expected
-  /// identity is current. The work and identify/reset are linearly ordered.
+  /// identity is current. The work receives that same locked identity snapshot,
+  /// and is linearly ordered with identify/reset.
   func performIfCurrentDistinctIdMatches<T>(
     _ expectedDistinctId: String,
-    _ work: () throws -> T
+    _ work: (IdentitySnapshot) throws -> T
   ) rethrows -> T?
 
   /// Set user properties only if they don't exist
@@ -230,11 +240,11 @@ final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
 
   public func performIfCurrentDistinctIdMatches<T>(
     _ expectedDistinctId: String,
-    _ work: () throws -> T
+    _ work: (IdentitySnapshot) throws -> T
   ) rethrows -> T? {
     try queue.sync {
       guard getDistinctIdLocked() == expectedDistinctId else { return nil }
-      return try work()
+      return try work(identitySnapshotLocked())
     }
   }
 
@@ -296,6 +306,17 @@ final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
     // Must be called within queue.sync
     return distinctId
       ?? (anonymousId ?? IdentityService.generateAnonymousIdAndPersistIfNeeded(self))
+  }
+
+  private func identitySnapshotLocked() -> IdentitySnapshot {
+    let anonymousId = anonymousId
+      ?? IdentityService.generateAnonymousIdAndPersistIfNeeded(self)
+    return IdentitySnapshot(
+      distinctId: distinctId ?? anonymousId,
+      userId: distinctId,
+      anonymousId: anonymousId,
+      isIdentified: distinctId != nil
+    )
   }
 
   private func loadFromDiskLocked() {
