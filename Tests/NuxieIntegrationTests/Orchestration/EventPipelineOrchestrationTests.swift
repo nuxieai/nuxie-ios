@@ -7,13 +7,14 @@ import Nimble
 #endif
 
 private actor OrchestrationForwardingRecorder {
-    private var names: [String] = []
+    private var events: [DurableForwardingEvent] = []
 
     func record(_ event: DurableForwardingEvent) {
-        names.append(event.event.forwardingName)
+        events.append(event)
     }
 
-    func snapshot() -> [String] { names }
+    func snapshot() -> [String] { events.map(\.event.forwardingName) }
+    func idSnapshot() -> [String] { events.map(\.event.id) }
 }
 
 /// Orchestration harness (cleanup plan, Phase 1).
@@ -184,6 +185,59 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                         $0.name == "auth_retained_event"
                     }.count
                 }.to(equal(2))
+            }
+
+            it("retries a failed response-bearing event after relaunch with its stored identity") {
+                let forwarding = OrchestrationForwardingRecorder()
+                await eventLog.subscribeForwarding { event in
+                    await forwarding.record(event)
+                }
+                await api.configureTrackEventFailure(
+                    error: NuxieNetworkError.httpError(
+                        statusCode: 500,
+                        message: "offline"
+                    )
+                )
+
+                await expect {
+                    try await eventLog.trackWithResponse(
+                        JourneyEvents.journeyTransition,
+                        properties: ["journey_id": "journey-durable-identity"],
+                        flushStrategy: .none
+                    )
+                }.to(throwError())
+
+                let recentEvents = await eventLog.getRecentEvents(limit: 10)
+                let stored = try unwrap(recentEvents.first {
+                    $0.name == JourneyEvents.journeyTransition
+                })
+                let sentEvents = await api.sentEvents
+                let firstWireId = try unwrap(sentEvents.last?.id)
+                expect(firstWireId).to(equal(stored.id))
+                await eventLog.close()
+
+                await api.reset()
+                let relaunched = EventLog(
+                    identity: identity,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                eventLog = relaunched
+                await relaunched.subscribeForwarding { event in
+                    await forwarding.record(event)
+                }
+                try await relaunched.configure(configuration: config)
+
+                let didFlush = await relaunched.flushEvents()
+                expect(didFlush).to(beTrue())
+                let retriedEvents = await api.sentEvents
+                let retried = try unwrap(retriedEvents.last)
+                expect(retried.id).to(equal(stored.id))
+                expect(retried.timestamp).to(equal(stored.timestamp))
+                let queuedEventCount = await relaunched.getQueuedEventCount()
+                expect(queuedEventCount).to(equal(0))
+                let forwardedIds = await forwarding.idSnapshot()
+                expect(forwardedIds).to(equal([stored.id]))
             }
 
             it("forwards a durable capture once and does not replay it after relaunch") {

@@ -73,7 +73,7 @@ $experience_shown	processCapture	governed	batch	true	true
 $experiment_exposure	processCapture	governed	batch	true	true
 $experiment_exposure_error	processCapture	governed	batch	true	true
 $experiment_exposure_fallback	processCapture	governed	batch	true	true
-$feature_used	storePreparedEventInHistory	governed	/i/event response lane	true	true
+$feature_used	featureCommand|storePreparedEventInHistory	governed	/i/event response lane	true	true
 $identify	processCapture	governed	batch	true	true
 $journey_claimed	trackForTrigger	exempt	/i/event response lane	true	true
 $journey_converted	trackWithResponse|commitServerFacts	exempt	/i/event response lane|none	true	true|false

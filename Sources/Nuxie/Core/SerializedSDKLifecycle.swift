@@ -339,6 +339,7 @@ final class NuxieSDKRun: @unchecked Sendable {
     let featureInfoDelegateTask: Task<Void, Never>?
     let profilePrefetchTask: Task<Void, Never>?
     let transactionObserverTask: Task<Void, Never>?
+    let featureCommandRecoveryTask: Task<Void, Never>?
     private let facadeTasks: FacadeTaskRegistry
 
     init(
@@ -350,6 +351,7 @@ final class NuxieSDKRun: @unchecked Sendable {
         featureInfoDelegateTask: Task<Void, Never>?,
         profilePrefetchTask: Task<Void, Never>?,
         transactionObserverTask: Task<Void, Never>?,
+        featureCommandRecoveryTask: Task<Void, Never>?,
         facadeTaskStartBarrier: (@Sendable () async -> Void)? = nil
     ) {
         self.configuration = configuration
@@ -360,10 +362,13 @@ final class NuxieSDKRun: @unchecked Sendable {
         self.featureInfoDelegateTask = featureInfoDelegateTask
         self.profilePrefetchTask = profilePrefetchTask
         self.transactionObserverTask = transactionObserverTask
+        self.featureCommandRecoveryTask = featureCommandRecoveryTask
         self.facadeTasks = FacadeTaskRegistry(startBarrier: facadeTaskStartBarrier)
     }
 
-    var startupTasks: [Task<Void, Never>] {
+    /// Startup work that can settle before admitted facade operations drain.
+    /// Feature command recovery joins only after the queue closes post-drain.
+    var preDrainStartupTasks: [Task<Void, Never>] {
         [
             eventSystemSetupTask,
             journeyInitializeTask,

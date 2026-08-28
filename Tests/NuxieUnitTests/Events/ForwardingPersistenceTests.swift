@@ -74,7 +74,7 @@ final class ForwardingPersistenceTests: XCTestCase {
     )
     XCTAssertEqual(stableCapture?.event.id, "fast-second-admission")
     store.resumeInsert(id: "slow-first-admission")
-    await slowAdmission.value
+    _ = await slowAdmission.value
     await log.drain()
 
     let durableIds = store.storedEvents.map(\.id)
@@ -119,7 +119,7 @@ final class ForwardingPersistenceTests: XCTestCase {
     var forwardedIds = await recorder.snapshot().map(\.event.id)
     XCTAssertEqual(forwardedIds, ["enabled-capture"])
 
-    await disabledCapture.value
+    _ = await disabledCapture.value
     await log.drain()
     forwardedIds = await recorder.snapshot().map(\.event.id)
     XCTAssertEqual(forwardedIds, ["enabled-capture"])

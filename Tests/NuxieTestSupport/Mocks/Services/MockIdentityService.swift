@@ -8,15 +8,82 @@ import Foundation
 /// (identify/reset scenarios), so every access is lock-guarded.
 public final class MockIdentityService: IdentityServiceProtocol, @unchecked Sendable {
     private let lock = NSLock()
+    private let distinctIdReadSuspended = DispatchSemaphore(value: 0)
+    private let distinctIdReadResume = DispatchSemaphore(value: 0)
     private var _distinctId = "test-user"
     private var _anonymousId = "test-anonymous-id"
     private var _userProperties: [String: Any] = [:]
     private var _isUserIdentified = true
+    private var _shouldSuspendNextDistinctIdRead = false
+    private var _distinctIdReadsBeforeSuspendingAfterSnapshot: Int?
 
     public init() {}
 
     public func getDistinctId() -> String {
-        lock.withLock { _distinctId }
+        let read: (shouldSuspend: Bool, snapshot: String?) = lock.withLock {
+            if let readsBeforeSuspension = _distinctIdReadsBeforeSuspendingAfterSnapshot {
+                if readsBeforeSuspension == 0 {
+                    _distinctIdReadsBeforeSuspendingAfterSnapshot = nil
+                    return (shouldSuspend: true, snapshot: _distinctId)
+                }
+                _distinctIdReadsBeforeSuspendingAfterSnapshot = readsBeforeSuspension - 1
+            }
+            let shouldSuspend = _shouldSuspendNextDistinctIdRead
+            _shouldSuspendNextDistinctIdRead = false
+            return (shouldSuspend: shouldSuspend, snapshot: nil)
+        }
+        if read.shouldSuspend {
+            distinctIdReadSuspended.signal()
+            distinctIdReadResume.wait()
+        }
+        if let snapshot = read.snapshot { return snapshot }
+        return lock.withLock { _distinctId }
+    }
+
+    public func suspendNextDistinctIdRead() {
+        lock.withLock { _shouldSuspendNextDistinctIdRead = true }
+    }
+
+    func suspendDistinctIdReadAfterSnapshot(skipping reads: Int) {
+        lock.withLock { _distinctIdReadsBeforeSuspendingAfterSnapshot = reads }
+    }
+
+    public func waitForSuspendedDistinctIdRead() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { [distinctIdReadSuspended] in
+                distinctIdReadSuspended.wait()
+                continuation.resume()
+            }
+        }
+    }
+
+    public func resumeSuspendedDistinctIdRead() {
+        distinctIdReadResume.signal()
+    }
+
+    /// Races an identity change against the suspended identity decision. The
+    /// result is true only when the change acquired the identity lock before
+    /// the guarded work was committed.
+    func raceDistinctIdChange(_ distinctId: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { [self] in
+                if lock.try() {
+                    _distinctId = distinctId
+                    _isUserIdentified = true
+                    lock.unlock()
+                    distinctIdReadResume.signal()
+                    continuation.resume(returning: true)
+                    return
+                }
+
+                distinctIdReadResume.signal()
+                lock.withLock {
+                    _distinctId = distinctId
+                    _isUserIdentified = true
+                }
+                continuation.resume(returning: false)
+            }
+        }
     }
 
     public func getRawDistinctId() -> String? {
@@ -76,6 +143,30 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
                 _userProperties[key] = value
             }
             return true
+        }
+    }
+
+    public func performIfCurrentDistinctIdMatches<T>(
+        _ expectedDistinctId: String,
+        _ work: (IdentitySnapshot) throws -> T
+    ) rethrows -> T? {
+        try lock.withLock {
+            guard _distinctId == expectedDistinctId else { return nil }
+            if let readsBeforeSuspension = _distinctIdReadsBeforeSuspendingAfterSnapshot {
+                if readsBeforeSuspension == 0 {
+                    _distinctIdReadsBeforeSuspendingAfterSnapshot = nil
+                    distinctIdReadSuspended.signal()
+                    distinctIdReadResume.wait()
+                } else {
+                    _distinctIdReadsBeforeSuspendingAfterSnapshot = readsBeforeSuspension - 1
+                }
+            }
+            return try work(IdentitySnapshot(
+                distinctId: _distinctId,
+                userId: _isUserIdentified ? _distinctId : nil,
+                anonymousId: _anonymousId,
+                isIdentified: _isUserIdentified
+            ))
         }
     }
 

@@ -10,6 +10,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var shouldFailTrackEvent = false
     public var trackEventError: Error?
     public var trackEventDelay: TimeInterval = 0
+    public var acceptedTrackEventTimeouts = 0
 
     public var profileDelay: TimeInterval = 0
     var profileResponse: ProfileResponse?
@@ -45,6 +46,18 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var sendBatchCallCount = 0
     public var trackEventCallCount = 0
     public var checkFeatureCallCount = 0
+    private var acceptedTrackEventIds: Set<String> = []
+    public private(set) var appliedFeatureTrackEventIds: [String] = []
+    private var shouldSuspendNextFeatureTrackEvent = false
+    private var suspendedFeatureTrackEvent: (
+        id: UUID,
+        continuation: CheckedContinuation<Void, Never>
+    )?
+    private var featureTrackSuspensionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    public var uniqueAcceptedTrackEventCount: Int {
+        acceptedTrackEventIds.count
+    }
 
     public var lastTimeoutUsed: TimeInterval?
     public private(set) var lastProfileLocale: String?
@@ -152,6 +165,31 @@ public actor MockNuxieApi: NuxieApiProtocol {
         trackEventDelay = delay
     }
 
+    public func setAcceptedTrackEventTimeouts(_ count: Int) {
+        acceptedTrackEventTimeouts = max(0, count)
+    }
+
+    public func suspendNextFeatureTrackEvent() {
+        shouldSuspendNextFeatureTrackEvent = true
+    }
+
+    public func waitForSuspendedFeatureTrackEvent() async {
+        if suspendedFeatureTrackEvent != nil { return }
+        await withCheckedContinuation { continuation in
+            featureTrackSuspensionWaiters.append(continuation)
+        }
+    }
+
+    public func resumeSuspendedFeatureTrackEvent() {
+        suspendedFeatureTrackEvent?.continuation.resume()
+        suspendedFeatureTrackEvent = nil
+    }
+
+    private func cancelSuspendedFeatureTrackEvent(id: UUID) {
+        guard suspendedFeatureTrackEvent?.id == id else { return }
+        resumeSuspendedFeatureTrackEvent()
+    }
+
     public func setCheckFeatureResponse(_ response: FeatureCheckResult?) {
         self.checkFeatureResponse = response
     }
@@ -172,6 +210,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
             }
             
             let nuxieEvent = NuxieEvent(
+                id: item.idempotencyKey ?? UUID.v7().uuidString,
                 name: item.event,
                 distinctId: item.distinctId,
                 properties: props,
@@ -279,6 +318,23 @@ public actor MockNuxieApi: NuxieApiProtocol {
         trackEventCalls.append(call)
         sentEvents.append(event)
 
+        if event.name == SystemEventNames.featureUsed,
+           shouldSuspendNextFeatureTrackEvent {
+            shouldSuspendNextFeatureTrackEvent = false
+            let suspensionId = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    suspendedFeatureTrackEvent = (suspensionId, continuation)
+                    let waiters = featureTrackSuspensionWaiters
+                    featureTrackSuspensionWaiters.removeAll()
+                    waiters.forEach { $0.resume() }
+                }
+            } onCancel: {
+                Task { await self.cancelSuspendedFeatureTrackEvent(id: suspensionId) }
+            }
+            try Task.checkCancellation()
+        }
+
         if trackEventDelay > 0 {
             try await Task.sleep(
                 nanoseconds: UInt64(trackEventDelay * 1_000_000_000)
@@ -295,7 +351,23 @@ public actor MockNuxieApi: NuxieApiProtocol {
             )
         }
 
-        return trackEventResponse ?? EventResponse(status: "success")
+        if event.name == SystemEventNames.featureUsed,
+           acceptedTrackEventTimeouts > 0 {
+            acceptedTrackEventTimeouts -= 1
+            if acceptedTrackEventIds.insert(event.id).inserted {
+                appliedFeatureTrackEventIds.append(event.id)
+            }
+            throw NuxieNetworkError.timeout
+        }
+
+        let response = trackEventResponse ?? EventResponse(status: "success")
+        if event.name == SystemEventNames.featureUsed,
+           response.status == "ok" || response.status == "success" {
+            if acceptedTrackEventIds.insert(event.id).inserted {
+                appliedFeatureTrackEventIds.append(event.id)
+            }
+        }
+        return response
     }
 
     public func checkFeature(
@@ -400,6 +472,12 @@ public actor MockNuxieApi: NuxieApiProtocol {
         shouldFailTrackEvent = false
         trackEventError = nil
         trackEventDelay = 0
+        acceptedTrackEventTimeouts = 0
+        shouldSuspendNextFeatureTrackEvent = false
+        resumeSuspendedFeatureTrackEvent()
+        let suspensionWaiters = featureTrackSuspensionWaiters
+        featureTrackSuspensionWaiters.removeAll()
+        suspensionWaiters.forEach { $0.resume() }
         trackEventResponse = nil
         profileDelay = 0
         fetchProfileCallCount = 0
@@ -407,6 +485,8 @@ public actor MockNuxieApi: NuxieApiProtocol {
         sendBatchCallCount = 0
         trackEventCallCount = 0
         checkFeatureCallCount = 0
+        acceptedTrackEventIds.removeAll()
+        appliedFeatureTrackEventIds.removeAll()
         trackEventCalls = []
         lastTimeoutUsed = nil
         lastProfileLocale = nil

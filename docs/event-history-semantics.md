@@ -41,6 +41,27 @@ fault.
 A fresh install, identity history from another device, and previously pruned or
 failed rows are outside this local-history contract.
 
+## Response-bearing delivery and Feature commands
+
+`trackWithResponse` creates one canonical `NuxieEvent` before persistence or
+transport. Its UUIDv7 is stored in the pending history row and sent as the
+direct `/i/event` `idempotency_key`. A failed response-lane send leaves that
+same row pending; direct or batch recovery after relaunch reuses the same id,
+and acknowledgement advances delivery state on the row instead of creating a
+delivered shadow event. Journey control events remain on the serialized direct
+control lane because their callers need the synchronous response.
+
+Ordinary `useFeatureAndWait` calls use a separate v1 Feature-command journal,
+not an undelivered history row. The final command is written atomically before
+its first send, and its UUIDv7 operation id is reused as the wire idempotency
+key for every retry. The decoded response is made durable before local
+reconciliation. An accepted command is mirrored into delivered history under
+the operation id; duplicate reconciliation observes the existing row, so
+forwarding remains at-most-once. Journals are isolated by an opaque host-app
+identity and Nuxie environment so a command cannot cross backend scopes. The
+pre-GA command journal is created directly at its final v1 shape and has no
+migration reader.
+
 ## Authored-query behavior
 
 Lifetime event queries have no lower bound (`since` and `within` are absent).

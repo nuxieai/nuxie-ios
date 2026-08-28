@@ -14,6 +14,7 @@ struct NuxieCoreOverrides {
   var experiences: ExperienceServiceProtocol?
   var profile: ProfileServiceProtocol?
   var featureInfo: FeatureInfo?
+  var featureUseCommandStore: FeatureUseCommandStoring?
   var features: FeatureServiceProtocol?
   var triggerBroker: TriggerBrokerProtocol?
   var experiencePresentation: ExperiencePresentationServiceProtocol?
@@ -66,6 +67,7 @@ final class NuxieCore: @unchecked Sendable {
   let experiences: ExperienceServiceProtocol
   let profile: ProfileServiceProtocol
   let featureInfo: FeatureInfo
+  let featureUseCommands: FeatureUseCommandQueue
   let features: FeatureServiceProtocol
   let triggerBroker: TriggerBrokerProtocol
   let experiencePresentation: ExperiencePresentationServiceProtocol
@@ -195,8 +197,21 @@ final class NuxieCore: @unchecked Sendable {
       customStoragePath: internalConfiguration.customStoragePath
     )
     let featureInfo = overrides.featureInfo ?? FeatureInfo()
+    let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+    let featureUseCommands = FeatureUseCommandQueue(
+      api: api,
+      identity: identity,
+      eventLog: eventLog,
+      featureInfo: featureInfo,
+      dateProvider: dateProvider,
+      store: overrides.featureUseCommandStore ?? FeatureUseCommandStore(
+        customStoragePath: internalConfiguration.customStoragePath,
+        appIdentifier: appIdentifier,
+        environment: configuration.environment
+      )
+    )
     let purchaseStorageScope = PurchaseStorageScope(
-      appIdentifier: Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app",
+      appIdentifier: appIdentifier,
       environment: configuration.environment,
       testStoreEnabled: configuration.testStoreEnabled
     )
@@ -338,6 +353,7 @@ final class NuxieCore: @unchecked Sendable {
     self.experiences = experiences
     self.profile = profile
     self.featureInfo = featureInfo
+    self.featureUseCommands = featureUseCommands
     self.features = features
     self.triggerBroker = triggerBroker
     self.experiencePresentation = experiencePresentation

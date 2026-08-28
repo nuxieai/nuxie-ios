@@ -194,7 +194,8 @@ protocol EventTriggerTracking: AnyObject, Sendable {
     _ properties: sending [String: Any]?
   ) async -> sending [String: Any]
   func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent?
-  func storePreparedEventInHistory(_ event: NuxieEvent) async
+  @discardableResult
+  func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool
   func commitPreparedTriggerEvent(_ event: NuxieEvent) async -> PreparedTriggerCommit
   func trackForTrigger(
     _ event: String,
@@ -382,7 +383,8 @@ protocol EventLogProtocol:
   ) async -> sending [String: Any]
 
   /// Persist a fully prepared trigger event into local history without re-enqueuing it.
-  func storePreparedEventInHistory(_ event: NuxieEvent) async
+  @discardableResult
+  func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool
 
   /// Commit server-born facts into local history without uploading them.
   /// Newly committed facts are routed through the committed-event subscriber lane.
@@ -1884,7 +1886,8 @@ actor EventLog: EventLogProtocol {
     )
   }
 
-  public func storePreparedEventInHistory(_ event: NuxieEvent) async {
+  @discardableResult
+  public func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool {
     await ready.wait()
 
     do {
@@ -1894,9 +1897,11 @@ actor EventLog: EventLogProtocol {
         receivedAt: event.timestamp
       )
       try await performCleanupIfNeeded()
+      return true
     } catch {
       LogWarning("Failed to store prepared event locally: \(error)")
       await recordHistoryGap(at: event.timestamp)
+      return false
     }
   }
 
@@ -3252,23 +3257,7 @@ actor EventLog: EventLogProtocol {
   }
 
   private func deliveryDisposition(for error: Error) -> DeliveryDisposition {
-    guard let networkError = error as? NuxieNetworkError,
-          let statusCode = networkError.httpStatusCode else {
-      return .retry(retryAfter: nil)
-    }
-
-    switch statusCode {
-    case 400, 422:
-      return .terminalPoison
-    case 401, 403:
-      return .unhealthyAuthentication
-    case 408, 425, 429:
-      return .retry(retryAfter: parseRetryAfter(networkError.retryAfter))
-    case 413:
-      return .split
-    default:
-      return .retry(retryAfter: nil)
-    }
+    EventDeliveryPolicy.disposition(for: error)
   }
 
   private func validate(response: BatchResponse, for batch: [NuxieEvent]) -> Bool {
@@ -3306,29 +3295,6 @@ actor EventLog: EventLogProtocol {
     let delay = deliveryConfig.flushIntervalSeconds
     nextRetryDate = Date().addingTimeInterval(delay)
     return delay
-  }
-
-  private func parseRetryAfter(_ value: String?) -> TimeInterval? {
-    guard let value else { return nil }
-    if let seconds = TimeInterval(value), seconds.isFinite, seconds >= 0 {
-      return seconds
-    }
-
-    let formats = [
-      "EEE',' dd MMM yyyy HH':'mm':'ss zzz",
-      "EEEE',' dd-MMM-yy HH':'mm':'ss zzz",
-      "EEE MMM d HH':'mm':'ss yyyy",
-    ]
-    for format in formats {
-      let formatter = DateFormatter()
-      formatter.locale = Locale(identifier: "en_US_POSIX")
-      formatter.timeZone = TimeZone(secondsFromGMT: 0)
-      formatter.dateFormat = format
-      if let date = formatter.date(from: value) {
-        return max(0, date.timeIntervalSinceNow)
-      }
-    }
-    return nil
   }
 
   private func startFlushTimer() {
@@ -3380,12 +3346,7 @@ actor EventLog: EventLogProtocol {
     }
   }
 
-  private enum DeliveryDisposition: Equatable {
-    case retry(retryAfter: TimeInterval?)
-    case split
-    case unhealthyAuthentication
-    case terminalPoison
-  }
+  private typealias DeliveryDisposition = EventDeliveryDisposition
 
   private enum SDKDeliveryHealth: String {
     case healthy

@@ -275,6 +275,46 @@ final class ConformanceVectorTests: XCTestCase {
         }
     }
 
+    func testResponseBearingEventEncodingVectors() throws {
+        let suite = try loadSuite("events/response-bearing-event-encoding.json")
+        let iso = ISO8601DateFormatter()
+
+        for vector in suite.vectors {
+            let input = vector.event
+            let timestamp = try XCTUnwrap(
+                iso.date(from: input.timestamp),
+                "[\(vector.name)] unparseable timestamp \(input.timestamp)"
+            )
+            let event = NuxieEvent(
+                id: input.id,
+                name: input.name,
+                distinctId: input.distinct_id,
+                properties: input.properties?.mapValues(\.value) ?? [:],
+                timestamp: timestamp
+            )
+            let request = EventRequest(event: event)
+
+            if let expectedPropertiesJSON = vector.expectPropertiesJSON {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                XCTAssertEqual(
+                    String(decoding: try encoder.encode(request.properties ?? [:]), as: UTF8.self),
+                    expectedPropertiesJSON,
+                    "[\(vector.name)] serialized properties"
+                )
+            }
+
+            XCTAssertEqual(request.event, vector.expect["event"]?.value as? String)
+            XCTAssertEqual(request.distinctId, vector.expect["distinct_id"]?.value as? String)
+            XCTAssertEqual(request.idempotencyKey, vector.expect["idempotency_key"]?.value as? String)
+            XCTAssertEqual(request.timestamp, vector.expect["timestamp"]?.value as? String)
+            let expectedValue = (vector.expect["value"]?.value as? Int).map(Double.init)
+                ?? vector.expect["value"]?.value as? Double
+            XCTAssertEqual(request.value, expectedValue)
+            XCTAssertEqual(request.entityId, vector.expect["entity_id"]?.value as? String)
+        }
+    }
+
     func testDeliveryDispositionFixtureCoversRequiredHazards() throws {
         let url = Self.fixturesRoot.appendingPathComponent(
             "events/delivery-disposition.json"

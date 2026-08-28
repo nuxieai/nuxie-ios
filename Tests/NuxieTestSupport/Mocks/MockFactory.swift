@@ -1,6 +1,26 @@
 import Foundation
 @testable import Nuxie
 
+private final class InMemoryFeatureUseCommandStore:
+    FeatureUseCommandStoring,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var commands: [FeatureUseCommand] = []
+
+    func load() throws -> [FeatureUseCommand] {
+        lock.withLock { commands }
+    }
+
+    func save(_ commands: [FeatureUseCommand]) throws {
+        lock.withLock { self.commands = commands }
+    }
+
+    func reset() {
+        lock.withLock { commands = [] }
+    }
+}
+
 /// Factory for creating and managing shared mock instances
 // @unchecked Sendable: the lazy mock instances are created during
 // single-threaded test setup and are themselves thread-safe; the usage flag
@@ -64,6 +84,7 @@ public final class MockFactory: @unchecked Sendable {
     private lazy var _dateProvider = MockDateProvider()
     private lazy var _sleepProvider = MockSleepProvider()
     private lazy var _productService = MockProductService()
+    private lazy var _featureUseCommandStore = InMemoryFeatureUseCommandStore()
     
     // Public accessors
     public var identityService: MockIdentityService { Self.markUsed(); return _identityService }
@@ -96,6 +117,7 @@ public final class MockFactory: @unchecked Sendable {
         dateProvider.reset()
         sleepProvider.reset()
         productService.reset()
+        _featureUseCommandStore.reset()
     }
     
     /// Overrides that replace every collaborator with the shared mocks.
@@ -114,6 +136,7 @@ public final class MockFactory: @unchecked Sendable {
         overrides.dateProvider = dateProvider
         overrides.sleepProvider = sleepProvider
         overrides.productService = productService
+        overrides.featureUseCommandStore = _featureUseCommandStore
         return overrides
     }
 

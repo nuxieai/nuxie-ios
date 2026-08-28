@@ -455,15 +455,7 @@ extension NuxieApi {
     }
 
     public func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
-        let request = EventRequest(
-            event: event.name,
-            distinctId: event.distinctId,
-            timestamp: event.timestamp,
-            properties: event.properties,
-            idempotencyKey: event.id,
-            value: (event.properties["value"] as? NSNumber)?.doubleValue,
-            entityId: event.properties["entityId"] as? String
-        )
+        let request = EventRequest(event: event)
 
         return try await self.request(
             endpoint: .event(request),

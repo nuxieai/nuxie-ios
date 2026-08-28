@@ -173,6 +173,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       var featureInfoDelegateTask: Task<Void, Never>?
       var profilePrefetchTask: Task<Void, Never>?
       var transactionObserverTask: Task<Void, Never>?
+      var featureCommandRecoveryTask: Task<Void, Never>?
 
       if !setupConfiguration.internalConfiguration.suppressBackgroundWork {
         // Wire up FeatureInfo delegate callback
@@ -202,6 +203,14 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
           guard !Task.isCancelled else { return }
           await core.transactionObserver.startListening()
         }
+        let eventSetup = eventSystemSetupTask
+        let profilePrefetch = profilePrefetchTask
+        featureCommandRecoveryTask = Task {
+          await eventSetup.value
+          await profilePrefetch?.value
+          guard !Task.isCancelled else { return }
+          await core.featureUseCommands.recover()
+        }
       }
 
       return NuxieSDKRun(
@@ -213,6 +222,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         featureInfoDelegateTask: featureInfoDelegateTask,
         profilePrefetchTask: profilePrefetchTask,
         transactionObserverTask: transactionObserverTask,
+        featureCommandRecoveryTask: featureCommandRecoveryTask,
         facadeTaskStartBarrier: facadeTaskStartBarrier
       )
     }
@@ -273,12 +283,15 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       await run.lifecycleCoordinator.stop()
 
       let facadeTasks = run.stopAcceptingFacadeTasksAndCancel()
+      // Stop recovery admission now, but join it only after admitted public
+      // feature operations drain and queue closure can settle its in-flight wait.
+      run.featureCommandRecoveryTask?.cancel()
 
       // Cancel startup callers first, then stop the observer before joining
       // those callers. A profile-prefetch caller may already be awaiting
       // purchase recovery, which only observer shutdown can cancel and settle.
       await Self.stopPurchasesAndAwaitStartupTasks(
-        run.startupTasks + facadeTasks,
+        run.preDrainStartupTasks + facadeTasks,
         stopPurchases: { await core.transactionObserver.stopListening() }
       )
     }) { run in
@@ -288,6 +301,11 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       // uncancellable — dropping transitions was the bug it exists to fix).
       await core.userTransitions.drain()
 
+      // Public feature operations are lifecycle leases and have now drained.
+      // Closing earlier would turn a suspended admitted call into an escaping
+      // CancellationError instead of letting it finish against this graph.
+      await core.featureUseCommands.close()
+      await run.featureCommandRecoveryTask?.value
       await core.journeys.shutdown()
       await core.eventLog.close()
       await core.profile.cleanupExpired()
@@ -998,7 +1016,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   ///   - setUsage: If true, sets the usage to the specified amount instead of decrementing (default: false)
   ///   - metadata: Optional additional metadata to record with the usage event
   /// - Returns: FeatureUsageResult with usage confirmation and updated balance
-  /// - Throws: NuxieError if SDK not configured or request fails
+  /// - Throws: `CancellationError` if the active identity changes before the
+  ///   usage command is durably admitted, or `NuxieError` if the SDK is not
+  ///   configured or the request fails.
   ///
   /// - Example:
   /// ```swift
@@ -1046,19 +1066,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     let identityService = core.identity
     let distinctId = identityService.getDistinctId()
 
-    // Build properties for $feature_used event
-    var properties: [String: Any] = [
-      "feature_extId": featureId
-    ]
-
-    if setUsage {
-      properties["setUsage"] = true
-    }
-
-    if let metadata = metadata {
-      properties["metadata"] = metadata
-    }
-
     if !setUsage,
        let purchaseBackedResult = try await core.transactionObserver
         .useFeatureWithPendingPurchase(
@@ -1086,55 +1093,14 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       throw CancellationError()
     }
 
-    // Send directly to /i/event endpoint for immediate confirmation
-    let api = core.api
-    // Boxed to hand the write-once payload across the API boundary.
-    let propertiesBox = UncheckedSendable(properties)
-    let response = try await api.trackEvent(
-      event: SystemEventNames.featureUsed,
+    let metadataBox = UncheckedSendable(metadata)
+    return try await core.featureUseCommands.use(
       distinctId: distinctId,
-      properties: propertiesBox.value,
-      value: amount,
-      entityId: entityId
-    )
-
-    guard identityService.getDistinctId() == distinctId else {
-      throw CancellationError()
-    }
-
-    // Update local balance from server response
-    if let usage = response.usage, let remaining = usage.remaining {
-      await MainActor.run {
-        core.featureInfo.setBalance(featureId, balance: remaining)
-      }
-    }
-
-    let accepted = response.status == "ok" || response.status == "success"
-    if accepted {
-      await captureAcceptedFeatureUse(
-        featureId: featureId,
-        amount: amount,
-        entityId: entityId,
-        metadata: metadata,
-        eventId: response.eventId,
-        distinctId: distinctId,
-        eventLog: core.eventLog
-      )
-    }
-
-    // Build result from response
-    return FeatureUsageResult(
-      success: accepted,
       featureId: featureId,
-      amountUsed: amount,
-      message: response.message,
-      usage: response.usage.map { usage in
-        FeatureUsageResult.UsageInfo(
-          current: usage.current,
-          limit: usage.limit,
-          remaining: usage.remaining
-        )
-      }
+      amount: amount,
+      entityId: entityId,
+      setUsage: setUsage,
+      metadata: metadataBox.value
     )
   }
 
