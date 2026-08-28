@@ -25,6 +25,12 @@ struct FeatureBalanceAuthority: Codable, Equatable, Sendable {
 @MainActor
 public final class FeatureInfo: ObservableObject {
 
+    internal struct CommandBalanceEmission {
+        fileprivate let featureId: String
+        fileprivate let oldAccess: FeatureAccess
+        fileprivate let newAccess: FeatureAccess
+    }
+
     // MARK: - Published Properties
 
     /// All currently cached features keyed by feature ID
@@ -121,22 +127,43 @@ public final class FeatureInfo: ObservableObject {
         )
     }
 
-    @discardableResult
-    internal func applyCommandBalanceIfFresh(
+    internal func commitCommandBalanceIfFresh(
         _ featureId: String,
         balance: Double,
         responseAuthority: FeatureBalanceAuthority
-    ) -> Bool {
+    ) -> CommandBalanceEmission? {
         let currentGeneration = balanceAuthorityGenerations[featureId] ?? 0
         if responseAuthority.epoch == balanceAuthorityEpoch {
-            guard currentGeneration <= responseAuthority.generation else { return false }
+            guard currentGeneration <= responseAuthority.generation else { return nil }
         } else {
             // A response from an earlier process may apply only when this
             // process has not admitted any authoritative state for the key.
-            guard currentGeneration == 0 else { return false }
+            guard currentGeneration == 0 else { return nil }
         }
-        setBalance(featureId, balance: balance)
-        return true
+        guard let oldAccess = all[featureId] else { return nil }
+
+        let newAccess = FeatureAccess.withBalance(
+            balance,
+            unlimited: oldAccess.unlimited,
+            type: oldAccess.type
+        )
+        return CommandBalanceEmission(
+            featureId: featureId,
+            oldAccess: oldAccess,
+            newAccess: newAccess
+        )
+    }
+
+    internal func emitCommandBalance(_ emission: CommandBalanceEmission) {
+        // The freshness decision is already committed. Emission deliberately
+        // performs no revalidation, so an identity change after that decision
+        // cannot invalidate or rewrite the notification it describes.
+        if !areEqual(emission.oldAccess, emission.newAccess) {
+            onFeatureChange?(emission.featureId, emission.oldAccess, emission.newAccess)
+        }
+        var features = all
+        features[emission.featureId] = emission.newAccess
+        all = features
     }
 
     /// Update a single feature (called internally after real-time checks)
@@ -187,24 +214,6 @@ public final class FeatureInfo: ObservableObject {
             type: access.type
         )
 
-        publish(featureId, access: newAccess)
-    }
-
-    /// Set the balance for a feature (after server confirmation)
-    /// - Parameters:
-    ///   - featureId: The feature identifier
-    ///   - balance: The new balance from server
-    private func setBalance(_ featureId: String, balance: Double) {
-        guard let access = all[featureId] else { return }
-
-        let newAccess = FeatureAccess.withBalance(
-            balance,
-            unlimited: access.unlimited,
-            type: access.type
-        )
-
-        // Command responses are already ordered by the durable projection
-        // queue. Publishing one must not make its younger same-key tail stale.
         publish(featureId, access: newAccess)
     }
 

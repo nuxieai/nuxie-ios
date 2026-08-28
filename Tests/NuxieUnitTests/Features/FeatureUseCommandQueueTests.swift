@@ -416,6 +416,67 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 expect(changes.count).to(equal(1))
             }
 
+            it("allows a feature change callback to identify after committing the balance") {
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_049)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                await api.configureTrackEventResponse(
+                    status: "ok",
+                    usage: .init(current: 6, limit: 10, remaining: 4)
+                )
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let featureInfo = FeatureInfo()
+                let changes = FeatureChangeRecorder()
+                await MainActor.run {
+                    featureInfo.update([
+                        "ai_generations": .withBalance(
+                            10,
+                            unlimited: false,
+                            type: .creditSystem
+                        ),
+                    ])
+                    featureInfo.onFeatureChange = { _, _, _ in
+                        changes.record()
+                        identity.setDistinctId("delegate-customer")
+                    }
+                }
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: featureInfo,
+                    dateProvider: MockDateProvider(initialDate: createdAt),
+                    store: store
+                )
+
+                await expect {
+                    try await queue.use(
+                        distinctId: "feature-customer",
+                        featureId: "ai_generations",
+                        amount: 1,
+                        entityId: "project-delegate-identify",
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }.to(throwError { error in
+                    expect(error).to(beAKindOf(CancellationError.self))
+                })
+
+                expect(identity.getDistinctId()).to(equal("delegate-customer"))
+                let balance = await MainActor.run {
+                    featureInfo.balance("ai_generations")
+                }
+                expect(balance).to(equal(4))
+                expect(changes.count).to(equal(1))
+                expect(try store.load()).to(beEmpty())
+            }
+
             it("allows exactly one identical foreground call to join recovery") {
                 let operationId = UUID.v7().uuidString
                 let createdAt = Date(timeIntervalSince1970: 1_788_000_050)

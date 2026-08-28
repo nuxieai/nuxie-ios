@@ -608,12 +608,15 @@ actor FeatureUseCommandQueue {
     )
     let featureId = command.featureId
     _ = await MainActor.run {
-      identity.performIfCurrentDistinctIdMatches(command.distinctId) { _ in
-        featureInfo.applyCommandBalanceIfFresh(
+      let emission = identity.performIfCurrentDistinctIdMatches(command.distinctId) { _ in
+        featureInfo.commitCommandBalanceIfFresh(
           featureId,
           balance: remaining,
           responseAuthority: durableResult.balanceAuthority
         )
+      }.flatMap { $0 }
+      if let emission {
+        featureInfo.emitCommandBalance(emission)
       }
     }
   }
