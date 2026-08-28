@@ -180,10 +180,6 @@ final class ConformanceVectorTests: XCTestCase {
             switch kind {
             case "noMatch":
                 result = .noMatch
-            case "allowed":
-                result = .allowed
-            case "denied":
-                result = .denied
             case "journeyCompleted":
                 result = .journeyCompleted(JourneyUpdate(
                     journeyId: vector.result["journey_id"]?.value as? String ?? "",

@@ -102,7 +102,7 @@ is_allowlisted_catalog_site() {
     '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1951' \
       | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1951' \
       | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1951' \
-      | '$feature_used|Sources/Nuxie/NuxieSDK.swift:1105')
+      | '$feature_used|Sources/Nuxie/NuxieSDK.swift:1094')
       return 0
       ;;
     *)
@@ -169,7 +169,7 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$journey_effect_completed' "$1" \
         '$journey_superseded' "$1"
       ;;
-    'Sources/Nuxie/NuxieSDK.swift:1176')
+    'Sources/Nuxie/NuxieSDK.swift:1165')
       # The accepted direct-response feature event keeps its authoritative id
       # when it is copied into delivered local history.
       printf '%s\t%s\n' '$feature_used' "$1"
@@ -324,10 +324,10 @@ $experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentat
 $experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3309
 $experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3268
 $experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3325
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1105
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1176
-$identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:643
-$journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:950
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1094
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1165
+$identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:632
+$journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:966
 $journey_converted\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5366
 $journey_converted\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1951
 $journey_effect_completed\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1951
@@ -417,7 +417,7 @@ lane_source_pattern() {
 
 direct_before_send_policy() {
   case "$1|$2" in
-    '$journey_claimed|Sources/Nuxie/Journey/JourneyService.swift:950' \
+    '$journey_claimed|Sources/Nuxie/Journey/JourneyService.swift:966' \
       | '$journey_handoff|Sources/Nuxie/Journey/JourneyService.swift:4512' \
       | '$journey_milestone|Sources/Nuxie/Journey/JourneyService.swift:3117')
       printf '%s' exempt
@@ -459,11 +459,11 @@ while IFS=$'\t' read -r event_name production_lane emitter; do
     # The milestone name is staged here and reaches trackScopedEvent later in
     # the same function after local journey evaluation.
     source_radius=64
-  elif [[ "$emitter" == "Sources/Nuxie/NuxieSDK.swift:1105" ]]; then
+  elif [[ "$emitter" == "Sources/Nuxie/NuxieSDK.swift:1094" ]]; then
     # The accepted /i/event response is converted into the exact prepared
     # history event at the end of the same useFeature operation.
     source_radius=80
-  elif [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:950" \
+  elif [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:966" \
       || "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:4512" ]]; then
     source_radius=8
   elif [[ "$emitter" == Sources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:* ]]; then

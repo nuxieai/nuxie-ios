@@ -184,20 +184,11 @@ actor TriggerService: TriggerServiceProtocol {
           return true
         case .decision(let decision):
           switch decision {
-          case .allowedImmediate, .deniedImmediate, .noMatch:
+          case .noMatch:
             return true
           case .suppressed:
             return !journeyStartFlag.get() && !journeyErrorFlag.get()
-          case .experienceShown:
-            return false
-          default:
-            return false
-          }
-        case .featureAccess(let featureAccess):
-          switch featureAccess {
-          case .allowed, .denied:
-            return true
-          case .pending:
+          case .experienceShown, .journeyStarted:
             return false
           }
         case .journey:

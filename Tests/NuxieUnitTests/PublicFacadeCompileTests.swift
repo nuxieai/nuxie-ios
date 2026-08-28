@@ -14,7 +14,6 @@ final class PublicFacadeCompileTests: XCTestCase {
         _ = sdk.isSetup
         _ = TriggerResult.self
         _ = TriggerUpdate.self
-        _ = FeatureAccessUpdate.self
         _ = ExperienceRef.self
         _ = TriggerError.Code.self
         _ = FeatureAccess.self

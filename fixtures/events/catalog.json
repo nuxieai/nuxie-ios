@@ -653,8 +653,8 @@
     "constant": "SystemEventNames.featureUsed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/NuxieSDK.swift:1105",
-      "Sources/Nuxie/NuxieSDK.swift:1176"
+      "Sources/Nuxie/NuxieSDK.swift:1094",
+      "Sources/Nuxie/NuxieSDK.swift:1165"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [
@@ -695,7 +695,7 @@
     "constant": "SystemEventNames.identify",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/NuxieSDK.swift:643"
+      "Sources/Nuxie/NuxieSDK.swift:632"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -735,7 +735,7 @@
     "constant": "JourneyEvents.journeyClaimed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Journey/JourneyService.swift:950"
+      "Sources/Nuxie/Journey/JourneyService.swift:966"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],

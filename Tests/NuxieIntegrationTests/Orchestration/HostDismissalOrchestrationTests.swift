@@ -139,7 +139,6 @@ final class HostDismissalOrchestrationTests: AsyncSpec {
                 expect(terminalUpdates.first?.experienceVersion).to(equal(flowId))
                 expect(terminalUpdates.first?.exitReason).to(equal(.dismissed))
                 expect(terminalUpdates.first?.goalMet).to(beFalse())
-                expect(updates.updates.contains(where: \.isDenial)).to(beFalse())
 
                 // The host-facing call has returned without a network round
                 // trip, while the stable capture remains pending for durable
@@ -353,14 +352,5 @@ private extension TriggerUpdate {
     var journeyUpdate: JourneyUpdate? {
         guard case .journey(let update) = self else { return nil }
         return update
-    }
-
-    var isDenial: Bool {
-        switch self {
-        case .decision(.deniedImmediate), .featureAccess(.denied):
-            return true
-        default:
-            return false
-        }
     }
 }

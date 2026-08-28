@@ -943,6 +943,22 @@ actor JourneyService: JourneyServiceProtocol {
         continue
       }
 
+      let claimed = Journey(
+        id: entry.journeyId,
+        experience: experience,
+        distinctId: distinctId,
+        now: now
+      )
+      guard await claimed.applyStateEnvelope(
+        entry.envelope,
+        epoch: entry.epoch + 1
+      ) else {
+        LogWarning(
+          "JourneyService: refusing mailbox claim with an invalid conversion anchor for \(entry.journeyId)"
+        )
+        continue
+      }
+
       let response: EventResponse
       do {
         guard !isShutDown else { return }
@@ -972,22 +988,6 @@ actor JourneyService: JourneyServiceProtocol {
         continue
       }
 
-      let claimed = Journey(
-        id: entry.journeyId,
-        experience: experience,
-        distinctId: distinctId,
-        now: now
-      )
-      guard !isShutDown else { return }
-      guard await claimed.applyStateEnvelope(
-        entry.envelope,
-        epoch: acknowledgement.epoch
-      ) else {
-        LogWarning(
-          "JourneyService: mailbox claim carried an invalid conversion anchor for \(entry.journeyId)"
-        )
-        continue
-      }
       guard !isShutDown else { return }
       let claimedState = await claimed.update { state in
         state.resumePoint = entry.resumePoint

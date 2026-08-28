@@ -399,10 +399,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   /// Trigger an event and await its terminal outcome — the register pattern:
   ///
   /// ```swift
-  /// switch await NuxieSDK.shared.triggerAndWait("export_tapped") {
-  /// case .allowed: performExport()
-  /// default: break
-  /// }
+  /// let result = await NuxieSDK.shared.triggerAndWait("export_tapped")
   /// ```
   /// An active journey that is still awaiting a terminal update when SDK
   /// shutdown begins resolves as an error whose code is `trigger_failed`.
@@ -504,16 +501,8 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       return .error(error)
     case .decision(let decision):
       switch decision {
-      case .allowedImmediate: return .allowed
-      case .deniedImmediate: return .denied
       case .noMatch: return .noMatch
       default: return nil
-      }
-    case .featureAccess(let featureAccess):
-      switch featureAccess {
-      case .allowed: return .allowed
-      case .denied: return .denied
-      case .pending: return nil
       }
     case .journey(let update):
       return .journeyCompleted(update)

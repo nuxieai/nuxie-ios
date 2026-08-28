@@ -677,6 +677,17 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
+        func unwrappedLegacyShowFlowResponse(flowId: String) -> EventResponse {
+            EventResponse(
+                status: "ok",
+                payload: [
+                    "decision": AnyCodable("show_flow"),
+                    "flowId": AnyCodable(flowId),
+                    "policy": AnyCodable("hard"),
+                ]
+            )
+        }
+
         func install(_ experience: Experience) async {
             mocks.identityService.setDistinctId(distinctId)
             let reference = ExperienceReference(
@@ -2178,7 +2189,7 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 )
             }
             mocks.eventLog.setTrackWithResponseResult(
-                legacyGateResponse(flowId: sourceFlow),
+                unwrappedLegacyShowFlowResponse(flowId: sourceFlow),
                 for: "renamed_submit"
             )
             mocks.eventLog.setTrackWithResponseResult(

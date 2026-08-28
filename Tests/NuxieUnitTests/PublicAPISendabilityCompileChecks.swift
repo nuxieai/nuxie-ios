@@ -49,7 +49,6 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(TriggerResult.self)
     requireSendable(TriggerError.self)
     requireSendable(TriggerError.Code.self)
-    requireSendable(FeatureAccessUpdate.self)
     requireSendable(ExperienceRef.self)
     requireSendable(JourneyUpdate.self)
     requireSendable(SuppressReason.self)
@@ -135,8 +134,7 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     // Awaited trigger; result consumed on the main actor.
     let result = await sdk.triggerAndWait("compile_check")
     switch result {
-    case .allowed: break
-    case .denied, .noMatch: break
+    case .noMatch: break
     case .journeyCompleted(let update): _ = update.journeyId
     case .error(let error): _ = error.code
     }

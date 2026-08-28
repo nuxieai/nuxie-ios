@@ -379,6 +379,43 @@ final class HostDismissalTests: AsyncSpec {
                 }).to(haveCount(1))
             }
 
+            it("refuses a legacy-anchor mailbox envelope before claiming it") { @MainActor in
+                let harness = await HostJourneyHarness.make(definition: .singleScreen())
+                serviceUnderTest = harness.service
+                await harness.service.initialize()
+
+                let journeyId = "mailbox-legacy-conversion-anchor"
+                let mailbox = JourneyMailboxEntry(
+                    journeyId: journeyId,
+                    experienceId: harness.experience.id,
+                    experienceVersion: harness.experience.versionId,
+                    epoch: 0,
+                    stateVersion: JourneyStateEnvelope.currentVersion,
+                    envelope: JourneyStateEnvelope(
+                        context: [:],
+                        executionState: JourneyExecutionState(),
+                        snapshots: [
+                            "conversionAnchor": AnyCodable("last_flow_shown")
+                        ],
+                        responseSession: nil
+                    ),
+                    expiresAt: Date().addingTimeInterval(600)
+                )
+                harness.mocks.profileService.setProfileResponse(ProfileResponse(
+                    segments: [],
+                    mailbox: [mailbox]
+                ))
+
+                _ = try? await harness.mocks.profileService.refetchProfile(
+                    distinctId: harness.distinctId
+                )
+
+                expect(harness.mocks.eventLog.trackForTriggerCalls.filter {
+                    $0.event == JourneyEvents.journeyClaimed
+                }).to(beEmpty())
+                expect(harness.store.loadJourney(id: journeyId)).to(beNil())
+            }
+
             it("completes a pre-screen dismissal with host metadata") { @MainActor in
                 let harness = await HostJourneyHarness.make(definition: .singleScreen())
                 serviceUnderTest = harness.service
@@ -424,7 +461,6 @@ final class HostDismissalTests: AsyncSpec {
                 let journeyUpdate = try await waitForHostJourneyUpdate(in: updates)
                 expect(journeyUpdate.journeyId).to(equal(journey.id))
                 expect(journeyUpdate.exitReason).to(equal(.dismissed))
-                expect(updates.values.contains(where: \.isDenied)).to(beFalse())
             }
 
             it("reserves the host outcome before a competing ordinary dismissal") { @MainActor in
@@ -628,7 +664,6 @@ final class HostDismissalTests: AsyncSpec {
                 let update = try await waitForHostJourneyUpdate(in: updates)
                 expect(update.exitReason).to(equal(.dismissed))
                 expect(updates.values.compactMap(\.journeyUpdate)).to(haveCount(1))
-                expect(updates.values.contains(where: \.isDenied)).to(beFalse())
             }
 
             it("releases the host reservation but preserves retry authority after persistence fails") { @MainActor in
@@ -750,7 +785,6 @@ final class HostDismissalTests: AsyncSpec {
                 expect(harness.journeyExitedCalls()).to(haveCount(1))
                 let update = try await waitForHostJourneyUpdate(in: updates)
                 expect(update.exitReason).to(equal(.dismissed))
-                expect(updates.values.contains(where: \.isDenied)).to(beFalse())
 
                 await harness.emitEvent(
                     journeyId: journey.id,
@@ -1038,7 +1072,6 @@ final class HostDismissalTests: AsyncSpec {
                 expect(exit.properties?["dismissed_by"] as? String).to(equal("host"))
                 let update = try await waitForHostJourneyUpdate(in: updates)
                 expect(update.exitReason).to(equal(.dismissed))
-                expect(updates.values.contains(where: \.isDenied)).to(beFalse())
             }
 
             it("rejects a new host reservation after the identity changes") { @MainActor in
@@ -1478,7 +1511,6 @@ final class HostDismissalTests: AsyncSpec {
                 expect(exit.properties?["dismissed_by"] as? String).to(equal("host"))
                 let journeyUpdate = try await waitForHostJourneyUpdate(in: updates)
                 expect(journeyUpdate.exitReason).to(equal(.dismissed))
-                expect(updates.values.contains(where: \.isDenied)).to(beFalse())
             }
 
             it("resumes an active server effect through its typed wait") { @MainActor in
@@ -1639,7 +1671,7 @@ final class HostDismissalTests: AsyncSpec {
                 expect(harness.journeyExitedCalls()).to(haveCount(1))
             }
 
-            it("resolves triggerAndWait as dismissed without denial") { @MainActor in
+            it("resolves triggerAndWait as dismissed") { @MainActor in
                 let triggerEvent = "host-dismiss-trigger"
                 let harness = await HostJourneyHarness.make(
                     definition: .singleScreen(),
@@ -1725,7 +1757,6 @@ final class HostDismissalTests: AsyncSpec {
                 }
                 expect(update.journeyId).to(equal(presentedJourney.id))
                 expect(update.exitReason).to(equal(.dismissed))
-                expect(progress.values.contains(where: \.isDenied)).to(beFalse())
             }
         }
     }
@@ -2315,15 +2346,6 @@ private extension TriggerUpdate {
     var journeyUpdate: JourneyUpdate? {
         guard case .journey(let update) = self else { return nil }
         return update
-    }
-
-    var isDenied: Bool {
-        switch self {
-        case .decision(.deniedImmediate), .featureAccess(.denied):
-            return true
-        default:
-            return false
-        }
     }
 }
 

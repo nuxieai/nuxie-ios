@@ -148,6 +148,34 @@ final class TriggerServiceTests: AsyncSpec {
                 expect(handledEvents).to(haveCount(1))
             }
 
+            it("ignores unwrapped legacy show_flow payloads without routing side effects") {
+                let payload: [String: AnyCodable] = [
+                    "decision": AnyCodable("show_flow"),
+                    "flowId": AnyCodable("legacy-fallback"),
+                    "policy": AnyCodable("hard"),
+                ]
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: payload,
+                    customer: nil,
+                    eventId: "event-unwrapped-legacy-gate",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil,
+                )
+
+                let updates = TriggerUpdateRecorder()
+
+                await triggerService.trigger("test_event") { update in
+                    updates.append(update)
+                }
+
+                let handledEvents = await mockJourneyService.handledEvents
+                expect(updates.values).to(equal([.decision(.noMatch)]))
+                expect(handledEvents).to(haveCount(1))
+            }
+
             it("emits noMatch when no journeys start") {
                 mockEventLog.trackWithResponseResult = .success()
 
@@ -225,7 +253,6 @@ final class TriggerServiceTests: AsyncSpec {
                 await triggerService.trigger("test_event") { updates.append($0) }
 
                 expect(updates.errorCodes).to(contain(.triggerFailed))
-                expect(updates.values).toNot(contain(.decision(.allowedImmediate)))
                 expect(updates.values).toNot(contain(.decision(.noMatch)))
                 expect(updates.values).to(contain(.decision(.suppressed(.alreadyActive))))
                 expect(updates.values).toNot(contain(.decision(.suppressed(.reentryLimited))))
@@ -257,7 +284,6 @@ final class TriggerServiceTests: AsyncSpec {
                 }
                 expect(updates.errorCodes).to(contain(.triggerFailed))
                 expect(emittedLaterJourney).to(beFalse())
-                expect(updates.values).toNot(contain(.decision(.allowedImmediate)))
             }
 
             it("emits journeyStarted when a journey starts") {
