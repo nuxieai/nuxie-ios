@@ -21,15 +21,16 @@ struct BatchError: Codable, Sendable {
 struct ProfileResponse: Codable, Sendable {
     /// Signed release control plane and sole experience-delivery authority.
     let releases: ExperienceReleaseProfile?
-    /// Segment definitions available for local evaluation.
+    /// Segment identities referenced by the membership snapshot.
     let segments: [Segment]
     let userProperties: [String: AnyCodable]?
     /// Server-computed experiment variant assignments (experimentKey -> assignment)
     let experiments: [String: ExperimentAssignment]?
     /// Customer's feature access (from active subscriptions)
     let features: [Feature]?
-    /// Authoritative server-evaluated membership snapshot.
-    let segmentMemberships: SegmentMembershipSeed?
+    /// Authoritative server-evaluated membership snapshot. This field is required so a
+    /// response that makes no membership claim cannot replace an admitted snapshot.
+    let segmentMemberships: SegmentMembershipSeed
     /// Undelivered server-born journey facts.
     let facts: [JourneyDownFact]?
     /// Pending or parked journeys offered for an epoch-safe device claim.
@@ -41,7 +42,10 @@ struct ProfileResponse: Codable, Sendable {
         userProperties: [String: AnyCodable]? = nil,
         experiments: [String: ExperimentAssignment]? = nil,
         features: [Feature]? = nil,
-        segmentMemberships: SegmentMembershipSeed? = nil,
+        segmentMemberships: SegmentMembershipSeed = SegmentMembershipSeed(
+            evaluatedAt: nil,
+            memberships: []
+        ),
         facts: [JourneyDownFact]? = nil,
         mailbox: [JourneyMailboxEntry]? = nil
     ) {
@@ -156,6 +160,16 @@ struct SegmentMembershipSeed: Codable, Equatable, Sendable {
     public init(evaluatedAt: Date?, memberships: [SeededSegmentMembership]) {
         self.evaluatedAt = evaluatedAt
         self.memberships = memberships
+    }
+}
+
+extension SegmentMembershipSeed: IRSegmentQueries {
+    func isMember(_ segmentId: String) async -> Bool {
+        memberships.contains { $0.segmentId == segmentId }
+    }
+
+    func enteredAt(_ segmentId: String) async -> Date? {
+        memberships.first { $0.segmentId == segmentId }?.enteredAt
     }
 }
 
@@ -323,56 +337,16 @@ enum ExperienceReentry: Codable, Sendable {
     }
 }
 
-/// Declares where a segment definition is evaluated.
-enum SegmentEvaluation: String, Codable, Sendable {
-    /// The server owns membership evaluation and sends authoritative snapshots.
-    case server
-
-    /// Decodes unknown future modes conservatively as server-owned.
-    public init(from decoder: Decoder) throws {
-        let rawValue = try decoder.singleValueContainer().decode(String.self)
-        self = SegmentEvaluation(rawValue: rawValue) ?? .server
-    }
-}
-
 /// A server-evaluated segment definition delivered in a profile response.
 struct Segment: Codable, Sendable {
     /// Stable segment identifier.
     public let id: String
     /// Display name.
     public let name: String
-    /// Compiled IR retained for compatibility and inspection.
-    public let condition: IREnvelope  // Compiled IR expression from backend
-    /// Evaluation owner. Experiences support server ownership.
-    public let evaluation: SegmentEvaluation
-
     /// Creates a segment definition.
-    public init(
-        id: String,
-        name: String,
-        condition: IREnvelope,
-        evaluation: SegmentEvaluation = .server
-    ) {
+    public init(id: String, name: String) {
         self.id = id
         self.name = name
-        self.condition = condition
-        self.evaluation = evaluation
-    }
-
-    private enum CodingKeys: String, CodingKey, Sendable {
-        case id
-        case name
-        case condition
-        case evaluation
-    }
-
-    /// Decodes a segment, defaulting older payloads without an owner to server evaluation.
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        condition = try container.decode(IREnvelope.self, forKey: .condition)
-        evaluation = try container.decodeIfPresent(SegmentEvaluation.self, forKey: .evaluation) ?? .server
     }
 }
 

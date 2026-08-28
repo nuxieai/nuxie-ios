@@ -754,7 +754,7 @@ struct JourneyExecutionState: Codable, Sendable {
 /// persistence.
 struct JourneyStateEnvelope: Codable, Sendable {
     /// Latest state-envelope schema version understood by this SDK.
-    public static let currentVersion = 3
+    public static let currentVersion = 4
 
     /// Schema version checked before applying the envelope.
     public let stateVersion: Int
@@ -916,6 +916,9 @@ struct JourneySnapshot: Codable, Sendable {
     /// Snapshot of experience trigger at journey start
     public var triggerSnapshot: ExperienceTrigger?
 
+    /// Segment membership facts captured when this journey enrolled.
+    public var segmentMemberships: SegmentMembershipSeed
+
     /// Conversion window in seconds
     public var conversionWindow: TimeInterval
 
@@ -933,10 +936,13 @@ struct JourneySnapshot: Codable, Sendable {
     ///   - id: Optional journey ID (for cross-device resume). If nil, generates a new UUID v7.
     ///   - experience: The experience this journey belongs to
     ///   - distinctId: The user identifier
+    ///   - segmentMemberships: Membership facts captured for the life of this run.
+    ///   - now: Enrollment time used to initialize the journey clock.
     public init(
         id: String? = nil,
         experience: Experience,
         distinctId: String,
+        segmentMemberships: SegmentMembershipSeed = .empty,
         now: Date
     ) {
         self.id = id ?? UUID.v7().uuidString
@@ -963,6 +969,7 @@ struct JourneySnapshot: Codable, Sendable {
         self.triggerSnapshot = experience.trigger
         self.goalSnapshot = experience.goal
         self.exitPolicySnapshot = experience.exitPolicy
+        self.segmentMemberships = segmentMemberships
 
         // Set conversion window (use default if not specified)
         if let window = experience.goal?.window {
@@ -1000,6 +1007,7 @@ struct JourneySnapshot: Codable, Sendable {
         case goalSnapshot
         case exitPolicySnapshot
         case triggerSnapshot
+        case segmentMemberships
         case conversionWindow
         case conversionAnchor
         case conversionAnchorAt
@@ -1049,6 +1057,10 @@ struct JourneySnapshot: Codable, Sendable {
         goalSnapshot = try container.decodeIfPresent(GoalConfig.self, forKey: .goalSnapshot)
         exitPolicySnapshot = try container.decodeIfPresent(ExitPolicy.self, forKey: .exitPolicySnapshot)
         triggerSnapshot = try container.decodeIfPresent(ExperienceTrigger.self, forKey: .triggerSnapshot)
+        segmentMemberships = try container.decode(
+            SegmentMembershipSeed.self,
+            forKey: .segmentMemberships
+        )
         conversionWindow = try container.decode(TimeInterval.self, forKey: .conversionWindow)
         conversionAnchor = try container.decode(ConversionAnchor.self, forKey: .conversionAnchor)
         conversionAnchorAt = try container.decode(Date.self, forKey: .conversionAnchorAt)
@@ -1082,6 +1094,7 @@ struct JourneySnapshot: Codable, Sendable {
         try container.encodeIfPresent(goalSnapshot, forKey: .goalSnapshot)
         try container.encodeIfPresent(exitPolicySnapshot, forKey: .exitPolicySnapshot)
         try container.encodeIfPresent(triggerSnapshot, forKey: .triggerSnapshot)
+        try container.encode(segmentMemberships, forKey: .segmentMemberships)
         try container.encode(conversionWindow, forKey: .conversionWindow)
         try container.encode(conversionAnchor, forKey: .conversionAnchor)
         try container.encode(conversionAnchorAt, forKey: .conversionAnchorAt)
@@ -1103,6 +1116,9 @@ struct JourneySnapshot: Codable, Sendable {
         }
         if let exitPolicySnapshot, let value = Self.snapshotValue(exitPolicySnapshot) {
             snapshots["exitPolicy"] = value
+        }
+        if let value = Self.snapshotValue(segmentMemberships) {
+            snapshots["segmentMemberships"] = value
         }
         return JourneyStateEnvelope(
             stateVersion: stateVersion,
@@ -1129,6 +1145,11 @@ struct JourneySnapshot: Codable, Sendable {
         } else {
             claimedConversionAnchor = nil
         }
+        guard let segmentMemberships: SegmentMembershipSeed = Self.decodeSnapshot(
+            envelope.snapshots["segmentMemberships"]
+        ) else {
+            return false
+        }
 
         stateVersion = envelope.stateVersion
         self.epoch = epoch
@@ -1148,6 +1169,7 @@ struct JourneySnapshot: Codable, Sendable {
         ) {
             exitPolicySnapshot = exitPolicy
         }
+        self.segmentMemberships = segmentMemberships
         if let value = envelope.snapshots["conversionWindow"]?.value as? Double {
             conversionWindow = value
         }
@@ -1252,12 +1274,14 @@ final class Journey: Sendable {
         id: String? = nil,
         experience: Experience,
         distinctId: String,
+        segmentMemberships: SegmentMembershipSeed = .empty,
         now: Date
     ) {
         let initial = JourneySnapshot(
             id: id,
             experience: experience,
             distinctId: distinctId,
+            segmentMemberships: segmentMemberships,
             now: now
         )
         self.id = initial.id

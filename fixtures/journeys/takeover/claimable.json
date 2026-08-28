@@ -7,9 +7,9 @@
     "experienceId": "experience-1",
     "experienceVersion": "flow-version-1",
     "epoch": 4,
-    "stateVersion": 3,
+    "stateVersion": 4,
     "envelope": {
-      "stateVersion": 3,
+      "stateVersion": 4,
       "context": {
         "answer": 3
       },
@@ -30,7 +30,9 @@
           "responseVersion": 4
         }
       },
-      "snapshots": {},
+      "snapshots": {
+        "segmentMemberships": {"evaluatedAt": null, "memberships": []}
+      },
       "responseSession": {
         "responseId": "rsp_fdf96a130d4da11a334943fddeae435c692b09f043d68c86a2c0298edbe8def7",
         "journeyId": "journey-takeover-1",

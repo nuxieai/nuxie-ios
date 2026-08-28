@@ -109,3 +109,4 @@ plans/
 
 # macOS
 .DS_Store
+*.profraw

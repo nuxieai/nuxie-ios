@@ -38,7 +38,6 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
   // MARK: - Dependencies (constructor-injected, Phase 4c)
 
   private let eventLog: EventHistoryReading
-  private let segmentService: SegmentServiceProtocol
   private let featureService: FeatureServiceProtocol
   private let identityService: IdentityServiceProtocol
   private let dateProvider: DateProviderProtocol
@@ -48,14 +47,12 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
 
   init(
     eventLog: EventHistoryReading,
-    segments: SegmentServiceProtocol,
     features: FeatureServiceProtocol,
     identity: IdentityServiceProtocol,
     dateProvider: DateProviderProtocol,
     irRuntime: IRRuntime
   ) {
     self.eventLog = eventLog
-    self.segmentService = segments
     self.featureService = features
     self.identityService = identity
     self.dateProvider = dateProvider
@@ -194,14 +191,13 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
       }
     }
 
-    // Segment memberships are tracked for the CURRENT user only. A journey
-    // belonging to a previous identity (e.g. during a logout/login window)
-    // must not convert on the new user's membership.
+    // Only the current user's run may convert; its membership facts remain the
+    // enrollment-time snapshot even after the admitted profile changes.
     guard journey.distinctId == identityService.getDistinctId() else {
       return (false, nil)
     }
 
-    let isMember = await segmentService.isInSegment(segmentId)
+    let isMember = await journey.segmentMemberships.isMember(segmentId)
 
     if isMember {
       return (true, now)
@@ -229,14 +225,13 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
       }
     }
 
-    // Segment memberships are tracked for the CURRENT user only. A journey
-    // belonging to a previous identity (e.g. during a logout/login window)
-    // must not convert on the new user's membership.
+    // Only the current user's run may convert; its membership facts remain the
+    // enrollment-time snapshot even after the admitted profile changes.
     guard journey.distinctId == identityService.getDistinctId() else {
       return (false, nil)
     }
 
-    let isMember = await segmentService.isInSegment(segmentId)
+    let isMember = await journey.segmentMemberships.isMember(segmentId)
 
     if !isMember {
       return (true, now)
@@ -290,7 +285,8 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
     let config = irRuntime.standardConfig(
       journeyId: journey.id,
       distinctId: journey.distinctId,
-      additionalEvents: transientEvents
+      additionalEvents: transientEvents,
+      segments: journey.segmentMemberships
     )
 
     LogDebug("[GoalEvaluator] Evaluating IR expression: \(attributeExpr)")
@@ -374,9 +370,11 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
         timestamp: storedEvent.timestamp
       )
 
-      let config = IRRuntime.Config(
+      let config = irRuntime.standardConfig(
         event: nuxieEvent,
-        journeyId: journey.id
+        journeyId: journey.id,
+        distinctId: journey.distinctId,
+        segments: journey.segmentMemberships
       )
 
       let filterMatches = await irRuntime.eval(filter, config)

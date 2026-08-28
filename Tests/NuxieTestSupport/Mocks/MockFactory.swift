@@ -36,7 +36,17 @@ public final class MockFactory: @unchecked Sendable {
     private lazy var _identityService = MockIdentityService()
     private lazy var _segmentService = MockSegmentService()
     private lazy var _journeyStore = MockJourneyStore()
-    private lazy var _profileService = MockProfileService()
+    private lazy var _profileService: MockProfileService = {
+        let profile = MockProfileService()
+        let experiences = self._experienceService
+        profile.experienceResolver = { experienceId, versionId in
+            try await experiences.experienceForJourneyControl(
+                experienceId: experienceId,
+                versionId: versionId
+            )
+        }
+        return profile
+    }()
     private lazy var _eventLog: MockEventLog = {
         let log = MockEventLog()
         log.identity = self._identityService
@@ -125,6 +135,7 @@ public final class MockFactory: @unchecked Sendable {
         presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace(),
         restoredPresentationAttempt: ExperiencePresentationAttempt? = nil,
         responseWriter: ResponseWriting? = nil,
+        segments suppliedSegments: SegmentServiceProtocol? = nil,
         features suppliedFeatures: FeatureServiceProtocol? = nil,
         featureInfo suppliedFeatureInfo: FeatureInfo? = nil
     ) -> JourneyService {
@@ -139,15 +150,15 @@ public final class MockFactory: @unchecked Sendable {
             featureInfo: featureInfo,
             cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
+        let segments = suppliedSegments ?? segmentService
         irRuntime.wire(
             identity: identityService,
             eventLog: eventLog,
-            segments: segmentService,
+            segments: segments,
             features: features
         )
         let goalEvaluator = GoalEvaluator(
             eventLog: eventLog,
-            segments: segmentService,
             features: features,
             identity: identityService,
             dateProvider: dateProvider,
@@ -158,7 +169,7 @@ public final class MockFactory: @unchecked Sendable {
             experiences: experienceService,
             profile: profileService,
             identity: identityService,
-            segments: segmentService,
+            segments: segments,
             features: features,
             experiencePresentation: experiencePresentation ?? experiencePresentationService,
             eventLog: eventLog,

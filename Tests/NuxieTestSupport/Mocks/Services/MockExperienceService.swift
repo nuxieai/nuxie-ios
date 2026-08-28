@@ -9,6 +9,8 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     private var _removedExperienceVersionIds: [String] = []
     private var _fetchedExperienceVersionIds: [String] = []
     private var _releaseProfiles: [ExperienceReleaseProfile?] = []
+    private var _committedReleaseProfiles: [ExperienceReleaseProfile?] = []
+    private var _latestProfileGeneration: UInt64 = 0
     private var _authenticatedReleaseReferences: [ExperienceReference]?
     private var _releaseProfileFailuresRemaining = 0
     private var _releaseProfileAuthenticationGate: ReleaseProfileAuthenticationGate?
@@ -54,6 +56,10 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
 
     public var releaseProfiles: [ExperienceReleaseProfile?] {
         withLock { _releaseProfiles }
+    }
+
+    public var committedReleaseProfiles: [ExperienceReleaseProfile?] {
+        withLock { _committedReleaseProfiles }
     }
 
     var authenticatedReleaseReferences: [ExperienceReference]? {
@@ -216,9 +222,9 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
         return ExperiencePresentationWarmReservation(release: {})
     }
     
-    public func replaceReleaseProfile(
+    public func prepareReleaseProfile(
         _ profile: ExperienceReleaseProfile?
-    ) async throws -> [ExperienceReference]? {
+    ) async throws -> PreparedExperienceReleaseProfile {
         withLock { _releaseProfiles.append(profile) }
         if profile != nil {
             let shouldFail = withLock { () -> Bool in
@@ -234,16 +240,71 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
                 )
             }
         }
-        guard let profile else { return nil }
-        if let configured = withLock({ _authenticatedReleaseReferences }) {
-            return configured
+        guard let profile else {
+            return PreparedExperienceReleaseProfile(profile: nil, catalog: nil)
         }
-        return (profile.active + profile.pinned).map {
+        if let configured = withLock({ _authenticatedReleaseReferences }) {
+            return PreparedExperienceReleaseProfile(
+                profile: profile,
+                catalog: nil,
+                references: configured
+            )
+        }
+        let references = (profile.active + profile.pinned).map {
             ExperienceReference(
                 experienceId: $0.locator.experienceId,
                 versionId: $0.locator.experienceVersionId
             )
         }
+        return PreparedExperienceReleaseProfile(
+            profile: profile,
+            catalog: nil,
+            references: references
+        )
+    }
+
+    public func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64
+    ) async throws -> ExperienceRoutingCatalog? {
+        let committed = withLock { () -> (
+            references: [ExperienceReference],
+            experiences: [String: Experience],
+            fallback: Experience?
+        )? in
+            guard generation >= _latestProfileGeneration else { return nil }
+            _latestProfileGeneration = generation
+            _committedReleaseProfiles.append(prepared.profile)
+            return (
+                prepared.references ?? [],
+                _mockExperiences,
+                _defaultMockExperience
+            )
+        }
+        guard let committed else { return nil }
+        return ExperienceRoutingCatalog(
+            generation: generation,
+            references: committed.references
+        ) { experienceId, versionId in
+            if let experience = committed.experiences[versionId],
+               experience.id == experienceId {
+                return experience
+            }
+            if let fallback = committed.fallback,
+               fallback.id == experienceId,
+               fallback.versionId == versionId {
+                return fallback
+            }
+            throw MockExperienceServiceError.experienceNotFound(versionId)
+        }
+    }
+
+    public func replaceReleaseProfile(
+        _ profile: ExperienceReleaseProfile?
+    ) async throws -> [ExperienceReference]? {
+        let prepared = try await prepareReleaseProfile(profile)
+        let committed = try await commitReleaseProfile(prepared, generation: 0)
+        return profile == nil ? nil : committed?.references
     }
 
     public func removeExperiences(_ versionIds: [String]) async {
@@ -374,6 +435,8 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             _removedExperienceVersionIds = []
             _fetchedExperienceVersionIds = []
             _releaseProfiles = []
+            _committedReleaseProfiles = []
+            _latestProfileGeneration = 0
             _authenticatedReleaseReferences = nil
             _releaseProfileFailuresRemaining = 0
             _releaseProfileAuthenticationGate = nil

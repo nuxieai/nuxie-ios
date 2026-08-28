@@ -1,7 +1,7 @@
 import Foundation
 import Quick
 import Nimble
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
 private actor ConditionalProfileAPI: ProfileFetching {
@@ -49,6 +49,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 mockFactory = MockFactory.shared
                 await mockFactory.nuxieApi.reset()
                 mockFactory.experienceService.reset()
+                await mockFactory.segmentService.reset()
                 profileService = ProfileService(
                     cache: InMemoryCachedProfileStore(ttl: nil),
                     identity: mockFactory.identityService,
@@ -157,6 +158,239 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 expect(mockFactory.experienceService.releaseProfiles.last ?? nil)
                     .to(equal(profile.releases))
                 expect(mockFactory.experienceService.prefetchedExperiences).to(beEmpty())
+            }
+
+            it("hydrates membership only from the persisted admitted profile snapshot") {
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let distinctId = "offline-membership-user"
+                let segment = Segment(id: "offline-segment", name: "Offline")
+                let enteredAt = Date(timeIntervalSince1970: 1_746_178_320)
+                let profile = ProfileResponse(
+                    segments: [segment],
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: enteredAt,
+                        memberships: [
+                            SeededSegmentMembership(
+                                segmentId: segment.id,
+                                enteredAt: enteredAt
+                            )
+                        ]
+                    )
+                )
+                try await cache.store(
+                    CachedProfile(
+                        response: profile,
+                        distinctId: distinctId,
+                        cachedAt: mockFactory.dateProvider.now()
+                    ),
+                    forKey: distinctId
+                )
+                let realSegmentService = SegmentService()
+                mockFactory.identityService.setDistinctId(distinctId)
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: realSegmentService,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: ConfigurationLocaleIdentifierProvider(
+                        configuredLocale: { "en_US" }
+                    )
+                )
+
+                _ = await profileService.getCachedProfile(distinctId: distinctId)
+
+                await expect { await realSegmentService.isInSegment(segment.id) }
+                    .to(beTrue())
+                await expect { await realSegmentService.enteredAt(segment.id) }
+                    .to(equal(enteredAt))
+            }
+
+            it("keeps the newest membership when same-user refreshes complete out of order") {
+                let distinctId = "overlapping-membership-user"
+                let oldSegment = Segment(id: "old-segment", name: "Old")
+                let newSegment = Segment(id: "new-segment", name: "New")
+                let gate = ReleaseProfileAuthenticationGate()
+                let realSegmentService = SegmentService()
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.experienceService.releaseProfileAuthenticationGate = gate
+                profileService = ProfileService(
+                    cache: InMemoryCachedProfileStore(ttl: nil),
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: realSegmentService,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: ConfigurationLocaleIdentifierProvider(
+                        configuredLocale: { "en_US" }
+                    )
+                )
+                await mockFactory.nuxieApi.setProfileResponse(ProfileResponse(
+                    segments: [oldSegment],
+                    releases: Self.releaseProfile(experienceId: "old-release"),
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: nil,
+                        memberships: [SeededSegmentMembership(
+                            segmentId: oldSegment.id,
+                            enteredAt: Date(timeIntervalSince1970: 10)
+                        )]
+                    )
+                ))
+                let service = profileService!
+                let olderRefresh = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await gate.waitUntilSuspended()
+                await mockFactory.nuxieApi.setProfileResponse(ProfileResponse(
+                    segments: [newSegment],
+                    releases: Self.releaseProfile(experienceId: "new-release"),
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: nil,
+                        memberships: [SeededSegmentMembership(
+                            segmentId: newSegment.id,
+                            enteredAt: Date(timeIntervalSince1970: 20)
+                        )]
+                    )
+                ))
+
+                _ = try await service.refetchProfile(distinctId: distinctId)
+                await gate.resume()
+                _ = try await olderRefresh.value
+
+                await expect { await realSegmentService.isInSegment(newSegment.id) }
+                    .to(beTrue())
+                await expect { await realSegmentService.isInSegment(oldSegment.id) }
+                    .to(beFalse())
+                let cached = await profileService.getCachedProfile(distinctId: distinctId)
+                expect(cached?.segments.first?.id).to(equal(newSegment.id))
+                expect((mockFactory.experienceService.committedReleaseProfiles.last ?? nil)?
+                    .active.first?.locator.experienceId).to(equal("new-release"))
+            }
+
+            it("keeps the old complete generation observable while a replacement is suspended") {
+                let distinctId = "atomic-admission-user"
+                let oldSegment = Segment(id: "atomic-old", name: "Old")
+                let newSegment = Segment(id: "atomic-new", name: "New")
+                let segments = SegmentService()
+                mockFactory.identityService.setDistinctId(distinctId)
+                profileService = ProfileService(
+                    cache: InMemoryCachedProfileStore(ttl: nil),
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: ConfigurationLocaleIdentifierProvider(
+                        configuredLocale: { "en_US" }
+                    )
+                )
+                let oldProfile = ProfileResponse(
+                    segments: [oldSegment],
+                    releases: Self.releaseProfile(experienceId: "atomic-old-release"),
+                    userProperties: ["profile_generation": AnyCodable("old")],
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: Date(timeIntervalSince1970: 10),
+                        memberships: [SeededSegmentMembership(
+                            segmentId: oldSegment.id,
+                            enteredAt: Date(timeIntervalSince1970: 5)
+                        )]
+                    )
+                )
+                await mockFactory.nuxieApi.setProfileResponse(oldProfile)
+                _ = try await profileService.refetchProfile(distinctId: distinctId)
+
+                let gate = ReleaseProfileAuthenticationGate()
+                mockFactory.experienceService.releaseProfileAuthenticationGate = gate
+                let newProfile = ProfileResponse(
+                    segments: [newSegment],
+                    releases: Self.releaseProfile(experienceId: "atomic-new-release"),
+                    userProperties: ["profile_generation": AnyCodable("new")],
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: Date(timeIntervalSince1970: 20),
+                        memberships: [SeededSegmentMembership(
+                            segmentId: newSegment.id,
+                            enteredAt: Date(timeIntervalSince1970: 15)
+                        )]
+                    )
+                )
+                await mockFactory.nuxieApi.setProfileResponse(newProfile)
+                let service = profileService!
+                let refresh = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await gate.waitUntilSuspended()
+
+                let during = await profileService.getCachedProfile(distinctId: distinctId)
+                let duringReferences = await profileService.getActiveExperienceReferences(
+                    distinctId: distinctId
+                )
+                expect(during?.segments.first?.id).to(equal(oldSegment.id))
+                expect(duringReferences?.first?.experienceId).to(equal("atomic-old-release"))
+                await expect { await segments.snapshot(for: distinctId) }
+                    .to(equal(oldProfile.segmentMemberships))
+                expect(mockFactory.identityService.getUserProperties()["profile_generation"] as? String)
+                    .to(equal("old"))
+                expect((mockFactory.experienceService.committedReleaseProfiles.last ?? nil)?
+                    .active.first?.locator.experienceId).to(equal("atomic-old-release"))
+
+                await gate.resume()
+                _ = try await refresh.value
+
+                let admitted = await profileService.getCachedProfile(distinctId: distinctId)
+                expect(admitted?.segments.first?.id).to(equal(newSegment.id))
+                await expect { await segments.snapshot(for: distinctId) }
+                    .to(equal(newProfile.segmentMemberships))
+            }
+
+            it("keeps routing absent until the first atomic admission commits") {
+                let distinctId = "cold-routing-admission-user"
+                let gate = ReleaseProfileAuthenticationGate()
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.experienceService.authenticatedReleaseReferences = []
+                mockFactory.experienceService.releaseProfileAuthenticationGate = gate
+                await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(
+                    experienceId: "authoritative-empty"
+                ))
+
+                let service = profileService!
+                let refresh = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await gate.waitUntilSuspended()
+
+                let pendingAdmission = await service.getTriggerAdmission(distinctId: distinctId)
+                let pendingEffective = await service.getEffectiveExperienceReferences(
+                    distinctId: distinctId
+                )
+                let pendingActive = await service.getActiveExperienceReferences(
+                    distinctId: distinctId
+                )
+                expect(pendingAdmission).to(beNil())
+                expect(pendingEffective).to(beNil())
+                expect(pendingActive).to(beNil())
+
+                await gate.resume()
+                _ = try await refresh.value
+
+                let admitted = await service.getTriggerAdmission(distinctId: distinctId)
+                let effective = await service.getEffectiveExperienceReferences(
+                    distinctId: distinctId
+                )
+                let active = await service.getActiveExperienceReferences(
+                    distinctId: distinctId
+                )
+                expect(admitted).notTo(beNil())
+                expect(admitted?.effectiveExperienceReferences).to(beEmpty())
+                expect(admitted?.activeExperienceReferences).to(beEmpty())
+                expect(effective).to(beEmpty())
+                expect(active).to(beEmpty())
             }
 
             it("revalidates a fresh disk profile and keeps its cached authority on 304") {
@@ -382,8 +616,9 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     )
                 )
 
+                let service = profileService!
                 let oldLoad = Task {
-                    await profileService.getCachedProfile(distinctId: oldId)
+                    await service.getCachedProfile(distinctId: oldId)
                 }
                 await gate.waitUntilSuspended()
                 mockFactory.identityService.setDistinctId(newId)
@@ -407,6 +642,86 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     allowStale: true
                 )
                 expect(evictedOld).to(beNil())
+            }
+
+            it("does not let successful startup hydration overwrite a user transition") {
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let segments = SegmentService()
+                let oldId = "startup-old-user"
+                let newId = "startup-new-user"
+                let oldSegment = Segment(id: "startup-old-segment", name: "Old")
+                let newSegment = Segment(id: "startup-new-segment", name: "New")
+                let oldProfile = ProfileResponse(
+                    segments: [oldSegment],
+                    releases: Self.releaseProfile(experienceId: "startup-old-release"),
+                    userProperties: ["startup_generation": AnyCodable("old")],
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: nil,
+                        memberships: [SeededSegmentMembership(
+                            segmentId: oldSegment.id,
+                            enteredAt: Date(timeIntervalSince1970: 10)
+                        )]
+                    )
+                )
+                let newProfile = ProfileResponse(
+                    segments: [newSegment],
+                    releases: Self.releaseProfile(experienceId: "startup-new-release"),
+                    userProperties: ["startup_generation": AnyCodable("new")],
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: nil,
+                        memberships: [SeededSegmentMembership(
+                            segmentId: newSegment.id,
+                            enteredAt: Date(timeIntervalSince1970: 20)
+                        )]
+                    )
+                )
+                try await cache.store(
+                    CachedProfile(response: oldProfile, distinctId: oldId, cachedAt: Date()),
+                    forKey: oldId
+                )
+                try await cache.store(
+                    CachedProfile(response: newProfile, distinctId: newId, cachedAt: Date()),
+                    forKey: newId
+                )
+                let gate = ReleaseProfileAuthenticationGate()
+                mockFactory.identityService.setDistinctId(oldId)
+                mockFactory.experienceService.releaseProfileAuthenticationGate = gate
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: ConfigurationLocaleIdentifierProvider(
+                        configuredLocale: { "en_US" }
+                    )
+                )
+
+                let service = profileService!
+                let startup = Task {
+                    await service.getCachedProfile(distinctId: oldId)
+                }
+                await gate.waitUntilSuspended()
+                mockFactory.identityService.setDistinctId(newId)
+                await profileService.handleUserChange(from: oldId, to: newId)
+                await gate.resume()
+                _ = await startup.value
+
+                let retained = await profileService.getCachedProfile(distinctId: newId)
+                expect(retained?.segments.first?.id).to(equal(newSegment.id))
+                let effective = await profileService.getEffectiveExperienceReferences(
+                    distinctId: newId
+                )
+                expect(effective?.first?.experienceId).to(equal("startup-new-release"))
+                await expect { await segments.snapshot(for: newId) }
+                    .to(equal(newProfile.segmentMemberships))
+                expect(mockFactory.identityService.getUserProperties()["startup_generation"] as? String)
+                    .to(equal("new"))
+                expect((mockFactory.experienceService.committedReleaseProfiles.last ?? nil)?
+                    .active.first?.locator.experienceId).to(equal("startup-new-release"))
             }
 
             it("does not retry a poisoned cached release after network recovery fails") {

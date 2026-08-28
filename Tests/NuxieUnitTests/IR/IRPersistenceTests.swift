@@ -38,25 +38,24 @@ final class IRPersistenceTests: AsyncSpec {
         }
 
         describe("cached profile persistence") {
-            it("encodes and decodes profile responses containing IR") {
+            it("encodes and decodes profile responses containing membership snapshots") {
                 let cachedProfile = CachedProfile(
                     response: ProfileResponse(
                         segments: [
-                            Segment(
-                                id: "segment_1",
-                                name: "High Intent",
-                                condition: makeEnvelope(.eventsCount(
-                                    name: "paywall_viewed",
-                                    since: .timeAgo(duration: .duration(86_400)),
-                                    until: .timeNow,
-                                    within: nil,
-                                    where_: .pred(op: "eq", key: "screen", value: .string("premium"))
-                                ))
-                            ),
+                            Segment(id: "segment_1", name: "High Intent"),
                         ],
                         userProperties: nil,
                         experiments: nil,
-                        features: nil
+                        features: nil,
+                        segmentMemberships: SegmentMembershipSeed(
+                            evaluatedAt: nil,
+                            memberships: [
+                                SeededSegmentMembership(
+                                    segmentId: "segment_1",
+                                    enteredAt: Date(timeIntervalSince1970: 1_723_700_000)
+                                )
+                            ]
+                        )
                     ),
                     distinctId: "user_1",
                     cachedAt: Date(timeIntervalSince1970: 1_723_780_000)
@@ -67,7 +66,8 @@ final class IRPersistenceTests: AsyncSpec {
 
                 expect(decoded.distinctId).to(equal("user_1"))
                 expect(decoded.response.segments).to(haveCount(1))
-                expect(decoded.response.segments[0].condition).to(equal(cachedProfile.response.segments[0].condition))
+                expect(decoded.response.segmentMemberships)
+                    .to(equal(cachedProfile.response.segmentMemberships))
             }
         }
 
@@ -270,6 +270,36 @@ final class IRPersistenceTests: AsyncSpec {
                 expect(store.loadJourney(id: journey.id)).to(beNil())
                 expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
                 expect(store.loadActiveJourneys()).to(beEmpty())
+                expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
+            }
+
+            it("rejects a pre-membership v3 snapshot through the version gate") {
+                let journey = JourneySnapshot(
+                    id: "journey_pre_membership_v3",
+                    experience: makeExperience(),
+                    distinctId: "user_1",
+                    now: Date()
+                )
+                let store = JourneyStore(
+                    customStoragePath: tempRoot,
+                    dateProvider: SystemDateProvider()
+                )
+                try store.saveJourney(journey)
+                let file = try onlyActiveJourneyFile()
+                var object = try JSONSerialization.jsonObject(
+                    with: Data(contentsOf: file)
+                ) as! [String: Any]
+                object["stateVersion"] = 3
+                object.removeValue(forKey: "segmentMemberships")
+                try JSONSerialization.data(withJSONObject: object).write(
+                    to: file,
+                    options: .atomic
+                )
+
+                expect(store.loadJourney(id: journey.id)).to(beNil())
+                expect(store.loadActiveJourneys()).to(beEmpty())
+                // Unsupported versions are retained for a future compatible
+                // SDK, proving decoding never classified this as corruption.
                 expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
             }
 

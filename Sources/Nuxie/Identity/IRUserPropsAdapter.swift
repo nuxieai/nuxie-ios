@@ -12,3 +12,11 @@ struct IRUserPropsAdapter: IRUserProps {
         return await identityService.userProperty(for: key)
     }
 }
+
+struct IRUserPropertySnapshot: IRUserProps {
+    let properties: [String: AnyCodable]
+
+    func userProperty(for key: String) async -> Any? {
+        properties[key]?.value
+    }
+}

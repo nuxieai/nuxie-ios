@@ -20,9 +20,6 @@ public actor MockJourneyService: JourneyServiceProtocol {
     public var triggerResults: [JourneyTriggerResult] = []
     public var capturedEventRoutingAvailable = true
     
-    /// Track segment changes
-    public var segmentChanges: [(distinctId: String, segments: Set<String>)] = []
-    
     /// Active journeys by user
     private var activeJourneysByUser: [String: [Journey]] = [:]
     
@@ -125,10 +122,6 @@ public actor MockJourneyService: JourneyServiceProtocol {
         capturedEventRoutingAvailable = available
     }
     
-    public func handleSegmentChange(distinctId: String, segments: Set<String>) async {
-        segmentChanges.append((distinctId: distinctId, segments: segments))
-    }
-    
     public func getActiveJourneys(for distinctId: String) async -> [Journey] {
         return activeJourneysByUser[distinctId] ?? []
     }
@@ -172,7 +165,6 @@ public actor MockJourneyService: JourneyServiceProtocol {
         startedJourneys.removeAll()
         resumedJourneys.removeAll()
         handledEvents.removeAll()
-        segmentChanges.removeAll()
         activeJourneysByUser.removeAll()
         checkExpiredTimersCallCount = 0
         initializeCallCount = 0

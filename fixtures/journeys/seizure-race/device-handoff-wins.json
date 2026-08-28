@@ -8,7 +8,7 @@
       "epoch": 8,
       "direction": "device_to_server",
       "envelope": {
-        "stateVersion": 3,
+        "stateVersion": 4,
         "context": {
           "answer": 3
         },
@@ -27,7 +27,9 @@
           },
           "navigationStack": []
         },
-        "snapshots": {},
+        "snapshots": {
+          "segmentMemberships": {"evaluatedAt": null, "memberships": []}
+        },
         "responseSession": null
       }
     }

@@ -213,30 +213,37 @@ final class IRTestSegmentService: SegmentServiceProtocol, IRSegmentQueries, @unc
     var memberSegments: Set<String> = ["premium_users"]
     var enteredDates: [String: Date] = ["premium_users": Date(timeIntervalSince1970: 1704067200)] // 2024-01-01
     
-    func getCurrentMemberships() async -> [SegmentService.SegmentMembership] {
-        return memberSegments.map { segmentId in
-            SegmentService.SegmentMembership(
-                segmentId: segmentId,
-                segmentName: segmentId,
-                enteredAt: enteredDates[segmentId] ?? Date(),
-                lastEvaluated: Date()
-            )
-        }
+    func replaceSnapshot(
+        _ snapshot: SegmentMembershipSeed,
+        definitions: [Segment],
+        for distinctId: String
+    ) async {
+        memberSegments = Set(snapshot.memberships.map(\.segmentId))
+        enteredDates = Dictionary(uniqueKeysWithValues: snapshot.memberships.map {
+            ($0.segmentId, $0.enteredAt)
+        })
     }
-    
-    func updateSegments(_ segments: [Segment], for distinctId: String) async {}
-    func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
-    func clearSegments(for distinctId: String) async { memberSegments.removeAll(); enteredDates.removeAll() }
-    var segmentChanges: AsyncStream<SegmentService.SegmentEvaluationResult> {
-        AsyncStream { _ in }
+
+    func snapshot(for distinctId: String) async -> SegmentMembershipSeed {
+        SegmentMembershipSeed(
+            evaluatedAt: nil,
+            memberships: memberSegments.map {
+                SeededSegmentMembership(
+                    segmentId: $0,
+                    enteredAt: enteredDates[$0] ?? Date()
+                )
+            }
+        )
     }
+
+    func clearSnapshot(for distinctId: String) async { memberSegments.removeAll(); enteredDates.removeAll() }
     
     func isInSegment(_ segmentId: String) async -> Bool {
         return memberSegments.contains(segmentId)
     }
-    
+
     func isMember(_ segmentId: String) async -> Bool {
-        return memberSegments.contains(segmentId)
+        memberSegments.contains(segmentId)
     }
     
     func enteredAt(_ segmentId: String) async -> Date? {

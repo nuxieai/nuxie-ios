@@ -45,12 +45,8 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 expect(actual as NSArray).to(equal(expected as NSArray))
             }
 
-            it("mirrors the server seed timeline") {
+            it("admits read-only membership snapshots") {
                 let fixture = try Self.loadObject("segments/seed-mirror/server-mode.json")
-                let distinctId: String = try Self.required(
-                    fixture["distinctId"] as? String,
-                    "distinctId"
-                )
                 let definitions: [[String: Any]] = try Self.required(
                     fixture["definitions"] as? [[String: Any]],
                     "definitions"
@@ -60,49 +56,29 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     "timeline"
                 )
                 let service = SegmentService()
-                let segments = definitions.map { definition in
-                    Segment(
-                        id: definition["id"] as! String,
-                        name: definition["name"] as! String,
-                        condition: IREnvelope(
-                            ir_version: 1,
-                            engine_min: nil,
-                            compiled_at: nil,
-                            expr: .bool(true)
-                        ),
-                        evaluation: .server
-                    )
-                }
-                await service.updateSegments(segments, for: distinctId)
 
                 for step in timeline {
-                    let generation = (step["generation"] as! NSNumber).uint64Value
-                    let seed: SegmentMembershipSeed?
-                    if let seedObject = step["seed"] as? [String: Any] {
-                        let decoder = JSONDecoder()
-                        decoder.dateDecodingStrategy = .iso8601
-                        seed = try decoder.decode(
-                            SegmentMembershipSeed.self,
-                            from: JSONSerialization.data(withJSONObject: seedObject)
-                        )
-                    } else {
-                        seed = nil
-                    }
-                    let result = await service.applySeed(
-                        seed,
-                        generation: generation,
-                        distinctId: distinctId
+                    let distinctId = step["distinctId"] as! String
+                    var profileObject = step["profile"] as! [String: Any]
+                    profileObject["segments"] = definitions
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .iso8601
+                    let profile = try? decoder.decode(
+                        ProfileResponse.self,
+                        from: JSONSerialization.data(withJSONObject: profileObject)
                     )
-                    let memberships = await service.getCurrentMemberships()
-                    expect(memberships.map(\.segmentId))
+                    expect(profile != nil).to(equal(step["accepted"] as? Bool))
+                    if let profile {
+                        await service.replaceSnapshot(
+                            profile.segmentMemberships,
+                            definitions: profile.segments,
+                            for: distinctId
+                        )
+                    }
+                    let snapshot = await service.snapshot(for: distinctId)
+                    expect(snapshot.memberships.map(\.segmentId))
                         .to(equal(step["expectedMembershipIds"] as? [String]))
-                    expect(result?.entered.map(\.id) ?? [])
-                        .to(equal(step["expectedEnteredIds"] as? [String]))
-                    expect(result?.exited.map(\.id) ?? [])
-                        .to(equal(step["expectedExitedIds"] as? [String]))
                 }
-
-                await service.clearSegments(for: distinctId)
             }
 
             it("decodes down-fact and golden-vocabulary fixtures") {

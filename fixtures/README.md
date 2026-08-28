@@ -4,7 +4,8 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 
 - `journeys/transitions`: a timeline maps to ordered `$journey_transition` facts with exact properties.
 - `journeys/effects`: deterministic request ids, server completion facts, result binding, timeout, late-arrival, and offline-delivery semantics.
-- `segments/seed-mirror`: profile generations reconcile an authoritative server membership mirror.
+- `segments/seed-mirror`: admitted profile snapshots replace the read-only membership value;
+  missing membership rejects the response and explicit empty membership clears it.
 - `events/down-facts`: repeated server facts commit once, never upload, and route once to subscribers.
 - `events/experience-events`: canonical `$experience_*` names and the
   experience identity/version properties carried by presentation facts and
