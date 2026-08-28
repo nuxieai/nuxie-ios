@@ -172,8 +172,8 @@ final class HistoryViewController: UIViewController {
                 "entry_count": moodStore.count,
                 "source": "history_toolbar"
             ]) { [weak self] update in
-                self?.handleTriggerUpdate(update) { [weak self] in
-                    self?.performCSVExport()
+                Task { @MainActor [weak self] in
+                    self?.handleTriggerUpdate(update)
                 }
             }
         }
@@ -235,9 +235,8 @@ final class HistoryViewController: UIViewController {
             "total_entries": moodStore.count,
             "source": "history_screen"
         ]) { [weak self] update in
-            self?.handleTriggerUpdate(update) { [weak self] in
-                self?.loadEntries()
-                self?.showSuccessMessage()
+            Task { @MainActor [weak self] in
+                self?.handleTriggerUpdate(update)
             }
         }
     }
@@ -245,41 +244,21 @@ final class HistoryViewController: UIViewController {
     // MARK: - Nuxie Flow Handling
 
     /// Handles the result of a tracked event that may trigger a flow
-    private func handleTriggerUpdate(_ update: TriggerUpdate, onAllowed: (() -> Void)? = nil) {
+    private func handleTriggerUpdate(_ update: TriggerUpdate) {
         switch update {
-        case .featureAccess(let featureAccess):
-            switch featureAccess {
-            case .allowed:
-                onAllowed?()
-            case .denied:
-                showError("This is a Pro feature")
-            case .pending:
-                break
-            }
-        case .decision(let decision):
-            switch decision {
-            case .allowedImmediate:
-                onAllowed?()
-            case .deniedImmediate, .noMatch, .suppressed:
-                showError("This is a Pro feature")
-            default:
-                break
-            }
+        case .decision(.journeyStarted(let experience)):
+            print("[MoodLog] Journey started for experience \(experience.experienceId)")
+        case .decision(.experienceShown(let experience)):
+            print("[MoodLog] Experience shown: \(experience.experienceId)")
+        case .decision(.suppressed(let reason)):
+            print("[MoodLog] Journey suppressed: \(reason)")
+        case .decision(.noMatch):
+            showError("No upgrade experience is configured for this event.")
+        case .journey(let journey):
+            print("[MoodLog] Journey \(journey.journeyId) finished: \(journey.exitReason.rawValue)")
         case .error(let error):
             showError("Unable to load: \(error.message)")
-        case .journey:
-            break
         }
-    }
-
-    private func showSuccessMessage() {
-        let alert = UIAlertController(
-            title: "🎉 Welcome to Pro!",
-            message: "You now have access to unlimited history!",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "Great!", style: .default))
-        present(alert, animated: true)
     }
 }
 

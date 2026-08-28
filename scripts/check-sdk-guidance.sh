@@ -53,6 +53,15 @@ for removed_api in startNewSession endSession resetSession 'setSessionId('; do
   fi
 done
 
+for removed_trigger_surface in '.featureAccess(' '.allowedImmediate' '.deniedImmediate'; do
+  if grep -R -Fq "$removed_trigger_surface" Examples; then
+    fail "example mentions removed trigger surface: $removed_trigger_surface"
+  fi
+done
+if grep -Fq 'journey lifecycle, feature access' Sources/Nuxie/NuxieSDK.swift; then
+  fail 'NuxieSDK.trigger documentation mentions removed trigger feature-access updates'
+fi
+
 for removed_config in enableFileLogging propertiesSanitizer do-not-track do‑not‑track FactoryKit \
   Container.shared '@Injected(' DI/NuxieContainer.swift; do
   if grep -Fq "$removed_config" README.md CLAUDE.md; then

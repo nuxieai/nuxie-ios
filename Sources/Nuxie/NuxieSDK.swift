@@ -354,7 +354,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
   /// Trigger an event: tracks it, evaluates matching experiences, and may
   /// present an experience. Fire-and-forget; pass `handler` to observe progressive
-  /// updates (decisions, journey lifecycle, feature access) for this trigger.
+  /// updates (routing decisions and journey lifecycle) for this trigger.
   public func trigger(
     _ event: String,
     properties: [String: Any]? = nil,

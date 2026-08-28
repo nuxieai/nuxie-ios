@@ -345,14 +345,15 @@ final class TodayViewController: UIViewController {
         /// Nuxie's backend decide whether to show a flow based on experiences
         /// configured in the dashboard.
         ///
-        /// The handler receives TriggerUpdate events with decisions and
-        /// feature-access updates.
+        /// The handler receives TriggerUpdate routing and journey-lifecycle events.
         NuxieSDK.shared.trigger("upgrade_tapped", properties: [
             "source": "today_screen",
             "current_streak": moodStore.calculateStreak(),
             "total_entries": moodStore.count
         ]) { [weak self] update in
-            self?.handleTriggerUpdate(update)
+            Task { @MainActor [weak self] in
+                self?.handleTriggerUpdate(update)
+            }
         }
     }
 
@@ -361,24 +362,18 @@ final class TodayViewController: UIViewController {
     /// Handles the result of a tracked event that may trigger a flow
     private func handleTriggerUpdate(_ update: TriggerUpdate) {
         switch update {
-        case .featureAccess(let featureAccess):
-            switch featureAccess {
-            case .allowed:
-                showSuccessMessage("🎉 Welcome to Pro!")
-                updateProBadge()
-            case .denied:
-                showError("Access denied.")
-            case .pending:
-                break
-            }
-        case .decision(let decision):
-            if case .noMatch = decision {
-                print("[MoodLog] No flow shown - configure an experience in Nuxie dashboard for 'upgrade_tapped' event")
-            }
+        case .decision(.journeyStarted(let experience)):
+            print("[MoodLog] Journey started for experience \(experience.experienceId)")
+        case .decision(.experienceShown(let experience)):
+            print("[MoodLog] Experience shown: \(experience.experienceId)")
+        case .decision(.suppressed(let reason)):
+            print("[MoodLog] Journey suppressed: \(reason)")
+        case .decision(.noMatch):
+            print("[MoodLog] No flow shown - configure an experience in Nuxie dashboard for 'upgrade_tapped' event")
+        case .journey(let journey):
+            print("[MoodLog] Journey \(journey.journeyId) finished: \(journey.exitReason.rawValue)")
         case .error(let error):
             showError("Unable to load: \(error.message)")
-        case .journey:
-            break
         }
     }
 
