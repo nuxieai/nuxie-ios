@@ -72,6 +72,7 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
 
                 await expect {
                     try await firstStack.core.featureUseCommands.use(
+                        distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
                         entityId: "project-7",
@@ -129,7 +130,7 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 expect(balance).to(equal(4))
             }
 
-            it("reconciles a durable response after relaunch without resending") {
+            it("keeps a newer profile balance while reconciling a durable response once") {
                 let operationId = UUID.v7().uuidString
                 let createdAt = Date(timeIntervalSince1970: 1_788_000_100)
                 let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
@@ -153,13 +154,15 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                                 status: "ok",
                                 usage: .init(current: 6, limit: 10, remaining: 4)
                             ),
-                            reconciliation: nil
+                            reconciliation: nil,
+                            persistedAt: createdAt
                         )
                     )
                 ])
 
                 let api = MockNuxieApi()
                 let date = MockDateProvider(initialDate: createdAt)
+                date.advance(by: 1)
                 let forwarding = FeatureCommandForwardingRecorder()
                 relaunched = try await OrchestrationStack.boot(
                     storageURL: storageURL,
@@ -192,9 +195,17 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 let balance = await MainActor.run {
                     stack.core.featureInfo.balance("ai_generations")
                 }
-                expect(balance).to(equal(4))
+                expect(balance).to(equal(5))
                 let pendingCount = try await stack.core.featureUseCommands.pendingCount()
                 expect(pendingCount).to(equal(0))
+
+                await stack.core.featureUseCommands.recover()
+                let mirroredAfterSecondRecovery = await stack.eventLog
+                    .getRecentEvents(limit: 20)
+                    .filter { $0.name == SystemEventNames.featureUsed }
+                expect(mirroredAfterSecondRecovery.map(\.id)).to(equal([operationId]))
+                let forwardedAfterSecondRecovery = await forwarding.snapshot()
+                expect(forwardedAfterSecondRecovery).to(equal([operationId]))
             }
 
             it("isolates command journals by host app and environment") {
@@ -256,7 +267,11 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                         setUsage: false,
                         metadata: nil,
                         createdAt: Date(timeIntervalSince1970: 1_788_000_300),
-                        result: .init(response: response, reconciliation: nil)
+                        result: .init(
+                            response: response,
+                            reconciliation: nil,
+                            persistedAt: Date(timeIntervalSince1970: 1_788_000_300)
+                        )
                     ),
                     FeatureUseCommand(
                         operationId: currentOperationId,
@@ -267,7 +282,11 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                         setUsage: false,
                         metadata: nil,
                         createdAt: Date(timeIntervalSince1970: 1_788_000_301),
-                        result: .init(response: response, reconciliation: nil)
+                        result: .init(
+                            response: response,
+                            reconciliation: nil,
+                            persistedAt: Date(timeIntervalSince1970: 1_788_000_301)
+                        )
                     ),
                 ])
 

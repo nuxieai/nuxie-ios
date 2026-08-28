@@ -102,7 +102,7 @@ is_allowlisted_catalog_site() {
     '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1956' \
       | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1956' \
       | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1956' \
-      | '$feature_used|Sources/Nuxie/Features/FeatureUseCommandQueue.swift:412')
+      | '$feature_used|Sources/Nuxie/Features/FeatureUseCommandQueue.swift:430')
       return 0
       ;;
     *)
@@ -169,9 +169,9 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$journey_effect_completed' "$1" \
         '$journey_superseded' "$1"
       ;;
-    'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:412' \
-      | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:472' \
-      | 'Sources/Nuxie/NuxieSDK.swift:1128')
+    'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:430' \
+      | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:488' \
+      | 'Sources/Nuxie/NuxieSDK.swift:1131')
       # The accepted direct-response feature event keeps its authoritative id
       # when it is copied into delivered local history.
       printf '%s\t%s\n' '$feature_used' "$1"
@@ -322,9 +322,9 @@ $experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentat
 $experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3306
 $experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3265
 $experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3322
-$feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:412
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:472
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1128
+$feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:430
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:488
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1131
 $identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:650
 $journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:984
 $journey_converted\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5408

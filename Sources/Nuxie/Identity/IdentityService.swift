@@ -41,6 +41,13 @@ protocol IdentityServiceProtocol: Sendable {
     ifCurrentDistinctIdMatches expectedDistinctId: String
   ) -> Bool
 
+  /// Atomically performs a synchronous mutation only while the expected
+  /// identity is current. The work and identify/reset are linearly ordered.
+  func performIfCurrentDistinctIdMatches<T>(
+    _ expectedDistinctId: String,
+    _ work: () throws -> T
+  ) rethrows -> T?
+
   /// Set user properties only if they don't exist
   func setOnceUserProperties(_ properties: [String: Any])
 
@@ -218,6 +225,16 @@ final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
         "Set \(properties.count) user properties for \(NuxieLogger.shared.logDistinctID(expectedDistinctId))"
       )
       return true
+    }
+  }
+
+  public func performIfCurrentDistinctIdMatches<T>(
+    _ expectedDistinctId: String,
+    _ work: () throws -> T
+  ) rethrows -> T? {
+    try queue.sync {
+      guard getDistinctIdLocked() == expectedDistinctId else { return nil }
+      return try work()
     }
   }
 

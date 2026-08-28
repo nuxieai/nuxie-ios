@@ -30,6 +30,11 @@ public final class FeatureInfo: ObservableObject {
     /// Callback for delegate notifications (set by NuxieSDK)
     internal var onFeatureChange: ((_ featureId: String, _ oldValue: FeatureAccess?, _ newValue: FeatureAccess) -> Void)?
 
+    /// Wall-clock admission fence for the latest profile-owned Feature
+    /// snapshot. Durable command responses carry the same clock domain so a
+    /// replay cannot project an older balance over a newer profile.
+    private var latestProfileSnapshotAdmissionAt: Date?
+
     // MARK: - Init
 
     /// Nonisolated so the composition root can construct the instance from
@@ -87,6 +92,37 @@ public final class FeatureInfo: ObservableObject {
         self.all = features
     }
 
+    internal func admitProfileSnapshot(
+        _ features: [String: FeatureAccess],
+        admittedAt: Date
+    ) {
+        if let latestProfileSnapshotAdmissionAt {
+            self.latestProfileSnapshotAdmissionAt = max(
+                latestProfileSnapshotAdmissionAt,
+                admittedAt
+            )
+        } else {
+            latestProfileSnapshotAdmissionAt = admittedAt
+        }
+        update(features)
+    }
+
+    @discardableResult
+    internal func applyCommandBalanceIfFresh(
+        _ featureId: String,
+        balance: Double,
+        responsePersistedAt: Date?
+    ) -> Bool {
+        if let latestProfileSnapshotAdmissionAt {
+            guard let responsePersistedAt,
+                  latestProfileSnapshotAdmissionAt <= responsePersistedAt else {
+                return false
+            }
+        }
+        setBalance(featureId, balance: balance)
+        return true
+    }
+
     /// Update a single feature (called internally after real-time checks)
     /// - Parameters:
     ///   - featureId: The feature identifier
@@ -109,6 +145,7 @@ public final class FeatureInfo: ObservableObject {
     /// Clear all cached features
     internal func clear() {
         all = [:]
+        latestProfileSnapshotAdmissionAt = nil
     }
 
     /// Decrement the balance for a feature (for local UI feedback after usage)

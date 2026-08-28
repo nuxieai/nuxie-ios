@@ -1016,7 +1016,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   ///   - setUsage: If true, sets the usage to the specified amount instead of decrementing (default: false)
   ///   - metadata: Optional additional metadata to record with the usage event
   /// - Returns: FeatureUsageResult with usage confirmation and updated balance
-  /// - Throws: NuxieError if SDK not configured or request fails
+  /// - Throws: `CancellationError` if the active identity changes before the
+  ///   usage command is durably admitted, or `NuxieError` if the SDK is not
+  ///   configured or the request fails.
   ///
   /// - Example:
   /// ```swift
@@ -1093,6 +1095,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
     let metadataBox = UncheckedSendable(metadata)
     return try await core.featureUseCommands.use(
+      distinctId: distinctId,
       featureId: featureId,
       amount: amount,
       entityId: entityId,

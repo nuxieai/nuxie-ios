@@ -67,6 +67,17 @@ struct FeatureUseCommand: Codable, Sendable {
   struct DurableResult: Codable, Sendable {
     let response: EventResponse
     var reconciliation: Reconciliation?
+    let persistedAt: Date?
+
+    init(
+      response: EventResponse,
+      reconciliation: Reconciliation?,
+      persistedAt: Date? = nil
+    ) {
+      self.response = response
+      self.reconciliation = reconciliation
+      self.persistedAt = persistedAt
+    }
   }
 
   struct Reconciliation: Codable, Sendable {
@@ -233,6 +244,7 @@ actor FeatureUseCommandQueue {
   }
 
   func use(
+    distinctId: String,
     featureId: String,
     amount: Double,
     entityId: String?,
@@ -241,7 +253,9 @@ actor FeatureUseCommandQueue {
   ) async throws -> FeatureUsageResult {
     guard !isClosed else { throw CancellationError() }
     try loadIfNeeded()
-    let distinctId = identity.getDistinctId()
+    guard identity.getDistinctId() == distinctId else {
+      throw CancellationError()
+    }
     let encodedMetadata = metadata?.mapValues(AnyCodable.init)
 
     let command: FeatureUseCommand
@@ -276,7 +290,11 @@ actor FeatureUseCommandQueue {
       )
       var updated = commands ?? []
       updated.append(command)
-      try store.save(updated)
+      let admitted = try identity.performIfCurrentDistinctIdMatches(distinctId) {
+        try store.save(updated)
+        return true
+      } ?? false
+      guard admitted else { throw CancellationError() }
       commands = updated
     }
 
@@ -428,7 +446,11 @@ actor FeatureUseCommandQueue {
         operationId: operationId,
         admission: recoveryAdmission
       ) {
-        command.result = .init(response: response, reconciliation: nil)
+        command.result = .init(
+          response: response,
+          reconciliation: nil,
+          persistedAt: dateProvider.now()
+        )
         try replaceAndPersist(command)
       }
     }
@@ -452,17 +474,11 @@ actor FeatureUseCommandQueue {
     let result = makeUsageResult(command: command, response: durableResult.response)
 
     if isAccepted(durableResult.response) {
-      if identity.getDistinctId() == command.distinctId,
-         let remaining = durableResult.response.usage?.remaining {
-        try admitRecoverySideEffect(
-          operationId: operationId,
-          admission: recoveryAdmission
-        )
-        let featureId = command.featureId
-        await MainActor.run {
-          featureInfo.setBalance(featureId, balance: remaining)
-        }
-      }
+      try await applyBalanceIfFresh(
+        command: command,
+        durableResult: durableResult,
+        recoveryAdmission: recoveryAdmission
+      )
 
       if let mirror = durableResult.reconciliation?.mirror {
         try admitRecoverySideEffect(
@@ -492,6 +508,28 @@ actor FeatureUseCommandQueue {
       throw CancellationError()
     }
     return result
+  }
+
+  private func applyBalanceIfFresh(
+    command: FeatureUseCommand,
+    durableResult: FeatureUseCommand.DurableResult,
+    recoveryAdmission: FeatureRecoveryAdmission?
+  ) async throws {
+    guard identity.getDistinctId() == command.distinctId,
+          let remaining = durableResult.response.usage?.remaining else { return }
+    try admitRecoverySideEffect(
+      operationId: command.operationId,
+      admission: recoveryAdmission
+    )
+    let featureId = command.featureId
+    let responsePersistedAt = durableResult.persistedAt
+    await MainActor.run {
+      featureInfo.applyCommandBalanceIfFresh(
+        featureId,
+        balance: remaining,
+        responsePersistedAt: responsePersistedAt
+      )
+    }
   }
 
   private func admitRecoverySideEffect(

@@ -604,7 +604,12 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Sync FeatureInfo from profile cache (call after profile refresh)
     func syncFeatureInfo() async {
-        await notifyFeatureInfoUpdate()
+        let allFeatures = await getAllCached()
+        let admittedAt = dateProvider.now()
+        let info = featureInfo
+        await MainActor.run {
+            info.admitProfileSnapshot(allFeatures, admittedAt: admittedAt)
+        }
     }
 
     // MARK: - Private Methods

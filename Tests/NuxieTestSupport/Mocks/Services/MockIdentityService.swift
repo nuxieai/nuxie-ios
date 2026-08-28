@@ -108,6 +108,16 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
         }
     }
 
+    public func performIfCurrentDistinctIdMatches<T>(
+        _ expectedDistinctId: String,
+        _ work: () throws -> T
+    ) rethrows -> T? {
+        try lock.withLock {
+            guard _distinctId == expectedDistinctId else { return nil }
+            return try work()
+        }
+    }
+
     public func setOnceUserProperties(_ properties: [String: Any]) {
         lock.withLock {
             for (key, value) in properties {

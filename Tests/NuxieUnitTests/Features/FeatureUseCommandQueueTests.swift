@@ -56,6 +56,54 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 }
             }
 
+            it("rejects a pinned feature use when identity changes before journaling") {
+                let createdAt = Date(timeIntervalSince1970: 1_788_000_040)
+                let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: appIdentifier,
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer-a")
+                let eventLog = MockEventLog()
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: eventLog,
+                    featureInfo: FeatureInfo(),
+                    dateProvider: MockDateProvider(initialDate: createdAt),
+                    store: store
+                )
+
+                identity.suspendNextDistinctIdRead()
+                let usage = Task {
+                    try await queue.use(
+                        distinctId: "feature-customer-a",
+                        featureId: "ai_generations",
+                        amount: 1,
+                        entityId: "project-identity-race",
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }
+                await identity.waitForSuspendedDistinctIdRead()
+                identity.setDistinctId("feature-customer-b")
+                identity.resumeSuspendedDistinctIdRead()
+
+                await expect { try await usage.value }.to(throwError { error in
+                    expect(error).to(beAKindOf(CancellationError.self))
+                })
+                expect(try store.load()).to(beEmpty())
+                let featureSends = await api.sentEvents.filter {
+                    $0.name == SystemEventNames.featureUsed
+                }
+                expect(featureSends).to(beEmpty())
+                let history = await eventLog.getRecentEvents(limit: 10)
+                expect(history).to(beEmpty())
+            }
+
             it("allows exactly one identical foreground call to join recovery") {
                 let operationId = UUID.v7().uuidString
                 let createdAt = Date(timeIntervalSince1970: 1_788_000_050)
@@ -102,6 +150,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 identity.suspendNextDistinctIdRead()
                 let joinedForeground = Task {
                     try await queue.use(
+                        distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
                         entityId: "project-recovery-race",
@@ -120,6 +169,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 identity.suspendNextDistinctIdRead()
                 let newForeground = Task {
                     try await queue.use(
+                        distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
                         entityId: "project-recovery-race",
@@ -303,6 +353,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 for index in 0..<3 {
                     await expect {
                         try await queue.use(
+                            distinctId: "feature-customer",
                             featureId: "ai_generations_\(index)",
                             amount: 1,
                             entityId: "project-poison-\(index)",
@@ -362,6 +413,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
 
                 await expect {
                     try await queue.use(
+                        distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
                         entityId: "project-oversized",

@@ -653,9 +653,9 @@
     "constant": "SystemEventNames.featureUsed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:412",
-      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:472",
-      "Sources/Nuxie/NuxieSDK.swift:1128"
+      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:430",
+      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:488",
+      "Sources/Nuxie/NuxieSDK.swift:1131"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [

@@ -125,7 +125,10 @@ final class OrchestrationStack {
         let core = NuxieCore(configuration: config, overrides: overrides)
         if !initialFeatureAccess.isEmpty {
             await MainActor.run {
-                core.featureInfo.update(initialFeatureAccess)
+                core.featureInfo.admitProfileSnapshot(
+                    initialFeatureAccess,
+                    admittedAt: dateProvider.now()
+                )
             }
         }
         presentation.eventLog = core.eventLog
