@@ -170,7 +170,7 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$journey_superseded' "$1"
       ;;
     'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:516' \
-      | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:667' \
+      | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:668' \
       | 'Sources/Nuxie/NuxieSDK.swift:1131')
       # The accepted direct-response feature event keeps its authoritative id
       # when it is copied into delivered local history.
@@ -323,7 +323,7 @@ $experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRun
 $experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3265
 $experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3322
 $feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:516
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:667
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:668
 $feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1131
 $identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:650
 $journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:984

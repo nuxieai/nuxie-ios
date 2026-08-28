@@ -349,7 +349,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 expect(try store.load()).to(beEmpty())
             }
 
-            it("does not publish an old balance when identity changes after its check") {
+            it("linearizes balance publication before an identity change racing its final check") {
                 let createdAt = Date(timeIntervalSince1970: 1_788_000_048)
                 let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
                 let store = FeatureUseCommandStore(
@@ -397,21 +397,23 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                     )
                 }
                 await api.waitForSuspendedFeatureTrackEvent()
-                identity.suspendNextDistinctIdReadAfterSnapshot()
+                identity.suspendDistinctIdReadAfterSnapshot(skipping: 1)
                 await api.resumeSuspendedFeatureTrackEvent()
                 await identity.waitForSuspendedDistinctIdRead()
 
-                identity.setDistinctId("current-customer")
-                identity.resumeSuspendedDistinctIdRead()
+                let identityChangeWonApplicationRace = await identity.raceDistinctIdChange(
+                    "current-customer"
+                )
 
                 await expect { try await usage.value }.to(throwError { error in
                     expect(error).to(beAKindOf(CancellationError.self))
                 })
+                expect(identityChangeWonApplicationRace).to(beFalse())
                 let balance = await MainActor.run {
                     featureInfo.balance("ai_generations")
                 }
-                expect(balance).to(equal(10))
-                expect(changes.count).to(equal(0))
+                expect(balance).to(equal(4))
+                expect(changes.count).to(equal(1))
             }
 
             it("allows exactly one identical foreground call to join recovery") {

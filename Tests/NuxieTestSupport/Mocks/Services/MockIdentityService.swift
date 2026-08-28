@@ -15,15 +15,18 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
     private var _userProperties: [String: Any] = [:]
     private var _isUserIdentified = true
     private var _shouldSuspendNextDistinctIdRead = false
-    private var _shouldSuspendNextDistinctIdReadAfterSnapshot = false
+    private var _distinctIdReadsBeforeSuspendingAfterSnapshot: Int?
 
     public init() {}
 
     public func getDistinctId() -> String {
         let read: (shouldSuspend: Bool, snapshot: String?) = lock.withLock {
-            if _shouldSuspendNextDistinctIdReadAfterSnapshot {
-                _shouldSuspendNextDistinctIdReadAfterSnapshot = false
-                return (shouldSuspend: true, snapshot: _distinctId)
+            if let readsBeforeSuspension = _distinctIdReadsBeforeSuspendingAfterSnapshot {
+                if readsBeforeSuspension == 0 {
+                    _distinctIdReadsBeforeSuspendingAfterSnapshot = nil
+                    return (shouldSuspend: true, snapshot: _distinctId)
+                }
+                _distinctIdReadsBeforeSuspendingAfterSnapshot = readsBeforeSuspension - 1
             }
             let shouldSuspend = _shouldSuspendNextDistinctIdRead
             _shouldSuspendNextDistinctIdRead = false
@@ -41,8 +44,8 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
         lock.withLock { _shouldSuspendNextDistinctIdRead = true }
     }
 
-    func suspendNextDistinctIdReadAfterSnapshot() {
-        lock.withLock { _shouldSuspendNextDistinctIdReadAfterSnapshot = true }
+    func suspendDistinctIdReadAfterSnapshot(skipping reads: Int) {
+        lock.withLock { _distinctIdReadsBeforeSuspendingAfterSnapshot = reads }
     }
 
     public func waitForSuspendedDistinctIdRead() async {
@@ -56,6 +59,31 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
 
     public func resumeSuspendedDistinctIdRead() {
         distinctIdReadResume.signal()
+    }
+
+    /// Races an identity change against the suspended identity decision. The
+    /// result is true only when the change acquired the identity lock before
+    /// the guarded work was committed.
+    func raceDistinctIdChange(_ distinctId: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { [self] in
+                if lock.try() {
+                    _distinctId = distinctId
+                    _isUserIdentified = true
+                    lock.unlock()
+                    distinctIdReadResume.signal()
+                    continuation.resume(returning: true)
+                    return
+                }
+
+                distinctIdReadResume.signal()
+                lock.withLock {
+                    _distinctId = distinctId
+                    _isUserIdentified = true
+                }
+                continuation.resume(returning: false)
+            }
+        }
     }
 
     public func getRawDistinctId() -> String? {
@@ -124,6 +152,15 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
     ) rethrows -> T? {
         try lock.withLock {
             guard _distinctId == expectedDistinctId else { return nil }
+            if let readsBeforeSuspension = _distinctIdReadsBeforeSuspendingAfterSnapshot {
+                if readsBeforeSuspension == 0 {
+                    _distinctIdReadsBeforeSuspendingAfterSnapshot = nil
+                    distinctIdReadSuspended.signal()
+                    distinctIdReadResume.wait()
+                } else {
+                    _distinctIdReadsBeforeSuspendingAfterSnapshot = readsBeforeSuspension - 1
+                }
+            }
             return try work(IdentitySnapshot(
                 distinctId: _distinctId,
                 userId: _isUserIdentified ? _distinctId : nil,

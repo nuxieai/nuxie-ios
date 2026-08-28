@@ -608,12 +608,13 @@ actor FeatureUseCommandQueue {
     )
     let featureId = command.featureId
     _ = await MainActor.run {
-      guard identity.getDistinctId() == command.distinctId else { return false }
-      return featureInfo.applyCommandBalanceIfFresh(
-        featureId,
-        balance: remaining,
-        responseAuthority: durableResult.balanceAuthority
-      )
+      identity.performIfCurrentDistinctIdMatches(command.distinctId) { _ in
+        featureInfo.applyCommandBalanceIfFresh(
+          featureId,
+          balance: remaining,
+          responseAuthority: durableResult.balanceAuthority
+        )
+      }
     }
   }
 
