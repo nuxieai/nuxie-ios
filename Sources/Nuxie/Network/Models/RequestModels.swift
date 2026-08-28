@@ -128,6 +128,26 @@ struct ProfileRequest: Codable {
 
 // MARK: - Event Tracking Request
 
+extension EventRequest {
+    /// Canonical captured-event → direct response-bearing request conversion.
+    ///
+    /// The direct `/i/event` lane and batch retry lane share the captured
+    /// event's UUIDv7 as their idempotency key. Keeping this conversion beside
+    /// `BatchEventItem.init(event:)` prevents a response-bearing retry from
+    /// minting a shadow identity.
+    init(event: NuxieEvent) {
+        self.init(
+            event: event.name,
+            distinctId: event.distinctId,
+            timestamp: event.timestamp,
+            properties: event.properties,
+            idempotencyKey: event.id,
+            value: (event.properties["value"] as? NSNumber)?.doubleValue,
+            entityId: event.properties["entityId"] as? String
+        )
+    }
+}
+
 struct EventRequest: Codable {
     let event: String
     let distinctId: String

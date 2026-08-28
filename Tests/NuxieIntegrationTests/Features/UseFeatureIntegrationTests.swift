@@ -96,6 +96,109 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     expect(lastCall?.value).to(equal(1.0))
                 }
 
+                it("reuses a pending operation id after an accepted response times out") {
+                    await mockApi.configureTrackEventResponse(
+                        status: "ok",
+                        usage: .init(current: 1, limit: 5, remaining: 4)
+                    )
+                    await mockApi.setAcceptedTrackEventTimeouts(1)
+
+                    await expect {
+                        try await NuxieSDK.shared.useFeatureAndWait(
+                            "ai_generations",
+                            entityId: "project-1",
+                            metadata: ["source": "retry-test"]
+                        )
+                    }.to(throwError(NuxieNetworkError.timeout))
+                    let firstSentEvents = await mockApi.sentEvents
+                    let firstId = try unwrap(firstSentEvents.last {
+                        $0.name == SystemEventNames.featureUsed
+                    }?.id)
+
+                    let result = try await NuxieSDK.shared.useFeatureAndWait(
+                        "ai_generations",
+                        entityId: "project-1",
+                        metadata: ["source": "retry-test"]
+                    )
+
+                    expect(result.success).to(beTrue())
+                    let ids = await mockApi.sentEvents
+                        .filter { $0.name == SystemEventNames.featureUsed }
+                        .map(\.id)
+                    expect(ids).to(equal([firstId, firstId]))
+                    let uniqueAcceptedCount = await mockApi.uniqueAcceptedTrackEventCount
+                    expect(uniqueAcceptedCount).to(equal(1))
+                    let mirrors = mocks.eventLog.routedEvents.filter {
+                        $0.name == SystemEventNames.featureUsed
+                    }
+                    expect(mirrors.map(\.id)).to(equal([firstId]))
+                }
+
+                it("keeps overlapping identical uses as distinct operations") {
+                    await mockApi.configureTrackEventResponse(status: "ok")
+                    await mockApi.suspendNextFeatureTrackEvent()
+
+                    let first = Task {
+                        try await NuxieSDK.shared.useFeatureAndWait(
+                            "ai_generations",
+                            entityId: "project-overlap",
+                            metadata: ["source": "concurrent-test"]
+                        )
+                    }
+                    await mockApi.waitForSuspendedFeatureTrackEvent()
+                    let second = Task {
+                        try await NuxieSDK.shared.useFeatureAndWait(
+                            "ai_generations",
+                            entityId: "project-overlap",
+                            metadata: ["source": "concurrent-test"]
+                        )
+                    }
+
+                    let secondResult: FeatureUsageResult
+                    do {
+                        secondResult = try await second.value
+                    } catch {
+                        await mockApi.resumeSuspendedFeatureTrackEvent()
+                        first.cancel()
+                        throw error
+                    }
+                    await mockApi.resumeSuspendedFeatureTrackEvent()
+                    let firstResult = try await first.value
+
+                    expect(firstResult.success).to(beTrue())
+                    expect(secondResult.success).to(beTrue())
+                    let featureEvents = await mockApi.sentEvents.filter {
+                        $0.name == SystemEventNames.featureUsed
+                    }
+                    expect(featureEvents.count).to(equal(2))
+                    expect(Set(featureEvents.map(\.id)).count).to(equal(2))
+                    let uniqueAcceptedCount = await mockApi.uniqueAcceptedTrackEventCount
+                    expect(uniqueAcceptedCount).to(equal(2))
+                }
+
+                it("cancels suspended relaunch recovery during shutdown") {
+                    await mockApi.configureTrackEventResponse(status: "ok")
+                    await mockApi.setAcceptedTrackEventTimeouts(1)
+                    await expect {
+                        try await NuxieSDK.shared.useFeatureAndWait(
+                            "ai_generations",
+                            entityId: "project-shutdown"
+                        )
+                    }.to(throwError(NuxieNetworkError.timeout))
+
+                    await NuxieSDK.shared.shutdown()
+                    await mockApi.setAcceptedTrackEventTimeouts(0)
+                    await mockApi.suspendNextFeatureTrackEvent()
+                    let config = NuxieConfiguration(apiKey: "test-api-key")
+                    try NuxieSDK.shared.setup(
+                        with: config,
+                        overrides: mocks.unitTestOverrides()
+                    )
+                    await mockApi.waitForSuspendedFeatureTrackEvent()
+
+                    await NuxieSDK.shared.shutdown()
+                }
+
                 it("should include feature_extId in properties") {
                     await mockApi.configureTrackEventResponse(status: "ok")
 

@@ -122,7 +122,7 @@ view controller or present an experience by version ID.
 | --- | --- |
 | `features: FeatureInfo` | Observable (SwiftUI-friendly) feature-access snapshot. |
 | `hasFeature(_:requiredBalance:entityId:policy:)` | Check access. `FeatureCheckPolicy.cacheFirst` answers locally and never blocks on the network; `.remote` forces a round trip. |
-| `useFeature(...)` / `useFeatureAndWait(...)` | Record consumption of a metered feature. When exactly one pending native purchase can fund the requested feature, `useFeatureAndWait` submits verification, grant, and first use as one idempotent command. A product that grants a credit system can fund a mapped metered feature; the SDK selects only from the authenticated release's signed direct and credit-schema targets, while the server independently verifies the current product and credit-system relationship. |
+| `useFeature(...)` / `useFeatureAndWait(...)` | Record consumption of a metered feature. Ordinary `useFeatureAndWait` persists a stable command before sending and reuses its operation id across same-process and relaunch retry. When exactly one pending native purchase can fund the requested feature, it instead submits verification, grant, and first use as one idempotent command. A product that grants a credit system can fund a mapped metered feature; the SDK selects only from the authenticated release's signed direct and credit-schema targets, while the server independently verifies the current product and credit-system relationship. |
 
 `FeatureUsageResult.success` means the usage command committed. It does not
 mean that another use remains available. For an atomic purchase-backed use,
@@ -130,6 +130,11 @@ mean that another use remains available. For an atomic purchase-backed use,
 credit returns `success == true` together with
 `authoritativeAccess.allowed == false` and a zero balance. Ordinary usage
 responses leave `authoritativeAccess` nil.
+
+An ambiguous ordinary usage result remains in the command journal. Relaunch or
+an explicit retry sends the same operation id, and an accepted durable result
+is reconciled into the local balance and `$feature_used` history once. The
+journal is scoped to the host app and selected Nuxie environment.
 
 Atomic purchase-backed failures retain the scoped receipt evidence and retry
 with the same purchase-use event identity. A decoded successful response

@@ -194,7 +194,8 @@ protocol EventTriggerTracking: AnyObject, Sendable {
     _ properties: sending [String: Any]?
   ) async -> sending [String: Any]
   func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent?
-  func storePreparedEventInHistory(_ event: NuxieEvent) async
+  @discardableResult
+  func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool
   func commitPreparedTriggerEvent(_ event: NuxieEvent) async -> PreparedTriggerCommit
   func trackForTrigger(
     _ event: String,
@@ -382,7 +383,8 @@ protocol EventLogProtocol:
   ) async -> sending [String: Any]
 
   /// Persist a fully prepared trigger event into local history without re-enqueuing it.
-  func storePreparedEventInHistory(_ event: NuxieEvent) async
+  @discardableResult
+  func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool
 
   /// Commit server-born facts into local history without uploading them.
   /// Newly committed facts are routed through the committed-event subscriber lane.
@@ -1884,7 +1886,8 @@ actor EventLog: EventLogProtocol {
     )
   }
 
-  public func storePreparedEventInHistory(_ event: NuxieEvent) async {
+  @discardableResult
+  public func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool {
     await ready.wait()
 
     do {
@@ -1894,9 +1897,11 @@ actor EventLog: EventLogProtocol {
         receivedAt: event.timestamp
       )
       try await performCleanupIfNeeded()
+      return true
     } catch {
       LogWarning("Failed to store prepared event locally: \(error)")
       await recordHistoryGap(at: event.timestamp)
+      return false
     }
   }
 

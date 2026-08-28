@@ -376,6 +376,12 @@ converges, so Nuxie does not guess, sync, or finish the receipt.
 
 ### Atomic purchase-backed Feature use
 
+Ordinary `useFeatureAndWait` calls are durable too: the SDK journals the final
+command before its first request and keeps one UUIDv7 operation id across
+transport retry and relaunch. If the server accepted a request whose response
+timed out, retry deduplicates the spend and the accepted result is mirrored
+locally once.
+
 `useFeatureAndWait` automatically uses one matching pending App Store receipt
 when the signed Product mapping grants the requested Feature. The backend
 accepts the receipt and records the requested usage as one atomic command, so a

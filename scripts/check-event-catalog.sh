@@ -99,10 +99,10 @@ server_fact_builder_pattern='name:[[:space:]]*fact[.]event[.]rawValue'
 # call. Keep this allowlist short and explicit.
 is_allowlisted_catalog_site() {
   case "$1|$2" in
-    '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1951' \
-      | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1951' \
-      | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1951' \
-      | '$feature_used|Sources/Nuxie/NuxieSDK.swift:1094')
+    '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1956' \
+      | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1956' \
+      | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1956' \
+      | '$feature_used|Sources/Nuxie/Features/FeatureUseCommandQueue.swift:300')
       return 0
       ;;
     *)
@@ -162,14 +162,16 @@ catalog_event_emitters_for_indirect_emission_site() {
       printf '%s\t%s\n' \
         '$permission_denied' 'Sources/Nuxie/Journey/JourneyService.swift:3466'
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:1951')
+    'Sources/Nuxie/Events/EventLog.swift:1956')
       # JourneyDownFact.Event has exactly these three cataloged raw values.
       printf '%s\t%s\n' \
         '$journey_converted' "$1" \
         '$journey_effect_completed' "$1" \
         '$journey_superseded' "$1"
       ;;
-    'Sources/Nuxie/NuxieSDK.swift:1165')
+    'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:300' \
+      | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:328' \
+      | 'Sources/Nuxie/NuxieSDK.swift:1128')
       # The accepted direct-response feature event keeps its authoritative id
       # when it is copied into delivered local history.
       printf '%s\t%s\n' '$feature_used' "$1"
@@ -191,33 +193,33 @@ catalog_event_emitters_for_indirect_emission_site() {
 # reserved SDK-authored names are checked instead.
 is_allowlisted_indirect_emission_site() {
   case "$1" in
-    'Sources/Nuxie/Events/EventLog.swift:1047' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1243' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1725' \
-      | 'Sources/Nuxie/Events/EventLog.swift:3024')
+    'Sources/Nuxie/Events/EventLog.swift:1049' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1245' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1727' \
+      | 'Sources/Nuxie/Events/EventLog.swift:3029')
       # Delivery-path apiClient.trackEvent calls transport an already-built
       # NuxieEvent; the event name originated in a capture lane whose call
       # site is checked above, so these sites are transport, not emission.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:245')
+    'Sources/Nuxie/Events/EventLog.swift:246')
       # Protocol convenience forwards names; concrete SDK callers are checked at their call sites.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:264')
+    'Sources/Nuxie/Events/EventLog.swift:265')
       # The ownership convenience forwards names; its concrete producer is checked at the owned capture call site.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:551' \
-      | 'Sources/Nuxie/Events/EventLog.swift:525' \
-      | 'Sources/Nuxie/Events/EventLog.swift:539' \
-      | 'Sources/Nuxie/Events/EventLog.swift:950' \
-      | 'Sources/Nuxie/Events/EventLog.swift:962')
+    'Sources/Nuxie/Events/EventLog.swift:553' \
+      | 'Sources/Nuxie/Events/EventLog.swift:527' \
+      | 'Sources/Nuxie/Events/EventLog.swift:541' \
+      | 'Sources/Nuxie/Events/EventLog.swift:952' \
+      | 'Sources/Nuxie/Events/EventLog.swift:964')
       # EventLog overloads forward names; concrete SDK callers are checked at their call sites.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:1320' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1341')
+    'Sources/Nuxie/Events/EventLog.swift:1322' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1343')
       # Stable-capture wrappers forward names; their concrete scoped producers are cataloged.
       return 0
       ;;
@@ -258,10 +260,6 @@ is_allowlisted_indirect_emission_site() {
       ;;
     'Sources/Nuxie/Experiences/ExperienceScreenViewController.swift:755')
       # Runtime journey and host-command names are variable; reserved response names use the concrete calls above.
-      return 0
-      ;;
-    'Sources/Nuxie/NuxieSDK.swift:1166')
-      # Accepted feature usage is durably mirrored through the prepared-event history seam.
       return 0
       ;;
     *)
@@ -324,13 +322,14 @@ $experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentat
 $experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3306
 $experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3265
 $experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3322
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1094
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1165
-$identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:632
+$feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:300
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:328
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1128
+$identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:650
 $journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:984
 $journey_converted\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5408
-$journey_converted\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1951
-$journey_effect_completed\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1951
+$journey_converted\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1956
+$journey_effect_completed\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1956
 $journey_effect_requested\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:4183
 $journey_enrolled\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:658
 $journey_exited\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:4912
@@ -340,7 +339,7 @@ $journey_handoff\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:45
 $journey_milestone\ttrackWithResponse\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3500
 $journey_milestone\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3147
 $journey_parked\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4762
-$journey_superseded\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1951
+$journey_superseded\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:1956
 $journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1371
 $journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1423
 $journey_transition\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:1894
@@ -403,6 +402,9 @@ lane_source_pattern() {
     storePreparedEventInHistory)
       printf '%s' 'storePreparedEventInHistory[(]'
       ;;
+    featureCommand)
+      printf '%s' 'api[.]trackEvent[(]'
+      ;;
     commitServerFacts)
       printf '%s' 'name:[[:space:]]*fact[.]event[.]rawValue'
       ;;
@@ -459,10 +461,6 @@ while IFS=$'\t' read -r event_name production_lane emitter; do
     # The milestone name is staged here and reaches trackScopedEvent later in
     # the same function after local journey evaluation.
     source_radius=64
-  elif [[ "$emitter" == "Sources/Nuxie/NuxieSDK.swift:1094" ]]; then
-    # The accepted /i/event response is converted into the exact prepared
-    # history event at the end of the same useFeature operation.
-    source_radius=80
   elif [[ "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:984" \
       || "$emitter" == "Sources/Nuxie/Journey/JourneyService.swift:4539" ]]; then
     source_radius=8
@@ -564,7 +562,7 @@ while IFS=$'\t' read -r event_name lane before_send endpoint persists wire; do
         expected="$before_send"$'\t/i/event response lane\ttrue\ttrue'
       fi
       ;;
-    storePreparedEventInHistory)
+    storePreparedEventInHistory|featureCommand)
       expected=$'governed\t/i/event response lane\ttrue\ttrue'
       ;;
     *)

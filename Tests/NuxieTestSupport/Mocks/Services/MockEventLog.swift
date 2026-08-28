@@ -327,10 +327,12 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         )
     }
 
-    public func storePreparedEventInHistory(_ event: NuxieEvent) async {
+    @discardableResult
+    public func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool {
         lock.withLock {
             _routedEvents.append(event)
         }
+        return true
     }
 
     public func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async {

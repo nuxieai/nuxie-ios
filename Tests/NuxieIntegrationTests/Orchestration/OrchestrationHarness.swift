@@ -79,6 +79,8 @@ final class OrchestrationStack {
         dateProvider: MockDateProvider,
         sleepProvider: MockSleepProvider,
         distinctId: String,
+        initialFeatureAccess: [String: FeatureAccess] = [:],
+        forwardingHandler: ForwardingEventHandler? = nil,
         productService: ProductService? = nil,
         preRegisteredExperiences: [(Experience, JourneyDocument)] = [],
         configure: ((NuxieConfiguration) -> Void)? = nil
@@ -121,6 +123,11 @@ final class OrchestrationStack {
         }
 
         let core = NuxieCore(configuration: config, overrides: overrides)
+        if !initialFeatureAccess.isEmpty {
+            await MainActor.run {
+                core.featureInfo.update(initialFeatureAccess)
+            }
+        }
         presentation.eventLog = core.eventLog
 
         // Identity is real and disk-backed: on a relaunch boot this is a
@@ -135,8 +142,12 @@ final class OrchestrationStack {
         await core.eventLog.subscribeCommitted { [weak journeys] event in
             await journeys?.handleEvent(event)
         }
+        if let forwardingHandler {
+            await core.eventLog.subscribeForwarding(handler: forwardingHandler)
+        }
         try await core.eventLog.configure(configuration: core.configuration)
         await journeys.initialize()
+        await core.featureUseCommands.recover()
 
         return OrchestrationStack(
             config: config,
@@ -164,6 +175,7 @@ final class OrchestrationStack {
     func shutdownForCleanup() async {
         await core.userTransitions.drain()
         await core.journeys.shutdown()
+        await core.featureUseCommands.close()
         await core.eventLog.close()
     }
 

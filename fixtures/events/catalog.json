@@ -653,16 +653,20 @@
     "constant": "SystemEventNames.featureUsed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/NuxieSDK.swift:1094",
-      "Sources/Nuxie/NuxieSDK.swift:1165"
+      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:300",
+      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:328",
+      "Sources/Nuxie/NuxieSDK.swift:1128"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [
       "fixtures/events/batch-item-encoding.json"
     ],
     "forwarding": "featureUsed",
-    "lane": "storePreparedEventInHistory",
-    "persistenceNote": "Captured as delivered history only after the authoritative response is accepted.",
+    "lane": [
+      "featureCommand",
+      "storePreparedEventInHistory"
+    ],
+    "persistenceNote": "The command is durable before its first response-lane send. Its accepted result is then mirrored as delivered history under the same operation id.",
     "persists": true,
     "properties": {
       "amount": {
@@ -695,7 +699,7 @@
     "constant": "SystemEventNames.identify",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/NuxieSDK.swift:632"
+      "Sources/Nuxie/NuxieSDK.swift:650"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -772,7 +776,7 @@
     "docs": true,
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:5408",
-      "Sources/Nuxie/Events/EventLog.swift:1951"
+      "Sources/Nuxie/Events/EventLog.swift:1956"
     ],
     "endpoint": [
       "/i/event response lane",
@@ -836,7 +840,7 @@
     "constant": "JourneyEvents.journeyEffectCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Events/EventLog.swift:1951"
+      "Sources/Nuxie/Events/EventLog.swift:1956"
     ],
     "endpoint": "none",
     "fixtures": [],
@@ -1216,7 +1220,7 @@
     "constant": "JourneyEvents.journeySuperseded",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Events/EventLog.swift:1951"
+      "Sources/Nuxie/Events/EventLog.swift:1956"
     ],
     "endpoint": "none",
     "fixtures": [],
@@ -1257,7 +1261,8 @@
       "batch"
     ],
     "fixtures": [
-      "fixtures/events/batch-item-encoding.json"
+      "fixtures/events/batch-item-encoding.json",
+      "fixtures/events/response-bearing-event-encoding.json"
     ],
     "forwarding": "hidden: journey state-sync protocol",
     "lane": [

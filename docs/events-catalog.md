@@ -67,7 +67,7 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `$feature_used` | active | platform | yes | governed | `/i/event` | `featureUsed` | Authoritative metered Feature use is accepted and durably mirrored. |
+| `$feature_used` | active | platform | yes | governed | `/i/event` | `featureUsed` | Authoritative metered Feature use persists as a stable command before send, then mirrors its accepted result under the same operation id. |
 
 ## Experiments
 
@@ -132,7 +132,7 @@ Code reality does conflict with broader forwarding premises. `$journey_effect_re
 
 - On first or updated launches, `$app_opened` reuses the mutable lifecycle properties and therefore retains `install_date`, or `previous_version` and `update_date`, respectively.
 - `$journey_transition` has two property variants: canonical node transitions require `epoch`, `journey_id`, `plane`, `region`, and `to_node`; response-snapshot conflicts instead require `journey_id`, `error`, `node_id`, `expected_response_version`, and `actual_response_version`.
-- `$feature_used` is pinned in `fixtures/events/batch-item-encoding.json` with `value` and `entityId` in event properties. The direct request retains that transport shape; after acceptance, durable history uses `feature_id`, `amount`, optional `entity_id`, and optional `metadata` for typed forwarding.
+- `$feature_used` is pinned in `fixtures/events/batch-item-encoding.json` with `value` and `entityId` in event properties. The durable command retains that transport shape and operation id across retries; after acceptance, history under the same id uses `feature_id`, `amount`, optional `entity_id`, and optional `metadata` for typed forwarding.
 
 Forwarding identity is captured at the producer. Products-unavailable includes product ids; screen, artifact-load, experiment diagnostic, and dismissal events include their available Experience context; dismissal includes the close reason; and purchase synchronization includes recoverable commercial context.
 
