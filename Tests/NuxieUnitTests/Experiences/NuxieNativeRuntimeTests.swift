@@ -7,7 +7,7 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeRuntimeTests: XCTestCase {
-    func testPreparedFileOpensFreshIndependentSessionsFromOneImport() async throws {
+    func testPreparedFileOpensFreshIndependentRendererBoundSessions() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "data_binding_test", extension: "riv"),
             importMode: .portable
@@ -51,7 +51,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let secondPlayerKind = try await second.playerInfo().kind
         XCTAssertEqual(secondPlayerKind, .stateMachine)
         let metrics = await prepared.metrics()
-        XCTAssertEqual(metrics.fileImportCount, 1)
+        XCTAssertEqual(metrics.fileImportCount, 3)
         XCTAssertEqual(metrics.openedSessionCount, 2)
     }
 
@@ -95,7 +95,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }?.value
         XCTAssertNotEqual(replacementNumber, .number(77))
         let metrics = await prepared.metrics()
-        XCTAssertEqual(metrics.fileImportCount, 1)
+        XCTAssertEqual(metrics.fileImportCount, 4)
         XCTAssertEqual(metrics.openedSessionCount, 2)
     }
 
@@ -250,7 +250,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(artboards.map(\.name), ["Two", "One"])
     }
 
-    func testRendererCompletionAndDomainLifecycleStayOnTheNativeSeam() async throws {
+    func testRendererCompletionAndResizeStayOnTheNativeSeam() async throws {
         let runtime = try await NuxieNativeRuntime.open(
             bytes: try staticFixture(),
             artboardName: "Two",
@@ -272,17 +272,13 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(first.disposition, .presented)
         await fulfillment(of: [firstCompletion], timeout: 1)
 
-        let detached = try await runtime.detachRenderer()
-        XCTAssertEqual(detached.health, .healthy)
-        let reattached = try await runtime.reattachRenderer(
+        let resized = try await runtime.resize(
             pixelWidth: 64,
             pixelHeight: 64
         )
-        XCTAssertEqual(reattached.disposition, .recreated)
-        try await runtime.resetPlayerRendererDomain()
+        XCTAssertEqual(resized.disposition, .reconfigured)
 
-        let replacementDevice = try await runtime.metalDevice()
-        let secondLayer = makeLayer(device: replacementDevice.value, width: 64, height: 64)
+        let secondLayer = makeLayer(device: device.value, width: 64, height: 64)
         let secondDrawable = try XCTUnwrap(secondLayer.nextDrawable())
         let secondCompletion = expectation(description: "reattached native frame completion")
         let second = try await runtime.render(

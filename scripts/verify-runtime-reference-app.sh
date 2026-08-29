@@ -57,7 +57,7 @@ fi
 exported_symbols="$(nm -gj "${symbol_executable}")"
 
 for expected_symbol in \
-    _nux_file_import_with_result \
+    _nux_file_import_metal \
     _nux_player_step \
     _nux_view_model_instance_snapshot \
     _nux_renderer_new_metal; do

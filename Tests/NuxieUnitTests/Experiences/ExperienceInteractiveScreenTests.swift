@@ -132,7 +132,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(placementIDs, ["golden:monthly"])
     }
 
-    func testPreparedAuthenticatedRIVOpensTwoScreensFromOneImportWithFreshState() async throws {
+    func testPreparedAuthenticatedRIVOpensTwoRendererBoundScreensWithFreshState() async throws {
         let fixture = try await twoScreenStatePayload()
 
         let preparation = try await ExperienceInteractivePreparation.prepare(
@@ -174,13 +174,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             metrics,
             ExperienceInteractivePreparationMetrics(
                 inspectionCount: 1,
-                configuredFileImportCount: 1,
+                configuredFileImportCount: 3,
                 openedSessionCount: 2
             )
         )
     }
 
-    func testSignedMultiScreenCorpusVisitsEveryScreenFromOneConfiguredImport() async throws {
+    func testSignedMultiScreenCorpusVisitsEveryScreenWithRendererBoundImports() async throws {
         let payload = try await authenticatedFixturePayload(named: "multi-screen")
         XCTAssertGreaterThan(payload.renderPlan.screens.count, 1)
         let preparation = try await ExperienceInteractivePreparation.prepare(
@@ -198,7 +198,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
 
         let metrics = await preparation.metrics()
-        XCTAssertEqual(metrics.configuredFileImportCount, 1)
+        XCTAssertEqual(
+            metrics.configuredFileImportCount,
+            payload.renderPlan.screens.count + 1
+        )
         XCTAssertEqual(
             metrics.openedSessionCount,
             payload.renderPlan.screens.count
@@ -920,7 +923,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
     #endif
 
-    func testAuthenticatedScreenSurvivesRepeatedRendererDomainCycles() async throws {
+    func testAuthenticatedScreenPreservesStateAcrossRepeatedRenders() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
         XCTAssertFalse(payload.renderPlan.images.isEmpty)
         XCTAssertFalse(payload.renderPlan.fonts.isEmpty)
@@ -934,11 +937,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
         for _ in 0..<3 {
             _ = try await renderAndWait(screen)
-            let detached = try await screen.detachRenderer()
-            XCTAssertEqual(detached.health, .healthy)
-            let reattached = try await screen.reattachRenderer(pixelWidth: 64, pixelHeight: 64)
-            XCTAssertEqual(reattached.disposition, .recreated)
-            try await screen.resetPlayerRendererDomain()
             _ = try await screen.step(elapsedSeconds: 0)
         }
 
@@ -948,11 +946,11 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await screen.close()
     }
 
-    func testAuthenticatedExternalImageSurvivesRepeatedRendererDomainCycles() async throws {
+    func testAuthenticatedExternalImageSurvivesRepeatedRenders() async throws {
         try await exerciseExternalAssetFixture(named: "external-image")
     }
 
-    func testSignedEmbeddedAudioSurvivesRepeatedRendererDomainCycles() async throws {
+    func testSignedEmbeddedAudioSurvivesRepeatedRenders() async throws {
         // Pinned from rive-app/rive-runtime@4ac7b32798da0482e441ef09304dc3b480ed3ee5
         // tests/unit_tests/assets/sound.riv.
         let encoded = try fixture(named: "sound_audio", extension: "riv.base64")
@@ -974,14 +972,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
         for _ in 0..<2 {
             _ = try await renderAndWait(screen)
-            let detached = try await screen.detachRenderer()
-            XCTAssertEqual(detached.health, .healthy)
-            let reattached = try await screen.reattachRenderer(
-                pixelWidth: 64,
-                pixelHeight: 64
-            )
-            XCTAssertEqual(reattached.disposition, .recreated)
-            try await screen.resetPlayerRendererDomain()
         }
         _ = try await renderAndWait(screen)
         try await screen.close()
@@ -1012,7 +1002,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await screen.close()
     }
 
-    func testScriptedPreparationUsesDistinctConfiguredImportsForRendererSessions() async throws {
+    func testScriptedPreparationUsesRendererBoundImportsForEverySession() async throws {
         let payload = try await authenticatedFixturePayload(
             named: "scripted-resources"
         )
@@ -1037,7 +1027,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await second.close()
 
         let metrics = await preparation.metrics()
-        XCTAssertEqual(metrics.configuredFileImportCount, 2)
+        XCTAssertEqual(metrics.configuredFileImportCount, 3)
         XCTAssertEqual(metrics.openedSessionCount, 2)
     }
 
@@ -3731,14 +3721,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         defer { Task { try? await screen.close() } }
         for _ in 0..<2 {
             _ = try await renderAndWait(screen)
-            let detached = try await screen.detachRenderer()
-            XCTAssertEqual(detached.health, .healthy)
-            let reattached = try await screen.reattachRenderer(
-                pixelWidth: 64,
-                pixelHeight: 64
-            )
-            XCTAssertEqual(reattached.disposition, .recreated)
-            try await screen.resetPlayerRendererDomain()
         }
         _ = try await renderAndWait(screen)
         try await screen.close()

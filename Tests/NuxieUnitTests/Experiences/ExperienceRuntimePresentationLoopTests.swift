@@ -405,10 +405,10 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         XCTAssertTrue(stepStarted)
         occludedLoop.setPresentationVisible(false)
         await occludedRecorder.releaseStep()
-        let detached = await occludedRecorder.waitForOperation(named: "detach")
+        let rendered = await occludedRecorder.waitForOperation(named: "render")
         let occludedStates = await occludedRecorder.drawableStates()
         let occludedDispositions = await occludedRecorder.renderDispositions()
-        XCTAssertTrue(detached)
+        XCTAssertTrue(rendered)
         XCTAssertEqual(occludedStates, ["occluded"])
         XCTAssertEqual(occludedDispositions, [.skippedOccluded])
         XCTAssertEqual(presentedDrawableCount, 0)
@@ -417,7 +417,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
-    func testBackgroundDetachWaitsForCompletionThenForegroundResetsDeviceDomain() async throws {
+    func testBackgroundPauseKeepsRendererDomainAndForegroundResumes() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
@@ -442,21 +442,20 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
 
         await recorder.setCompletionMode(.immediate)
         await recorder.releaseFrames()
-        let detached = await recorder.waitForOperation(named: "detach")
-        XCTAssertTrue(detached)
 
         notificationCenter.post(name: UIApplication.didBecomeActiveNotification, object: nil)
         let recovered = await recorder.waitForRenderCount(2)
         XCTAssertTrue(recovered)
         let names = await recorder.operationNames()
-        XCTAssertTrue(names.containsSequence([
-            "detach", "reattach", "reset", "metalDevice", "resize", "step", "render",
-        ]))
+        XCTAssertFalse(names.contains("detach"))
+        XCTAssertFalse(names.contains("reattach"))
+        XCTAssertFalse(names.contains("reset"))
+        XCTAssertTrue(names.containsSequence(["step", "render", "step", "render"]))
         XCTAssertTrue(view.metalLayer.device === device)
 
         await loop.shutdown()
         let finalNames = await recorder.operationNames()
-        XCTAssertEqual(Array(finalNames.suffix(2)), ["detach", "close"])
+        XCTAssertEqual(finalNames.last, "close")
         _ = window
     }
 
@@ -478,8 +477,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         loop.setPresentationVisible(false)
         loop.setTimelineActive(false)
         view.removeFromSuperview()
-        let detached = await recorder.waitForOperation(named: "detach")
-        XCTAssertTrue(detached)
+        await Task.yield()
         let renderCount = await recorder.renderDispositions().count
         let stepCountAtHide = await recorder.steps().count
         notificationCenter.post(
@@ -488,6 +486,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         )
         await Task.yield()
         let namesAfterHiddenWarning = await recorder.operationNames()
+        XCTAssertFalse(namesAfterHiddenWarning.contains("detach"))
         XCTAssertFalse(namesAfterHiddenWarning.contains("reattach"))
 
         loop.displayLinkDidFire(at: 10)
@@ -505,7 +504,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let stepsAfterHiddenWork = await recorder.steps()
         XCTAssertEqual(stepsAfterHiddenWork.last?.elapsedSeconds, 0)
         XCTAssertEqual(finalRenderCount, renderCount)
-        XCTAssertTrue(names.containsSequence(["detach", "queued", "step"]))
+        XCTAssertTrue(names.containsSequence(["queued", "step"]))
 
         window.addSubview(view)
         loop.setTimelineActive(true)
@@ -513,9 +512,10 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let renderedAfterReveal = await recorder.waitForRenderCount(renderCount + 1)
         let revealedNames = await recorder.operationNames()
         XCTAssertTrue(renderedAfterReveal)
-        XCTAssertTrue(revealedNames.containsSequence([
-            "reattach", "reset", "metalDevice", "resize", "step", "render",
-        ]))
+        XCTAssertFalse(revealedNames.contains("detach"))
+        XCTAssertFalse(revealedNames.contains("reattach"))
+        XCTAssertFalse(revealedNames.contains("reset"))
+        XCTAssertTrue(revealedNames.containsSequence(["step", "render"]))
         let stepsAfterReveal = await recorder.steps()
         XCTAssertEqual(stepsAfterReveal.last?.elapsedSeconds, 0)
 
@@ -589,8 +589,9 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
             name: UIScene.willDeactivateNotification,
             object: window.windowScene
         )
-        let detached = await recorder.waitForOperation(named: "detach")
-        XCTAssertTrue(detached)
+        await Task.yield()
+        let namesAfterPause = await recorder.operationNames()
+        XCTAssertFalse(namesAfterPause.contains("detach"))
 
         notificationCenter.post(
             name: UIScene.didActivateNotification,
@@ -599,16 +600,17 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let rendered = await recorder.waitForRenderCount(1)
         let names = await recorder.operationNames()
         XCTAssertTrue(rendered)
-        XCTAssertTrue(names.containsSequence([
-            "detach", "reattach", "reset", "metalDevice", "resize", "step", "render",
-        ]))
+        XCTAssertFalse(names.contains("detach"))
+        XCTAssertFalse(names.contains("reattach"))
+        XCTAssertFalse(names.contains("reset"))
+        XCTAssertTrue(names.containsSequence(["step", "render"]))
 
         await loop.shutdown()
         _ = window
     }
 
     @MainActor
-    func testMemoryWarningWaitsForNativeCompletionThenCyclesVisibleRenderer() async throws {
+    func testMemoryWarningDoesNotRebindTheLiveRendererDomain() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
@@ -636,14 +638,14 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
 
         await recorder.setCompletionMode(.immediate)
         await recorder.releaseFrames()
+        loop.displayLinkDidFire(at: 2)
         let renderedTwice = await recorder.waitForRenderCount(2)
         let names = await recorder.operationNames()
-        let recoveryStep = await recorder.steps().last
         XCTAssertTrue(renderedTwice)
-        XCTAssertTrue(names.containsSequence([
-            "render", "detach", "reattach", "reset", "metalDevice", "resize", "step", "render",
-        ]))
-        XCTAssertEqual(recoveryStep?.elapsedSeconds, 0)
+        XCTAssertFalse(names.contains("detach"))
+        XCTAssertFalse(names.contains("reattach"))
+        XCTAssertFalse(names.contains("reset"))
+        XCTAssertTrue(names.containsSequence(["render", "step", "render"]))
 
         await loop.shutdown()
         _ = window
@@ -672,7 +674,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         await recorder.releaseFrames()
         await shutdown.value
         let finalNames = await recorder.operationNames()
-        XCTAssertEqual(finalNames.filter { $0 == "detach" }.count, 1)
+        XCTAssertEqual(finalNames.filter { $0 == "detach" }.count, 0)
         XCTAssertEqual(finalNames.filter { $0 == "close" }.count, 1)
         _ = window
     }
@@ -763,7 +765,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
             ["pending-failure", "accepted-effect", "accepted-success"]
         )
         let names = await recorder.operationNames()
-        XCTAssertEqual(Array(names.suffix(2)), ["detach", "close"])
+        XCTAssertEqual(names.last, "close")
         _ = window
     }
 
@@ -809,17 +811,17 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         await recorder.releaseFrames()
         await shutdown.value
         let finalNames = await recorder.operationNames()
-        XCTAssertEqual(Array(finalNames.suffix(2)), ["detach", "close"])
+        XCTAssertEqual(finalNames.last, "close")
         _ = window
     }
 
     @MainActor
-    func testDeviceLossGetsOneRecoveryAndARepeatedLossIsTerminal() async throws {
+    func testDeviceLossIsTerminalUntilTheAuthenticatedOwnerRemounts() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
         let recorder = PresentationSessionRecorder(device: device)
-        await recorder.enqueueRenderHealth([.deviceLost, .deviceLost])
+        await recorder.enqueueRenderHealth([.deviceLost])
         let (window, view) = makePresentationSurface()
         var errors: [ExperienceRuntimePresentationLoopError] = []
         let loop = makeLoop(recorder: recorder, view: view, onError: {
@@ -828,13 +830,14 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         try await loop.start()
         loop.displayLinkDidFire(at: 1)
 
-        let renderedTwice = await recorder.waitForRenderCount(2)
-        let recoveryNames = await recorder.operationNames()
-        XCTAssertTrue(renderedTwice)
-        XCTAssertTrue(recoveryNames.containsSequence([
-            "render", "detach", "reattach", "reset", "metalDevice", "resize", "step", "render",
-        ]))
-        XCTAssertEqual(errors, [.repeatedDeviceLoss])
+        let rendered = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(rendered)
+        await Task.yield()
+        let operationNames = await recorder.operationNames()
+        XCTAssertFalse(operationNames.contains("detach"))
+        XCTAssertFalse(operationNames.contains("reattach"))
+        XCTAssertFalse(operationNames.contains("reset"))
+        XCTAssertEqual(errors, [.rendererFailed(.deviceLost)])
 
         await loop.shutdown()
         _ = window
@@ -1039,16 +1042,6 @@ private actor PresentationSessionRecorder {
                 await withCheckedContinuation { queuedWorkContinuation = $0 }
             }
             return try await work.perform()
-        case .detach:
-            names.append("detach")
-            return .renderer(.detached)
-        case .reattach(let size):
-            names.append("reattach")
-            currentSize = size
-            return .renderer(.recreated(size))
-        case .resetPlayerRendererDomain:
-            names.append("reset")
-            return .none
         case .close:
             names.append("close")
             return .none

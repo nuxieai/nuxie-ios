@@ -241,7 +241,7 @@ require_build_contract "${simulator_archive}" 7 15.0 iOS
 require_build_contract "${macos_archive}" 1 12.0 macOS
 
 for archive in "${device_archive}" "${simulator_archive}" "${macos_archive}"; do
-    require_symbol "${archive}" _nux_file_import_with_result
+    require_symbol "${archive}" _nux_file_import_metal
     require_symbol "${archive}" _nux_player_step
     require_symbol "${archive}" _nux_view_model_instance_snapshot
     require_symbol "${archive}" _nux_renderer_new_metal

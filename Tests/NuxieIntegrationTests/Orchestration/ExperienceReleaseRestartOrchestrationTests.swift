@@ -214,7 +214,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                 }
 
                 let metrics = await sharedPreparation?.metrics()
-                expect(metrics?.configuredFileImportCount).to(equal(1))
+                expect(metrics?.configuredFileImportCount).to(equal(screenIDs.count + 1))
                 expect(metrics?.openedSessionCount).to(equal(screenIDs.count))
                 expect(requests.count).to(equal(1))
             }
