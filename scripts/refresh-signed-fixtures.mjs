@@ -130,8 +130,5 @@ for (const relativePath of profilePaths) {
 for (const relativePath of envelopePaths) {
   const path = resolve(relativePath);
   const envelope = JSON.parse(await readFile(path, "utf8"));
-  await writeFile(
-    path,
-    `${JSON.stringify(refreshEnvelope(envelope), null, 2)}\n`,
-  );
+  await writeFile(path, canonicalEnvelopeJson(refreshEnvelope(envelope)));
 }
