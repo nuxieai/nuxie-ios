@@ -57,7 +57,7 @@ has_symbol() {
 }
 
 expected_symbols=(
-    _nux_file_import_with_result
+    _nux_file_import_metal
     _nux_player_step
     _nux_view_model_instance_snapshot
     _nux_renderer_new_metal

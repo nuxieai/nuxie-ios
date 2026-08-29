@@ -1459,10 +1459,9 @@ struct ExperienceInteractivePreparationHandle: Sendable {
     }
 }
 
-/// Immutable authenticated renderer preparation shared by every screen and
-/// presentation of one release. Script-free files reuse one configured native
-/// import. Scripted files use a fresh import for each renderer session because
-/// their script VM is bound to that session's renderer factory domain.
+/// Immutable authenticated source preparation shared by every screen and
+/// presentation of one release. Every opened screen receives a fresh native
+/// import bound to that session's exact Metal renderer factory domain.
 actor ExperienceInteractivePreparation {
     private static let generatedInteractionStateMachineNames = [
         "Generated Nuxie Pressable Interaction",
@@ -1470,29 +1469,21 @@ actor ExperienceInteractivePreparation {
     ]
 
     private let payload: AuthenticatedRuntimePayload
-    private let primaryPreparedFile: NuxieNativePreparedFile
-    private let importMode: NuxieNativeImportMode
-    private let requiresDistinctRendererDomains: Bool
+    private let preparedFile: NuxieNativePreparedFile
     private let generatedInteractionStateMachineByArtboard: [String: String]
     private let imageIDsByName: [String: UInt64]
     private let inspectionCount: Int
-    private var primaryPreparedFileClaimed = false
-    private var configuredFileImportCount = 1
     private var openedSessionCount = 0
 
     private init(
         payload: AuthenticatedRuntimePayload,
         preparedFile: NuxieNativePreparedFile,
-        importMode: NuxieNativeImportMode,
-        requiresDistinctRendererDomains: Bool,
         generatedInteractionStateMachineByArtboard: [String: String],
         imageIDsByName: [String: UInt64],
         inspectionCount: Int
     ) {
         self.payload = payload
-        primaryPreparedFile = preparedFile
-        self.importMode = importMode
-        self.requiresDistinctRendererDomains = requiresDistinctRendererDomains
+        self.preparedFile = preparedFile
         self.generatedInteractionStateMachineByArtboard =
             generatedInteractionStateMachineByArtboard
         self.imageIDsByName = imageIDsByName
@@ -1540,8 +1531,6 @@ actor ExperienceInteractivePreparation {
         return ExperienceInteractivePreparation(
             payload: payload,
             preparedFile: preparedFile,
-            importMode: importMode,
-            requiresDistinctRendererDomains: catalog.contains { $0.kind == .script },
             generatedInteractionStateMachineByArtboard:
                 generatedInteractionStateMachineByArtboard,
             imageIDsByName: imageIDsByName,
@@ -1556,7 +1545,6 @@ actor ExperienceInteractivePreparation {
         pixelWidth: UInt32,
         pixelHeight: UInt32
     ) async throws -> ExperienceInteractiveScreen {
-        let preparedFile = try await preparedFileForOpeningSession()
         let resolvedScreenID = screenID ?? payload.renderPlan.entry.screenId
         let resolvedArtboardName = payload.renderPlan.screens.first {
             $0.screenId == resolvedScreenID
@@ -1588,27 +1576,12 @@ actor ExperienceInteractivePreparation {
     }
 
     func metrics() async -> ExperienceInteractivePreparationMetrics {
+        let nativeMetrics = await preparedFile.metrics()
         return ExperienceInteractivePreparationMetrics(
             inspectionCount: inspectionCount,
-            configuredFileImportCount: configuredFileImportCount,
+            configuredFileImportCount: nativeMetrics.fileImportCount,
             openedSessionCount: openedSessionCount
         )
-    }
-
-    private func preparedFileForOpeningSession() async throws -> NuxieNativePreparedFile {
-        guard requiresDistinctRendererDomains else {
-            return primaryPreparedFile
-        }
-        guard primaryPreparedFileClaimed else {
-            primaryPreparedFileClaimed = true
-            return primaryPreparedFile
-        }
-        let preparedFile = try await NuxieNativePreparedFile.prepare(
-            bytes: payload.sceneBytes,
-            importMode: importMode
-        )
-        configuredFileImportCount += 1
-        return preparedFile
     }
 }
 
@@ -3369,32 +3342,6 @@ actor ExperienceInteractiveScreen {
                     completion: completion
                 )
             )
-        }
-    }
-
-    func detachRenderer() async throws -> ExperienceInteractiveRenderOutcome {
-        let runtime = runtime
-        return try await operationGate.withLock {
-            Self.renderOutcome(try await runtime.detachRenderer())
-        }
-    }
-
-    func reattachRenderer(pixelWidth: UInt32, pixelHeight: UInt32) async throws
-        -> ExperienceInteractiveRenderOutcome
-    {
-        let runtime = runtime
-        return try await operationGate.withLock {
-            Self.renderOutcome(try await runtime.reattachRenderer(
-                pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight
-            ))
-        }
-    }
-
-    func resetPlayerRendererDomain() async throws {
-        let runtime = runtime
-        try await operationGate.withLock {
-            try await runtime.resetPlayerRendererDomain()
         }
     }
 

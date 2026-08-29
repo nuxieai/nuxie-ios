@@ -444,20 +444,28 @@ package struct NuxieNativePreparedFileMetrics: Equatable, Sendable {
     package let openedSessionCount: Int
 }
 
-/// One immutable native file import that can vend fresh mutable runtime
-/// sessions. Every session retains this owner so cache eviction cannot close
-/// the file while a presentation is still using it.
+/// Immutable source bytes and copied metadata that can vend fresh mutable
+/// runtime sessions. Each session imports its own file after constructing its
+/// Metal renderer so the entire native object graph belongs to one exact
+/// renderer factory domain.
 package actor NuxieNativePreparedFile {
     private let executor: NuxieRuntimePinnedThreadExecutor
-    private let file: NuxieNativeFileHandle
+    private let bytes: Data
+    private let importMode: NuxieNativeImportMode
+    private let preparedArtboards: [NuxieNativeArtboardInfo]
+    private var fileImportCount = 1
     private var openedSessionCount = 0
 
     private init(
         executor: NuxieRuntimePinnedThreadExecutor,
-        file: NuxieNativeFileHandle
+        bytes: Data,
+        importMode: NuxieNativeImportMode,
+        preparedArtboards: [NuxieNativeArtboardInfo]
     ) {
         self.executor = executor
-        self.file = file
+        self.bytes = bytes
+        self.importMode = importMode
+        self.preparedArtboards = preparedArtboards
     }
 
     package static func prepare(
@@ -466,14 +474,41 @@ package actor NuxieNativePreparedFile {
     ) async throws -> NuxieNativePreparedFile {
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
-            let file = try await executor.call {
-                try NuxieNativeFileHandle(
+            let preparedArtboards = try await executor.call {
+                let renderer = try NuxieNativeRendererHandle(
                     executor: executor,
-                    bytes: bytes,
-                    importMode: importMode
+                    pixelWidth: 1,
+                    pixelHeight: 1
                 )
+                let file: NuxieNativeFileHandle
+                do {
+                    file = try NuxieNativeFileHandle(
+                        executor: executor,
+                        renderer: renderer,
+                        bytes: bytes,
+                        importMode: importMode
+                    )
+                } catch {
+                    try? renderer.close()
+                    throw error
+                }
+                do {
+                    let artboards = try file.artboards()
+                    try file.close()
+                    try renderer.close()
+                    return artboards
+                } catch {
+                    try? file.close()
+                    try? renderer.close()
+                    throw error
+                }
             }
-            return NuxieNativePreparedFile(executor: executor, file: file)
+            return NuxieNativePreparedFile(
+                executor: executor,
+                bytes: bytes,
+                importMode: importMode,
+                preparedArtboards: preparedArtboards
+            )
         } catch {
             executor.shutdown()
             throw error
@@ -488,16 +523,19 @@ package actor NuxieNativePreparedFile {
         bindDefaultViewModel: Bool = false
     ) async throws -> NuxieNativeRuntime {
         let executor = self.executor
-        let file = self.file
+        let bytes = self.bytes
+        let importMode = self.importMode
+        fileImportCount += 1
         let state = try await executor.call {
             try NuxieNativeRuntimeState(
                 executor: executor,
-                file: file,
+                bytes: bytes,
                 artboardName: artboardName,
                 selection: player,
                 pixelWidth: pixelWidth,
                 pixelHeight: pixelHeight,
-                bindDefaultViewModel: bindDefaultViewModel
+                bindDefaultViewModel: bindDefaultViewModel,
+                importMode: importMode
             )
         }
         openedSessionCount += 1
@@ -510,20 +548,13 @@ package actor NuxieNativePreparedFile {
 
     package func metrics() -> NuxieNativePreparedFileMetrics {
         NuxieNativePreparedFileMetrics(
-            fileImportCount: 1,
+            fileImportCount: fileImportCount,
             openedSessionCount: openedSessionCount
         )
     }
 
     package func artboards() async throws -> [NuxieNativeArtboardInfo] {
-        let executor = self.executor
-        let file = self.file
-        return try await executor.call { try file.artboards() }
-    }
-
-    deinit {
-        let file = file
-        executor.enqueue { try? file.close() }
+        preparedArtboards
     }
 }
 
@@ -551,17 +582,31 @@ package actor NuxieNativeRuntime {
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
             return try await executor.callThenShutdown {
-                let file = try NuxieNativeFileHandle(
+                let renderer = try NuxieNativeRendererHandle(
                     executor: executor,
-                    bytes: bytes,
-                    importMode: .portable
+                    pixelWidth: 1,
+                    pixelHeight: 1
                 )
+                let file: NuxieNativeFileHandle
+                do {
+                    file = try NuxieNativeFileHandle(
+                        executor: executor,
+                        renderer: renderer,
+                        bytes: bytes,
+                        importMode: .portable
+                    )
+                } catch {
+                    try? renderer.close()
+                    throw error
+                }
                 do {
                     let assets = try file.assets()
                     try file.close()
+                    try renderer.close()
                     return assets
                 } catch {
                     try? file.close()
+                    try? renderer.close()
                     throw error
                 }
             }
@@ -742,28 +787,6 @@ package actor NuxieNativeRuntime {
         }
     }
 
-    package func detachRenderer() async throws -> NuxieNativeRendererOutcome {
-        let state = try requireState()
-        return try await executor.call { try state.renderer.detach() }
-    }
-
-    package func reattachRenderer(
-        pixelWidth: UInt32,
-        pixelHeight: UInt32
-    ) async throws -> NuxieNativeRendererOutcome {
-        let state = try requireState()
-        return try await executor.call {
-            try state.renderer.reattach(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
-        }
-    }
-
-    package func resetPlayerRendererDomain() async throws {
-        let state = try requireState()
-        try await executor.call {
-            try state.renderer.resetPlayerDomain(player: state.player)
-        }
-    }
-
     package func executorThreadIdentity() async throws -> UInt64 {
         _ = try requireState()
         return try await executor.call {
@@ -834,9 +857,9 @@ private final class NuxieNativeOwnedHandle: @unchecked Sendable {
             self.handle = nil
             return
         }
-        // ABI v3 consumes a registered handle once destruction begins, even
-        // when a destructor panic is contained as RUNTIME_ERROR. Other
-        // failures happen before destruction and leave ownership with Swift.
+        // The portable ABI consumes a registered handle once destruction
+        // begins, even when a destructor panic is contained as RUNTIME_ERROR.
+        // Other failures happen before destruction and leave ownership with Swift.
         if status == NUX_STATUS_RUNTIME_ERROR.rawValue {
             self.handle = nil
         }
@@ -851,7 +874,6 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     var player: NuxieNativePlayerHandle { players[0] }
     let viewModel: NuxieNativeViewModelHandle?
     let renderer: NuxieNativeRendererHandle
-    private let closesFile: Bool
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
     private var auxiliaryPlayersNeedInitialStep = true
     private var isClosed = false
@@ -866,72 +888,49 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         bindDefaultViewModel: Bool,
         importMode: NuxieNativeImportMode
     ) throws {
-        let file = try NuxieNativeFileHandle(
+        let renderer = try NuxieNativeRendererHandle(
             executor: executor,
-            bytes: bytes,
-            importMode: importMode
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
         )
+        let file: NuxieNativeFileHandle
         do {
-            let artboard = try file.makeArtboard(named: artboardName)
-            let viewModel: NuxieNativeViewModelHandle?
-            if bindDefaultViewModel {
-                let defaultViewModel = try artboard.makeDefaultViewModel()
-                try artboard.bind(viewModel: defaultViewModel)
-                viewModel = defaultViewModel
-            } else {
-                viewModel = nil
-            }
-            let players = try Self.makePlayers(artboard: artboard, selection: selection)
-            let renderer = try NuxieNativeRendererHandle(
+            file = try NuxieNativeFileHandle(
                 executor: executor,
-                pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight
+                renderer: renderer,
+                bytes: bytes,
+                importMode: importMode
             )
-            self.file = file
-            self.artboard = artboard
-            self.players = players
-            self.viewModel = viewModel
-            self.renderer = renderer
-            self.closesFile = true
         } catch {
-            try? file.close()
+            try? renderer.close()
             throw error
         }
-    }
-
-    init(
-        executor: NuxieRuntimePinnedThreadExecutor,
-        file: NuxieNativeFileHandle,
-        artboardName: String,
-        selection: NuxieNativePlayerSelection,
-        pixelWidth: UInt32,
-        pixelHeight: UInt32,
-        bindDefaultViewModel: Bool
-    ) throws {
-        let artboard = try file.makeArtboard(named: artboardName)
+        let artboard: NuxieNativeArtboardHandle
         do {
-            let viewModel: NuxieNativeViewModelHandle?
+            artboard = try file.makeArtboard(named: artboardName)
+        } catch {
+            try? file.close()
+            try? renderer.close()
+            throw error
+        }
+        var viewModel: NuxieNativeViewModelHandle?
+        do {
             if bindDefaultViewModel {
                 let defaultViewModel = try artboard.makeDefaultViewModel()
-                try artboard.bind(viewModel: defaultViewModel)
                 viewModel = defaultViewModel
-            } else {
-                viewModel = nil
+                try artboard.bind(viewModel: defaultViewModel)
             }
             let players = try Self.makePlayers(artboard: artboard, selection: selection)
-            let renderer = try NuxieNativeRendererHandle(
-                executor: executor,
-                pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight
-            )
             self.file = file
             self.artboard = artboard
             self.players = players
             self.viewModel = viewModel
             self.renderer = renderer
-            self.closesFile = false
         } catch {
+            try? viewModel?.close()
             try? artboard.close()
+            try? file.close()
+            try? renderer.close()
             throw error
         }
     }
@@ -943,17 +942,18 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             do { try viewModel.close() } catch { firstError = firstError ?? error }
         }
         retainedViewModels.removeAll()
-        var operations: [() throws -> Void] = [{ try self.renderer.close() }]
+        // The renderer owns the factory domain used at import. Every bound
+        // descendant, including the file itself, must be gone before it.
+        var operations: [() throws -> Void] = []
         operations.append(contentsOf: players.reversed().map { player in
             { try player.close() }
         })
         operations.append(contentsOf: [
             { try self.viewModel?.close() },
             { try self.artboard.close() },
+            { try self.file.close() },
+            { try self.renderer.close() },
         ])
-        if closesFile {
-            operations.append { try self.file.close() }
-        }
         for operation in operations {
             do { try operation() } catch { firstError = firstError ?? error }
         }
@@ -1290,6 +1290,7 @@ private func decodeNativeImage(
 
 private enum NuxieNativeAppleAssetImporter {
     static func importFile(
+        renderer: OpaquePointer,
         bytes: Data,
         moduleName: String,
         expectedAssets: [NuxieNativeFileAssetDescriptor],
@@ -1346,6 +1347,7 @@ private enum NuxieNativeAppleAssetImporter {
                         config.expected_asset_count = assetsPointer.count
                         return bytes.withUnsafeBytes { rawBytes in
                             nux_product_file_import_configured(
+                                renderer,
                                 rawBytes.bindMemory(to: UInt8.self).baseAddress,
                                 rawBytes.count,
                                 &config,
@@ -1366,38 +1368,49 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
 
     init(
         executor: NuxieRuntimePinnedThreadExecutor,
+        renderer: NuxieNativeRendererHandle,
         bytes: Data,
         importMode: NuxieNativeImportMode
     ) throws {
+        let renderer = try renderer.require()
         var file: OpaquePointer?
         var result: OpaquePointer?
         let status: UInt32
         switch importMode {
         case .portable:
             status = bytes.withUnsafeBytes { storage in
-                nux_file_import_with_result(
+                nux_file_import_metal(
+                    renderer,
                     storage.bindMemory(to: UInt8.self).baseAddress,
                     storage.count,
+                    nil,
                     &file,
                     &result
                 )
             }
         case .trustedHostCommands(let moduleName):
-            var config = makeHostCommandImportConfig()
+            var host = makeHostCommandImportConfig()
+            var config = NuxFileImportConfig()
+            config.struct_size = UInt32(MemoryLayout<NuxFileImportConfig>.size)
             status = withStringView(moduleName) { moduleNameView in
-                config.module_name = moduleNameView
-                return bytes.withUnsafeBytes { storage in
-                    nux_file_import_trusted_with_host_commands(
-                        storage.bindMemory(to: UInt8.self).baseAddress,
-                        storage.count,
-                        &config,
-                        &file,
-                        &result
-                    )
+                host.module_name = moduleNameView
+                return withUnsafePointer(to: &host) { hostPointer in
+                    config.host_commands = hostPointer
+                    return bytes.withUnsafeBytes { storage in
+                        nux_file_import_metal(
+                            renderer,
+                            storage.bindMemory(to: UInt8.self).baseAddress,
+                            storage.count,
+                            &config,
+                            &file,
+                            &result
+                        )
+                    }
                 }
             }
         case .configured(let moduleName, let expectedAssets, let externalAssets):
             status = try NuxieNativeAppleAssetImporter.importFile(
+                renderer: renderer,
                 bytes: bytes,
                 moduleName: moduleName,
                 expectedAssets: expectedAssets,
@@ -2298,6 +2311,8 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
         )
     }
 
+    func require() throws -> OpaquePointer { try owned.require() }
+
     func copyDevice() throws -> NuxieNativeMetalDevice {
         var rawDevice: UnsafeMutableRawPointer?
         var result: OpaquePointer?
@@ -2379,42 +2394,6 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
             try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
         }
         return try copyRendererOutcome(outcome)
-    }
-
-    func detach() throws -> NuxieNativeRendererOutcome {
-        var outcome = NuxRendererOutcome()
-        outcome.struct_size = UInt32(MemoryLayout<NuxRendererOutcome>.size)
-        var result: OpaquePointer?
-        let status = nux_renderer_detach(try owned.require(), &outcome, &result)
-        try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
-        return try copyRendererOutcome(outcome)
-    }
-
-    func reattach(pixelWidth: UInt32, pixelHeight: UInt32) throws
-        -> NuxieNativeRendererOutcome
-    {
-        var outcome = NuxRendererOutcome()
-        outcome.struct_size = UInt32(MemoryLayout<NuxRendererOutcome>.size)
-        var result: OpaquePointer?
-        let status = nux_renderer_reattach(
-            try owned.require(),
-            pixelWidth,
-            pixelHeight,
-            &outcome,
-            &result
-        )
-        try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
-        return try copyRendererOutcome(outcome)
-    }
-
-    func resetPlayerDomain(player: NuxieNativePlayerHandle) throws {
-        var result: OpaquePointer?
-        let status = nux_renderer_reset_player_domain(
-            try owned.require(),
-            try player.require(),
-            &result
-        )
-        try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
     }
 
     func close() throws { try owned.close() }

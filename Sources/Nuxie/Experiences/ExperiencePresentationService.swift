@@ -686,8 +686,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             await trackDismissal(reason, experienceVersionId: experienceVersionId, journey: journey)
         }
 
-        // Sessions and their Apple surfaces must be detached before the host
-        // window is destroyed.
+        // Renderer-bound sessions must close before the host window is
+        // destroyed so every imported child is released before its renderer.
         let previousCleanupTask = presentationCleanupTask
         let cleanupTask = Task<Void, Never> { @MainActor in
             await previousCleanupTask?.value

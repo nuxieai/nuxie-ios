@@ -41,24 +41,6 @@ struct ExperienceRuntimePresentationRenderOutcome: Equatable, Sendable {
     let pixelWidth: UInt32
     let pixelHeight: UInt32
     let drawCalls: UInt64
-
-    static let detached = Self(
-        disposition: .none,
-        health: .healthy,
-        pixelWidth: 0,
-        pixelHeight: 0,
-        drawCalls: 0
-    )
-
-    static func recreated(_ size: ExperienceRuntimeSurfaceSize) -> Self {
-        Self(
-            disposition: .recreated,
-            health: .healthy,
-            pixelWidth: size.pixelWidth,
-            pixelHeight: size.pixelHeight,
-            drawCalls: 0
-        )
-    }
 }
 
 struct ExperienceRuntimePresentationStep: Equatable, Sendable {
@@ -271,9 +253,6 @@ enum ExperienceRuntimePresentationSessionOperation: @unchecked Sendable {
         completion: ExperienceRuntimePresentationFrameCompletion
     )
     case queued(ExperienceRuntimePresentationQueuedWork)
-    case detach
-    case reattach(ExperienceRuntimeSurfaceSize)
-    case resetPlayerRendererDomain
     case close
 }
 
@@ -409,16 +388,6 @@ extension ExperienceInteractiveScreen {
                 )))
             case .queued(let work):
                 return try await work.perform()
-            case .detach:
-                return .renderer(Self.presentationOutcome(try await screen.detachRenderer()))
-            case .reattach(let size):
-                return .renderer(Self.presentationOutcome(try await screen.reattachRenderer(
-                    pixelWidth: size.pixelWidth,
-                    pixelHeight: size.pixelHeight
-                )))
-            case .resetPlayerRendererDomain:
-                try await screen.resetPlayerRendererDomain()
-                return .none
             case .close:
                 try await screen.close()
                 return .none
@@ -479,13 +448,9 @@ private final class ExperienceRuntimePresentationWorkCompletion: @unchecked Send
 ///
 /// MainActor owns the view, layer, drawables, timestamps, lifecycle and FIFO.
 /// The session owns all C handles and calls. At most one session operation is
-/// in flight, and detach/reattach waits for every native frame completion.
+/// in flight, and session close waits for every native frame completion.
 @MainActor
 final class ExperienceRuntimePresentationLoop: NSObject {
-    private enum RecoveryStage: Equatable {
-        case idle, detach, reattach, resetDomain, refreshDevice, resize, redraw
-    }
-
     private struct PendingWork {
         let work: ExperienceRuntimePresentationQueuedWork
         let completion: ExperienceRuntimePresentationWorkCompletion
@@ -539,10 +504,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var owningSceneIsActive = true
     private var isPresentationVisible = true
     private var isTimelineActive = true
-    private var rendererIsAttached = true
-    private var recoveryStage: RecoveryStage = .idle
-    private var deviceLossRecoveryCount = 0
-    private var awaitingRecoveryFrame = false
+    private var sessionIsOpen = true
     private var lastAppliedSize: ExperienceRuntimeSurfaceSize?
     private var frameSequence: UInt64 = 0
     private var lifecycleGeneration: UInt64 = 0
@@ -651,7 +613,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
         try requireHealthy(outcome)
         lastAppliedSize = size
-        rendererIsAttached = true
         frameClock.reset()
         isStarted = true
         surfaceView.runtimeObserver = self
@@ -666,7 +627,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             await waitForShutdownToFinish()
             return
         }
-        guard isStarted || operationInFlight || rendererIsAttached else { return }
+        guard isStarted || operationInFlight || sessionIsOpen else { return }
         isShuttingDown = true
         lifecycleGeneration &+= 1
         isStarted = false
@@ -686,22 +647,16 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         await waitForOperationToFinish()
         await waitForFramesToFinish()
 
-        if rendererIsAttached {
+        if sessionIsOpen {
             do {
-                _ = try await session.perform(.detach)
-                rendererIsAttached = false
+                _ = try await session.perform(.close)
             } catch {
                 onError(error)
             }
-        }
-        do {
-            _ = try await session.perform(.close)
-        } catch {
-            onError(error)
+            sessionIsOpen = false
         }
         surfaceView?.metalLayer.device = nil
         lastAppliedSize = nil
-        recoveryStage = .idle
         isShuttingDown = false
         resumeShutdownWaiters()
     }
@@ -844,17 +799,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
         // Every accepted step gets an explicit render outcome before lifecycle
         // work, even when visibility changed while the step was in flight.
-        if pendingRender, rendererIsAttached {
+        if pendingRender {
             pendingRender = false
             return makeRenderOperation(for: surfaceView)
         }
 
-        if recoveryStage != .idle {
-            return nextRecoveryOperation(for: surfaceView)
-        }
-
         if !shouldAdvance {
-            if rendererIsAttached, inFlightFrameIDs.isEmpty { return .detach }
             if !pendingWork.isEmpty { return takeNextQueuedOperation() }
             if pendingZeroDeltaFrame {
                 pendingZeroDeltaFrame = false
@@ -869,7 +819,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
 
         if !shouldPresent {
-            if rendererIsAttached, inFlightFrameIDs.isEmpty { return .detach }
             if !pendingWork.isEmpty { return takeNextQueuedOperation() }
             if pendingZeroDeltaFrame {
                 pendingZeroDeltaFrame = false
@@ -892,7 +841,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
 
         let size = surfaceSize(for: surfaceView)
-        if !rendererIsAttached { return .reattach(size) }
         if size != lastAppliedSize { return .resize(size) }
         if !pendingWork.isEmpty { return takeNextQueuedOperation() }
         if pendingZeroDeltaFrame {
@@ -916,33 +864,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         ))
     }
 
-    private func nextRecoveryOperation(
-        for surfaceView: ExperienceRuntimeSurfaceView
-    ) -> ExperienceRuntimePresentationSessionOperation? {
-        let size = surfaceSize(for: surfaceView)
-        switch recoveryStage {
-        case .idle:
-            return nil
-        case .detach:
-            guard inFlightFrameIDs.isEmpty else { return nil }
-            if rendererIsAttached { return .detach }
-            recoveryStage = .reattach
-            return nextRecoveryOperation(for: surfaceView)
-        case .reattach:
-            return .reattach(size)
-        case .resetDomain:
-            return .resetPlayerRendererDomain
-        case .refreshDevice:
-            return .copyMetalDevice
-        case .resize:
-            return .resize(size)
-        case .redraw:
-            recoveryStage = .idle
-            pendingTimestamp = CACurrentMediaTime()
-            return nextOperation()
-        }
-    }
-
     private func consume(
         _ result: ExperienceRuntimePresentationSessionResult,
         for operation: ExperienceRuntimePresentationSessionOperation
@@ -953,12 +874,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 throw ExperienceRuntimePresentationLoopError.disposedSurface
             }
             configure(layer, with: device)
-            if recoveryStage == .refreshDevice { recoveryStage = .resize }
         case (.resize(let size), .renderer(let outcome)):
             try requireHealthy(outcome)
             lastAppliedSize = size
-            if recoveryStage == .resize { recoveryStage = .redraw }
-            else { pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime() }
+            pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
         case (.step(let step), .session):
             await result.deliver()
             if !step.pointers.isEmpty {
@@ -990,19 +909,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                     pendingZeroDeltaFrame = true
                 }
             }
-        case (.detach, .renderer(let outcome)):
-            try requireHealthy(outcome)
-            rendererIsAttached = false
-            lastAppliedSize = nil
-            frameClock.reset()
-            if recoveryStage == .detach { recoveryStage = .reattach }
-        case (.reattach, .renderer(let outcome)):
-            try requireHealthy(outcome)
-            rendererIsAttached = true
-            frameClock.reset()
-            recoveryStage = .resetDomain
-        case (.resetPlayerRendererDomain, .none):
-            recoveryStage = .refreshDevice
         default:
             throw ExperienceRuntimePresentationLoopError.unexpectedSessionResult
         }
@@ -1013,19 +919,9 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     ) throws {
         switch outcome.health {
         case .healthy:
-            if awaitingRecoveryFrame {
-                awaitingRecoveryFrame = false
-                deviceLossRecoveryCount = 0
-            }
+            break
         case .deviceLost:
-            guard deviceLossRecoveryCount == 0 else {
-                throw ExperienceRuntimePresentationLoopError.repeatedDeviceLoss
-            }
-            deviceLossRecoveryCount = 1
-            awaitingRecoveryFrame = true
-            recoveryStage = .detach
-            pendingTimestamp = nil
-            frameClock.reset()
+            throw ExperienceRuntimePresentationLoopError.rendererFailed(.deviceLost)
         case .outOfMemory, .failed:
             throw ExperienceRuntimePresentationLoopError.rendererFailed(outcome.health)
         }
@@ -1241,15 +1137,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                     self?.reconcile()
                 }
             },
-            notificationCenter.addObserver(
-                forName: UIApplication.didReceiveMemoryWarningNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.handleMemoryWarning()
-                }
-            },
         ]
     }
 
@@ -1291,21 +1178,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         owningSceneIsActive = (surfaceView?.window?.windowScene ?? observedWindowScene).map {
             $0.activationState == .foregroundActive
         } ?? true
-    }
-
-    private func handleMemoryWarning() {
-        guard isStarted,
-              !isShuttingDown,
-              terminalError == nil,
-              recoveryStage == .idle else { return }
-        guard shouldPresent else {
-            reconcile()
-            return
-        }
-        recoveryStage = .detach
-        pendingTimestamp = nil
-        frameClock.reset()
-        reconcile()
     }
 
     private func removeApplicationObservers() {
@@ -1410,7 +1282,6 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
 enum ExperienceRuntimePresentationLoopError: Error, Equatable {
     case unexpectedSessionResult
     case rendererFailed(ExperienceRuntimePresentationRenderOutcome.Health)
-    case repeatedDeviceLoss
     case disposedSurface
     case pendingWorkOverflow
 }

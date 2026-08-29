@@ -19,12 +19,13 @@ class SlimRuntimeContractTests(unittest.TestCase):
     def test_accepts_an_exact_product_neutral_symbol_set(self) -> None:
         header = """
         uint32_t nux_capi_abi_version(void);
-        NuxStatus nux_file_import_with_result(const uint8_t *bytes, size_t len);
+        NuxStatus nux_file_import_metal(NuxRenderer *renderer,
+            const uint8_t *bytes, size_t len);
         NuxStatus nux_renderer_new_metal(uint32_t width, uint32_t height);
         """
         exports = """
         _nux_capi_abi_version
-        _nux_file_import_with_result
+        _nux_file_import_metal
         _nux_renderer_new_metal
         _unrelated_system_symbol
         """
@@ -33,12 +34,10 @@ class SlimRuntimeContractTests(unittest.TestCase):
 
     def test_accepts_the_single_authored_data_extension_symbol(self) -> None:
         header = """
-        NuxStatus nux_file_import_configured(const uint8_t *bytes, size_t len);
         NuxStatus nux_product_file_import_configured(
-            const uint8_t *bytes, size_t len);
+            NuxRenderer *renderer, const uint8_t *bytes, size_t len);
         """
         exports = """
-        _nux_file_import_configured
         _nux_product_file_import_configured
         """
 
