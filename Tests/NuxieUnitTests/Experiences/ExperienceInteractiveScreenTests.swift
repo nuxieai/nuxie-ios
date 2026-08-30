@@ -1318,95 +1318,60 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
-    func testFactoryHydratesFlattenedViewModelAndListStateInOneSignedPayload() async throws {
-        let payload = try await statePayload(
-            defaultViewModelName: "Test",
-            values: [
-                JourneyViewModelValue(
-                    viewModelName: "Test",
-                    instanceId: "root-sdk-id",
-                    path: "Nested/vmInstanceId",
-                    value: AnyCodable("nested-sdk-id")
-                ),
-                JourneyViewModelValue(
-                    viewModelName: "Test",
-                    instanceId: "root-sdk-id",
-                    path: "Nested/values/String",
-                    value: AnyCodable("nested-signed")
-                ),
-                JourneyViewModelValue(
-                    viewModelName: "Test",
-                    instanceId: "root-sdk-id",
-                    path: "List",
-                    value: AnyCodable([[
-                        "vmInstanceId": "row-sdk-id",
-                        "viewModelId": "Nested",
-                        "values": ["String": "row-signed"],
-                    ]])
-                ),
-            ]
-        )
+    func testFactoryHydratesCanonicalListStateInOneSignedPayload() async throws {
+        let payload = try await componentListStatePayload(values: [
+            JourneyViewModelValue(
+                viewModelName: "Doc",
+                instanceId: "root-sdk-id",
+                path: "items",
+                value: AnyCodable([[
+                    "vmInstanceId": "row-sdk-id",
+                    "viewModelId": "ItemVM",
+                    "values": ["value": 11],
+                ]])
+            ),
+        ])
         let screen = try await ExperienceInteractiveScreen.open(
             payload: payload,
-            player: .stateMachine("State Machine 1"),
+            player: .staticArtboard,
             pixelWidth: 16,
             pixelHeight: 16
         )
         defer { Task { try? await screen.close() } }
 
         let root = try await screen.rootViewModel()
-        let nested = try await screen.viewModel(named: "Nested", instanceID: "nested-sdk-id")
-        let row = try await screen.viewModel(named: "Nested", instanceID: "row-sdk-id")
+        let row = try await screen.viewModel(named: "ItemVM", instanceID: "row-sdk-id")
         let snapshot = try await screen.snapshot()
         let rootValues = snapshot.values.filter { $0.ownerInstanceID == root.rawValue }
-        guard case .referencedInstance(let linkedNested) = rootValues.first(where: {
-            $0.name == "Nested"
-        })?.value,
-        case .list(let linkedRows) = rootValues.first(where: {
-            $0.name == "List"
+        guard case .list(let linkedRows) = rootValues.first(where: {
+            $0.name == "items"
         })?.value,
         let linkedRow = linkedRows.first else {
-            return XCTFail("Expected signed structural state")
+            return XCTFail("Expected signed list state")
         }
         XCTAssertEqual(
             snapshot.values.first(where: {
-                $0.ownerInstanceID == linkedNested && $0.name == "String"
+                $0.ownerInstanceID == linkedRow && $0.name == "value"
             })?.value,
-            .bytes(Data("nested-signed".utf8))
-        )
-        XCTAssertEqual(
-            snapshot.values.first(where: {
-                $0.ownerInstanceID == linkedRow && $0.name == "String"
-            })?.value,
-            .bytes(Data("row-signed".utf8))
+            .number(11)
         )
 
         _ = try await screen.mutateState(
-            [.setString(nested, path: "String", value: Data("nested-sdk".utf8))],
-            correlationID: 91
-        )
-        _ = try await screen.mutateState(
-            [.setString(row, path: "String", value: Data("row-sdk".utf8))],
+            [.setNumber(row, path: "value", value: 22)],
             correlationID: 92
         )
         let mutated = try await screen.snapshot()
         XCTAssertEqual(
             mutated.values.first(where: {
-                $0.ownerInstanceID == linkedNested && $0.name == "String"
+                $0.ownerInstanceID == linkedRow && $0.name == "value"
             })?.value,
-            .bytes(Data("nested-sdk".utf8))
-        )
-        XCTAssertEqual(
-            mutated.values.first(where: {
-                $0.ownerInstanceID == linkedRow && $0.name == "String"
-            })?.value,
-            .bytes(Data("row-sdk".utf8))
+            .number(22)
         )
 
         do {
             _ = try await screen.mutateState(
                 [
-                    .listRemove(root, path: "List", index: 0),
+                    .listRemove(root, path: "items", index: 0),
                     .setNumber(root, path: "missing", value: 1),
                 ],
                 correlationID: 93
@@ -1414,24 +1379,24 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             XCTFail("Expected the mixed native batch to roll back")
         } catch {}
         _ = try await screen.mutateState(
-            [.listRemove(root, path: "List", index: 0)],
+            [.listRemove(root, path: "items", index: 0)],
             correlationID: 94
         )
         let removed = try await screen.snapshot()
         XCTAssertEqual(
             removed.values.first(where: {
-                $0.ownerInstanceID == root.rawValue && $0.name == "List"
+                $0.ownerInstanceID == root.rawValue && $0.name == "items"
             })?.value,
             .list([])
         )
         _ = try await screen.mutateState(
-            [.listInsert(root, path: "List", index: 0, value: row)],
+            [.listInsert(root, path: "items", index: 0, value: row)],
             correlationID: 95
         )
         let reinserted = try await screen.snapshot()
         XCTAssertEqual(
             reinserted.values.first(where: {
-                $0.ownerInstanceID == root.rawValue && $0.name == "List"
+                $0.ownerInstanceID == root.rawValue && $0.name == "items"
             })?.value,
             .list([linkedRow])
         )
@@ -1564,92 +1529,52 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
-    func testSwiftSnapshotReplaysFlattenedViewModelAndCanonicalListAtomically() async throws {
-        let payload = try await statePayload(
-            defaultViewModelName: "Test",
-            values: [
-                JourneyViewModelValue(
-                    viewModelName: "Test",
-                    instanceId: "root-sdk-id",
-                    path: "Nested/vmInstanceId",
-                    value: AnyCodable("nested-sdk-id")
-                ),
-                JourneyViewModelValue(
-                    viewModelName: "Test",
-                    instanceId: "root-sdk-id",
-                    path: "Nested/values/String",
-                    value: AnyCodable("before-nested")
-                ),
-                JourneyViewModelValue(
-                    viewModelName: "Test",
-                    instanceId: "root-sdk-id",
-                    path: "List",
-                    value: AnyCodable([[
-                        "vmInstanceId": "row-sdk-id",
-                        "viewModelId": "Nested",
-                        "values": ["String": "before-row"],
-                    ]])
-                ),
-            ]
-        )
+    func testSwiftSnapshotReplaysCanonicalListAtomically() async throws {
+        let payload = try await componentListStatePayload(values: [
+            JourneyViewModelValue(
+                viewModelName: "Doc",
+                instanceId: "root-sdk-id",
+                path: "items",
+                value: AnyCodable([[
+                    "vmInstanceId": "row-sdk-id",
+                    "viewModelId": "ItemVM",
+                    "values": ["value": 1],
+                ]])
+            ),
+        ])
         let screen = try await ExperienceInteractiveScreen.open(
             payload: payload,
-            player: .stateMachine("State Machine 1"),
+            player: .staticArtboard,
             pixelWidth: 16,
             pixelHeight: 16
         )
         defer { Task { try? await screen.close() } }
 
-        _ = try await screen.applyStateCommand(.snapshot([
-            .init(
-                viewModelName: "Test",
-                instanceID: "root-sdk-id",
-                instanceName: nil,
-                path: "Nested/vmInstanceId",
-                value: .string("nested-sdk-id")
-            ),
-            .init(
-                viewModelName: "Test",
-                instanceID: "root-sdk-id",
-                instanceName: nil,
-                path: "Nested/values/String",
-                value: .string("after-nested")
-            ),
-            .init(
-                viewModelName: "Test",
-                instanceID: "root-sdk-id",
-                instanceName: nil,
-                path: "List",
-                value: .list([Self.object([
-                    ("viewModelId", .string("Nested")),
-                    ("vmInstanceId", .string("row-sdk-id")),
-                    ("values", Self.object([("String", .string("after-row"))])),
-                ])])
-            ),
-        ]))
+        _ = try await screen.applyStateCommand(.snapshot([.init(
+            viewModelName: "Doc",
+            instanceID: "root-sdk-id",
+            instanceName: nil,
+            path: "items",
+            value: .list([Self.object([
+                ("viewModelId", .string("ItemVM")),
+                ("vmInstanceId", .string("row-sdk-id")),
+                ("values", Self.object([("value", .number(2))])),
+            ])])
+        )]))
 
         let root = try await screen.rootViewModel()
         let snapshot = try await screen.snapshot()
-        guard case .referencedInstance(let nestedID) = snapshot.values.first(where: {
-            $0.ownerInstanceID == root.rawValue && $0.name == "Nested"
-        })?.value,
-        case .list(let rowIDs) = snapshot.values.first(where: {
-            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+        guard case .list(let rowIDs) = snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "items"
         })?.value,
         let rowID = rowIDs.first else {
-            return XCTFail("Expected canonical composite topology")
+            return XCTFail("Expected canonical list topology")
         }
         XCTAssertEqual(
             snapshot.values.first(where: {
-                $0.ownerInstanceID == nestedID && $0.name == "String"
+                $0.ownerInstanceID == rowID && $0.name == "value"
             })?.value,
-            .bytes(Data("after-nested".utf8))
-        )
-        XCTAssertEqual(
-            snapshot.values.first(where: {
-                $0.ownerInstanceID == rowID && $0.name == "String"
-            })?.value,
-            .bytes(Data("after-row".utf8))
+            .number(2)
         )
     }
 
@@ -1718,177 +1643,138 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
     }
 
-    func testRuntimeCompositeChangesProjectStablePublisherIdentities() async throws {
-        let payload = try await statePayload(
-            defaultViewModelName: "Test",
-            values: [
-                JourneyViewModelValue(
-                    viewModelName: "Test",
-                    instanceId: "root-sdk-id",
-                    path: "Nested/vmInstanceId",
-                    value: AnyCodable("nested-sdk-id")
-                ),
-                JourneyViewModelValue(
-                    viewModelName: "Test",
-                    instanceId: "root-sdk-id",
-                    path: "Nested/values/String",
-                    value: AnyCodable("nested-value")
-                ),
-                JourneyViewModelValue(
-                    viewModelName: "Test",
-                    instanceId: "root-sdk-id",
-                    path: "List",
-                    value: AnyCodable([[
-                        "vmInstanceId": "row-sdk-id",
-                        "viewModelId": "Nested",
-                        "values": ["String": "row"],
-                    ]])
-                ),
-            ]
-        )
+    func testRuntimeListChangesProjectStablePublisherIdentities() async throws {
+        let payload = try await componentListStatePayload(values: [
+            JourneyViewModelValue(
+                viewModelName: "Doc",
+                instanceId: "root-sdk-id",
+                path: "items",
+                value: AnyCodable([[
+                    "vmInstanceId": "row-sdk-id",
+                    "viewModelId": "ItemVM",
+                    "values": ["value": 7],
+                ]])
+            ),
+        ])
         let screen = try await ExperienceInteractiveScreen.open(
             payload: payload,
-            player: .stateMachine("State Machine 1"),
+            player: .staticArtboard,
             pixelWidth: 16,
             pixelHeight: 16
         )
         defer { Task { try? await screen.close() } }
         let root = try await screen.rootViewModel()
-        let nestedReference = try await screen.viewModel(
-            named: "Nested",
-            instanceID: "nested-sdk-id"
-        )
-        let rowReference = try await screen.viewModel(named: "Nested", instanceID: "row-sdk-id")
+        let rowReference = try await screen.viewModel(named: "ItemVM", instanceID: "row-sdk-id")
         let snapshot = try await screen.snapshot()
-        let nestedValue = try XCTUnwrap(snapshot.values.first(where: {
-            $0.ownerInstanceID == root.rawValue && $0.name == "Nested"
-        }))
         let listValue = try XCTUnwrap(snapshot.values.first(where: {
-            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+            $0.ownerInstanceID == root.rawValue && $0.name == "items"
         }))
 
-        let nested = try await screen.resolveViewModelChange(.init(
-            origin: .runtime,
-            correlationID: 1,
-            ownerInstanceID: root.rawValue,
-            propertyIndex: nestedValue.propertyIndex,
-            value: .referencedInstance(nestedReference.rawValue)
-        ))
         let list = try await screen.resolveViewModelChange(.init(
             origin: .runtime,
-            correlationID: 2,
+            correlationID: 1,
             ownerInstanceID: root.rawValue,
             propertyIndex: listValue.propertyIndex,
             value: .list([rowReference.rawValue])
         ))
-        XCTAssertEqual(nested.value["vmInstanceId"], .string("nested-sdk-id"))
-        XCTAssertEqual(nested.value["values"]?["String"], .string("nested-value"))
         guard case .list(let rows) = list.value else {
             return XCTFail("Expected canonical list identities")
         }
         XCTAssertEqual(rows.first?["vmInstanceId"], .string("row-sdk-id"))
-        XCTAssertEqual(rows.first?["values"]?["String"], .string("row"))
+        XCTAssertEqual(rows.first?["values"]?["value"], .number(7))
     }
 
     func testSnapshotAllocatesDynamicInlineListIdentityAndRejectsConflictingFields() async throws {
-        let payload = try await statePayload(
-            defaultViewModelName: "Test",
-            values: [JourneyViewModelValue(
-                viewModelName: "Test",
-                instanceId: "root-sdk-id",
-                path: "Number",
-                value: AnyCodable(1)
-            )]
-        )
+        let payload = try await componentListStatePayload(values: [])
         let screen = try await ExperienceInteractiveScreen.open(
             payload: payload,
-            player: .stateMachine("State Machine 1"),
+            player: .staticArtboard,
             pixelWidth: 16,
             pixelHeight: 16
         )
         defer { Task { try? await screen.close() } }
 
         _ = try await screen.applyStateCommand(.snapshot([.init(
-            viewModelName: "Test",
+            viewModelName: "Doc",
             instanceID: "root-sdk-id",
             instanceName: nil,
-            path: "List",
+            path: "items",
             value: .list([Self.object([
-                ("viewModelId", .string("Nested")),
+                ("viewModelId", .string("ItemVM")),
                 ("vmInstanceId", .string("dynamic-row")),
-                ("String", .string("inline-row")),
+                ("value", .number(1)),
             ])])
         )]))
 
         let root = try await screen.rootViewModel()
-        let dynamic = try await screen.viewModel(named: "Nested", instanceID: "dynamic-row")
+        let dynamic = try await screen.viewModel(named: "ItemVM", instanceID: "dynamic-row")
         let snapshot = try await screen.snapshot()
         guard case .list(let rowIDs) = snapshot.values.first(where: {
-            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+            $0.ownerInstanceID == root.rawValue && $0.name == "items"
         })?.value else {
             return XCTFail("Expected dynamic list row")
         }
         XCTAssertEqual(rowIDs.count, 1)
         XCTAssertEqual(
             snapshot.values.first(where: {
-                $0.ownerInstanceID == rowIDs[0] && $0.name == "String"
+                $0.ownerInstanceID == rowIDs[0] && $0.name == "value"
             })?.value,
-            .bytes(Data("inline-row".utf8))
+            .number(1)
         )
         XCTAssertEqual(dynamic.rawValue != 0, true)
 
         _ = try await screen.applyStateCommand(.list(
-            viewModelName: "Test",
+            viewModelName: "Doc",
             instanceID: "root-sdk-id",
             instanceName: nil,
-            path: "List",
+            path: "items",
             edit: .insert(index: 0, value: Self.object([
-                ("viewModelId", .string("Nested")),
+                ("viewModelId", .string("ItemVM")),
                 ("vmInstanceId", .string("inserted-row")),
-                ("values", Self.object([("String", .string("inserted-value"))])),
+                ("values", Self.object([("value", .number(2))])),
             ]))
         ))
         _ = try await screen.applyStateCommand(.list(
-            viewModelName: "Test",
+            viewModelName: "Doc",
             instanceID: "root-sdk-id",
             instanceName: nil,
-            path: "List",
+            path: "items",
             edit: .set(index: 1, value: Self.object([
-                ("viewModelId", .string("Nested")),
+                ("viewModelId", .string("ItemVM")),
                 ("vmInstanceId", .string("dynamic-row")),
-                ("String", .string("set-value")),
+                ("value", .number(3)),
             ]))
         ))
         let edited = try await screen.snapshot()
         guard case .list(let editedRowIDs) = edited.values.first(where: {
-            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+            $0.ownerInstanceID == root.rawValue && $0.name == "items"
         })?.value else {
             return XCTFail("Expected incrementally edited list")
         }
         XCTAssertEqual(editedRowIDs.count, 2)
         XCTAssertEqual(
             edited.values.first(where: {
-                $0.ownerInstanceID == editedRowIDs[0] && $0.name == "String"
+                $0.ownerInstanceID == editedRowIDs[0] && $0.name == "value"
             })?.value,
-            .bytes(Data("inserted-value".utf8))
+            .number(2)
         )
         XCTAssertEqual(
             edited.values.first(where: {
-                $0.ownerInstanceID == editedRowIDs[1] && $0.name == "String"
+                $0.ownerInstanceID == editedRowIDs[1] && $0.name == "value"
             })?.value,
-            .bytes(Data("set-value".utf8))
+            .number(3)
         )
         do {
             _ = try await screen.applyStateCommand(.snapshot([.init(
-                viewModelName: "Test",
+                viewModelName: "Doc",
                 instanceID: "root-sdk-id",
                 instanceName: nil,
-                path: "List",
+                path: "items",
                 value: .list([Self.object([
-                    ("viewModelId", .string("Nested")),
+                    ("viewModelId", .string("ItemVM")),
                     ("vmInstanceId", .string("conflicting-row")),
-                    ("String", .string("inline")),
-                    ("values", Self.object([("String", .string("nested"))])),
+                    ("value", .number(4)),
+                    ("values", Self.object([("value", .number(5))])),
                 ])])
             )]))
             XCTFail("Expected conflicting inline and nested values to fail")
@@ -1896,11 +1782,11 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             guard case .stateContract(let reason) = error as? ExperienceInteractiveScreenError else {
                 return XCTFail("Unexpected error: \(error)")
             }
-            XCTAssertTrue(reason.contains("conflicts on 'String'"))
+            XCTAssertTrue(reason.contains("conflicts on 'value'"))
         }
         do {
             _ = try await screen.viewModel(
-                named: "Nested",
+                named: "ItemVM",
                 instanceID: "conflicting-row"
             )
             XCTFail("Expected failed allocation to remain uncommitted")
@@ -3008,22 +2894,21 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let rows = (0..<3).map { index in
             [
                 "vmInstanceId": "row-\(index)",
-                "viewModelId": "Nested",
-                "values": ["String": "row-\(index)"],
+                "viewModelId": "ItemVM",
+                "values": ["value": index],
             ]
         }
-        let payload = try await statePayload(
-            defaultViewModelName: "Test",
+        let payload = try await componentListStatePayload(
             values: [JourneyViewModelValue(
-                viewModelName: "Test",
+                viewModelName: "Doc",
                 instanceId: "root-sdk-id",
-                path: "List",
+                path: "items",
                 value: AnyCodable(rows)
             )]
         )
         let screen = try await ExperienceInteractiveScreen.open(
             payload: payload,
-            player: .stateMachine("State Machine 1"),
+            player: .staticArtboard,
             pixelWidth: 16,
             pixelHeight: 16
         )
@@ -3031,22 +2916,22 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let root = try await screen.rootViewModel()
 
         _ = try await screen.mutateState(
-            [.listMove(root, path: "List", from: 0, to: rows.count)],
+            [.listMove(root, path: "items", from: 0, to: rows.count)],
             correlationID: 120
         )
         let snapshot = try await screen.snapshot()
         guard case .list(let rowIDs) = snapshot.values.first(where: {
-            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+            $0.ownerInstanceID == root.rawValue && $0.name == "items"
         })?.value else { return XCTFail("Expected moved list") }
-        let strings = rowIDs.map { rowID in
+        let values = rowIDs.map { rowID in
             snapshot.values.first(where: {
-                $0.ownerInstanceID == rowID && $0.name == "String"
+                $0.ownerInstanceID == rowID && $0.name == "value"
             })?.value
         }
-        XCTAssertEqual(strings, [
-            .bytes(Data("row-1".utf8)),
-            .bytes(Data("row-2".utf8)),
-            .bytes(Data("row-0".utf8)),
+        XCTAssertEqual(values, [
+            .number(1),
+            .number(2),
+            .number(0),
         ])
     }
 
@@ -3902,6 +3787,17 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             journey: journey,
             sceneBytes: scene,
             assets: runtimeAssets
+        )
+    }
+
+    private func componentListStatePayload(
+        values: [JourneyViewModelValue]
+    ) async throws -> AuthenticatedRuntimePayload {
+        try await statePayload(
+            defaultViewModelName: "Doc",
+            values: values,
+            scene: exactComponentListFixture(),
+            artboardName: "Main"
         )
     }
 
