@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import XCTest
 @testable import Nuxie
@@ -222,6 +223,80 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
         info.setProjectionDistinctId("customer-a")
         XCTAssertTrue(info.isAllowed("premium"))
         XCTAssertEqual(info.state, .reconciling)
+    }
+
+    @MainActor
+    func testFeatureChangeDelegateIdentitySwitchWinsNestedPublication() {
+        let info = FeatureInfo()
+        info.admitProfileSnapshot([:], admittedAt: Date())
+        var delegateObservedAllowed: Bool?
+        var delegateObservedState: FeatureInfo.State?
+        info.onFeatureChange = { _, _, _ in
+            delegateObservedAllowed = info.isAllowed("premium")
+            delegateObservedState = info.state
+            info.setProjectionDistinctId("customer-b")
+        }
+
+        info.replaceOptimisticProjection(
+            evidence: [OptimisticPurchaseEvidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                backendSynced: false,
+                revoked: false
+            )],
+            descriptorAllowances: [
+                "transaction-1": [OptimisticEntitlementAllowance(
+                    featureId: "premium",
+                    kind: .boolean,
+                    unlimited: false,
+                    allowance: nil
+                )],
+            ],
+            distinctId: "customer-a"
+        )
+
+        XCTAssertEqual(delegateObservedAllowed, true)
+        XCTAssertEqual(delegateObservedState, .reconciling)
+        XCTAssertFalse(info.isAllowed("premium"))
+        XCTAssertEqual(info.state, .ready)
+    }
+
+    @MainActor
+    func testFeatureCombineIdentitySwitchWinsNestedPublication() {
+        let info = FeatureInfo()
+        info.admitProfileSnapshot([:], admittedAt: Date())
+        var shouldSwitchIdentity = false
+        let cancellable = info.$all.sink { features in
+            guard shouldSwitchIdentity, features["premium"]?.allowed == true else {
+                return
+            }
+            shouldSwitchIdentity = false
+            info.setProjectionDistinctId("customer-b")
+        }
+
+        shouldSwitchIdentity = true
+        info.replaceOptimisticProjection(
+            evidence: [OptimisticPurchaseEvidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                backendSynced: false,
+                revoked: false
+            )],
+            descriptorAllowances: [
+                "transaction-1": [OptimisticEntitlementAllowance(
+                    featureId: "premium",
+                    kind: .boolean,
+                    unlimited: false,
+                    allowance: nil
+                )],
+            ],
+            distinctId: "customer-a"
+        )
+
+        withExtendedLifetime(cancellable) {
+            XCTAssertFalse(info.isAllowed("premium"))
+            XCTAssertEqual(info.state, .ready)
+        }
     }
 
     @MainActor

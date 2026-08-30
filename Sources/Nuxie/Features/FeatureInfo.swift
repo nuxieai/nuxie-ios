@@ -70,6 +70,7 @@ public final class FeatureInfo: ObservableObject {
     private var projectionDistinctId = ""
     private var projectionPublicationEpoch: UUID?
     private var projectionPublicationGeneration: UInt64?
+    private var visiblePublicationGeneration: UInt64 = 0
 
     // MARK: - Init
 
@@ -120,21 +121,38 @@ public final class FeatureInfo: ObservableObject {
     }
 
     private func publish(_ features: [String: FeatureAccess], state: State) {
+        visiblePublicationGeneration &+= 1
+        let publicationGeneration = visiblePublicationGeneration
         let oldFeatures = all
-
-        // Notify delegate for each changed feature
-        if let onFeatureChange = onFeatureChange {
-            // Check for new or changed features
-            for (featureId, newAccess) in features {
-                let oldAccess = oldFeatures[featureId]
-                if oldAccess == nil || !areEqual(oldAccess!, newAccess) {
-                    onFeatureChange(featureId, oldAccess, newAccess)
-                }
+        let capturedOnFeatureChange = onFeatureChange
+        let delegateEmissions: [(
+            featureId: String,
+            oldAccess: FeatureAccess?,
+            newAccess: FeatureAccess
+        )] = features.compactMap { entry in
+            let (featureId, newAccess) = entry
+            let oldAccess = oldFeatures[featureId]
+            guard oldAccess.map({ areEqual($0, newAccess) }) != true else {
+                return nil
             }
+            return (featureId, oldAccess, newAccess)
         }
 
         self.all = features
+        guard visiblePublicationGeneration == publicationGeneration else {
+            publishVisibleProjection()
+            return
+        }
         self.state = state
+        guard visiblePublicationGeneration == publicationGeneration else {
+            publishVisibleProjection()
+            return
+        }
+
+        guard let capturedOnFeatureChange else { return }
+        for (featureId, oldAccess, newAccess) in delegateEmissions {
+            capturedOnFeatureChange(featureId, oldAccess, newAccess)
+        }
     }
 
     internal func admitProfileSnapshot(
