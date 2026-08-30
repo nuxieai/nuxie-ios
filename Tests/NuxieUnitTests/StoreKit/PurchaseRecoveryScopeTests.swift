@@ -3486,7 +3486,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let evidenceStore = InMemoryTransactionEvidenceStore()
         XCTAssertTrue(evidenceStore.save([evidence.transactionId: evidence]))
         let api = ControlledConcurrentRecoverySyncAPI()
-        let entitlementScans = AsyncCallCounter()
+        let projectionDerivations = AsyncCallCounter()
         let configuration = NuxieConfiguration(apiKey: "app-a")
         let settings = NuxieRuntimeSettings(configuration: configuration)
         let features = FeatureService(
@@ -3505,12 +3505,12 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: evidenceStore,
+            descriptorAllowanceProvider: { _ in
+                await projectionDerivations.increment()
+                return nil
+            },
             purchaseStorageScope: scope,
-            dateProvider: mocks.dateProvider,
-            activeStoreOriginalTransactionIDs: {
-                await entitlementScans.increment()
-                return []
-            }
+            dateProvider: mocks.dateProvider
         )
 
         let firstRetry = Task { await observer.retryStoredEvidence() }
@@ -3522,9 +3522,9 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         await concurrentRetry.value
 
         let recordedCustomers = await api.recordedCustomers()
-        let scanCount = await entitlementScans.count()
+        let derivationCount = await projectionDerivations.count()
         XCTAssertEqual(recordedCustomers, ["customer-a"])
-        XCTAssertEqual(scanCount, 2)
+        XCTAssertEqual(derivationCount, 1)
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 

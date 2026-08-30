@@ -294,7 +294,11 @@ public final class FeatureInfo: ObservableObject {
 
         var visible = all
         visible[featureId] = newAccess
-        publish(visible, state: state)
+        // This is provisional UI feedback, not an authoritative Feature
+        // transition. Publishing it through `onFeatureChange` would expose an
+        // intermediate value and let a reentrant identity change race the
+        // command queue's decide-then-notify commit.
+        all = visible
     }
 
     /// Discards visual-only usage feedback and recomposes from the two owned
