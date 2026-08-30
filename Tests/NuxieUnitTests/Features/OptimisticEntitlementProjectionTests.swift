@@ -10,9 +10,24 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
         struct Case: Decodable {
             let name: String
             let distinctId: String
+            let profileAdmitted: Bool
+            let authoritative: [String: Access]?
             let evidence: [Evidence]?
             let descriptors: [String: [Allowance]]?
-            let expected: [String: Expected]?
+            let expectedOverlay: [String: ExpectedOverlay]?
+            let expectedVisible: [String: Access]
+            let expectedState: String
+            let transitions: [Transition]?
+        }
+
+        struct Transition: Decodable {
+            let name: String
+            let distinctId: String
+            let profileAdmitted: Bool
+            let authoritative: [String: Access]?
+            let expectedOverlay: [String: ExpectedOverlay]?
+            let expectedVisible: [String: Access]
+            let expectedState: String
         }
 
         struct Evidence: Decodable {
@@ -29,14 +44,21 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
             let allowance: Double?
         }
 
-        struct Expected: Decodable {
+        struct Access: Decodable {
+            let allowed: Bool
+            let unlimited: Bool
+            let balance: Double?
+            let type: FeatureType
+        }
+
+        struct ExpectedOverlay: Decodable {
             let kind: OptimisticEntitlementAllowance.Kind
             let unlimited: Bool
             let allowance: Double?
         }
     }
 
-    func testProjectionMatchesPortableFixture() throws {
+    func testProjectionMatchesPortableFixture() async throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -73,13 +95,176 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
                 distinctId: vector.distinctId
             )
 
-            XCTAssertEqual(actual?.count, vector.expected?.count, vector.name)
-            for (featureId, expected) in vector.expected ?? [:] {
+            XCTAssertEqual(actual?.count, vector.expectedOverlay?.count, vector.name)
+            for (featureId, expected) in vector.expectedOverlay ?? [:] {
                 let projected = try XCTUnwrap(actual?[featureId], vector.name)
                 XCTAssertEqual(projected.kind, expected.kind, vector.name)
                 XCTAssertEqual(projected.unlimited, expected.unlimited, vector.name)
                 XCTAssertEqual(projected.allowance, expected.allowance, vector.name)
             }
+
+            let info = await MainActor.run { FeatureInfo() }
+            await MainActor.run {
+                info.beginOptimisticProjectionPublication(
+                    epoch: UUID(),
+                    distinctId: vector.distinctId
+                )
+                if vector.profileAdmitted {
+                    info.admitProfileSnapshot(
+                        vector.authoritative?.mapValues(Self.featureAccess) ?? [:],
+                        admittedAt: Date()
+                    )
+                }
+                info.replaceOptimisticProjection(
+                    evidence: evidence,
+                    descriptorAllowances: descriptors,
+                    distinctId: vector.distinctId
+                )
+            }
+            try await MainActor.run {
+                XCTAssertEqual(info.all.count, vector.expectedVisible.count, vector.name)
+                for (featureId, expected) in vector.expectedVisible {
+                    let visible = try XCTUnwrap(info.feature(featureId), vector.name)
+                    Self.assertAccess(visible, equals: expected, message: vector.name)
+                }
+                XCTAssertEqual(info.state, Self.state(vector.expectedState), vector.name)
+            }
+
+            for transition in vector.transitions ?? [] {
+                let transitionOverlay = OptimisticEntitlementProjection.derive(
+                    evidence: evidence,
+                    descriptorAllowances: descriptors,
+                    distinctId: transition.distinctId
+                )
+                XCTAssertEqual(
+                    transitionOverlay?.count,
+                    transition.expectedOverlay?.count,
+                    transition.name
+                )
+                for (featureId, expected) in transition.expectedOverlay ?? [:] {
+                    let projected = try XCTUnwrap(
+                        transitionOverlay?[featureId],
+                        transition.name
+                    )
+                    XCTAssertEqual(projected.kind, expected.kind, transition.name)
+                    XCTAssertEqual(projected.unlimited, expected.unlimited, transition.name)
+                    XCTAssertEqual(projected.allowance, expected.allowance, transition.name)
+                }
+                await MainActor.run {
+                    info.setProjectionDistinctId(transition.distinctId)
+                    if transition.profileAdmitted {
+                        info.admitProfileSnapshot(
+                            transition.authoritative?.mapValues(Self.featureAccess) ?? [:],
+                            admittedAt: Date()
+                        )
+                    }
+                }
+                try await MainActor.run {
+                    XCTAssertEqual(
+                        info.all.count,
+                        transition.expectedVisible.count,
+                        transition.name
+                    )
+                    for (featureId, expected) in transition.expectedVisible {
+                        let visible = try XCTUnwrap(
+                            info.feature(featureId),
+                            transition.name
+                        )
+                        Self.assertAccess(
+                            visible,
+                            equals: expected,
+                            message: transition.name
+                        )
+                    }
+                    XCTAssertEqual(
+                        info.state,
+                        Self.state(transition.expectedState),
+                        transition.name
+                    )
+                }
+            }
+        }
+    }
+
+    func testDescriptorAllowanceClassificationIsSchemaFaithfulAndDeterministic() {
+        let boolean = OptimisticEntitlementAllowance(
+            featureId: "boolean",
+            featureExternalId: nil,
+            allowanceType: nil,
+            allowance: nil
+        )
+        let fixed = OptimisticEntitlementAllowance(
+            featureId: "balance",
+            featureExternalId: nil,
+            allowanceType: "fixed",
+            allowance: 10
+        )
+        let unlimited = OptimisticEntitlementAllowance(
+            featureId: "balance",
+            featureExternalId: nil,
+            allowanceType: "unlimited",
+            allowance: nil
+        )
+
+        XCTAssertEqual(boolean.kind, .boolean)
+        XCTAssertEqual(fixed.kind, .metered)
+        XCTAssertEqual(unlimited.kind, .metered)
+        let evidence = [
+            OptimisticPurchaseEvidence(
+                transactionId: "transaction-fixed",
+                distinctId: "customer-a",
+                backendSynced: false,
+                revoked: false
+            ),
+            OptimisticPurchaseEvidence(
+                transactionId: "transaction-unlimited",
+                distinctId: "customer-a",
+                backendSynced: false,
+                revoked: false
+            ),
+        ]
+        for evidenceOrder in [evidence, Array(evidence.reversed())] {
+            let projection = OptimisticEntitlementProjection.derive(
+                evidence: evidenceOrder,
+                descriptorAllowances: [
+                    "transaction-fixed": [fixed],
+                    "transaction-unlimited": [unlimited],
+                ],
+                distinctId: "customer-a"
+            )
+            XCTAssertEqual(projection?["balance"]?.kind, .metered)
+            XCTAssertEqual(projection?["balance"]?.unlimited, true)
+        }
+    }
+
+    private static func featureAccess(_ access: Fixture.Access) -> FeatureAccess {
+        FeatureAccess(
+            allowed: access.allowed,
+            unlimited: access.unlimited,
+            balance: access.balance,
+            type: access.type
+        )
+    }
+
+    private static func assertAccess(
+        _ actual: FeatureAccess,
+        equals expected: Fixture.Access,
+        message: String
+    ) {
+        XCTAssertEqual(actual.allowed, expected.allowed, message)
+        XCTAssertEqual(actual.unlimited, expected.unlimited, message)
+        XCTAssertEqual(actual.balance, expected.balance, message)
+        XCTAssertEqual(actual.type, expected.type, message)
+    }
+
+    private static func state(_ rawValue: String) -> FeatureInfo.State {
+        switch rawValue {
+        case "unknown": return .unknown
+        case "reconciling": return .reconciling
+        case "ready": return .ready
+        default:
+            XCTFail("unknown fixture state: \(rawValue)")
+            return .unknown
         }
     }
 
@@ -196,7 +381,68 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
     @MainActor
     func testFeatureInfoScopesProjectionToIdentityAndRestoresItOnReturn() {
         let info = FeatureInfo()
+        info.admitProfileSnapshot([
+            "customer-a-only": FeatureAccess(
+                allowed: true,
+                unlimited: false,
+                balance: nil,
+                type: .boolean
+            ),
+        ], admittedAt: Date())
+        info.replaceOptimisticProjection(
+            evidence: [
+                OptimisticPurchaseEvidence(
+                    transactionId: "transaction-a",
+                    distinctId: "customer-a",
+                    backendSynced: false,
+                    revoked: false
+                ),
+                OptimisticPurchaseEvidence(
+                    transactionId: "transaction-b",
+                    distinctId: "customer-b",
+                    backendSynced: false,
+                    revoked: false
+                ),
+            ],
+            descriptorAllowances: [
+                "transaction-a": [OptimisticEntitlementAllowance(
+                    featureId: "premium",
+                    kind: .boolean,
+                    unlimited: false,
+                    allowance: nil
+                )],
+                "transaction-b": [OptimisticEntitlementAllowance(
+                    featureId: "credits",
+                    kind: .metered,
+                    unlimited: false,
+                    allowance: 10
+                )],
+            ],
+            distinctId: "customer-a"
+        )
+        XCTAssertTrue(info.isAllowed("premium"))
+
+        info.setProjectionDistinctId("customer-b")
+        XCTAssertFalse(info.isAllowed("premium"))
+        XCTAssertNil(info.feature("customer-a-only"))
+        XCTAssertEqual(info.balance("credits"), 10)
+        XCTAssertEqual(info.state, .unknown)
+
+        info.setProjectionDistinctId("customer-a")
+        XCTAssertTrue(info.isAllowed("premium"))
+        XCTAssertNil(info.feature("customer-a-only"))
+        XCTAssertEqual(info.state, .unknown)
+    }
+
+    @MainActor
+    func testAllSubscribersObserveMatchingReadiness() {
+        let info = FeatureInfo()
         info.admitProfileSnapshot([:], admittedAt: Date())
+        var observedStates: [FeatureInfo.State] = []
+        let cancellable = info.$all.dropFirst().sink { _ in
+            observedStates.append(info.state)
+        }
+
         info.replaceOptimisticProjection(
             evidence: [OptimisticPurchaseEvidence(
                 transactionId: "transaction-1",
@@ -214,15 +460,109 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
             ],
             distinctId: "customer-a"
         )
-        XCTAssertTrue(info.isAllowed("premium"))
+        info.replaceOptimisticProjection(
+            evidence: [OptimisticPurchaseEvidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                backendSynced: true,
+                revoked: false
+            )],
+            descriptorAllowances: [:],
+            distinctId: "customer-a"
+        )
 
-        info.setProjectionDistinctId("customer-b")
-        XCTAssertFalse(info.isAllowed("premium"))
-        XCTAssertEqual(info.state, .ready)
+        withExtendedLifetime(cancellable) {
+            XCTAssertEqual(observedStates, [.reconciling, .ready])
+        }
+    }
 
-        info.setProjectionDistinctId("customer-a")
-        XCTAssertTrue(info.isAllowed("premium"))
-        XCTAssertEqual(info.state, .reconciling)
+    @MainActor
+    func testOverlayRemovalEmitsDeniedDelegateTransition() throws {
+        let info = FeatureInfo()
+        info.admitProfileSnapshot([:], admittedAt: Date())
+        var removal: (FeatureAccess?, FeatureAccess)?
+        info.onFeatureChange = { featureId, oldAccess, newAccess in
+            guard featureId == "premium", oldAccess != nil, !newAccess.allowed else {
+                return
+            }
+            removal = (oldAccess, newAccess)
+        }
+        let allowances = [
+            "transaction-1": [OptimisticEntitlementAllowance(
+                featureId: "premium",
+                kind: .boolean,
+                unlimited: false,
+                allowance: nil
+            )],
+        ]
+
+        info.replaceOptimisticProjection(
+            evidence: [OptimisticPurchaseEvidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                backendSynced: false,
+                revoked: false
+            )],
+            descriptorAllowances: allowances,
+            distinctId: "customer-a"
+        )
+        info.replaceOptimisticProjection(
+            evidence: [OptimisticPurchaseEvidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                backendSynced: true,
+                revoked: false
+            )],
+            descriptorAllowances: allowances,
+            distinctId: "customer-a"
+        )
+
+        XCTAssertTrue(try XCTUnwrap(removal?.0).allowed)
+        XCTAssertFalse(try XCTUnwrap(removal?.1).allowed)
+        XCTAssertNil(info.feature("premium"))
+    }
+
+    @MainActor
+    func testDelegateLoopStopsAfterReentrantIdentityChange() {
+        let info = FeatureInfo()
+        info.admitProfileSnapshot([:], admittedAt: Date())
+        var emissions: [String] = []
+        info.onFeatureChange = { featureId, _, _ in
+            emissions.append(featureId)
+            guard emissions.count == 1 else { return }
+            info.onFeatureChange = nil
+            info.setProjectionDistinctId("customer-b")
+        }
+
+        info.replaceOptimisticProjection(
+            evidence: [OptimisticPurchaseEvidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                backendSynced: false,
+                revoked: false
+            )],
+            descriptorAllowances: [
+                "transaction-1": [
+                    OptimisticEntitlementAllowance(
+                        featureId: "a-feature",
+                        kind: .boolean,
+                        unlimited: false,
+                        allowance: nil
+                    ),
+                    OptimisticEntitlementAllowance(
+                        featureId: "b-feature",
+                        kind: .boolean,
+                        unlimited: false,
+                        allowance: nil
+                    ),
+                ],
+            ],
+            distinctId: "customer-a"
+        )
+
+        XCTAssertEqual(emissions, ["a-feature"])
+        XCTAssertEqual(info.state, .unknown)
+        XCTAssertTrue(info.all.isEmpty)
     }
 
     @MainActor
@@ -232,6 +572,7 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
         var delegateObservedAllowed: Bool?
         var delegateObservedState: FeatureInfo.State?
         info.onFeatureChange = { _, _, _ in
+            guard delegateObservedAllowed == nil else { return }
             delegateObservedAllowed = info.isAllowed("premium")
             delegateObservedState = info.state
             info.setProjectionDistinctId("customer-b")
@@ -258,7 +599,9 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
         XCTAssertEqual(delegateObservedAllowed, true)
         XCTAssertEqual(delegateObservedState, .reconciling)
         XCTAssertFalse(info.isAllowed("premium"))
-        XCTAssertEqual(info.state, .ready)
+        // The identity switch drops the prior customer's profile admission,
+        // so the new customer starts unknown rather than inheriting ready.
+        XCTAssertEqual(info.state, .unknown)
     }
 
     @MainActor
@@ -295,7 +638,7 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
 
         withExtendedLifetime(cancellable) {
             XCTAssertFalse(info.isAllowed("premium"))
-            XCTAssertEqual(info.state, .ready)
+            XCTAssertEqual(info.state, .unknown)
         }
     }
 

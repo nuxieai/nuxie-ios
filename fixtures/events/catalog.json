@@ -653,8 +653,8 @@
     "constant": "SystemEventNames.featureUsed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:542",
-      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:697",
+      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:550",
+      "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:705",
       "Sources/Nuxie/NuxieSDK.swift:1157"
     ],
     "endpoint": "/i/event response lane",
@@ -1653,8 +1653,8 @@
     "constant": "SystemEventNames.purchaseCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1825",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1832",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1830",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1837",
       "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:705",
       "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:737",
       "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:599",
@@ -1834,7 +1834,7 @@
     "docs": true,
     "emitters": [
       "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1361",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1560"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1565"
     ],
     "endpoint": [
       "batch",

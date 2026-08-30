@@ -41,6 +41,12 @@ public final class FeatureInfo: ObservableObject {
         fileprivate let newAccess: FeatureAccess
     }
 
+    internal struct VisibleBalanceEmission {
+        fileprivate let featureId: String
+        fileprivate let newAccess: FeatureAccess
+        fileprivate let projectionIdentityGeneration: UInt64
+    }
+
     // MARK: - Published Properties
 
     /// All currently cached features keyed by feature ID
@@ -71,6 +77,7 @@ public final class FeatureInfo: ObservableObject {
     private var projectionPublicationEpoch: UUID?
     private var projectionPublicationGeneration: UInt64?
     private var visiblePublicationGeneration: UInt64 = 0
+    private var projectionIdentityGeneration: UInt64 = 0
 
     // MARK: - Init
 
@@ -129,21 +136,23 @@ public final class FeatureInfo: ObservableObject {
             featureId: String,
             oldAccess: FeatureAccess?,
             newAccess: FeatureAccess
-        )] = features.compactMap { entry in
-            let (featureId, newAccess) = entry
+        )] = Set(oldFeatures.keys).union(features.keys).sorted().compactMap { featureId in
             let oldAccess = oldFeatures[featureId]
+            let newAccess = features[featureId] ?? .notFound
             guard oldAccess.map({ areEqual($0, newAccess) }) != true else {
                 return nil
             }
             return (featureId, oldAccess, newAccess)
         }
 
-        self.all = features
+        // Publish readiness first so synchronous `$all` observers see the
+        // state that describes the values being delivered.
+        self.state = state
         guard visiblePublicationGeneration == publicationGeneration else {
             publishVisibleProjection()
             return
         }
-        self.state = state
+        self.all = features
         guard visiblePublicationGeneration == publicationGeneration else {
             publishVisibleProjection()
             return
@@ -152,6 +161,9 @@ public final class FeatureInfo: ObservableObject {
         guard let capturedOnFeatureChange else { return }
         for (featureId, oldAccess, newAccess) in delegateEmissions {
             capturedOnFeatureChange(featureId, oldAccess, newAccess)
+            guard visiblePublicationGeneration == publicationGeneration else {
+                return
+            }
         }
     }
 
@@ -264,6 +276,7 @@ public final class FeatureInfo: ObservableObject {
         projectionEvidence = nil
         projectionDescriptorAllowances = nil
         projectionDistinctId = distinctId
+        projectionIdentityGeneration &+= 1
         publishVisibleProjection()
     }
 
@@ -273,6 +286,9 @@ public final class FeatureInfo: ObservableObject {
     internal func setProjectionDistinctId(_ distinctId: String) {
         guard projectionDistinctId != distinctId else { return }
         projectionDistinctId = distinctId
+        projectionIdentityGeneration &+= 1
+        authoritative.removeAll()
+        hasAdmittedProfile = false
         publishVisibleProjection()
     }
 
@@ -298,8 +314,11 @@ public final class FeatureInfo: ObservableObject {
     /// - Parameters:
     ///   - featureId: The feature identifier
     ///   - amount: The amount to decrement
-    internal func decrementBalance(_ featureId: String, amount: Double) {
-        guard let access = all[featureId], !access.unlimited else { return }
+    internal func prepareBalanceDecrement(
+        _ featureId: String,
+        amount: Double
+    ) -> VisibleBalanceEmission? {
+        guard let access = all[featureId], !access.unlimited else { return nil }
 
         let currentBalance = access.balance ?? 0
         let newBalance = max(0, currentBalance - amount)
@@ -310,13 +329,31 @@ public final class FeatureInfo: ObservableObject {
             type: access.type
         )
 
+        return VisibleBalanceEmission(
+            featureId: featureId,
+            newAccess: newAccess,
+            projectionIdentityGeneration: projectionIdentityGeneration
+        )
+    }
+
+    internal func emitBalanceDecrement(_ emission: VisibleBalanceEmission) {
+        guard emission.projectionIdentityGeneration == projectionIdentityGeneration else {
+            return
+        }
         var visible = all
-        visible[featureId] = newAccess
+        visible[emission.featureId] = emission.newAccess
         // This is provisional UI feedback, not an authoritative Feature
         // transition. Publishing it through `onFeatureChange` would expose an
         // intermediate value and let a reentrant identity change race the
         // command queue's decide-then-notify commit.
         all = visible
+    }
+
+    internal func decrementBalance(_ featureId: String, amount: Double) {
+        guard let emission = prepareBalanceDecrement(featureId, amount: amount) else {
+            return
+        }
+        emitBalanceDecrement(emission)
     }
 
     /// Discards visual-only usage feedback and recomposes from the two owned

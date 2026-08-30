@@ -1269,6 +1269,11 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             )
         }
         await api.waitUntilSyncStarted()
+        // Suspend the fallback's first identity read so the use task is
+        // provably past its entry guards before the identity changes;
+        // otherwise a late-starting task observes the post-switch projection
+        // state and returns nil without ever reaching the fence.
+        identity.suspendNextDistinctIdRead()
         let use = Task {
             try await observer.useFeatureWithPendingPurchase(
                 distinctId: "customer-a",
@@ -1278,6 +1283,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
                 metadata: nil
             )
         }
+        await identity.waitForSuspendedDistinctIdRead()
+        identity.resumeSuspendedDistinctIdRead()
 
         identity.setDistinctId("customer-b")
         await api.releaseSync()

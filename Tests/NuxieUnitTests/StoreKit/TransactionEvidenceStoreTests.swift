@@ -311,6 +311,152 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         )
     }
 
+    func testImmediateRevocationWithoutStoredEvidenceRejectsLateActiveWrite() async {
+        let mocks = MockFactory.shared
+        mocks.identityService.setDistinctId("test-user")
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(
+            apiKey: "isolated"
+        ))
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
+        )
+        let authority = ActiveAuthoritySwitch()
+        await authority.set(.unavailable)
+        let pendingService = TransactionService(
+            productService: mocks.productService,
+            transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: mocks.dateProvider,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            identityService: mocks.identityService,
+            featureService: features,
+            activeProductEvidenceAuthority: { _ in await authority.get() }
+        )
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let observer = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: features,
+            identity: mocks.identityService,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { pendingService },
+            evidenceStore: evidenceStore
+        )
+        let transactionId = "transaction-late-active"
+        let originalTransactionId = "original-late-active"
+
+        await observer.handleVerifiedTransaction(
+            VerifiedStoreTransactionUpdate(
+                transactionId: transactionId,
+                originalTransactionId: originalTransactionId,
+                productId: "product-late-active",
+                appAccountToken: nil,
+                isRevoked: true,
+                isUpgraded: false,
+                finish: {}
+            ),
+            jwsRepresentation: "revoked-jws",
+            source: .storeUpdates
+        )
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+
+        let recorded = await observer.recordVerifiedPurchase(
+            evidence: StoreTransactionEvidence(
+                transactionJws: "late-active-jws",
+                transactionId: transactionId,
+                originalTransactionId: originalTransactionId,
+                productId: "product-late-active",
+                finish: {}
+            ),
+            product: StoreProduct(
+                productId: "product-late-active",
+                placementId: "placement-late-active",
+                name: "Product",
+                price: "$1.00",
+                period: nil
+            ),
+            distinctId: "test-user",
+            finishRequired: true
+        )
+
+        XCTAssertTrue(recorded)
+        XCTAssertEqual(
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])?[transactionId]?.isRevoked,
+            true
+        )
+    }
+
+    func testExistingRevocationCannotBeDowngradedByPurchaseRecording() async {
+        let mocks = MockFactory.shared
+        mocks.identityService.setDistinctId("test-user")
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(
+            apiKey: "isolated"
+        ))
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let revoked = StoredTransactionEvidence(
+            transactionJws: "revoked-jws",
+            transactionId: "transaction-revoked-write",
+            originalTransactionId: "original-revoked-write",
+            productId: "product-revoked-write",
+            distinctId: "test-user",
+            recordedAt: Date(),
+            isRevoked: true
+        )
+        XCTAssertTrue(evidenceStore.save([revoked.transactionId: revoked]))
+        let observer = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: mocks.identityService,
+                profile: mocks.profileService,
+                dateProvider: mocks.dateProvider,
+                featureInfo: FeatureInfo(),
+                cacheTTL: NuxieInternalConfiguration().featureCacheTTL
+            ),
+            identity: mocks.identityService,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: evidenceStore
+        )
+
+        let recorded = await observer.recordVerifiedPurchase(
+            evidence: StoreTransactionEvidence(
+                transactionJws: "late-active-jws",
+                transactionId: revoked.transactionId,
+                originalTransactionId: revoked.originalTransactionId,
+                productId: revoked.productId,
+                finish: {}
+            ),
+            product: StoreProduct(
+                productId: revoked.productId,
+                placementId: "placement-revoked-write",
+                name: "Product",
+                price: "$1.00",
+                period: nil
+            ),
+            distinctId: "test-user",
+            finishRequired: true
+        )
+
+        XCTAssertTrue(recorded)
+        XCTAssertEqual(
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])?[revoked.transactionId]?.isRevoked,
+            true
+        )
+        XCTAssertEqual(
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])?[revoked.transactionId]?
+                .transactionJws,
+            "revoked-jws"
+        )
+    }
+
     func testStoredEvidenceDoesNotEmitSyncForAnotherActiveCustomer() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("customer-b")

@@ -102,7 +102,7 @@ is_allowlisted_catalog_site() {
     '$journey_converted|Sources/Nuxie/Events/EventLog.swift:1956' \
       | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:1956' \
       | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:1956' \
-      | '$feature_used|Sources/Nuxie/Features/FeatureUseCommandQueue.swift:542')
+      | '$feature_used|Sources/Nuxie/Features/FeatureUseCommandQueue.swift:550')
       return 0
       ;;
     *)
@@ -169,8 +169,8 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$journey_effect_completed' "$1" \
         '$journey_superseded' "$1"
       ;;
-    'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:542' \
-      | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:697' \
+    'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:550' \
+      | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:705' \
       | 'Sources/Nuxie/NuxieSDK.swift:1157')
       # The accepted direct-response feature event keeps its authoritative id
       # when it is copied into delivered local history.
@@ -322,8 +322,8 @@ $experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentat
 $experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3298
 $experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3257
 $experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3314
-$feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:542
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:697
+$feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:550
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:705
 $feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1157
 $identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:654
 $journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:984
@@ -361,8 +361,8 @@ $purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactio
 $purchase_completed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:637
 $purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:705
 $purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:737
-$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1825
-$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1832
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1830
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1837
 $purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2158
 $purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2216
 $purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2239
@@ -371,7 +371,7 @@ $purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/Transacti
 $purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:727
 $purchase_pending\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2188
 $purchase_synced\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1361
-$purchase_synced\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1560
+$purchase_synced\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1565
 $response_set\tnone\tSources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:494
 $response_unset\tnone\tSources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:497
 $restore_completed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:1135

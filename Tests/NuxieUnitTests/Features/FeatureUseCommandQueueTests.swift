@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Nimble
 import Quick
@@ -149,6 +150,125 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                     featureInfo.balance("credits")
                 }
                 expect(reconciled) == 14
+            }
+
+            it("publishes visual balance feedback outside the identity fence") {
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: Bundle.main.bundleIdentifier
+                        ?? "nuxie.unidentified-host-app",
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                await api.configureTrackEventResponse(
+                    status: "ok",
+                    usage: .init(current: 6, limit: 10, remaining: 4)
+                )
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let featureInfo = FeatureInfo()
+                let cancellable = await MainActor.run {
+                    featureInfo.beginOptimisticProjectionPublication(
+                        epoch: UUID(),
+                        distinctId: "feature-customer"
+                    )
+                    featureInfo.admitProfileSnapshot([
+                        "credits": .withBalance(
+                            10,
+                            unlimited: false,
+                            type: .metered
+                        ),
+                    ], admittedAt: Date())
+                    return featureInfo.$all.sink { features in
+                        guard features["credits"]?.balance == 9 else { return }
+                        identity.setDistinctId("subscriber-customer")
+                        featureInfo.setProjectionDistinctId("subscriber-customer")
+                    }
+                }
+                defer { cancellable.cancel() }
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: featureInfo,
+                    dateProvider: MockDateProvider(),
+                    store: store
+                )
+
+                await expect {
+                    try await queue.use(
+                        distinctId: "feature-customer",
+                        featureId: "credits",
+                        amount: 1,
+                        entityId: nil,
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }.to(throwError { error in
+                    expect(error).to(beAKindOf(CancellationError.self))
+                })
+
+                expect(identity.getDistinctId()).to(equal("subscriber-customer"))
+                let visible = await MainActor.run {
+                    (featureInfo.all, featureInfo.state)
+                }
+                expect(visible.0).to(beEmpty())
+                expect(visible.1).to(equal(.unknown))
+            }
+
+            it("rejects visual balance feedback when the identity fence advances") {
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: Bundle.main.bundleIdentifier
+                        ?? "nuxie.unidentified-host-app",
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let featureInfo = FeatureInfo()
+                await MainActor.run {
+                    featureInfo.beginOptimisticProjectionPublication(
+                        epoch: UUID(),
+                        distinctId: "feature-customer"
+                    )
+                    featureInfo.admitProfileSnapshot([
+                        "credits": .withBalance(
+                            10,
+                            unlimited: false,
+                            type: .metered
+                        ),
+                    ], admittedAt: Date())
+                }
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: featureInfo,
+                    dateProvider: MockDateProvider(),
+                    store: store
+                )
+                identity.changeDistinctIdAfterNextFencedWork(
+                    to: "next-customer"
+                )
+
+                await expect {
+                    try await queue.use(
+                        distinctId: "feature-customer",
+                        featureId: "credits",
+                        amount: 1,
+                        entityId: nil,
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }.to(throwError { error in
+                    expect(error).to(beAKindOf(CancellationError.self))
+                })
+
+                let balance = await MainActor.run {
+                    featureInfo.balance("credits")
+                }
+                expect(balance).to(equal(10))
             }
 
             it("rejects a pinned feature use when identity changes before journaling") {

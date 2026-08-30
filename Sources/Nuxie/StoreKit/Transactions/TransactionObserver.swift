@@ -1968,6 +1968,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let retained = loaded.filter {
             $0.value.backendSyncedAt == nil || $0.value.recordedAt > cutoff
         }
+        revokedOriginalTransactionIds.formUnion(
+            loaded.values.lazy.filter(\.isRevoked).map(\.originalTransactionId)
+        )
         if retained.count != loaded.count {
             guard evidenceStore.save(retained) else {
                 // Do not cache a pruned snapshot that was not durably written.
@@ -1984,7 +1987,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         guard evidence.scope == purchaseStorageScope else { return false }
         var entries = storedEvidence()
         guard !evidenceStoreUnreadable else { return false }
-        entries[evidence.transactionId] = evidence
+        let existingRevocation = entries[evidence.transactionId].flatMap {
+            $0.isRevoked ? $0 : nil
+        }
+        let mustRemainRevoked = evidence.isRevoked
+            || revokedOriginalTransactionIds.contains(evidence.originalTransactionId)
+            || entries.values.contains {
+                $0.originalTransactionId == evidence.originalTransactionId
+                    && $0.isRevoked
+            }
+        let evidenceToPersist = mustRemainRevoked && !evidence.isRevoked
+            ? evidenceWithRevocation(evidence, preserving: existingRevocation)
+            : evidence
+        entries[evidence.transactionId] = evidenceToPersist
         guard evidenceStore.save(entries) else { return false }
         evidenceByTransactionId = entries
         await refreshOptimisticProjection()
@@ -1995,6 +2010,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     func removeEvidence(transactionId: String) async -> Bool {
         var entries = storedEvidence()
         guard !evidenceStoreUnreadable else { return false }
+        if let removed = entries[transactionId], removed.isRevoked {
+            revokedOriginalTransactionIds.insert(removed.originalTransactionId)
+        }
         entries.removeValue(forKey: transactionId)
         guard evidenceStore.save(entries) else { return false }
         evidenceByTransactionId = entries
@@ -2066,7 +2084,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     /// Commits revocation evidence before purchase-authority and pending-store
     /// checks that may defer the rest of transaction processing. A volatile
-    /// marker remains only when this durable rewrite cannot complete.
+    /// marker remains for the process lifetime so a delayed active callback
+    /// cannot downgrade or recreate revoked evidence after a durable drain.
     private func persistImmediateRevocation(
         transactionId: String,
         originalTransactionId: String,
@@ -2100,7 +2119,33 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
         guard !changed || evidenceStore.save(entries) else { return }
         evidenceByTransactionId = entries
-        revokedOriginalTransactionIds.remove(originalTransactionId)
         await refreshOptimisticProjection()
+    }
+
+    private func evidenceWithRevocation(
+        _ evidence: StoredTransactionEvidence,
+        preserving existing: StoredTransactionEvidence? = nil
+    ) -> StoredTransactionEvidence {
+        StoredTransactionEvidence(
+            scope: existing?.scope ?? evidence.scope,
+            transactionJws: existing?.transactionJws ?? evidence.transactionJws,
+            transactionId: existing?.transactionId ?? evidence.transactionId,
+            originalTransactionId: existing?.originalTransactionId
+                ?? evidence.originalTransactionId,
+            productId: existing?.productId ?? evidence.productId,
+            distinctId: existing?.distinctId ?? evidence.distinctId,
+            recordedAt: existing?.recordedAt ?? evidence.recordedAt,
+            productFeatureIds: existing?.productFeatureIds.isEmpty == false
+                ? existing!.productFeatureIds
+                : evidence.productFeatureIds,
+            isRevoked: true,
+            finishRequired: existing?.finishRequired == true || evidence.finishRequired,
+            commercialContext: existing?.commercialContext ?? evidence.commercialContext,
+            checkoutCompletionEventId: existing?.checkoutCompletionEventId
+                ?? evidence.checkoutCompletionEventId,
+            completionDeliveredAt: evidence.completionDeliveredAt
+                ?? existing?.completionDeliveredAt,
+            backendSyncedAt: evidence.backendSyncedAt ?? existing?.backendSyncedAt
+        )
     }
 }

@@ -369,11 +369,19 @@ actor FeatureUseCommandQueue {
 
     if shouldDecrementVisibleBalance {
       await MainActor.run {
-        _ = identity.performIfCurrentDistinctIdMatches(distinctId) { _ in
+        let prepared = identity.performWithCurrentIdentityFence(distinctId) { _ in
           // UI feedback consumes only `all`. Authoritative state and the
           // optimistic overlay remain independent inputs and are reconciled
           // later in capture order from the command response.
-          featureInfo.decrementBalance(featureId, amount: amount)
+          return featureInfo.prepareBalanceDecrement(featureId, amount: amount)
+        }
+        if let prepared, let emission = prepared.value {
+          // Publication is intentionally outside IdentityService's serial
+          // queue. A separate recursive publication gate keeps identity
+          // mutation linearized without deadlocking reentrant subscribers.
+          identity.publishIfCurrentIdentityFenceToken(prepared.token) {
+            featureInfo.emitBalanceDecrement(emission)
+          }
         }
       }
     }

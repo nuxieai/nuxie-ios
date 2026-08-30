@@ -10,6 +10,16 @@ struct IdentitySnapshot {
 
 extension IdentitySnapshot: Codable, Equatable, Sendable {}
 
+struct IdentityFenceToken: Equatable, Sendable {
+  let distinctId: String
+  let generation: UInt64
+}
+
+struct IdentityFenced<Value> {
+  let value: Value
+  let token: IdentityFenceToken
+}
+
 /// Protocol for managing user identity state
 protocol IdentityServiceProtocol: Sendable {
   /// Get the current distinct ID (returns distinct ID if identified, anonymous ID if not)
@@ -58,6 +68,18 @@ protocol IdentityServiceProtocol: Sendable {
     _ work: (IdentitySnapshot) throws -> T
   ) rethrows -> T?
 
+  func performWithCurrentIdentityFence<T>(
+    _ expectedDistinctId: String,
+    _ work: (IdentitySnapshot) throws -> T
+  ) rethrows -> IdentityFenced<T>?
+
+  @MainActor
+  @discardableResult
+  func publishIfCurrentIdentityFenceToken(
+    _ token: IdentityFenceToken,
+    _ publication: () -> Void
+  ) -> Bool
+
   /// Set user properties only if they don't exist
   func setOnceUserProperties(_ properties: [String: Any])
 
@@ -76,9 +98,14 @@ final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
   private var distinctId: String?
   private var anonymousId: String?
   private var userPropertiesById: [String: [String: Any]] = [:]  // Properties per user ID
+  private var identityFenceGeneration: UInt64 = 0
 
   // MARK: - Infra
   private let queue = DispatchQueue(label: "com.nuxie.identity", qos: .utility)
+  /// Serializes identity mutation with the short check-and-publication window.
+  /// Recursive acquisition lets a synchronous publication subscriber identify
+  /// or reset without re-entering `queue` while it is held.
+  private let identityPublicationLock = NSRecursiveLock()
   private let encoder: JSONEncoder = {
     let e = JSONEncoder()
     e.dateEncodingStrategy = .iso8601
@@ -152,56 +179,67 @@ final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
   }
 
   public func setDistinctId(_ distinctId: String) {
-    queue.sync {
-      // capture previous effective key and whether we were identified
-      let oldEffectiveKey = getDistinctIdLocked()
-      let wasIdentified = (self.distinctId != nil)
+    identityPublicationLock.withLock {
+      queue.sync {
+        // capture previous effective key and whether we were identified
+        let oldEffectiveKey = getDistinctIdLocked()
+        let wasIdentified = (self.distinctId != nil)
 
-      let prev = self.distinctId
-      self.distinctId = distinctId
+        let prev = self.distinctId
+        self.distinctId = distinctId
+        if !wasIdentified || oldEffectiveKey != distinctId {
+          identityFenceGeneration &+= 1
+        }
 
-      // Migrate props only for anon -> identified
-      if !wasIdentified, oldEffectiveKey != distinctId {
-        let oldProps = userPropertiesById[oldEffectiveKey] ?? [:]
-        let existingNew = userPropertiesById[distinctId] ?? [:]
-        // Preserve any explicit props already on the new id
-        let merged = oldProps.merging(existingNew) { (_, new) in new }
-        userPropertiesById[distinctId] = merged
-        // Drop the anon copy to avoid duplication
-        userPropertiesById.removeValue(forKey: oldEffectiveKey)
-        LogDebug(
-          "Migrated \(merged.count) user properties from \(NuxieLogger.shared.logDistinctID(oldEffectiveKey)) to \(NuxieLogger.shared.logDistinctID(distinctId))"
+        // Migrate props only for anon -> identified
+        if !wasIdentified, oldEffectiveKey != distinctId {
+          let oldProps = userPropertiesById[oldEffectiveKey] ?? [:]
+          let existingNew = userPropertiesById[distinctId] ?? [:]
+          // Preserve any explicit props already on the new id
+          let merged = oldProps.merging(existingNew) { (_, new) in new }
+          userPropertiesById[distinctId] = merged
+          // Drop the anon copy to avoid duplication
+          userPropertiesById.removeValue(forKey: oldEffectiveKey)
+          LogDebug(
+            "Migrated \(merged.count) user properties from \(NuxieLogger.shared.logDistinctID(oldEffectiveKey)) to \(NuxieLogger.shared.logDistinctID(distinctId))"
+          )
+        }
+
+        persistLocked()
+        LogInfo(
+          "Set distinct ID: \(NuxieLogger.shared.logDistinctID(distinctId)) (previous: \(NuxieLogger.shared.logDistinctID(prev)))"
         )
       }
-
-      persistLocked()
-      LogInfo(
-        "Set distinct ID: \(NuxieLogger.shared.logDistinctID(distinctId)) (previous: \(NuxieLogger.shared.logDistinctID(prev)))"
-      )
     }
   }
 
   public func reset(keepAnonymousId: Bool = true) {
-    queue.sync {
-      let prevEffectiveKey = getDistinctIdLocked()
-      let prev = self.distinctId
+    identityPublicationLock.withLock {
+      queue.sync {
+        let prevEffectiveKey = getDistinctIdLocked()
+        let prev = self.distinctId
+        let wasIdentified = (prev != nil)
 
-      // Clear property bag for the previous identity
-      userPropertiesById.removeValue(forKey: prevEffectiveKey)
+        // Clear property bag for the previous identity
+        userPropertiesById.removeValue(forKey: prevEffectiveKey)
 
-      // Clear identification
-      self.distinctId = nil
+        // Clear identification
+        self.distinctId = nil
 
-      // Handle anonymous id lifecycle
-      if !keepAnonymousId { self.anonymousId = nil }
-      if self.anonymousId == nil {
-        self.anonymousId = IdentityService.generateAnonymousId()
+        // Handle anonymous id lifecycle
+        if !keepAnonymousId { self.anonymousId = nil }
+        if self.anonymousId == nil {
+          self.anonymousId = IdentityService.generateAnonymousId()
+        }
+        if wasIdentified || getDistinctIdLocked() != prevEffectiveKey {
+          identityFenceGeneration &+= 1
+        }
+
+        persistLocked()
+        LogInfo(
+          "Reset identity - distinct ID: \(NuxieLogger.shared.logDistinctID(prev)) -> nil, anonymous kept: \(keepAnonymousId)"
+        )
       }
-
-      persistLocked()
-      LogInfo(
-        "Reset identity - distinct ID: \(NuxieLogger.shared.logDistinctID(prev)) -> nil, anonymous kept: \(keepAnonymousId)"
-      )
     }
   }
 
@@ -245,6 +283,39 @@ final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
     try queue.sync {
       guard getDistinctIdLocked() == expectedDistinctId else { return nil }
       return try work(identitySnapshotLocked())
+    }
+  }
+
+  public func performWithCurrentIdentityFence<T>(
+    _ expectedDistinctId: String,
+    _ work: (IdentitySnapshot) throws -> T
+  ) rethrows -> IdentityFenced<T>? {
+    try queue.sync {
+      guard getDistinctIdLocked() == expectedDistinctId else { return nil }
+      return try IdentityFenced(
+        value: work(identitySnapshotLocked()),
+        token: IdentityFenceToken(
+          distinctId: expectedDistinctId,
+          generation: identityFenceGeneration
+        )
+      )
+    }
+  }
+
+  @MainActor
+  @discardableResult
+  public func publishIfCurrentIdentityFenceToken(
+    _ token: IdentityFenceToken,
+    _ publication: () -> Void
+  ) -> Bool {
+    identityPublicationLock.withLock {
+      let isCurrent = queue.sync {
+        getDistinctIdLocked() == token.distinctId
+          && identityFenceGeneration == token.generation
+      }
+      guard isCurrent else { return false }
+      publication()
+      return true
     }
   }
 

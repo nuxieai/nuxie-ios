@@ -41,8 +41,7 @@ struct OptimisticEntitlementAllowance: Equatable, Sendable {
         self.featureId = featureExternalId ?? featureId
         self.unlimited = normalizedType == "unlimited"
         self.kind = switch normalizedType {
-        case nil, "boolean", "unlimited": .boolean
-        case "credits", "credit_system": .creditSystem
+        case nil: .boolean
         default: .metered
         }
         self.allowance = allowance
@@ -100,14 +99,15 @@ enum OptimisticEntitlementProjection {
                 : max(0, allowance.allowance ?? 0)
         )
         guard let current else { return incoming }
+        let joinedKind = deterministicKind(current.kind, incoming.kind)
         if current.unlimited || incoming.unlimited {
             return OptimisticEntitlementOverlay(
-                kind: current.kind,
+                kind: joinedKind,
                 unlimited: true,
                 allowance: nil
             )
         }
-        if current.kind == .boolean || incoming.kind == .boolean {
+        if joinedKind == .boolean {
             return OptimisticEntitlementOverlay(
                 kind: .boolean,
                 unlimited: false,
@@ -115,9 +115,23 @@ enum OptimisticEntitlementProjection {
             )
         }
         return OptimisticEntitlementOverlay(
-            kind: current.kind,
+            kind: joinedKind,
             unlimited: false,
             allowance: (current.allowance ?? 0) + (incoming.allowance ?? 0)
         )
+    }
+
+    private static func deterministicKind(
+        _ lhs: OptimisticEntitlementAllowance.Kind,
+        _ rhs: OptimisticEntitlementAllowance.Kind
+    ) -> OptimisticEntitlementAllowance.Kind {
+        func rank(_ kind: OptimisticEntitlementAllowance.Kind) -> Int {
+            switch kind {
+            case .boolean: 0
+            case .metered: 1
+            case .creditSystem: 2
+            }
+        }
+        return rank(lhs) >= rank(rhs) ? lhs : rhs
     }
 }
