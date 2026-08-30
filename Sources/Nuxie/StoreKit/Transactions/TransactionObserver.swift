@@ -1503,7 +1503,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         forKey: evidence.transactionId
                     )
                 }
-                guard identityService.getDistinctId() == distinctId else {
+                // Linearize the fallback decision with identify/reset. The
+                // ordinary command queue repeats the same atomic admission,
+                // so a later identity change cannot cross either boundary.
+                let ordinaryFallbackAdmitted = identityService
+                    .performIfCurrentDistinctIdMatches(distinctId) { _ in true }
+                guard ordinaryFallbackAdmitted == true else {
                     throw CancellationError()
                 }
                 if synced { return nil }
