@@ -23,8 +23,8 @@ enum NuxieSuperwallBridgeError: LocalizedError {
 }
 
 #if canImport(SuperwallKit)
-/// Nuxie's concrete Superwall checkout adapter. Superwall observes the exact
-/// StoreKit purchase while signed Connector state bounds immediate access.
+/// Nuxie's concrete Superwall checkout adapter. Superwall owns the exact
+/// StoreKit purchase; Connector-synchronized server state supplies Feature Access.
 final class NuxieSuperwallPurchaseDelegate:
     NuxiePurchaseDelegate, @unchecked Sendable
 {

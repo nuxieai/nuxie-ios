@@ -407,8 +407,44 @@ actor ExperienceLoader {
         return productAuthorityCatalog[storeProductId] ?? .readyNoMatch
     }
 
+    func optimisticEntitlementAllowances(
+        releaseDescriptorSHA256: String?,
+        productId: String?,
+        storeProductId: String
+    ) async -> [OptimisticEntitlementAllowance]? {
+        let product: ExperienceReleaseProductDocument?
+        if let releaseDescriptorSHA256, let productId {
+            product = await cachedProductMapping(
+                releaseDescriptorSHA256: releaseDescriptorSHA256,
+                productID: productId
+            )
+        } else {
+            let matches = releasesByVersion.values
+                .filter { $0.mode == .active }
+                .flatMap(\.products)
+                .filter {
+                    $0.store.platform == "apple_app_store"
+                        && $0.store.productId == storeProductId
+                }
+            guard let first = matches.first,
+                  matches.dropFirst().allSatisfy({ $0.entitlements == first.entitlements }) else {
+                return nil
+            }
+            product = first
+        }
+        guard let product else { return nil }
+        return product.entitlements.map {
+            OptimisticEntitlementAllowance(
+                featureId: $0.featureId ?? $0.id,
+                featureExternalId: $0.featureExternalId,
+                allowanceType: $0.allowanceType,
+                allowance: $0.allowance
+            )
+        }
+    }
+
     /// Returns authenticated Product authority without requiring an Experience
-    /// or paywall to be loaded. Restore and local Feature Access use this seam.
+    /// or paywall to be loaded. Restore and optimistic projection use this seam.
     func cachedProductMapping(
         releaseDescriptorSHA256: String,
         productID: String
@@ -779,10 +815,6 @@ actor ExperienceLoader {
                 collectPurchasePlacementIDs(in: connector.onSucceeded ?? [], into: &result)
                 collectPurchasePlacementIDs(in: connector.onFailed ?? [], into: &result)
                 collectPurchasePlacementIDs(in: connector.onTimeout ?? [], into: &result)
-            case .grantEntitlement(let grant):
-                collectPurchasePlacementIDs(in: grant.onSucceeded ?? [], into: &result)
-                collectPurchasePlacementIDs(in: grant.onFailed ?? [], into: &result)
-                collectPurchasePlacementIDs(in: grant.onTimeout ?? [], into: &result)
             default:
                 continue
             }
@@ -822,10 +854,6 @@ actor ExperienceLoader {
                 if containsDynamicPurchase(in: connector.onSucceeded ?? [])
                     || containsDynamicPurchase(in: connector.onFailed ?? [])
                     || containsDynamicPurchase(in: connector.onTimeout ?? []) { return true }
-            case .grantEntitlement(let grant):
-                if containsDynamicPurchase(in: grant.onSucceeded ?? [])
-                    || containsDynamicPurchase(in: grant.onFailed ?? [])
-                    || containsDynamicPurchase(in: grant.onTimeout ?? []) { return true }
             default:
                 continue
             }

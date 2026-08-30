@@ -333,10 +333,6 @@ final class ExperienceDefinitionTests: XCTestCase {
                 "payload": ["value": ["type": "Boolean", "value": true]],
                 "timeoutMs": 100, "onSucceeded": [], "onFailed": [], "onTimeout": [],
             ],
-            [
-                "type": "grant_entitlement", "featureId": "pro", "unlimited": true,
-                "onSucceeded": [], "onFailed": [], "onTimeout": [],
-            ],
         ]
 
         let decoded = try JSONDecoder().decode(

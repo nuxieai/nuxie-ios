@@ -1487,7 +1487,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] },
@@ -2348,6 +2347,34 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(cachedByProduct?.entitlements.map(\.id), ["entitlement_pro"])
         XCTAssertEqual(cachedByProduct?.providerFeatureAccess?.provider, "revenuecat")
         XCTAssertEqual(cachedByStore?.id, "product_purchase_only")
+        let exactOptimisticAllowances = await store.optimisticEntitlementAllowances(
+            releaseDescriptorSHA256: entry.descriptorSha256,
+            productId: "product_purchase_only",
+            storeProductId: productID
+        )
+        XCTAssertEqual(
+            exactOptimisticAllowances,
+            [OptimisticEntitlementAllowance(
+                featureId: "feature_pro",
+                featureExternalId: "pro",
+                allowanceType: "unlimited",
+                allowance: nil
+            )]
+        )
+        let activeOptimisticAllowances = await store.optimisticEntitlementAllowances(
+            releaseDescriptorSHA256: nil,
+            productId: nil,
+            storeProductId: productID
+        )
+        XCTAssertEqual(
+            activeOptimisticAllowances,
+            [OptimisticEntitlementAllowance(
+                featureId: "feature_pro",
+                featureExternalId: "pro",
+                allowanceType: "unlimited",
+                allowance: nil
+            )]
+        )
         XCTAssertFalse(productService.fetchProductsCalled)
 
         let updatedEntry = try resign(entry: entry) { root in

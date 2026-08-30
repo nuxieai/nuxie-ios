@@ -25,6 +25,16 @@ struct FeatureBalanceAuthority: Codable, Equatable, Sendable {
 @MainActor
 public final class FeatureInfo: ObservableObject {
 
+    /// Readiness of the current customer-scoped Feature snapshot.
+    public enum State: Equatable, Sendable {
+        /// No profile snapshot has been admitted for the current customer.
+        case unknown
+        /// A profile is admitted, but visible access includes a purchase overlay.
+        case reconciling
+        /// A profile is admitted and visible access is fully authoritative.
+        case ready
+    }
+
     internal struct CommandBalanceEmission {
         fileprivate let featureId: String
         fileprivate let oldAccess: FeatureAccess
@@ -35,6 +45,9 @@ public final class FeatureInfo: ObservableObject {
 
     /// All currently cached features keyed by feature ID
     @Published public private(set) var all: [String: FeatureAccess] = [:]
+
+    /// Readiness of `all` for the current customer.
+    @Published public private(set) var state: State = .unknown
 
     // MARK: - Internal Properties
 
@@ -47,6 +60,16 @@ public final class FeatureInfo: ObservableObject {
     /// so neither clock rollback nor identity cycling can make a replay fresh.
     private let balanceAuthorityEpoch = UUID()
     private var balanceAuthorityGenerations: [String: UInt64] = [:]
+    /// Server/profile/command state. Optimistic purchase values never enter
+    /// this dictionary and therefore cannot advance the authority fence.
+    private var authoritative: [String: FeatureAccess] = [:]
+    private var hasAdmittedProfile = false
+    private var projectionEvidence: [OptimisticPurchaseEvidence]?
+    private var projectionDescriptorAllowances:
+        [String: [OptimisticEntitlementAllowance]]?
+    private var projectionDistinctId = ""
+    private var projectionPublicationEpoch: UUID?
+    private var projectionPublicationGeneration: UInt64?
 
     // MARK: - Init
 
@@ -92,10 +115,11 @@ public final class FeatureInfo: ObservableObject {
         for featureId in features.keys {
             advanceAuthority(for: featureId)
         }
-        publish(features)
+        authoritative = features
+        publishVisibleProjection()
     }
 
-    private func publish(_ features: [String: FeatureAccess]) {
+    private func publish(_ features: [String: FeatureAccess], state: State) {
         let oldFeatures = all
 
         // Notify delegate for each changed feature
@@ -110,6 +134,7 @@ public final class FeatureInfo: ObservableObject {
         }
 
         self.all = features
+        self.state = state
     }
 
     internal func admitProfileSnapshot(
@@ -117,6 +142,7 @@ public final class FeatureInfo: ObservableObject {
         admittedAt: Date
     ) {
         _ = admittedAt
+        hasAdmittedProfile = true
         update(features)
     }
 
@@ -141,11 +167,12 @@ public final class FeatureInfo: ObservableObject {
             guard currentGeneration == 0 else { return nil }
         }
         guard let oldAccess = all[featureId] else { return nil }
+        let authoritativeAccess = authoritative[featureId]
 
         let newAccess = FeatureAccess.withBalance(
             balance,
-            unlimited: oldAccess.unlimited,
-            type: oldAccess.type
+            unlimited: authoritativeAccess?.unlimited ?? false,
+            type: authoritativeAccess?.type ?? oldAccess.type
         )
         return CommandBalanceEmission(
             featureId: featureId,
@@ -158,12 +185,8 @@ public final class FeatureInfo: ObservableObject {
         // The freshness decision is already committed. Emission deliberately
         // performs no revalidation, so an identity change after that decision
         // cannot invalidate or rewrite the notification it describes.
-        if !areEqual(emission.oldAccess, emission.newAccess) {
-            onFeatureChange?(emission.featureId, emission.oldAccess, emission.newAccess)
-        }
-        var features = all
-        features[emission.featureId] = emission.newAccess
-        all = features
+        authoritative[emission.featureId] = emission.newAccess
+        publishVisibleProjection()
     }
 
     /// Update a single feature (called internally after real-time checks)
@@ -175,27 +198,82 @@ public final class FeatureInfo: ObservableObject {
         access: FeatureAccess
     ) {
         advanceAuthority(for: featureId)
-        publish(featureId, access: access)
+        authoritative[featureId] = access
+        publishVisibleProjection()
     }
 
-    private func publish(_ featureId: String, access: FeatureAccess) {
-        let oldAccess = all[featureId]
-
-        // Notify delegate if changed
-        if let onFeatureChange = onFeatureChange {
-            if oldAccess == nil || !areEqual(oldAccess!, access) {
-                onFeatureChange(featureId, oldAccess, access)
-            }
+    /// Replaces the complete pure-projection input snapshot. Evidence and
+    /// descriptor allowances remain separate so either missing input produces
+    /// absence rather than an authoritative empty overlay.
+    internal func replaceOptimisticProjection(
+        evidence: [OptimisticPurchaseEvidence]?,
+        descriptorAllowances: [String: [OptimisticEntitlementAllowance]]?,
+        distinctId: String,
+        publicationEpoch: UUID? = nil,
+        publicationGeneration: UInt64? = nil
+    ) {
+        if let publicationEpoch {
+            guard publicationEpoch == projectionPublicationEpoch else { return }
         }
+        if let publicationGeneration {
+            guard projectionPublicationGeneration.map({
+                publicationGeneration >= $0
+            }) ?? true else { return }
+            projectionPublicationGeneration = publicationGeneration
+        }
+        projectionEvidence = evidence
+        projectionDescriptorAllowances = descriptorAllowances
+        // Explicit identity changes own this scope after initialization. A
+        // delayed refresh for the previous customer may update retained pure
+        // inputs, but it cannot switch which customer is viewing them.
+        if projectionDistinctId.isEmpty {
+            projectionDistinctId = distinctId
+        }
+        publishVisibleProjection()
+    }
 
-        var updated = all
-        updated[featureId] = access
-        self.all = updated
+    /// Starts a customer-unknown composition root and installs its sole
+    /// projection publisher. A draining observer from an old setup lifecycle
+    /// cannot overwrite the new observer's snapshot.
+    internal func beginOptimisticProjectionPublication(
+        epoch: UUID,
+        distinctId: String
+    ) {
+        projectionPublicationEpoch = epoch
+        projectionPublicationGeneration = nil
+        authoritative.removeAll()
+        hasAdmittedProfile = false
+        projectionEvidence = nil
+        projectionDescriptorAllowances = nil
+        projectionDistinctId = distinctId
+        publishVisibleProjection()
+    }
+
+    /// Changes only the customer through which retained projection inputs are
+    /// viewed. Evidence remains retained and becomes visible again if its
+    /// pinned identity returns before reconciliation.
+    internal func setProjectionDistinctId(_ distinctId: String) {
+        guard projectionDistinctId != distinctId else { return }
+        projectionDistinctId = distinctId
+        publishVisibleProjection()
+    }
+
+    /// Whether the current identity has a complete, active optimistic overlay.
+    /// This remains independent of readiness because `unknown` can still have
+    /// an overlay before profile admission.
+    internal var hasActiveOptimisticProjection: Bool {
+        OptimisticEntitlementProjection.derive(
+            evidence: projectionEvidence,
+            descriptorAllowances: projectionDescriptorAllowances,
+            distinctId: projectionDistinctId
+        ) != nil
     }
 
     /// Clear all cached features
     internal func clear() {
-        all = [:]
+        authoritative.removeAll()
+        hasAdmittedProfile = false
+        publishVisibleProjection()
     }
 
     /// Decrement the balance for a feature (for local UI feedback after usage)
@@ -214,7 +292,15 @@ public final class FeatureInfo: ObservableObject {
             type: access.type
         )
 
-        publish(featureId, access: newAccess)
+        var visible = all
+        visible[featureId] = newAccess
+        publish(visible, state: state)
+    }
+
+    /// Discards visual-only usage feedback and recomposes from the two owned
+    /// inputs. Used when a newly journaled command is rejected terminally.
+    internal func restoreVisibleProjection() {
+        publishVisibleProjection()
     }
 
     // MARK: - Private Methods
@@ -229,5 +315,59 @@ public final class FeatureInfo: ObservableObject {
 
     private func advanceAuthority(for featureId: String) {
         balanceAuthorityGenerations[featureId, default: 0] &+= 1
+    }
+
+    private func publishVisibleProjection() {
+        let overlay = OptimisticEntitlementProjection.derive(
+            evidence: projectionEvidence,
+            descriptorAllowances: projectionDescriptorAllowances,
+            distinctId: projectionDistinctId
+        )
+        var visible = authoritative
+        for (featureId, projected) in overlay ?? [:] {
+            visible[featureId] = wideningJoin(
+                authoritative: authoritative[featureId],
+                overlay: projected
+            )
+        }
+        let readiness: State
+        if !hasAdmittedProfile {
+            readiness = .unknown
+        } else if overlay == nil {
+            readiness = .ready
+        } else {
+            readiness = .reconciling
+        }
+        publish(visible, state: readiness)
+    }
+
+    private func wideningJoin(
+        authoritative: FeatureAccess?,
+        overlay: OptimisticEntitlementOverlay
+    ) -> FeatureAccess {
+        let overlayType: FeatureType = switch overlay.kind {
+        case .boolean: .boolean
+        case .metered: .metered
+        case .creditSystem: .creditSystem
+        }
+        let type = authoritative?.type ?? overlayType
+        if type == .boolean || overlay.kind == .boolean {
+            return FeatureAccess(
+                allowed: true,
+                unlimited: authoritative?.unlimited == true || overlay.unlimited,
+                balance: authoritative?.balance,
+                type: type
+            )
+        }
+        let unlimited = authoritative?.unlimited == true || overlay.unlimited
+        let balance = unlimited
+            ? authoritative?.balance
+            : (authoritative?.balance ?? 0) + (overlay.allowance ?? 0)
+        return FeatureAccess(
+            allowed: authoritative?.allowed == true || unlimited || (balance ?? 0) > 0,
+            unlimited: unlimited,
+            balance: balance,
+            type: type
+        )
     }
 }

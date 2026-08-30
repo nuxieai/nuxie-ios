@@ -21,9 +21,8 @@ final class CommercePersistenceOrchestrationTests: AsyncSpec {
                 storageURLs.removeAll()
             }
 
-            it("keeps all four stores unknown until their files are readable") {
+            it("keeps all three stores unknown until their files are readable") {
                 let distinctId = "commerce-corruption-customer"
-                let featureId = "commerce-corruption-feature"
                 let storageURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent(
                         "commerce-orchestration-\(UUID().uuidString)",
@@ -45,7 +44,6 @@ final class CommercePersistenceOrchestrationTests: AsyncSpec {
                 )
                 let fileNames = [
                     "transaction-evidence.json",
-                    "local-purchase-access.json",
                     "pending-purchases.json",
                     "account-ownership.json",
                 ]
@@ -62,15 +60,7 @@ final class CommercePersistenceOrchestrationTests: AsyncSpec {
                     segments: [],
                     userProperties: nil,
                     experiments: nil,
-                    features: [Feature(
-                        id: featureId,
-                        type: .boolean,
-                        balance: nil,
-                        unlimited: true,
-                        nextResetAt: nil,
-                        interval: nil,
-                        entities: nil
-                    )]
+                    features: []
                 ))
                 let stack = try await OrchestrationStack.boot(
                     storageURL: storageURL,
@@ -106,43 +96,130 @@ final class CommercePersistenceOrchestrationTests: AsyncSpec {
                     fail("Expected account ownership to remain unreadable")
                     return
                 }
-                let beforeRepair = await stack.core.features.getCached(
-                    featureId: featureId,
-                    entityId: nil
-                )
-                expect(beforeRepair?.allowed).to(beTrue())
-
                 for file in files.values {
                     expect(try Data(contentsOf: file)) == corruptContents
                 }
+            }
 
-                let revoked = StoredLocalPurchaseAccess(
-                    scope: scope,
-                    transactionId: "repaired-revocation",
-                    originalTransactionId: "repaired-revocation-original",
-                    productId: "corrupt-product",
+            it("projects durable evidence until backend acknowledgement") {
+                let distinctId = "projection-customer"
+                let storageURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(
+                        "projection-orchestration-\(UUID().uuidString)",
+                        isDirectory: true
+                    )
+                storageURLs.append(storageURL)
+                let api = MockNuxieApi()
+                let stack = try await OrchestrationStack.boot(
+                    storageURL: storageURL,
+                    api: api,
+                    dateProvider: MockDateProvider(),
+                    sleepProvider: MockSleepProvider(),
                     distinctId: distinctId,
-                    grants: [StoredLocalEntitlementGrant(
-                        featureId: featureId,
-                        featureExternalId: nil,
-                        allowanceType: "boolean",
-                        allowance: nil
-                    )],
-                    state: .revoked
+                    initialFeatureAccess: [
+                        "premium": FeatureAccess(
+                            allowed: false,
+                            unlimited: false,
+                            balance: nil,
+                            type: .boolean
+                        ),
+                        "credits": .withBalance(
+                            2,
+                            unlimited: false,
+                            type: .metered
+                        ),
+                    ]
                 )
-                let repairedAccess = try JSONEncoder().encode([
-                    revoked.transactionId: revoked,
-                ])
-                try repairedAccess.write(
-                    to: files["local-purchase-access.json"]!,
-                    options: .atomic
+                stacks.append(stack)
+                stack.experienceService.optimisticAllowancesByStoreProductId = [
+                    "store-product-1": [
+                        OptimisticEntitlementAllowance(
+                            featureId: "premium",
+                            kind: .boolean,
+                            unlimited: false,
+                            allowance: nil
+                        ),
+                        OptimisticEntitlementAllowance(
+                            featureId: "credits",
+                            kind: .metered,
+                            unlimited: false,
+                            allowance: 10
+                        ),
+                    ],
+                ]
+                let product = StoreProduct(
+                    productId: "product-1",
+                    storeProductId: "store-product-1",
+                    placementId: "placement-1",
+                    name: "Projection product",
+                    price: "$9.99",
+                    period: nil
                 )
 
-                let afterRepair = await stack.core.features.getCached(
-                    featureId: featureId,
-                    entityId: nil
+                let recorded = await stack.core.transactionObserver
+                    .recordVerifiedPurchase(
+                        evidence: StoreTransactionEvidence(
+                            transactionJws: "signed-transaction",
+                            transactionId: "transaction-1",
+                            originalTransactionId: "original-1",
+                            productId: "store-product-1",
+                            finish: {}
+                        ),
+                        product: product,
+                        distinctId: distinctId,
+                        finishRequired: false
                 )
-                expect(afterRepair?.allowed).to(beFalse())
+                expect(recorded).to(beTrue())
+                let featureInfo = stack.core.featureInfo
+                let projected = await MainActor.run {
+                    (
+                        featureInfo.isAllowed("premium"),
+                        featureInfo.balance("credits"),
+                        featureInfo.state
+                    )
+                }
+                expect(projected.0).to(beTrue())
+                expect(projected.1) == 12
+                expect(projected.2) == .reconciling
+
+                await stack.core.features.updateFromPurchase([
+                    PurchaseFeature(
+                        id: "premium",
+                        extId: nil,
+                        type: .boolean,
+                        allowed: false,
+                        balance: nil,
+                        unlimited: false
+                    ),
+                    PurchaseFeature(
+                        id: "credits",
+                        extId: nil,
+                        type: .metered,
+                        allowed: true,
+                        balance: 1,
+                        unlimited: false
+                    ),
+                ], distinctId: distinctId)
+                let joined = await MainActor.run {
+                    (
+                        featureInfo.isAllowed("premium"),
+                        featureInfo.balance("credits")
+                    )
+                }
+                expect(joined.0).to(beTrue())
+                expect(joined.1) == 11
+
+                await stack.core.transactionObserver.retryStoredEvidence()
+                let reconciled = await MainActor.run {
+                    (
+                        featureInfo.isAllowed("premium"),
+                        featureInfo.balance("credits"),
+                        featureInfo.state
+                    )
+                }
+                expect(reconciled.0).to(beFalse())
+                expect(reconciled.1) == 1
+                expect(reconciled.2) == .ready
             }
         }
     }

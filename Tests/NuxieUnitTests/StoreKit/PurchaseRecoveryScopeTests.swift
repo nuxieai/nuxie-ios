@@ -473,7 +473,6 @@ private actor AsyncCallCounter {
 }
 
 actor RecoveryFeatureRecorder: FeatureServiceProtocol {
-    private var appliedTransactionIds: [String] = []
     private var suspendPurchaseUpdate = false
     private var purchaseUpdateStarted = false
     private var purchaseUpdateWaiters: [CheckedContinuation<Void, Never>] = []
@@ -517,15 +516,6 @@ actor RecoveryFeatureRecorder: FeatureServiceProtocol {
         }
         completedPurchaseUpdates += 1
     }
-    func applyLocalPurchase(
-        grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String
-    ) async {
-        appliedTransactionIds.append(transactionId)
-    }
-
-    func appliedTransactions() -> [String] { appliedTransactionIds }
-
     func suspendNextPurchaseUpdate() { suspendPurchaseUpdate = true }
 
     func waitForPurchaseUpdate() async {
@@ -609,7 +599,6 @@ private struct OutcomeOnlyDelegateUpdateHarness {
     let service: TransactionService
     let api: RecoverySyncAPI
     let eventSink: RecoveryEventSink
-    let localAccessStore: InMemoryLocalPurchaseAccessStore
     let pendingStore: InMemoryPendingPurchaseStore
     let finishes: FinishCounter
 
@@ -712,7 +701,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 eventSink: RecoveryEventSink(),
                 transactionServiceProvider: { fatalError("unused") },
                 evidenceStore: InMemoryTransactionEvidenceStore(),
-                localAccessStore: InMemoryLocalPurchaseAccessStore(),
                 purchaseStorageScope: scope,
                 dateProvider: mocks.dateProvider,
                 activeStoreOriginalTransactionIDs: { [] }
@@ -870,7 +858,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -958,7 +945,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             featureService: features
         )
         let api = RecoverySyncAPI(succeeds: true)
-        let localAccessStore = InMemoryLocalPurchaseAccessStore()
         let observer = TransactionObserver(
             api: api,
             features: features,
@@ -967,7 +953,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: localAccessStore,
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -978,7 +963,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             service: service,
             api: api,
             eventSink: eventSink,
-            localAccessStore: localAccessStore,
             pendingStore: pendingStore,
             finishes: FinishCounter()
         )
@@ -995,8 +979,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertTrue(harness.api.recordedCustomers.isEmpty, file: file, line: line)
         XCTAssertTrue(harness.evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty, file: file, line: line)
         XCTAssertTrue(harness.eventSink.events.isEmpty, file: file, line: line)
-        let appliedTransactions = await harness.features.appliedTransactions()
-        XCTAssertTrue(appliedTransactions.isEmpty, file: file, line: line)
         let finishCount = await harness.finishes.count()
         XCTAssertEqual(finishCount, 0, file: file, line: line)
         let retainedPending = await harness.service.pendingPurchaseRecord(
@@ -1110,7 +1092,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -1185,7 +1166,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -1236,8 +1216,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
         XCTAssertEqual(harness.eventSink.routedCaptureCount, 0)
         XCTAssertEqual(harness.eventSink.captureOnlyCount, 1)
-        let appliedTransactions = await harness.features.appliedTransactions()
-        XCTAssertEqual(appliedTransactions, ["provider-update"])
         let finishCount = await harness.finishes.count()
         XCTAssertEqual(finishCount, 0)
         let consumedPending = await harness.service.pendingPurchaseRecord(
@@ -1256,8 +1234,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertTrue(harness.api.recordedCustomers.isEmpty)
         XCTAssertTrue(harness.evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertTrue(harness.eventSink.events.isEmpty)
-        let appliedTransactions = await harness.features.appliedTransactions()
-        XCTAssertTrue(appliedTransactions.isEmpty)
         let finishCount = await harness.finishes.count()
         XCTAssertEqual(finishCount, 0)
         let retainedPending = await harness.service.pendingPurchaseRecord(
@@ -1308,7 +1284,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -1395,7 +1370,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { providerService },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] },
@@ -1489,7 +1463,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { nativeService },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] },
@@ -1582,7 +1555,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -1686,7 +1658,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -1736,11 +1707,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             harness.eventSink.events.map(\.name),
             [SystemEventNames.purchaseCompleted, SystemEventNames.purchaseSynced]
         )
-        XCTAssertEqual(
-            harness.localAccessStore.load().valueTreatingAbsentAsEmpty([:])!["outcome-only-update"]?.grants
-                .map(\.featureId),
-            ["premium"]
-        )
     }
 
     func testOutcomeOnlyStoreUpdateBeforeCallbackCompletesPurchaseOnce() async throws {
@@ -1783,7 +1749,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -1881,7 +1846,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -1993,10 +1957,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: LocalPurchaseAccessStore(
-                customStoragePath: root,
-                scope: scope
-            ),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -2100,7 +2060,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -2135,11 +2094,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(retained.state, .checkout)
         XCTAssertNil(retained.completionReportedAt)
         XCTAssertEqual(eventSink.routedAttemptCount, 1)
-        let appliedAfterCallback = await features.appliedTransactions()
-        XCTAssertEqual(appliedAfterCallback, [
-            providerLocalAccessTransactionId(storeProductId: product.storeProductId),
-        ])
-
         eventSink.setCaptureSucceeds(true)
         let finishes = FinishCounter()
         await observer.handleVerifiedTransaction(
@@ -2162,10 +2116,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             Set(eventSink.attemptedCompletionEventIds),
             [retained.checkoutCompletionEventId]
         )
-        let appliedAfterUpdate = await features.appliedTransactions()
-        XCTAssertEqual(appliedAfterUpdate, [
-            providerLocalAccessTransactionId(storeProductId: product.storeProductId),
-        ])
         XCTAssertTrue(api.recordedCustomers.isEmpty)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 0)
@@ -2248,7 +2198,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         let api = RecoverySyncAPI(succeeds: true)
-        let localAccessStore = InMemoryLocalPurchaseAccessStore()
         let finishes = FinishCounter()
         let timelyRelaunch = TransactionService(
             productService: mocks.productService,
@@ -2276,7 +2225,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { timelyRelaunch },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: localAccessStore,
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -2302,11 +2250,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 SystemEventNames.purchaseCompleted,
                 SystemEventNames.purchaseSynced,
             ]
-        )
-        XCTAssertEqual(
-            localAccessStore.load().valueTreatingAbsentAsEmpty([:])!["inside-window-transaction"]?
-                .grants.map(\.featureId),
-            ["premium"]
         )
 
         dateProvider.advance(
@@ -2339,7 +2282,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { relaunchedService },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: localAccessStore,
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -2374,7 +2316,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 SystemEventNames.purchaseSynced,
             ]
         )
-        XCTAssertNil(localAccessStore.load().valueTreatingAbsentAsEmpty([:])!["post-crash-transaction"])
         XCTAssertTrue(PendingPurchaseStore(
             customStoragePath: root,
             scope: scope
@@ -2400,9 +2341,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(
             harness.eventSink.events.map(\.name),
             [SystemEventNames.purchaseSynced]
-        )
-        XCTAssertNil(
-            harness.localAccessStore.load().valueTreatingAbsentAsEmpty([:])!["outcome-only-update"]
         )
     }
 
@@ -2445,7 +2383,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -2562,34 +2499,12 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "product",
             distinctId: "customer",
             recordedAt: Date(timeIntervalSince1970: 10),
-            localEntitlementGrants: [],
             isRevoked: false
         )
 
         XCTAssertTrue(liveStore.save([evidence.transactionId: evidence]))
         XCTAssertEqual(liveStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId], evidence)
         XCTAssertTrue(testStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-
-        let liveAccess = LocalPurchaseAccessStore(
-            customStoragePath: root,
-            scope: live
-        )
-        let testAccess = LocalPurchaseAccessStore(
-            customStoragePath: root,
-            scope: test
-        )
-        let access = StoredLocalPurchaseAccess(
-            scope: live,
-            transactionId: "transaction",
-            originalTransactionId: "original",
-            productId: "product",
-            distinctId: "customer",
-            grants: [],
-            state: .active
-        )
-        XCTAssertTrue(liveAccess.save([access.transactionId: access]))
-        XCTAssertNotNil(liveAccess.load().valueTreatingAbsentAsEmpty([:])![access.transactionId])
-        XCTAssertTrue(testAccess.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
 
         let liveRecovery = PendingPurchaseStore(
             customStoragePath: root,
@@ -2673,7 +2588,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
         XCTAssertTrue(recoveryStore.save(["customer-a::store-product-1": recovery]))
 
-        let accessStore = InMemoryLocalPurchaseAccessStore()
         let evidenceStore = InMemoryTransactionEvidenceStore()
         let features = FeatureService(
             api: mocks.nuxieApi,
@@ -2682,7 +2596,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
             cacheTTL: 300,
-            localPurchaseAccessStore: accessStore
         )
         let settings = NuxieRuntimeSettings(
             configuration: NuxieConfiguration(apiKey: "app-a")
@@ -2708,7 +2621,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: accessStore,
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { ["original-1"] }
@@ -2747,10 +2659,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(
             evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.commercialContext,
             commercialContext()
-        )
-        XCTAssertEqual(
-            accessStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.distinctId,
-            "customer-a"
         )
         let activeCustomerAccess = await features.getCached(
             featureId: "premium",
@@ -2810,7 +2718,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -2888,7 +2795,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -2957,7 +2863,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3019,7 +2924,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false,
             finishRequired: true,
             commercialContext: commercialContext()
@@ -3043,7 +2947,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3129,7 +3032,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false,
             finishRequired: false,
             commercialContext: commercialContext()
@@ -3171,10 +3073,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 eventSink: eventSink,
                 transactionServiceProvider: { service },
                 evidenceStore: TransactionEvidenceStore(
-                    customStoragePath: root,
-                    scope: scope
-                ),
-                localAccessStore: LocalPurchaseAccessStore(
                     customStoragePath: root,
                     scope: scope
                 ),
@@ -3239,7 +3137,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "product",
             distinctId: "customer-a",
             recordedAt: now.addingTimeInterval(-91 * 24 * 3600),
-            localEntitlementGrants: [],
             isRevoked: false
         )
         XCTAssertTrue(evidenceStore.save([unsynced.transactionId: unsynced]))
@@ -3273,7 +3170,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 eventSink: RecoveryEventSink(),
                 transactionServiceProvider: { service },
                 evidenceStore: evidenceStore,
-                localAccessStore: InMemoryLocalPurchaseAccessStore(),
                 purchaseStorageScope: scope,
                 dateProvider: dateProvider,
                 activeStoreOriginalTransactionIDs: { [] }
@@ -3307,7 +3203,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false,
             commercialContext: commercialContext()
         )
@@ -3347,7 +3242,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 eventSink: events,
                 transactionServiceProvider: { service },
                 evidenceStore: evidenceStore,
-                localAccessStore: InMemoryLocalPurchaseAccessStore(),
                 purchaseStorageScope: scope,
                 dateProvider: mocks.dateProvider,
                 activeStoreOriginalTransactionIDs: { [] }
@@ -3393,7 +3287,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false,
             commercialContext: commercialContext(),
             backendSyncedAt: mocks.dateProvider.now()
@@ -3432,7 +3325,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: events,
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3466,7 +3358,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false,
             commercialContext: commercialContext()
         )
@@ -3502,7 +3393,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: events,
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3536,7 +3426,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false,
             finishRequired: true
         )
@@ -3561,7 +3450,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { fatalError("no unfinished transaction matched") },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3593,7 +3481,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false
         )
         let evidenceStore = InMemoryTransactionEvidenceStore()
@@ -3618,7 +3505,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: {
@@ -3665,7 +3551,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: events,
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: .testFixture,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3724,7 +3609,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: events,
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: .testFixture,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3765,7 +3649,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false
         )
         let evidenceStore = InMemoryTransactionEvidenceStore()
@@ -3787,7 +3670,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3821,7 +3703,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false
         )
         let evidenceStore = InMemoryTransactionEvidenceStore()
@@ -3846,7 +3727,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: events,
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3885,7 +3765,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3909,7 +3788,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: .testFixture,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -3960,7 +3838,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false,
             commercialContext: commercialContext()
         )
@@ -3999,7 +3876,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 eventSink: events,
                 transactionServiceProvider: { service },
                 evidenceStore: evidenceStore,
-                localAccessStore: InMemoryLocalPurchaseAccessStore(),
                 purchaseStorageScope: scope,
                 dateProvider: mocks.dateProvider,
                 activeStoreOriginalTransactionIDs: { [] }
@@ -4042,7 +3918,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [],
             isRevoked: false
         )
         let evidenceStore = ControlledTransactionEvidenceStore(
@@ -4077,7 +3952,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
@@ -4112,7 +3986,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: Date(timeIntervalSince1970: 0),
-            localEntitlementGrants: [],
             isRevoked: false,
             backendSyncedAt: Date(timeIntervalSince1970: 1)
         )
@@ -4149,7 +4022,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }

@@ -151,6 +151,14 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         storeProductId: String
     ) async -> ActiveProductEvidenceAuthorityResolution
 
+    /// Signed descriptor allowances used with retained StoreKit evidence to
+    /// derive the optimistic Feature overlay.
+    func optimisticEntitlementAllowances(
+        releaseDescriptorSHA256: String?,
+        productId: String?,
+        storeProductId: String
+    ) async -> [OptimisticEntitlementAllowance]?
+
     func setProductAuthorityChangeHandler(
         _ handler: @escaping @Sendable () async -> Void
     )
@@ -171,6 +179,16 @@ extension ExperienceServiceProtocol {
     func purchaseEvidenceAuthority(
         storeProductId: String
     ) async -> ActiveProductEvidenceAuthorityResolution { .unavailable }
+    func optimisticEntitlementAllowances(
+        releaseDescriptorSHA256: String?,
+        productId: String?,
+        storeProductId: String
+    ) async -> [OptimisticEntitlementAllowance]? {
+        _ = releaseDescriptorSHA256
+        _ = productId
+        _ = storeProductId
+        return nil
+    }
     func setProductAuthorityChangeHandler(
         _ handler: @escaping @Sendable () async -> Void
     ) { _ = handler }
@@ -353,6 +371,18 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         storeProductId: String
     ) async -> ActiveProductEvidenceAuthorityResolution {
         await experienceLoader.purchaseEvidenceAuthority(
+            storeProductId: storeProductId
+        )
+    }
+
+    func optimisticEntitlementAllowances(
+        releaseDescriptorSHA256: String?,
+        productId: String?,
+        storeProductId: String
+    ) async -> [OptimisticEntitlementAllowance]? {
+        await experienceLoader.optimisticEntitlementAllowances(
+            releaseDescriptorSHA256: releaseDescriptorSHA256,
+            productId: productId,
             storeProductId: storeProductId
         )
     }

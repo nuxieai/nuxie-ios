@@ -315,6 +315,7 @@ actor FeatureUseCommandQueue {
     let encodedMetadata = metadata?.mapValues(AnyCodable.init)
 
     let command: FeatureUseCommand
+    let shouldDecrementVisibleBalance: Bool
     if let existing = commands?.first(where: { candidate in
       // An overlapping identical public call is a new consumption. A durable
       // command recovered from an earlier attempt remains joinable while its
@@ -333,6 +334,7 @@ actor FeatureUseCommandQueue {
         )
     }) {
       command = existing
+      shouldDecrementVisibleBalance = false
     } else {
       guard let appendSequence = nextAppendSequence else {
         throw FeatureUseCommandError.appendSequenceExhausted
@@ -359,16 +361,40 @@ actor FeatureUseCommandQueue {
       guard let admitted else { throw CancellationError() }
       command = admitted.0
       commands = admitted.1
+      shouldDecrementVisibleBalance = !setUsage
       nextAppendSequence = appendSequence < UInt64.max
         ? appendSequence + 1
         : nil
+    }
+
+    if shouldDecrementVisibleBalance {
+      await MainActor.run {
+        _ = identity.performIfCurrentDistinctIdMatches(distinctId) { _ in
+          // UI feedback consumes only `all`. Authoritative state and the
+          // optimistic overlay remain independent inputs and are reconciled
+          // later in capture order from the command response.
+          featureInfo.decrementBalance(featureId, amount: amount)
+        }
+      }
     }
 
     if recoveryOwnedOperationIds.contains(command.operationId),
        inFlight[command.operationId] != nil {
       foregroundJoinedRecoveryIds.insert(command.operationId)
     }
-    return try await execute(operationId: command.operationId)
+    do {
+      let result = try await execute(operationId: command.operationId)
+      if shouldDecrementVisibleBalance, !result.success {
+        await MainActor.run { featureInfo.restoreVisibleProjection() }
+      }
+      return result
+    } catch {
+      if shouldDecrementVisibleBalance,
+         commands?.contains(where: { $0.operationId == command.operationId }) == false {
+        await MainActor.run { featureInfo.restoreVisibleProjection() }
+      }
+      throw error
+    }
   }
 
   /// Retries every durable command in capture order. Retryable errors leave

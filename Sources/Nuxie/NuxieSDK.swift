@@ -623,6 +623,10 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     identityService.setDistinctId(distinctId)
     
     let currentDistinctId = identityService.getDistinctId()
+    updateProjectionIdentitySynchronously(
+      core.featureInfo,
+      distinctId: currentDistinctId
+    )
     LogInfo("Identifying user: \(NuxieLogger.shared.logDistinctID(currentDistinctId))")
     
     // Serialized, uncancellable transition across all per-user state
@@ -683,6 +687,10 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
     // Serialized, uncancellable transition (interleaves FIFO with identify).
     let newDistinctId = identityService.getDistinctId()
+    updateProjectionIdentitySynchronously(
+      core.featureInfo,
+      distinctId: newDistinctId
+    )
     core.userTransitions.enqueue(
       UserTransitionCoordinator.Transition(
         kind: .reset,
@@ -1102,6 +1110,24 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       setUsage: setUsage,
       metadata: metadataBox.value
     )
+  }
+
+  /// Identity changes are synchronous public operations, so old-customer
+  /// overlays must disappear before the call returns. The broader per-user
+  /// transition remains serialized asynchronously.
+  private func updateProjectionIdentitySynchronously(
+    _ featureInfo: FeatureInfo,
+    distinctId: String
+  ) {
+    if Thread.isMainThread {
+      MainActor.assumeIsolated {
+        featureInfo.setProjectionDistinctId(distinctId)
+      }
+    } else {
+      DispatchQueue.main.sync {
+        featureInfo.setProjectionDistinctId(distinctId)
+      }
+    }
   }
 
   private func captureAcceptedFeatureUse(

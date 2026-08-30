@@ -38,6 +38,8 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     private var _viewControllerHandler: (@Sendable () async -> Void)?
     private var _productAuthorityResolution: ActiveProductEvidenceAuthorityResolution = .unavailable
     private var _deliverProductAuthorityOnHandlerRegistration = false
+    private var _optimisticAllowancesByStoreProductId:
+        [String: [OptimisticEntitlementAllowance]] = [:]
 
     public var prefetchedExperiences: [ExperienceReference] {
         get { withLock { _prefetchedExperiences } }
@@ -122,6 +124,12 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
         set { withLock { _presentationCommitValidationResults = newValue } }
     }
 
+    var optimisticAllowancesByStoreProductId:
+        [String: [OptimisticEntitlementAllowance]] {
+        get { withLock { _optimisticAllowancesByStoreProductId } }
+        set { withLock { _optimisticAllowancesByStoreProductId = newValue } }
+    }
+
     var presentationCommitIsMemoryWarm: Bool {
         get { withLock { _presentationCommitIsMemoryWarm } }
         set { withLock { _presentationCommitIsMemoryWarm = newValue } }
@@ -171,6 +179,16 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     ) async -> ActiveProductEvidenceAuthorityResolution {
         _ = storeProductId
         return withLock { _productAuthorityResolution }
+    }
+
+    func optimisticEntitlementAllowances(
+        releaseDescriptorSHA256: String?,
+        productId: String?,
+        storeProductId: String
+    ) async -> [OptimisticEntitlementAllowance]? {
+        _ = releaseDescriptorSHA256
+        _ = productId
+        return withLock { _optimisticAllowancesByStoreProductId[storeProductId] }
     }
 
     public func setProductAuthorityChangeHandler(
@@ -454,6 +472,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             _foregroundPreparationResumeCallCount = 0
             _viewControllerHandler = nil
             _productAuthorityResolution = .unavailable
+            _optimisticAllowancesByStoreProductId = [:]
             _deliverProductAuthorityOnHandlerRegistration = false
         }
     }

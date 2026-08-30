@@ -1,0 +1,141 @@
+{
+  "cases": [
+    {
+      "name": "missing evidence is absent",
+      "distinctId": "customer-a",
+      "evidence": null,
+      "descriptors": null,
+      "expected": null
+    },
+    {
+      "name": "missing descriptor allowances are absent",
+      "distinctId": "customer-a",
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        }
+      ],
+      "descriptors": null,
+      "expected": null
+    },
+    {
+      "name": "verified evidence widens boolean and metered access",
+      "distinctId": "customer-a",
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        }
+      ],
+      "descriptors": {
+        "transaction-1": [
+          { "featureId": "premium", "kind": "boolean" },
+          { "featureId": "credits", "kind": "metered", "allowance": 10 }
+        ]
+      },
+      "expected": {
+        "premium": { "kind": "boolean", "unlimited": false },
+        "credits": { "kind": "metered", "unlimited": false, "allowance": 10 }
+      }
+    },
+    {
+      "name": "multiple purchases add metered allowances",
+      "distinctId": "customer-a",
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        },
+        {
+          "transactionId": "transaction-2",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        }
+      ],
+      "descriptors": {
+        "transaction-1": [
+          { "featureId": "credits", "kind": "metered", "allowance": 10 }
+        ],
+        "transaction-2": [
+          { "featureId": "credits", "kind": "metered", "allowance": 5 }
+        ]
+      },
+      "expected": {
+        "credits": { "kind": "metered", "unlimited": false, "allowance": 15 }
+      }
+    },
+    {
+      "name": "backend acknowledgement retires the overlay",
+      "distinctId": "customer-a",
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": true,
+          "revoked": false
+        }
+      ],
+      "descriptors": {
+        "transaction-1": [
+          { "featureId": "premium", "kind": "boolean" }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "name": "revocation retires the overlay immediately",
+      "distinctId": "customer-a",
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": true
+        }
+      ],
+      "descriptors": {
+        "transaction-1": [
+          { "featureId": "premium", "kind": "boolean" }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "name": "another customer cannot see retained evidence",
+      "distinctId": "customer-b",
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        }
+      ],
+      "descriptors": {
+        "transaction-1": [
+          { "featureId": "premium", "kind": "boolean" }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "name": "external billing without verified evidence is absent",
+      "distinctId": "customer-a",
+      "evidence": [],
+      "descriptors": {
+        "external-purchase": [
+          { "featureId": "premium", "kind": "boolean" }
+        ]
+      },
+      "expected": null
+    }
+  ]
+}

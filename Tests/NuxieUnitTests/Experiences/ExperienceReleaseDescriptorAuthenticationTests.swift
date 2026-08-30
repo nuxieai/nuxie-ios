@@ -738,13 +738,6 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             is: "experience_release.descriptor.invalid"
         )
 
-        let emptyGrant = try descriptorWithFirstHandlerAction([
-            "type": "grant_entitlement", "featureId": "premium",
-        ])
-        assertAuthenticationError(
-            try signedEnvelope(descriptorBytes: emptyGrant),
-            is: "experience_release.descriptor.invalid"
-        )
     }
 
     func testRejectsCustomProviderFeatureAccessAuthority() throws {

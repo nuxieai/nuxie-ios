@@ -197,6 +197,22 @@ final class NuxieCore: @unchecked Sendable {
       customStoragePath: internalConfiguration.customStoragePath
     )
     let featureInfo = overrides.featureInfo ?? FeatureInfo()
+    let projectionPublicationEpoch = UUID()
+    if Thread.isMainThread {
+      MainActor.assumeIsolated {
+        featureInfo.beginOptimisticProjectionPublication(
+          epoch: projectionPublicationEpoch,
+          distinctId: identity.getDistinctId()
+        )
+      }
+    } else {
+      DispatchQueue.main.sync {
+        featureInfo.beginOptimisticProjectionPublication(
+          epoch: projectionPublicationEpoch,
+          distinctId: identity.getDistinctId()
+        )
+      }
+    }
     let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
     let featureUseCommands = FeatureUseCommandQueue(
       api: api,
@@ -215,18 +231,13 @@ final class NuxieCore: @unchecked Sendable {
       environment: configuration.environment,
       testStoreEnabled: configuration.testStoreEnabled
     )
-    let localPurchaseAccessStore = LocalPurchaseAccessStore(
-      customStoragePath: internalConfiguration.customStoragePath,
-      scope: purchaseStorageScope
-    )
     let features = overrides.features ?? FeatureService(
       api: api,
       identity: identity,
       profile: profile,
       dateProvider: dateProvider,
       featureInfo: featureInfo,
-      cacheTTL: internalConfiguration.featureCacheTTL,
-      localPurchaseAccessStore: localPurchaseAccessStore
+      cacheTTL: internalConfiguration.featureCacheTTL
     )
 
     // Set-once wiring for the segments → irRuntime → features cycle.
@@ -291,7 +302,25 @@ final class NuxieCore: @unchecked Sendable {
         customStoragePath: internalConfiguration.customStoragePath,
         scope: purchaseStorageScope
       ),
-      localAccessStore: localPurchaseAccessStore,
+      descriptorAllowanceProvider: { evidence in
+        await experiences.optimisticEntitlementAllowances(
+          releaseDescriptorSHA256: evidence.commercialContext?
+            .release.descriptorSHA256,
+          productId: evidence.commercialContext?.productId,
+          storeProductId: evidence.productId
+        )
+      },
+      projectionPublisher: { evidence, allowances, distinctId, generation in
+        await MainActor.run {
+          featureInfo.replaceOptimisticProjection(
+            evidence: evidence,
+            descriptorAllowances: allowances,
+            distinctId: distinctId,
+            publicationEpoch: projectionPublicationEpoch,
+            publicationGeneration: generation
+          )
+        }
+      },
       purchaseStorageScope: purchaseStorageScope,
       dateProvider: dateProvider,
       recoverySources: overrides.transactionRecoverySources

@@ -2,10 +2,6 @@ import CryptoKit
 import Foundation
 import StoreKit
 
-func providerLocalAccessTransactionId(storeProductId: String) -> String {
-    "nuxie-provider-\(storeProductId)"
-}
-
 enum TransactionProcessingSource {
     case storeUpdates
     case nuxieEntitlementSync(distinctId: String)
@@ -227,10 +223,16 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private let eventSink: SystemEventSink
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let evidenceStore: TransactionEvidenceStoreProtocol
-    private let localAccessStore: LocalPurchaseAccessStoreProtocol
+    private let descriptorAllowanceProvider:
+        @Sendable (StoredTransactionEvidence) async -> [OptimisticEntitlementAllowance]?
+    private let projectionPublisher: @Sendable (
+        [OptimisticPurchaseEvidence]?,
+        [String: [OptimisticEntitlementAllowance]]?,
+        String,
+        UInt64
+    ) async -> Void
     private let purchaseStorageScope: PurchaseStorageScope
     private let dateProvider: DateProviderProtocol
-    private let activeStoreOriginalTransactionIDs: @Sendable () async -> Set<String>
     private let unfinishedRecoveryTransactions:
         @Sendable () async -> [StoreTransactionRecoveryItem]
     private let currentEntitlementRecoveryTransactions:
@@ -264,6 +266,18 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private var completedPurchaseEventTransactionIds: Set<String> = []
     private var evidenceByTransactionId: [String: StoredTransactionEvidence]?
     private var evidenceStoreUnreadable = false
+    /// Purchase-backed use and projection refresh share this actor-owned
+    /// routing state. While any refresh is suspended resolving descriptor
+    /// allowances, spends conservatively use the durable command journal.
+    private var projectionRefreshGeneration: UInt64 = 0
+    private var projectionRefreshesInFlight = 0
+    private var optimisticProjectionIsActive = false
+    private var optimisticProjectionDistinctId: String?
+    /// Verified revocations retained for the observer lifetime even when a
+    /// commerce store is unreadable. This revocation evidence is not persisted
+    /// entitlement state and prevents a later recompute from resurrecting access
+    /// before the durable evidence record can be updated.
+    private var revokedOriginalTransactionIds: Set<String> = []
     /// Serializes the one purchase-backed Feature command that may consume a
     /// transaction's initial metered grant. Actor reentrancy otherwise lets a
     /// background receipt sync race the atomic command while its request is
@@ -289,7 +303,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         eventSink: SystemEventSink,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         evidenceStore: TransactionEvidenceStoreProtocol = TransactionEvidenceStore(),
-        localAccessStore: LocalPurchaseAccessStoreProtocol = LocalPurchaseAccessStore(),
+        descriptorAllowanceProvider: @escaping @Sendable (
+            StoredTransactionEvidence
+        ) async -> [OptimisticEntitlementAllowance]? = { _ in nil },
+        projectionPublisher: @escaping @Sendable (
+            [OptimisticPurchaseEvidence]?,
+            [String: [OptimisticEntitlementAllowance]]?,
+            String,
+            UInt64
+        ) async -> Void = { _, _, _, _ in },
         purchaseStorageScope: PurchaseStorageScope = .testFixture,
         dateProvider: DateProviderProtocol = SystemDateProvider(),
         activeStoreOriginalTransactionIDs: @escaping @Sendable () async -> Set<String> = {
@@ -369,10 +391,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         self.eventSink = eventSink
         self.transactionServiceProvider = transactionServiceProvider
         self.evidenceStore = evidenceStore
-        self.localAccessStore = localAccessStore
+        self.descriptorAllowanceProvider = descriptorAllowanceProvider
+        self.projectionPublisher = projectionPublisher
         self.purchaseStorageScope = purchaseStorageScope
         self.dateProvider = dateProvider
-        self.activeStoreOriginalTransactionIDs = activeStoreOriginalTransactionIDs
+        _ = activeStoreOriginalTransactionIDs
         self.unfinishedRecoveryTransactions = recoverySources?.unfinished
             ?? unfinishedRecoveryTransactions
         self.currentEntitlementRecoveryTransactions = recoverySources?.currentEntitlements
@@ -552,7 +575,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     // duplicate receipt submissions meanwhile.
                     continue
                 }
-                _ = removeEvidence(
+                _ = await removeEvidence(
                     transactionId: retainedEvidence.transactionId
                 )
             }
@@ -560,8 +583,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     /// Retry all durable evidence after an identity transition. Evidence is
-    /// always submitted to the customer it was recorded for; local grants are
-    /// only re-applied when that customer is still active.
+    /// always submitted to the customer it was recorded for; its derived
+    /// projection is visible only when that customer is active.
     func retryStoredEvidence() async {
         guard !isStopped else { return }
         evidenceRecoveryRequestGeneration &+= 1
@@ -593,7 +616,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             let processingGeneration = evidenceRecoveryRequestGeneration
             let scanCurrentEntitlements = profileReadyEntitlementScanRequested
             profileReadyEntitlementScanRequested = false
-            await reconcileLocalAccessWithCurrentEntitlements()
+            await refreshOptimisticProjection()
             guard !Task.isCancelled else {
                 evidenceRecoveryTask = nil
                 return
@@ -722,20 +745,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 ),
                 distinctId: currentDistinctId
             )
-            if captured, await transactionService.consumePendingPurchase(
+            if captured {
+                _ = await transactionService.consumePendingPurchase(
                 productId: transaction.productId,
                 distinctId: currentDistinctId
-            ), !pending.localEntitlementGrants.isEmpty {
-                await featureService.applyLocalPurchase(
-                    grants: pending.localEntitlementGrants.map {
-                        StoreProduct.LocalEntitlementGrant(
-                            featureId: $0.featureId,
-                            featureExternalId: $0.featureExternalId,
-                            allowanceType: $0.allowanceType,
-                            allowance: $0.allowance
-                        )
-                    },
-                    transactionId: transaction.transactionId
                 )
             }
         }
@@ -786,26 +799,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     ) async {
         let transactionIdString = transaction.transactionId
         let isRevoked = transaction.isRevoked
-        let stored = storedEvidence()[transactionIdString]
+        var stored = storedEvidence()[transactionIdString]
         if isRevoked {
-            // The local denial must precede every unreadable-store deferral
-            // below (evidence, pending purchases, ownership): no storage
-            // failure may keep revoked paid access alive (A12). The main
-            // revocation branch repeats these removals idempotently before
-            // its evidence-dependent work.
-            await featureService.removeLocalPurchase(
-                transactionId: providerLocalAccessTransactionId(
-                    storeProductId: transaction.productId
-                ),
-                grants: []
-            )
-            await featureService.removeLocalPurchase(
-                transactionId: transactionIdString,
-                grants: []
-            )
-            await removeLocalAccess(
+            // Revocation narrows immediately, even if durable commerce stores
+            // are temporarily unreadable and later processing must defer.
+            await publishImmediateRevocation(
                 originalTransactionId: transaction.originalTransactionId
             )
+            await persistImmediateRevocation(
+                transactionId: transactionIdString,
+                originalTransactionId: transaction.originalTransactionId,
+                transactionJws: transactionJwt
+            )
+            stored = storedEvidence()[transactionIdString]
         }
         guard !evidenceStoreUnreadable else { return }
         let transactionService = transactionServiceProvider()
@@ -886,25 +892,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
         if isRevoked {
             LogDebug("TransactionObserver: Transaction \(transaction.transactionId) is revoked")
-            // Provider-owned purchases are projected locally for immediate
-            // offline access, but the provider remains the receipt authority.
-            // Remove both the provider's product-scoped projection and any
-            // native evidence projection before any recovery or sync path.
-            if policy.providerOwnsTransaction {
-                await featureService.removeLocalPurchase(
-                    transactionId: providerLocalAccessTransactionId(
-                        storeProductId: transaction.productId
-                    ),
-                    grants: []
-                )
-            }
-            await featureService.removeLocalPurchase(
-                transactionId: transactionIdString,
-                grants: []
-            )
-            await removeLocalAccess(
-                originalTransactionId: transaction.originalTransactionId
-            )
         }
 
         // A delegate may transfer verified StoreKit evidence to Nuxie and the
@@ -928,7 +915,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     distinctId: stored.distinctId,
                     recordedAt: stored.recordedAt,
                     productFeatureIds: stored.productFeatureIds,
-                    localEntitlementGrants: stored.localEntitlementGrants,
                     isRevoked: true,
                     finishRequired: true,
                     commercialContext: stored.commercialContext,
@@ -936,18 +922,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     completionDeliveredAt: stored.completionDeliveredAt,
                     backendSyncedAt: stored.backendSyncedAt
                 )
-                guard persistEvidence(recoveryEvidence) else { return }
+                guard await persistEvidence(recoveryEvidence) else { return }
             } else {
                 recoveryEvidence = stored
-            }
-            if !recoveryEvidence.isRevoked,
-               !persistLocalAccess(recoveryEvidence) {
-                LogError("TransactionObserver: Could not recover local purchase access")
-                return
-            }
-            if !recoveryEvidence.isRevoked,
-               recoveryEvidence.distinctId == identityService.getDistinctId() {
-                await applyLocalAccess(recoveryEvidence)
             }
             guard await completeStoredTransactionRecovery(
                 recoveryEvidence,
@@ -1023,7 +1000,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             pendingRecord = nil
         }
         let pendingDistinctId = pendingRecord?.distinctId
-        let pendingGrants = pendingRecord?.localEntitlementGrants
         let evidenceDistinctId = stored?.distinctId
             ?? sourceDistinctId
             ?? pendingDistinctId
@@ -1032,9 +1008,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let evidenceRecordedAt = stored?.recordedAt
             ?? pendingRecord?.recordedAt
             ?? dateProvider.now()
-        let evidenceGrants = stored?.localEntitlementGrants
-            ?? pendingGrants
-            ?? []
         let evidenceFeatureIds = stored?.productFeatureIds
             ?? pendingRecord?.productFeatureIds
             ?? []
@@ -1047,7 +1020,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             distinctId: evidenceDistinctId,
             recordedAt: evidenceRecordedAt,
             productFeatureIds: evidenceFeatureIds,
-            localEntitlementGrants: evidenceGrants,
             isRevoked: isRevoked,
             finishRequired: stored?.finishRequired ?? false,
             commercialContext: stored?.commercialContext
@@ -1057,16 +1029,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             completionDeliveredAt: stored?.completionDeliveredAt,
             backendSyncedAt: stored?.backendSyncedAt
         )
-        guard persistEvidence(evidence) else {
+        guard await persistEvidence(evidence) else {
             LogError("TransactionObserver: Could not durably record transaction (transaction.id); leaving it unfinished")
             return
-        }
-        if !isRevoked, !persistLocalAccess(evidence) {
-            LogError("TransactionObserver: Could not durably record local purchase access")
-            return
-        }
-        if !isRevoked, evidence.distinctId == identityService.getDistinctId() {
-            await applyLocalAccess(evidence)
         }
         guard await retireCheckoutRecovery(
             appAccountToken: transaction.appAccountToken,
@@ -1110,7 +1075,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     routeToJourneys: false
                 )
                 if completed {
-                    _ = removeEvidence(transactionId: transactionIdString)
+                    _ = await removeEvidence(transactionId: transactionIdString)
                 }
             }
         }
@@ -1137,8 +1102,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return true
     }
 
-    /// Completes recovery from persisted evidence. Local access, StoreKit
-    /// finishing, and stable analytics capture do not wait for the backend.
+    /// Completes recovery from persisted evidence. StoreKit finishing and
+    /// stable analytics capture do not wait for the backend.
     /// Journey routing occurs only if the exact checkout is still active in
     /// this process; relaunch recovery is capture-only.
     func completeStoredTransactionRecovery(
@@ -1178,7 +1143,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         )
         if synced,
            storedEvidence()[evidence.transactionId]?.completionDeliveredAt != nil {
-            removeEvidence(transactionId: evidence.transactionId)
+            await removeEvidence(transactionId: evidence.transactionId)
         }
         return true
     }
@@ -1240,7 +1205,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
         if syncedTransactionIds.contains(dedupeKey) {
             LogDebug("TransactionObserver: Transaction already synced, finishing fast path")
-            return reconcileEvidenceAfterDeduplicatedSync(
+            return await reconcileEvidenceAfterDeduplicatedSync(
                 transactionId: transactionId,
                 retainEvidenceAfterSync: retainEvidenceAfterSync
             )
@@ -1253,7 +1218,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                   lifecycleGeneration == requestLifecycleGeneration else {
                 return false
             }
-            return reconcileEvidenceAfterDeduplicatedSync(
+            return await reconcileEvidenceAfterDeduplicatedSync(
                 transactionId: transactionId,
                 retainEvidenceAfterSync: retainEvidenceAfterSync
             )
@@ -1292,7 +1257,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func reconcileEvidenceAfterDeduplicatedSync(
         transactionId: String,
         retainEvidenceAfterSync: Bool
-    ) -> Bool {
+    ) async -> Bool {
         // Transaction.updates can win the race with the direct purchase
         // callback. The callback may persist the same evidence after the
         // observer already synced it, so the deduplicated path must drain
@@ -1302,13 +1267,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             || stored.finishRequired
             || (stored.commercialContext != nil
                 && stored.completionDeliveredAt == nil) {
-            return persistEvidence(stored.replacing(
+            return await persistEvidence(stored.replacing(
                 backendSyncedAt: dateProvider.now()
             ))
         }
         if !retainEvidenceAfterSync,
            storedEvidence()[transactionId]?.finishRequired != true {
-            return removeEvidence(transactionId: transactionId)
+            return await removeEvidence(transactionId: transactionId)
         }
         return true
     }
@@ -1369,12 +1334,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     || stored.finishRequired
                     || (stored.commercialContext != nil
                         && stored.completionDeliveredAt == nil) {
-                    guard persistEvidence(stored.replacing(
+                    guard await persistEvidence(stored.replacing(
                         backendSyncedAt: dateProvider.now()
                     )) else { return false }
                 } else if !retainEvidenceAfterSync,
                           storedEvidence()[transactionId]?.finishRequired != true {
-                    guard removeEvidence(transactionId: transactionId) else {
+                    guard await removeEvidence(transactionId: transactionId) else {
                         return false
                     }
                 }
@@ -1415,7 +1380,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     func syncCurrentEntitlements(distinctId: String) async {
         LogInfo("TransactionObserver: Syncing current entitlements")
 
-        await reconcileLocalAccessWithCurrentEntitlements()
+        await refreshOptimisticProjection()
         await processCurrentEntitlements(distinctId: distinctId)
 
         LogInfo("TransactionObserver: Finished syncing current entitlements")
@@ -1447,16 +1412,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogWarning("TransactionObserver: Refusing mismatched StoreKit evidence")
             return false
         }
-        let grants = optimisticLocalEntitlementGrants(
-            product.localEntitlementGrants
-        ).map {
-            StoredLocalEntitlementGrant(
-                featureId: $0.featureId,
-                featureExternalId: $0.featureExternalId,
-                allowanceType: $0.allowanceType,
-                allowance: $0.allowance
-            )
-        }
         let existing = storedEvidence()[evidence.transactionId]
         guard existing?.distinctId == nil || existing?.distinctId == distinctId else {
             LogWarning("TransactionObserver: Refusing to move a purchase between customers")
@@ -1465,12 +1420,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         guard existing?.productId == nil || existing?.productId == evidence.productId else {
             LogWarning("TransactionObserver: Refusing to move evidence between products")
             return false
-        }
-        let retainedGrants: [StoredLocalEntitlementGrant]
-        if let existing, !existing.localEntitlementGrants.isEmpty {
-            retainedGrants = existing.localEntitlementGrants
-        } else {
-            retainedGrants = grants
         }
         let featureIds = storeProductFeatureIds(product.localEntitlementGrants)
         let retainedFeatureIds = existing?.productFeatureIds.isEmpty == false
@@ -1485,7 +1434,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             distinctId: distinctId,
             recordedAt: existing?.recordedAt ?? dateProvider.now(),
             productFeatureIds: retainedFeatureIds,
-            localEntitlementGrants: retainedGrants,
             isRevoked: false,
             finishRequired: existing?.finishRequired == true || finishRequired,
             commercialContext: existing?.commercialContext ?? product.purchaseContext,
@@ -1493,11 +1441,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             completionDeliveredAt: existing?.completionDeliveredAt,
             backendSyncedAt: existing?.backendSyncedAt
         )
-        guard persistEvidence(stored) else { return false }
-        guard persistLocalAccess(stored) else { return false }
-        if identityService.getDistinctId() == distinctId {
-            await applyLocalAccess(stored)
-        }
+        guard await persistEvidence(stored) else { return false }
         return true
     }
 
@@ -1517,6 +1461,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
               amount.isFinite,
               amount > 0,
               let usageApi = api as? PurchaseBackedFeatureUsing else {
+            return nil
+        }
+        guard projectionRefreshesInFlight == 0,
+              optimisticProjectionDistinctId == nil
+                || optimisticProjectionDistinctId == distinctId,
+              !optimisticProjectionIsActive else {
             return nil
         }
 
@@ -1625,7 +1575,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 guard let current = storedEvidence()[evidence.transactionId],
                       current.distinctId == distinctId,
                       current.transactionJws == evidence.transactionJws,
-                      persistEvidence(current.replacing(
+                      await persistEvidence(current.replacing(
                           backendSyncedAt: acceptedAt
                       )) else {
                     releasePurchaseUsageClaim(
@@ -1637,7 +1587,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 if !current.finishRequired
                     && (current.commercialContext == nil
                         || current.completionDeliveredAt != nil) {
-                    _ = removeEvidence(transactionId: evidence.transactionId)
+                    _ = await removeEvidence(transactionId: evidence.transactionId)
                 }
                 releasePurchaseUsageClaim(transactionId: evidence.transactionId)
 
@@ -1783,7 +1733,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             distinctId: distinctId,
             recordedAt: recovery?.recordedAt ?? dateProvider.now(),
             productFeatureIds: recovery?.productFeatureIds ?? [],
-            localEntitlementGrants: recovery?.localEntitlementGrants ?? [],
             isRevoked: false,
             finishRequired: finishRequired,
             commercialContext: recovery?.commercialContext,
@@ -1791,11 +1740,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             completionDeliveredAt: completionReportedAt,
             backendSyncedAt: nil
         )
-        guard persistEvidence(stored), persistLocalAccess(stored) else {
+        guard await persistEvidence(stored) else {
             return .recovered
-        }
-        if distinctId == identityService.getDistinctId() {
-            await applyLocalAccess(stored)
         }
         if let recovery,
            recovery.evidenceAuthority == .outcomeOnlyDelegate,
@@ -1847,7 +1793,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             || storedEvidence()[evidence.transactionId]?
                 .completionDeliveredAt != nil
         if synced, durablyCompleted {
-            removeEvidence(transactionId: evidence.transactionId)
+            await removeEvidence(transactionId: evidence.transactionId)
         }
         return .recovered
     }
@@ -1917,7 +1863,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             distinctId: stored.distinctId,
             recordedAt: stored.recordedAt,
             productFeatureIds: stored.productFeatureIds,
-            localEntitlementGrants: stored.localEntitlementGrants,
             isRevoked: stored.isRevoked,
             finishRequired: false,
             commercialContext: stored.commercialContext,
@@ -1927,9 +1872,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         )
         if syncedTransactionIds.contains(transactionId),
            stored.commercialContext == nil || stored.completionDeliveredAt != nil {
-            _ = removeEvidence(transactionId: transactionId)
+            _ = await removeEvidence(transactionId: transactionId)
         } else {
-            _ = persistEvidence(stored)
+            _ = await persistEvidence(stored)
         }
     }
 
@@ -1960,7 +1905,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 distinctId: stored.distinctId,
                 recordedAt: stored.recordedAt,
                 productFeatureIds: stored.productFeatureIds,
-                localEntitlementGrants: stored.localEntitlementGrants,
                 isRevoked: stored.isRevoked,
                 finishRequired: stored.finishRequired,
                 commercialContext: stored.commercialContext,
@@ -1968,10 +1912,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 completionDeliveredAt: dateProvider.now(),
                 backendSyncedAt: stored.backendSyncedAt
         )
-        guard persistEvidence(delivered) else { return false }
+        guard await persistEvidence(delivered) else { return false }
         if syncedTransactionIds.contains(transactionId),
            !delivered.finishRequired {
-            return removeEvidence(transactionId: transactionId)
+            return await removeEvidence(transactionId: transactionId)
         }
         return true
     }
@@ -2031,126 +1975,127 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return retained
     }
 
-    private func persistEvidence(_ evidence: StoredTransactionEvidence) -> Bool {
+    private func persistEvidence(_ evidence: StoredTransactionEvidence) async -> Bool {
         guard evidence.scope == purchaseStorageScope else { return false }
         var entries = storedEvidence()
         guard !evidenceStoreUnreadable else { return false }
         entries[evidence.transactionId] = evidence
         guard evidenceStore.save(entries) else { return false }
         evidenceByTransactionId = entries
+        await refreshOptimisticProjection()
         return true
     }
 
     @discardableResult
-    func removeEvidence(transactionId: String) -> Bool {
+    func removeEvidence(transactionId: String) async -> Bool {
         var entries = storedEvidence()
         guard !evidenceStoreUnreadable else { return false }
         entries.removeValue(forKey: transactionId)
         guard evidenceStore.save(entries) else { return false }
         evidenceByTransactionId = entries
+        await refreshOptimisticProjection()
         return true
     }
 
-    private func storedLocalAccess() -> [String: StoredLocalPurchaseAccess] {
-        localAccessStore.load().readableValue ?? [:]
-    }
+    private func refreshOptimisticProjection() async {
+        projectionRefreshGeneration &+= 1
+        let refreshGeneration = projectionRefreshGeneration
+        projectionRefreshesInFlight += 1
+        defer { projectionRefreshesInFlight -= 1 }
 
-    @discardableResult
-    private func persistLocalAccess(_ evidence: StoredTransactionEvidence) -> Bool {
-        guard !evidence.localEntitlementGrants.isEmpty else { return true }
-        let access = StoredLocalPurchaseAccess(
-            scope: evidence.scope,
-            transactionId: evidence.transactionId,
-            originalTransactionId: evidence.originalTransactionId,
-            productId: evidence.productId,
-            distinctId: evidence.distinctId,
-            grants: evidence.localEntitlementGrants,
-            state: .active
-        )
-        return localAccessStore.upsert(access)
-    }
-
-    private func removeLocalAccess(originalTransactionId: String) async {
-        guard let revoked = localAccessStore.markRevoked(
-            originalTransactionId: originalTransactionId
-        ) else {
-            LogError("TransactionObserver: Could not persist revoked local access")
+        let entries = storedEvidence()
+        guard !evidenceStoreUnreadable else {
+            let distinctId = identityService.getDistinctId()
+            guard refreshGeneration == projectionRefreshGeneration else { return }
+            optimisticProjectionIsActive = false
+            optimisticProjectionDistinctId = distinctId
+            await projectionPublisher(nil, nil, distinctId, refreshGeneration)
             return
         }
-        for access in revoked {
-            if access.distinctId == identityService.getDistinctId() {
-                await featureService.removeLocalPurchase(
-                    transactionId: access.transactionId,
-                    grants: storeProductGrants(access.grants)
-                )
+        let evidence = entries.values.map { stored in
+            OptimisticPurchaseEvidence(
+                transactionId: stored.transactionId,
+                distinctId: stored.distinctId,
+                backendSynced: stored.backendSyncedAt != nil,
+                revoked: stored.isRevoked
+                    || revokedOriginalTransactionIds.contains(
+                        stored.originalTransactionId
+                    )
+            )
+        }
+        var allowances: [String: [OptimisticEntitlementAllowance]] = [:]
+        for stored in entries.values
+        where stored.backendSyncedAt == nil
+            && !stored.isRevoked
+            && !revokedOriginalTransactionIds.contains(
+                stored.originalTransactionId
+            ) {
+            if let resolved = await descriptorAllowanceProvider(stored) {
+                allowances[stored.transactionId] = resolved
             }
         }
-    }
-
-    private func rehydrateLocalAccessForCurrentCustomer() async {
+        guard refreshGeneration == projectionRefreshGeneration else { return }
+        let evidenceInput = evidence.isEmpty ? nil : evidence
+        let allowanceInput = allowances.isEmpty ? nil : allowances
         let distinctId = identityService.getDistinctId()
-        let accesses = storedLocalAccess().values.filter {
-            $0.scope == purchaseStorageScope && $0.distinctId == distinctId
-        }
-        // Apply denials first so an independently active transaction for the
-        // same feature wins during repurchase or overlapping subscriptions.
-        for access in accesses where access.state == .revoked {
-            await featureService.removeLocalPurchase(
-                transactionId: access.transactionId,
-                grants: storeProductGrants(access.grants)
-            )
-        }
-        for access in accesses where access.state == .active {
-            await applyLocalAccess(access)
-        }
-    }
-
-    private func reconcileLocalAccessWithCurrentEntitlements() async {
-        let activeOriginalTransactionIDs = await activeStoreOriginalTransactionIDs()
-
-        guard let revoked = localAccessStore.markInactiveRevoked(
-            activeOriginalTransactionIds: activeOriginalTransactionIDs
-        ) else {
-            LogError("TransactionObserver: Could not reconcile local access ledger")
-            return
-        }
-        for access in revoked {
-            if access.distinctId == identityService.getDistinctId() {
-                await featureService.removeLocalPurchase(
-                    transactionId: access.transactionId,
-                    grants: storeProductGrants(access.grants)
-                )
-            }
-        }
-        await rehydrateLocalAccessForCurrentCustomer()
-    }
-
-    private func applyLocalAccess(_ evidence: StoredTransactionEvidence) async {
-        let grants = storeProductGrants(evidence.localEntitlementGrants)
-        await featureService.applyLocalPurchase(
-            grants: grants,
-            transactionId: evidence.transactionId
+        optimisticProjectionIsActive = OptimisticEntitlementProjection.derive(
+            evidence: evidenceInput,
+            descriptorAllowances: allowanceInput,
+            distinctId: distinctId
+        ) != nil
+        optimisticProjectionDistinctId = distinctId
+        await projectionPublisher(
+            evidenceInput,
+            allowanceInput,
+            distinctId,
+            refreshGeneration
         )
     }
 
-    private func applyLocalAccess(_ access: StoredLocalPurchaseAccess) async {
-        let grants = storeProductGrants(access.grants)
-        await featureService.applyLocalPurchase(
-            grants: grants,
-            transactionId: access.transactionId
-        )
+    private func publishImmediateRevocation(
+        originalTransactionId: String
+    ) async {
+        revokedOriginalTransactionIds.insert(originalTransactionId)
+        await refreshOptimisticProjection()
     }
 
-    private func storeProductGrants(
-        _ grants: [StoredLocalEntitlementGrant]
-    ) -> [StoreProduct.LocalEntitlementGrant] {
-        grants.map {
-            StoreProduct.LocalEntitlementGrant(
-                featureId: $0.featureId,
-                featureExternalId: $0.featureExternalId,
-                allowanceType: $0.allowanceType,
-                allowance: $0.allowance
+    /// Commits revocation evidence before purchase-authority and pending-store
+    /// checks that may defer the rest of transaction processing. A volatile
+    /// marker remains only when this durable rewrite cannot complete.
+    private func persistImmediateRevocation(
+        transactionId: String,
+        originalTransactionId: String,
+        transactionJws: String
+    ) async {
+        var entries = storedEvidence()
+        guard !evidenceStoreUnreadable else { return }
+        var changed = false
+        for (key, stored) in entries
+        where stored.originalTransactionId == originalTransactionId
+            && !stored.isRevoked {
+            entries[key] = StoredTransactionEvidence(
+                scope: stored.scope,
+                transactionJws: key == transactionId && !transactionJws.isEmpty
+                    ? transactionJws
+                    : stored.transactionJws,
+                transactionId: stored.transactionId,
+                originalTransactionId: stored.originalTransactionId,
+                productId: stored.productId,
+                distinctId: stored.distinctId,
+                recordedAt: stored.recordedAt,
+                productFeatureIds: stored.productFeatureIds,
+                isRevoked: true,
+                finishRequired: stored.finishRequired,
+                commercialContext: stored.commercialContext,
+                checkoutCompletionEventId: stored.checkoutCompletionEventId,
+                completionDeliveredAt: stored.completionDeliveredAt,
+                backendSyncedAt: stored.backendSyncedAt
             )
+            changed = true
         }
+        guard !changed || evidenceStore.save(entries) else { return }
+        evidenceByTransactionId = entries
+        revokedOriginalTransactionIds.remove(originalTransactionId)
+        await refreshOptimisticProjection()
     }
 }

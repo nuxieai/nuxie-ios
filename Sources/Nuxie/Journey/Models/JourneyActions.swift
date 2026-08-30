@@ -322,7 +322,6 @@ enum JourneyAction: Codable, Sendable {
     case dismiss(DismissAction)
     case appAction(AppActionStep)
     case connectorAction(ConnectorAction)
-    case grantEntitlement(GrantEntitlementAction)
     case setViewModel(SetViewModelAction)
     case fireTrigger(FireTriggerAction)
     case listInsert(ListInsertAction)
@@ -361,7 +360,6 @@ enum JourneyAction: Codable, Sendable {
         case dismiss
         case appAction = "app_action"
         case connectorAction = "connector_action"
-        case grantEntitlement = "grant_entitlement"
         case setViewModel = "set_view_model"
         case fireTrigger = "fire_trigger"
         case listInsert = "list_insert"
@@ -422,8 +420,6 @@ enum JourneyAction: Codable, Sendable {
             self = .appAction(try AppActionStep(from: decoder))
         case .connectorAction:
             self = .connectorAction(try ConnectorAction(from: decoder))
-        case .grantEntitlement:
-            self = .grantEntitlement(try GrantEntitlementAction(from: decoder))
         case .setViewModel:
             self = .setViewModel(try SetViewModelAction(from: decoder))
         case .fireTrigger:
@@ -499,8 +495,6 @@ enum JourneyAction: Codable, Sendable {
             try action.encode(to: encoder)
         case .connectorAction(let action):
             try action.encode(to: encoder)
-        case .grantEntitlement(let action):
-            try action.encode(to: encoder)
         case .setViewModel(let action):
             try action.encode(to: encoder)
         case .fireTrigger(let action):
@@ -572,8 +566,6 @@ extension JourneyAction {
         case .appAction(let action):
             return action.nodeId
         case .connectorAction(let action):
-            return action.nodeId
-        case .grantEntitlement(let action):
             return action.nodeId
         case .setViewModel(let action):
             return action.nodeId
@@ -1517,38 +1509,6 @@ struct ConnectorAction: Codable, Sendable {
         try c.encode(onSucceeded ?? [], forKey: .onSucceeded)
         try c.encode(onFailed ?? [], forKey: .onFailed)
         try c.encode(onTimeout ?? [], forKey: .onTimeout)
-    }
-}
-
-struct GrantEntitlementAction: Codable, Sendable {
-    let type: String
-    /// Stable compiler-authored identity used by transition facts.
-    let nodeId: String?
-    let featureId: String
-    let balance: Double?
-    let unlimited: Bool?
-    let onSucceeded: [JourneyAction]?
-    let onFailed: [JourneyAction]?
-    let onTimeout: [JourneyAction]?
-
-    init(
-        type: String = "grant_entitlement",
-        nodeId: String? = nil,
-        featureId: String,
-        balance: Double? = nil,
-        unlimited: Bool? = nil,
-        onSucceeded: [JourneyAction]? = nil,
-        onFailed: [JourneyAction]? = nil,
-        onTimeout: [JourneyAction]? = nil
-    ) {
-        self.type = type
-        self.nodeId = nodeId
-        self.featureId = featureId
-        self.balance = balance
-        self.unlimited = unlimited
-        self.onSucceeded = onSucceeded
-        self.onFailed = onFailed
-        self.onTimeout = onTimeout
     }
 }
 

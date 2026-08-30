@@ -67,6 +67,90 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 }
             }
 
+            it("decrements the visible optimistic join without consuming its inputs") {
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: Bundle.main.bundleIdentifier
+                        ?? "nuxie.unidentified-host-app",
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                await api.configureTrackEventResponse(
+                    status: "ok",
+                    usage: .init(current: 6, limit: 10, remaining: 4)
+                )
+                await api.suspendNextFeatureTrackEvent()
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let featureInfo = FeatureInfo()
+                let authority = await MainActor.run {
+                    featureInfo.admitProfileSnapshot(
+                        ["credits": .withBalance(
+                            5,
+                            unlimited: false,
+                            type: .metered
+                        )],
+                        admittedAt: Date()
+                    )
+                    featureInfo.replaceOptimisticProjection(
+                        evidence: [OptimisticPurchaseEvidence(
+                            transactionId: "transaction-1",
+                            distinctId: "feature-customer",
+                            backendSynced: false,
+                            revoked: false
+                        )],
+                        descriptorAllowances: [
+                            "transaction-1": [OptimisticEntitlementAllowance(
+                                featureId: "credits",
+                                kind: .metered,
+                                unlimited: false,
+                                allowance: 10
+                            )],
+                        ],
+                        distinctId: "feature-customer"
+                    )
+                    return featureInfo.balanceAuthority(for: "credits")
+                }
+                let queue = FeatureUseCommandQueue(
+                    api: api,
+                    identity: identity,
+                    eventLog: MockEventLog(),
+                    featureInfo: featureInfo,
+                    dateProvider: MockDateProvider(),
+                    store: store
+                )
+
+                let usage = Task {
+                    try await queue.use(
+                        distinctId: "feature-customer",
+                        featureId: "credits",
+                        amount: 1,
+                        entityId: nil,
+                        setUsage: false,
+                        metadata: nil
+                    )
+                }
+                await api.waitForSuspendedFeatureTrackEvent()
+
+                let pending = await MainActor.run {
+                    (
+                        featureInfo.balance("credits"),
+                        featureInfo.balanceAuthority(for: "credits"),
+                        featureInfo.hasActiveOptimisticProjection
+                    )
+                }
+                expect(pending.0) == 14
+                expect(pending.1) == authority
+                expect(pending.2).to(beTrue())
+
+                await api.resumeSuspendedFeatureTrackEvent()
+                _ = try await usage.value
+                let reconciled = await MainActor.run {
+                    featureInfo.balance("credits")
+                }
+                expect(reconciled) == 14
+            }
+
             it("rejects a pinned feature use when identity changes before journaling") {
                 let createdAt = Date(timeIntervalSince1970: 1_788_000_040)
                 let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"

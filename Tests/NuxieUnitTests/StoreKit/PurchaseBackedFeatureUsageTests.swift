@@ -347,6 +347,43 @@ private actor ControlledReceiptSyncAPI:
     func recordedUsageRequestCount() -> Int { usageRequestCount }
 }
 
+private actor ControlledDescriptorAllowanceProvider {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func resolve(
+        _ evidence: StoredTransactionEvidence
+    ) async -> [OptimisticEntitlementAllowance]? {
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if !released {
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        }
+        return [OptimisticEntitlementAllowance(
+            featureId: evidence.productFeatureIds[0],
+            kind: .creditSystem,
+            unlimited: false,
+            allowance: 5
+        )]
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 final class PurchaseBackedFeatureUsageTests: XCTestCase {
     private let scope = PurchaseStorageScope(
         appIdentifierHash: "purchase-use-app",
@@ -458,6 +495,57 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         let updateCount = await features.recordedUpdates().count
         XCTAssertEqual(updateCount, 1)
         XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+    }
+
+    func testProjectionRefreshRoutesConcurrentSpendAwayFromAtomicShortcut() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = InMemoryTransactionEvidenceStore()
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["credits"]
+            ),
+        ]))
+        let api = PurchaseBackedUsageAPI(results: [])
+        let allowances = ControlledDescriptorAllowanceProvider()
+        let observer = TransactionObserver(
+            api: api,
+            features: PurchaseBackedFeatureRecorder(),
+            identity: identity,
+            settings: NuxieRuntimeSettings(
+                configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+            ),
+            eventSink: DiscardingSystemEventSink(),
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: store,
+            descriptorAllowanceProvider: { evidence in
+                await allowances.resolve(evidence)
+            },
+            purchaseStorageScope: scope,
+            dateProvider: MockDateProvider(
+                initialDate: Date(timeIntervalSince1970: 100)
+            ),
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        let refresh = Task { await observer.retryStoredEvidence() }
+        await allowances.waitUntilStarted()
+
+        let result = try await observer.useFeatureWithPendingPurchase(
+            distinctId: "customer-a",
+            featureId: "credits",
+            amount: 1,
+            entityId: nil,
+            metadata: nil
+        )
+
+        XCTAssertNil(result)
+        let requestCount = await api.recordedRequests().count
+        XCTAssertEqual(requestCount, 0)
+        await allowances.release()
+        await refresh.value
     }
 
     func testFinalAtomicCreditReportsSuccessfulCommandAndPostUseAccess() async throws {
@@ -1063,7 +1151,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             eventSink: PurchaseBackedEventSink(),
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: store,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: MockDateProvider(
                 initialDate: Date(timeIntervalSince1970: 100)
@@ -1222,142 +1309,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         )
     }
 
-    func testRevokedTransactionDeniesLocalAccessEvenWhenEvidenceIsUnreadable() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "revoke-corruption-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        addTeardownBlock {
-            try? FileManager.default.removeItem(at: root)
-        }
-        let directory = scope.storageDirectory(customStoragePath: root)
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        try Data("{ unreadable".utf8).write(
-            to: directory.appendingPathComponent("transaction-evidence.json")
-        )
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let api = PurchaseBackedUsageAPI(results: [])
-        let features = PurchaseBackedFeatureRecorder()
-        let events = PurchaseBackedEventSink()
-        let localAccess = InMemoryLocalPurchaseAccessStore()
-        _ = localAccess.save([
-            "txn-revoked": StoredLocalPurchaseAccess(
-                scope: scope,
-                transactionId: "txn-revoked",
-                originalTransactionId: "original-revoked",
-                productId: "store-product-1",
-                distinctId: "customer-a",
-                grants: [],
-                state: .active
-            ),
-        ])
-        let observer = TransactionObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            settings: NuxieRuntimeSettings(
-                configuration: NuxieConfiguration(apiKey: "purchase-use-test")
-            ),
-            eventSink: events,
-            transactionServiceProvider: { fatalError("unused") },
-            evidenceStore: TransactionEvidenceStore(
-                customStoragePath: root,
-                scope: scope
-            ),
-            localAccessStore: localAccess,
-            purchaseStorageScope: scope,
-            dateProvider: MockDateProvider(),
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "txn-revoked",
-                originalTransactionId: "original-revoked",
-                productId: "store-product-1",
-                appAccountToken: nil,
-                isRevoked: true,
-                isUpgraded: false,
-                finish: {}
-            ),
-            jwsRepresentation: "revoked-jws",
-            source: .storeUpdates
-        )
-
-        let states = localAccess.load().readableValue?.values.map(\.state)
-        XCTAssertEqual(states, [.revoked])
-    }
-
-    func testRevokedTransactionDeniesLocalAccessWhenOnlyPendingStoreIsUnreadable() async throws {
-        // Readable evidence but a corrupt pending-purchases file must still
-        // apply the local revocation denial before any deferral.
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let api = PurchaseBackedUsageAPI(results: [])
-        let features = PurchaseBackedFeatureRecorder()
-        let events = PurchaseBackedEventSink()
-        let localAccess = InMemoryLocalPurchaseAccessStore()
-        _ = localAccess.save([
-            "txn-revoked": StoredLocalPurchaseAccess(
-                scope: scope,
-                transactionId: "txn-revoked",
-                originalTransactionId: "original-revoked",
-                productId: "store-product-1",
-                distinctId: "customer-a",
-                grants: [],
-                state: .active
-            ),
-        ])
-        let settings = NuxieRuntimeSettings(
-            configuration: NuxieConfiguration(apiKey: "purchase-use-test")
-        )
-        let transactionService = TransactionService(
-            productService: MockProductService(),
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: UnreadablePendingPurchaseStore(),
-            dateProvider: MockDateProvider(),
-            settings: settings,
-            eventSink: events,
-            purchaseStorageScope: scope,
-            identityService: identity,
-            featureService: features
-        )
-        let observer = TransactionObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            settings: settings,
-            eventSink: events,
-            transactionServiceProvider: { transactionService },
-            evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: localAccess,
-            purchaseStorageScope: scope,
-            dateProvider: MockDateProvider(),
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "txn-revoked",
-                originalTransactionId: "original-revoked",
-                productId: "store-product-1",
-                appAccountToken: nil,
-                isRevoked: true,
-                isUpgraded: false,
-                finish: {}
-            ),
-            jwsRepresentation: "revoked-jws",
-            source: .storeUpdates
-        )
-
-        let states = localAccess.load().readableValue?.values.map(\.state)
-        XCTAssertEqual(states, [.revoked])
-    }
-
     func testUnreadableEvidenceThrowsFromPendingPurchaseUseInsteadOfFallingThrough() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "pending-use-corruption-\(UUID().uuidString)",
@@ -1392,7 +1343,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
                 customStoragePath: root,
                 scope: scope
             ),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: MockDateProvider(),
             activeStoreOriginalTransactionIDs: { [] }
@@ -1446,7 +1396,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
                 customStoragePath: root,
                 scope: scope
             ),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: MockDateProvider(),
             activeStoreOriginalTransactionIDs: { [] }
@@ -1491,7 +1440,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             eventSink: events,
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: store,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: MockDateProvider(
                 initialDate: Date(timeIntervalSince1970: 100)
@@ -1542,7 +1490,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             eventSink: events,
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: store,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: MockDateProvider(
                 initialDate: Date(timeIntervalSince1970: 100)
@@ -1728,7 +1675,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             distinctId: distinctId,
             recordedAt: Date(timeIntervalSince1970: 50),
             productFeatureIds: featureIds,
-            localEntitlementGrants: [],
             isRevoked: isRevoked,
             finishRequired: finishRequired,
             commercialContext: commercialContext,
@@ -1778,7 +1724,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: store,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: observerScope ?? scope,
             dateProvider: MockDateProvider(
                 initialDate: Date(timeIntervalSince1970: 100)
@@ -1805,7 +1750,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: store,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: MockDateProvider(
                 initialDate: Date(timeIntervalSince1970: 100)
@@ -1829,7 +1773,6 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             eventSink: DiscardingSystemEventSink(),
             transactionServiceProvider: { fatalError("unused") },
             evidenceStore: store,
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: MockDateProvider(
                 initialDate: Date(timeIntervalSince1970: 100)
