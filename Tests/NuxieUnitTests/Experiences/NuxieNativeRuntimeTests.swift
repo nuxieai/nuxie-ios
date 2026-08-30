@@ -101,39 +101,39 @@ final class NuxieNativeRuntimeTests: XCTestCase {
 
     func testOneBatchCanAttachAndMutateADetachedViewModel() async throws {
         let runtime = try await NuxieNativeRuntime.open(
-            bytes: try fixture(named: "data_binding_test", extension: "riv"),
-            artboardName: "Artboard",
-            player: .stateMachine("State Machine 1"),
+            bytes: try exactComponentListFixture(),
+            artboardName: "Main",
+            player: .staticArtboard,
             pixelWidth: 1,
             pixelHeight: 1,
             bindDefaultViewModel: true
         )
         defer { Task { try? await runtime.close() } }
         let root = try await runtime.rootViewModelReference()
-        let child = try await runtime.makeViewModel(schemaIndex: 1)
+        let child = try await runtime.makeViewModel(schemaIndex: 0)
 
         let result = try await runtime.mutateViewModel(
             [
-                .listClear(instance: root, path: "List"),
-                .listInsert(instance: root, path: "List", index: 0, value: child),
-                .setString(
+                .listClear(instance: root, path: "items"),
+                .listInsert(instance: root, path: "items", index: 0, value: child),
+                .setNumber(
                     instance: child,
-                    path: "String",
-                    value: Data("atomic".utf8)
+                    path: "value",
+                    value: 42
                 ),
             ],
             correlationID: 1
         )
         XCTAssertEqual(result.appliedCount, 3)
-        XCTAssertEqual(result.changes.count, 2)
+        XCTAssertEqual(result.changes.count, 3)
         let snapshot = try await runtime.snapshot()
         guard case .list(let rows) = snapshot.values.first(where: {
-            $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "List"
+            $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "items"
         })?.value,
         let row = rows.first else { return XCTFail("Expected attached row") }
         XCTAssertEqual(snapshot.values.first(where: {
-            $0.ownerInstanceID == row && $0.name == "String"
-        })?.value, .bytes(Data("atomic".utf8)))
+            $0.ownerInstanceID == row && $0.name == "value"
+        })?.value, .number(42))
     }
 
     func testAbandonedDetachedViewModelCanBeReleased() async throws {
@@ -344,7 +344,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(catalog.schemas.first { $0.name == "Test" }?.name, "Test")
     }
 
-    func testViewModelBatchSupportsScalarTriggerAndStructuralMutationsAtomically() async throws {
+    func testViewModelBatchSupportsScalarTriggerAndReferenceMutationsAtomically() async throws {
         let runtime = try await NuxieNativeRuntime.open(
             bytes: try fixture(named: "data_binding_test", extension: "riv"),
             artboardName: "Artboard",
@@ -366,16 +366,15 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                 .setNumber(instance: root, path: "Number", value: 23),
                 .setBool(instance: root, path: "Boolean", value: true),
                 .setColor(instance: root, path: "Color", value: 0xFF11_2233),
-                .setEnumeration(instance: root, path: "Enum", value: 2),
+                .setEnumeration(instance: root, path: "Enum", value: 1),
                 .fireTrigger(instance: root, path: "Trigger Blue"),
                 .setViewModel(instance: root, path: "Nested", value: nested),
-                .listInsert(instance: root, path: "List", index: 0, value: nested),
             ],
             correlationID: 99
         )
-        XCTAssertEqual(result.appliedCount, 8)
+        XCTAssertEqual(result.appliedCount, 7)
         XCTAssertEqual(result.correlationID, 99)
-        XCTAssertEqual(result.changes.count, 8)
+        XCTAssertEqual(result.changes.count, 7)
         XCTAssertTrue(result.changes.allSatisfy { $0.origin == .caller && $0.correlationID == 99 })
 
         let snapshot = try await runtime.snapshot()
@@ -384,13 +383,19 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(rootValues.first { $0.name == "Number" }?.value, .number(23))
         XCTAssertEqual(rootValues.first { $0.name == "Boolean" }?.value, .bool(true))
         XCTAssertEqual(rootValues.first { $0.name == "Color" }?.value, .integer(0xFF11_2233))
-        XCTAssertEqual(result.changes[6].value, .referencedInstance(nested.rawValue))
-        XCTAssertEqual(result.changes[7].value, .list([nested.rawValue]))
-        guard case .referencedInstance(let linked) = rootValues.first(where: { $0.name == "Nested" })?.value,
-              case .list(let listed) = rootValues.first(where: { $0.name == "List" })?.value else {
-            return XCTFail("Expected the committed structural snapshot")
+        XCTAssertEqual(rootValues.first { $0.name == "Enum" }?.value, .integer(1))
+        XCTAssertTrue(result.changes.contains {
+            $0.value == .referencedInstance(nested.rawValue)
+        })
+        guard case .referencedInstance(let linked) = rootValues.first(where: {
+            $0.name == "Nested"
+        })?.value else {
+            return XCTFail("Expected the committed reference snapshot")
         }
-        XCTAssertEqual(listed, [linked])
+        XCTAssertEqual(
+            snapshot.instances.first(where: { $0.id == linked })?.schemaIndex,
+            1
+        )
     }
 
     func testDetachedViewModelCanBeHydratedBeforeStructuralCommit() async throws {
@@ -413,11 +418,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             correlationID: 1
         )
         _ = try await runtime.mutateViewModel(
-            [
-                .setViewModel(instance: root, path: "Nested", value: nested),
-                .listClear(instance: root, path: "List"),
-                .listInsert(instance: root, path: "List", index: 0, value: nested),
-            ],
+            [.setViewModel(instance: root, path: "Nested", value: nested)],
             correlationID: 2
         )
         let snapshot = try await runtime.snapshot()
@@ -425,7 +426,6 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         guard case .referencedInstance(let linked) = rootValues.first(where: {
             $0.name == "Nested"
         })?.value else { return XCTFail("Expected linked child") }
-        XCTAssertEqual(rootValues.first(where: { $0.name == "List" })?.value, .list([linked]))
         XCTAssertEqual(snapshot.values.first(where: {
             $0.ownerInstanceID == linked && $0.name == "String"
         })?.value, .bytes(Data("child".utf8)))
@@ -663,7 +663,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let root = try await runtime.rootViewModelReference()
         XCTAssertEqual(
             selectedProduct.value,
-            .bytes(Data())
+            .bytes(Data("draft:before".utf8))
         )
         let preview = try await runtime.mutateViewModel([
             .setString(
@@ -673,6 +673,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             )
         ])
         XCTAssertEqual(preview.appliedCount, 1)
+        _ = try await runtime.step(elapsedSeconds: 0)
         let initialRender = try await renderPixels(runtime, width: 320, height: 160)
         XCTAssertEqual(initialRender.outcome.disposition, .presented)
 
@@ -684,6 +685,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             )
         ])
         XCTAssertEqual(empty.appliedCount, 1)
+        _ = try await runtime.step(elapsedSeconds: 0)
         let emptySnapshot = try await runtime.snapshot()
         XCTAssertEqual(
             emptySnapshot.values.first {
@@ -714,6 +716,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             )
         ])
         XCTAssertEqual(restored.appliedCount, 1)
+        _ = try await runtime.step(elapsedSeconds: 0)
         let restoredRender = try await renderPixels(runtime, width: 320, height: 160)
         let restoredDifference = changedPixelExtent(
             between: restoredRender.pixels,
@@ -736,6 +739,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             )
         ])
         XCTAssertEqual(long.appliedCount, 1)
+        _ = try await runtime.step(elapsedSeconds: 0)
         let longSnapshot = try await runtime.snapshot()
         XCTAssertEqual(
             longSnapshot.values.first {
@@ -1023,6 +1027,18 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
         throw CocoaError(.fileNoSuchFile)
     }
+}
+
+/// Small exact-upstream fixture with a `Doc.items` list and a matching
+/// `ItemVM` row artboard. The prior `data_binding_test.riv` list coverage was
+/// invalid because that file has no artboard for its `Nested` schema.
+func exactComponentListFixture() throws -> Data {
+    let encoded =
+        "UklWRQcCAMQB7gPzA4QEhgSlBKYEqgStBLYEvwTHBMoEzATVBNYE3gTfBOAE7QTuBO8E8ATyBI8FkAXSBgCgAAAAAgAAACEAAAAEAAAAAAAAAAAAAAAAAAAAFwCzA60EBkl0ZW1WTQCvA60EBXZhbHVlALUDtgQABAJJMQC6A78EAACAP6oEAAC1A7YEAAQCSTIAugO/BAAAAECqBAAAtQO2BAAEAkkzALoDvwQAAEBAqgQAALUDtgQABAJJNAC6A78EAACAQKoEAAC1A7YEAAQCSTUAugO/BAAAoECqBAAAtQO2BAAEAkk2ALoDvwQAAMBAqgQAALMDrQQDRG9jALIDrQQFaXRlbXMAtQO2BAEECEluc3RhbmNlALkDqgQAAKsDpQQApgQAAKsDpQQApgQBAKsDpQQApgQCAKsDpQQApgQDAKsDpQQApgQEAKsDpQQApgQFAAHHBAHEAQEHAADIQwgAAMhD7gMDBARNYWluABQECkJhY2tncm91bmQFAAASJRAQEP8EBUNvbG9yBQEApAMEDkFydGJvYXJkIFN0eWxlBQAAmQMHAADIQwgAACBC7gMHBAdPdmVybGF5BQAAFAQLT3ZlcmxheUZpbGwFBAASJf8AAP8EBUNvbG9yBQUApAPVBALtBAHuBAHwBAEEDU92ZXJsYXkgU3R5bGUFBACZA8QBAQcAAEhDCAAASEPuAwkECFZpZXdwb3J0BQAApAOEBAAAyEKGBAAAyELVBALtBAHvBAEEDlZpZXdwb3J0IFN0eWxlBQgAmQMHAABIQwgAAEhD7gMLBAdDb250ZW50BQgApAPzAwAAIEGPBQGQBQLWBADeBAHfBAPgBAPyBAEEDUNvbnRlbnQgU3R5bGUFCgCvBAQETGlzdAUKAL8DzAQCAQDKBKAGAIkE0gYBBAZTY3JvbGwFCgABxAEAxwQABwAASEMIAABIQu4DAwQESXRlbQAUBAhJdGVtRmlsbAUAABIlAP8A/wQFQ29sb3IFAQCkAwQKSXRlbSBTdHlsZQUAAA=="
+    guard let decoded = Data(base64Encoded: encoded) else {
+        throw CocoaError(.fileReadCorruptFile)
+    }
+    return decoded
 }
 
 private final class RuntimeExecutorHolder: @unchecked Sendable {

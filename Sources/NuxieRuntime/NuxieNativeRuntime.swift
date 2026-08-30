@@ -1378,12 +1378,14 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
         let status: UInt32
         switch importMode {
         case .portable:
+            var config = NuxFileImportConfig()
+            config.struct_size = UInt32(MemoryLayout<NuxFileImportConfig>.size)
             status = bytes.withUnsafeBytes { storage in
                 nux_file_import_metal(
                     renderer,
                     storage.bindMemory(to: UInt8.self).baseAddress,
                     storage.count,
-                    nil,
+                    &config,
                     &file,
                     &result
                 )

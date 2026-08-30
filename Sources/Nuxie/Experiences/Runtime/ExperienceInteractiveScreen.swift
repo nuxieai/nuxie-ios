@@ -4488,7 +4488,7 @@ private enum ExperienceInteractiveAssetBinding {
             case .audio where descriptor.isEmbedded:
                 // Embedded audio is already authenticated by the signed scene
                 // digest. It needs no external provider entry and remains
-                // owned by the native file across renderer-domain resets.
+                // owned by the renderer-bound native file for its lifetime.
                 continue
             case .audio, .blob:
                 throw ExperienceInteractiveScreenError.assetContract(
