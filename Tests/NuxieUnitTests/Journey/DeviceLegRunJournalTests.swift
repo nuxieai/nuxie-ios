@@ -34,12 +34,13 @@ final class DeviceLegRunJournalTests: XCTestCase {
                                                    entryStepId: "step", at: date(vector.startedAtMillis / 1000))
             let run = try XCTUnwrap(admitted)
             try await journal.recordResponses(run.id, values: vector.outputs.responses)
-            try await journal.recordEventOutputs(run.id, values: vector.outputs.event)
-            try await journal.complete(run.id, outcome: vector.outcome, at: date(vector.completedAtMillis / 1000))
+            try await journal.complete(run.id, outcome: vector.outcome, at: date(vector.completedAtMillis / 1000),
+                                       eventOutputs: vector.outputs.event)
             if mode == "accept_then_lost_receipt" {
                 try await DeviceLegReporter(journal: journal, events: LostCompletionAcknowledgement(events: log)).flushPending()
                 let retained = try await journal.runs()
                 XCTAssertEqual(retained.count, 1)
+                try await journal.complete(run.id, outcome: "abandoned", at: date(900))
             }
             try await DeviceLegReporter(journal: journal, events: log).flushPending()
             await log.drain()
@@ -54,6 +55,8 @@ final class DeviceLegRunJournalTests: XCTestCase {
                 XCTAssertEqual(Set(rows.map(\.id)), [run.startedEventId, run.completedEventId])
                 XCTAssertEqual(Set(rows.map(\.name)), Set(vector.eventNames))
                 XCTAssertEqual(forwarded, vector.forwardedNames)
+                let timestamps = await forwarding.timestamps()
+                XCTAssertEqual(timestamps, [date(vector.startedAtMillis / 1000), date(vector.completedAtMillis / 1000)])
                 let completion = try XCTUnwrap(rows.first { $0.id == run.completedEventId }).getPropertiesDict()
                 XCTAssertEqual(completion["journey_id"] as? String, vector.binding.journeyId)
                 XCTAssertEqual(completion["leg_generation"] as? Int, vector.binding.generation)
@@ -317,10 +320,13 @@ private actor LostCompletionAcknowledgement: StableSystemEventCapturing {
 
 private actor LegForwardingRecorder {
     private var values: [String] = []
+    private var times: [Date] = []
     func record(_ event: NuxieEvent) {
         if let activity = ActivityCuration.activity(internalName: event.forwardingName, properties: event.properties) {
             values.append(activity.wireName)
+            times.append(ActivityCuration.timestamp(event))
         }
     }
     func names() -> [String] { values }
+    func timestamps() -> [Date] { times }
 }

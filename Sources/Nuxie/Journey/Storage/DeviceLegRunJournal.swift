@@ -126,14 +126,6 @@ struct DeviceLegRunJournal {
         }
     }
 
-    func recordEventOutputs(_ id: String, values: [String: ExperienceReleaseJSONValue]) async throws {
-        try await update { state in
-            guard var run = state.runs[id], run.completion == nil else { throw DeviceLegJournalError.invalidState }
-            run.outputs = .init(event: run.outputs.event.merging(values) { _, new in new }, responses: run.outputs.responses)
-            state.runs[id] = run
-        }
-    }
-
     func park(_ id: String, stepId: String, until: Date?) async throws {
         try await update { state in
             guard var run = state.runs[id], run.startedQueued, run.completion == nil else {
@@ -171,12 +163,16 @@ struct DeviceLegRunJournal {
         }
     }
 
-    func complete(_ id: String, outcome: String, at: Date) async throws {
+    func complete(_ id: String, outcome: String, at: Date,
+                  eventOutputs: [String: ExperienceReleaseJSONValue] = [:]) async throws {
         try await update { state in
             guard var run = state.runs[id] else { throw DeviceLegJournalError.invalidState }
             // A retry cannot rewrite the outcome, outputs, or occurrence time.
             guard run.completion == nil else { return }
             guard !outcome.isEmpty, outcome.utf16.count <= 256 else { throw DeviceLegJournalError.invalidState }
+            // These fields belong to the selected terminal boundary. Publish
+            // them with its outcome so a crash cannot send them as abandoned.
+            run.outputs = .init(event: eventOutputs, responses: run.outputs.responses)
             run.completion = .init(outcome: outcome, at: at)
             state.runs[id] = run
         }

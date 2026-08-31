@@ -263,7 +263,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     ) else { return }
     let info = NuxieActivityInfo(
       id: durable.event.id,
-      timestamp: durable.event.timestamp,
+      timestamp: ActivityCuration.timestamp(durable.event),
       receivedAt: durable.receivedAt,
       activity: activity
     )
