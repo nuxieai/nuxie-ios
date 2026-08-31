@@ -213,10 +213,14 @@ public final class FeatureInfo: ObservableObject {
             guard let visibleAccess = all[featureId] else { return nil }
             oldAccess = visibleAccess
         } else {
-            // A response from an earlier process may apply only when this
-            // process has not admitted newer authoritative state for the key.
-            // An overlay is never enough: a complete profile that omitted the
-            // key must keep a recovered response from resurrecting it.
+            // A response from an earlier process may apply only while NOTHING
+            // authoritative has been admitted for the key this process (the
+            // Orchestration contract: an admitted profile balance always
+            // outranks a recovered prior-process response, because the
+            // response's server-side effect is already durable and the newer
+            // profile reflects it). An overlay is never enough: a complete
+            // profile that omitted the key must keep a recovered response
+            // from resurrecting it.
             guard currentGeneration == 0,
                   let authoritativeAccess = authoritative[featureId] else { return nil }
             oldAccess = authoritativeAccess

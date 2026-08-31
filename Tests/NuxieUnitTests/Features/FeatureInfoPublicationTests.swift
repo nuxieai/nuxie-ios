@@ -151,6 +151,43 @@ final class FeatureInfoPublicationTests: XCTestCase {
     }
 
     @MainActor
+    func testAdmittedProfileBalanceOutranksARecoveredPriorProcessResponse() {
+        let info = FeatureInfo()
+        info.beginOptimisticProjectionPublication(
+            epoch: UUID(),
+            distinctId: "customer-a"
+        )
+        let currentEpoch = info.balanceAuthority(for: "credits").epoch
+        let firstPriorEpoch = UUID(
+            uuidString: "00000000-0000-0000-0000-000000000001"
+        )!
+        let priorEpoch = currentEpoch == firstPriorEpoch
+            ? UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+            : firstPriorEpoch
+        info.admitProfileSnapshot([
+            "credits": .withBalance(5, unlimited: false, type: .metered),
+        ], admittedAt: Date())
+
+        let recovered = info.commitCommandBalanceIfFresh(
+            "credits",
+            balance: 3,
+            responseAuthority: FeatureBalanceAuthority(
+                epoch: priorEpoch,
+                generation: 7
+            )
+        )
+        XCTAssertNil(
+            recovered,
+            """
+            an admitted profile balance outranks a recovered prior-process \
+            response: the response's server-side effect is already durable \
+            and the newer profile reflects it (Orchestration contract)
+            """
+        )
+        XCTAssertEqual(info.balance("credits"), 5)
+    }
+
+    @MainActor
     func testCrossEpochResponseCannotUseOverlayForFeatureOmittedByProfile() {
         let info = FeatureInfo()
         info.beginOptimisticProjectionPublication(
