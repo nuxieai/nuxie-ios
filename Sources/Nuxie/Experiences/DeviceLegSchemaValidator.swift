@@ -192,23 +192,23 @@ enum DeviceLegSchemaValidator {
 
     private static func validateFacts(_ leg: [String: Any]) throws {
         let facts = try object(leg["facts"], required: ["propertyKeys", "segmentIds", "experimentIds"])
-        var properties = Set<String>(), segments = Set<String>(), experiments = Set<String>()
+        var properties = ExactJSONObject<Bool>(), segments = ExactJSONObject<Bool>(), experiments = ExactJSONObject<Bool>()
         func walk(_ value: Any) throws {
             if let values = value as? [Any] { for value in values { try walk(value) }; return }
             guard let node = value as? [String: Any] else { return }
-            if node["type"] as? String == "User", let key = node["key"] as? String { properties.insert(key) }
+            if node["type"] as? String == "User", let key = node["key"] as? String { properties[key] = true }
             if node["type"] as? String == "Segment" {
                 guard node["op"] as? String != "entered_within" else { throw invalid }
-                if let id = node["id"] as? String { segments.insert(id) }
+                if let id = node["id"] as? String { segments[id] = true }
             }
-            if node["type"] as? String == "segment", let id = node["segmentId"] as? String { segments.insert(id) }
-            if node["type"] as? String == "experiment", let id = node["experimentId"] as? String { experiments.insert(id) }
+            if node["type"] as? String == "segment", let id = node["segmentId"] as? String { segments[id] = true }
+            if node["type"] as? String == "experiment", let id = node["experimentId"] as? String { experiments[id] = true }
             for value in node.values { try walk(value) }
         }
         try walk(try dictionary(leg["entryCondition"]))
         try walk(try array(leg["steps"]))
         for (key, expected) in [("propertyKeys", properties), ("segmentIds", segments), ("experimentIds", experiments)] {
-            guard try identifiers(facts[key]) == expected.sorted(by: utf16Precedes) else { throw invalid }
+            guard try identifiers(facts[key]).map({ Array($0.utf16) }) == expected.keys.sorted(by: utf16Precedes).map({ Array($0.utf16) }) else { throw invalid }
         }
     }
 
