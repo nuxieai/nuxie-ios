@@ -80,6 +80,10 @@ These language-neutral vectors pin the cross-plane experience-execution contract
   snapshot. Vectors pin overlay absence, widening joins, post-ack server
   authority, tri-state readiness, revocation, identity scoping, and
   external-billing absence.
+- `purchases/outcome-commit.json`: one purchase-outcome committer across
+  checkout, transaction-stream, startup-recovery, deferred-update, and
+  external-delegate producers, including evidence/callback dedupe, Journey
+  advancement, projection, sync, finish, and scanner boundaries.
 
 - `journeys/planes/run-recovery.json`: only park points resume after process
   death; active runs abandon with durable answers, pending completions keep

@@ -19,12 +19,11 @@ enum PendingPurchaseState: String, Codable, Equatable, Sendable {
 }
 
 /// Internal authority inferred before checkout. It never crosses the public
-/// delegate API: signed connector state is definitive, while an outcome-only
-/// delegate gets a short StoreKit correlation window.
+/// delegate API. A configured external delegate owns billing completely;
+/// these values therefore describe verified StoreKit evidence only.
 enum PurchaseEvidenceAuthority: String, Codable, Equatable, Sendable {
     case nativeStoreKit
     case providerConnector
-    case outcomeOnlyDelegate
     /// Conflicting authenticated active Products for the same store identity.
     /// Recovery must wait rather than guessing who owns receipt processing.
     case ambiguous
@@ -33,9 +32,33 @@ enum PurchaseEvidenceAuthority: String, Codable, Equatable, Sendable {
         switch self {
         case .providerConnector, .ambiguous:
             return self
-        case .nativeStoreKit, .outcomeOnlyDelegate:
+        case .nativeStoreKit:
             return .nativeStoreKit
         }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if value == "outcomeOnlyDelegate" {
+            // Pre-unification external checkout markers are decoded only so
+            // TransactionService can prune them. They must never regain native
+            // receipt authority after an SDK upgrade.
+            self = .providerConnector
+            return
+        }
+        guard let authority = Self(rawValue: value) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown purchase evidence authority: \(value)"
+            )
+        }
+        self = authority
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
@@ -52,19 +75,8 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
     let localEntitlementGrants: [StoredLocalEntitlementGrant]
     let state: PendingPurchaseState
     let evidenceAuthority: PurchaseEvidenceAuthority
-    /// Stable identity for this checkout's commercial completion. It exists
-    /// before delegate invocation, so callback and StoreKit recovery can use
-    /// the same durable EventLog key without a transaction identifier.
+    /// Stable identity for this native checkout's completion event.
     let checkoutCompletionEventId: String
-    /// Bounds commercial-context correlation for an ambiguous successful
-    /// delegate outcome. Stable SDK account-token ownership survives expiry.
-    let storeKitObservationDeadline: Date?
-    /// Set after either race participant durably reports commercial
-    /// completion. The other participant must not report it again.
-    let completionReportedAt: Date?
-    /// Set after verified evidence is durable so the callback and observer can
-    /// race on the same transaction-scoped completion claim.
-    let observedTransactionId: String?
 
     init(
         scope: PurchaseStorageScope,
@@ -76,10 +88,7 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
         localEntitlementGrants: [StoredLocalEntitlementGrant],
         state: PendingPurchaseState,
         evidenceAuthority: PurchaseEvidenceAuthority = .nativeStoreKit,
-        checkoutCompletionEventId: String = UUID().uuidString.lowercased(),
-        storeKitObservationDeadline: Date? = nil,
-        completionReportedAt: Date? = nil,
-        observedTransactionId: String? = nil
+        checkoutCompletionEventId: String = UUID().uuidString.lowercased()
     ) {
         self.scope = scope
         self.distinctId = distinctId
@@ -91,9 +100,6 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
         self.state = state
         self.evidenceAuthority = evidenceAuthority
         self.checkoutCompletionEventId = checkoutCompletionEventId
-        self.storeKitObservationDeadline = storeKitObservationDeadline
-        self.completionReportedAt = completionReportedAt
-        self.observedTransactionId = observedTransactionId
     }
 }
 

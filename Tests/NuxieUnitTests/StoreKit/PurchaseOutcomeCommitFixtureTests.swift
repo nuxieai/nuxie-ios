@@ -1,0 +1,1146 @@
+import Foundation
+import XCTest
+@testable import Nuxie
+#if SWIFT_PACKAGE
+@testable import NuxieTestSupport
+#endif
+
+private struct PurchaseCommitTerminalOutcome: Decodable, Equatable, Sendable {
+    let kind: String
+    let source: String
+    let reason: String?
+    let terminal: Bool
+}
+
+private struct PurchaseOutcomeCommitFixture: Decodable {
+    struct Product: Decodable {
+        struct LocalEntitlementGrant: Decodable {
+            let featureId: String
+        }
+
+        let productId: String
+        let storeProductId: String
+        let placementId: String
+        let experienceId: String
+        let experienceVersion: String
+        let displayPrice: String
+        let price: Double
+        let localEntitlementGrants: [LocalEntitlementGrant]
+    }
+
+    struct Evidence: Decodable {
+        let identity: String
+        let originalIdentity: String
+        let signedPayload: String
+        let product: String
+    }
+
+    struct Action: Decodable {
+        let entry: String
+        let operation: String?
+        let outcome: String
+        let evidence: String?
+        let product: String?
+        let reason: String?
+    }
+
+    struct Expectation: Decodable {
+        let successfulCommits: Int
+        let uniqueEvidenceRows: Int
+        let journeyAdvancements: Int
+        let purchaseCompletedEvents: Int
+        let restoreCompletedEvents: Int
+        let purchaseFailedEvents: Int
+        let receiptSyncRequests: Int
+        let pendingRecords: Int
+        let overlayEverPresent: Bool
+        let nativeEntitlementScans: Int
+        let nativeFinishCalls: Int?
+        let checkoutErrors: [String]
+        let committerTerminalOutcomes: [PurchaseCommitTerminalOutcome]
+        let completionSources: [String]
+        let completionCarriesEvidenceIdentity: Bool
+        let completionCarriesProductMapping: Bool
+        let completionEventIdsDistinct: Bool?
+    }
+
+    struct Case: Decodable {
+        let name: String
+        let actions: [Action]
+        let expect: Expectation
+    }
+
+    let suite: String
+    let version: Int
+    let sources: [String]
+    let products: [String: Product]
+    let evidence: [String: Evidence]
+    let cases: [Case]
+}
+
+private struct RecordedPurchaseOutcomeEvent: Sendable {
+    let name: String
+    let routed: Bool
+    let source: String?
+    let eventId: String?
+    let transactionId: String?
+    let productId: String?
+    let storeProductId: String?
+    let placementId: String?
+    let experienceId: String?
+    let displayPrice: String?
+    let price: Double?
+}
+
+private final class PurchaseOutcomeEventSink: SystemEventSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [RecordedPurchaseOutcomeEvent] = []
+    private var routedCaptureResult = true
+    private var routedCaptureAttempts = 0
+    private var captureOnlyAttempts = 0
+
+    func emit(_ name: String, properties: [String: Any]?) {
+        append(name: name, properties: properties, eventId: nil, routed: false)
+    }
+
+    func capture(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        _ = distinctId
+        let routes = lock.withLock {
+            routedCaptureAttempts += 1
+            return routedCaptureResult
+        }
+        append(name: name, properties: properties, eventId: eventId, routed: routes)
+        return routes
+    }
+
+    func captureOnly(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        _ = distinctId
+        lock.withLock { captureOnlyAttempts += 1 }
+        append(name: name, properties: properties, eventId: eventId, routed: false)
+        return true
+    }
+
+    func setRoutedCaptureResult(_ result: Bool) {
+        lock.withLock { routedCaptureResult = result }
+    }
+
+    var routedAttemptCount: Int {
+        lock.withLock { routedCaptureAttempts }
+    }
+
+    var captureOnlyAttemptCount: Int {
+        lock.withLock { captureOnlyAttempts }
+    }
+
+    func events(named name: String) -> [RecordedPurchaseOutcomeEvent] {
+        lock.withLock { storage.filter { $0.name == name } }
+    }
+
+    private func append(
+        name: String,
+        properties: [String: Any]?,
+        eventId: String?,
+        routed: Bool
+    ) {
+        let event = RecordedPurchaseOutcomeEvent(
+            name: name,
+            routed: routed,
+            source: properties?["source"] as? String,
+            eventId: eventId,
+            transactionId: properties?["transaction_id"] as? String,
+            productId: properties?["product_id"] as? String,
+            storeProductId: properties?["store_product_id"] as? String,
+            placementId: properties?["placement_id"] as? String,
+            experienceId: properties?["experience_id"] as? String,
+            displayPrice: properties?["display_price"] as? String,
+            price: properties?["price"] as? Double
+        )
+        lock.withLock {
+            if let eventId,
+               let index = storage.firstIndex(where: { $0.eventId == eventId }) {
+                // Stable EventLog identity is idempotent. A later successful
+                // routed capture upgrades the one durable carrier in place.
+                if routed, !storage[index].routed {
+                    storage[index] = event
+                }
+            } else {
+                storage.append(event)
+            }
+        }
+    }
+}
+
+private final class RecordingPurchaseEvidenceStore:
+    TransactionEvidenceStoreProtocol,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var entries: [String: StoredTransactionEvidence] = [:]
+    private var persistedTransactionIds: Set<String> = []
+
+    func load() -> StoreReadResult<[String: StoredTransactionEvidence]> {
+        lock.withLock { .value(entries) }
+    }
+
+    @discardableResult
+    func save(_ entries: [String: StoredTransactionEvidence]) -> Bool {
+        lock.withLock {
+            self.entries = entries
+            persistedTransactionIds.formUnion(entries.keys)
+        }
+        return true
+    }
+
+    var uniquePersistedCount: Int {
+        lock.withLock { persistedTransactionIds.count }
+    }
+}
+
+private final class RecordingPendingPurchaseStore:
+    PendingPurchaseStoreProtocol,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var entries: [String: PendingPurchaseRecord] = [:]
+
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]> {
+        lock.withLock { .value(entries) }
+    }
+
+    @discardableResult
+    func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
+        lock.withLock { self.entries = entries }
+        return true
+    }
+
+    var count: Int { lock.withLock { entries.count } }
+}
+
+private actor PurchaseOutcomeSyncAPI: PurchaseSynchronizing {
+    private var requests: [(transactionJwt: String, distinctId: String)] = []
+    private var responseSuccesses: [Bool] = []
+
+    func setResponseSuccesses(_ successes: [Bool]) {
+        responseSuccesses = successes
+    }
+
+    func syncTransaction(
+        transactionJwt: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse {
+        requests.append((transactionJwt, distinctId))
+        let success = responseSuccesses.isEmpty
+            ? true
+            : responseSuccesses.removeFirst()
+        return PurchaseResponse(
+            success: success,
+            customerId: distinctId,
+            features: nil,
+            error: success ? nil : "fixture receipt rejection"
+        )
+    }
+
+    var requestCount: Int { requests.count }
+}
+
+private actor PurchaseOutcomeFeatureService: FeatureServiceProtocol {
+    func getCached(featureId: String, entityId: String?) async -> FeatureAccess? {
+        _ = featureId
+        _ = entityId
+        return nil
+    }
+
+    func getAllCached() async -> [String: FeatureAccess] { [:] }
+
+    func check(
+        featureId: String,
+        requiredBalance: Double?,
+        entityId: String?
+    ) async throws -> FeatureCheckResult {
+        _ = featureId
+        _ = requiredBalance
+        _ = entityId
+        throw NuxieNetworkError.invalidResponse
+    }
+
+    func checkWithCache(
+        featureId: String,
+        requiredBalance: Double?,
+        entityId: String?,
+        forceRefresh: Bool
+    ) async throws -> FeatureAccess {
+        _ = featureId
+        _ = requiredBalance
+        _ = entityId
+        _ = forceRefresh
+        return .notFound
+    }
+
+    func clearCache() async {}
+    func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
+    func syncFeatureInfo() async {}
+    func updateFromPurchase(_ features: [PurchaseFeature], distinctId: String) async {}
+}
+
+private actor PurchaseOutcomeProjectionProbe {
+    private var observedOverlay = false
+
+    func observe(_ present: Bool) {
+        observedOverlay = observedOverlay || present
+    }
+
+    var overlayEverPresent: Bool { observedOverlay }
+}
+
+private final class PurchaseOutcomeFinishProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finishCount = 0
+
+    func finish() async {
+        lock.withLock { finishCount += 1 }
+    }
+
+    var count: Int { lock.withLock { finishCount } }
+}
+
+private actor PurchaseOutcomeRecoveryProbe {
+    private var currentEntitlements: [StoreTransactionRecoveryItem] = []
+    private var currentEntitlementScanCount = 0
+
+    func enqueueCurrentEntitlement(_ item: StoreTransactionRecoveryItem) {
+        currentEntitlements.append(item)
+    }
+
+    func drainUnfinished() -> [StoreTransactionRecoveryItem] {
+        []
+    }
+
+    func scanCurrentEntitlements() -> [StoreTransactionRecoveryItem] {
+        currentEntitlementScanCount += 1
+        defer { currentEntitlements.removeAll() }
+        return currentEntitlements
+    }
+
+    var nativeEntitlementScans: Int { currentEntitlementScanCount }
+}
+
+private final class PurchaseOutcomeNativeAdapter:
+    NativeStoreKitPurchasing,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var nextPurchaseResult: NativePurchaseResult = .cancelled
+    private var purchaseCalls = 0
+    private var restoreCalls = 0
+
+    func setPurchaseResult(_ result: NativePurchaseResult) {
+        lock.withLock { nextPurchaseResult = result }
+    }
+
+    func purchase(product: StoreProduct) async -> NativePurchaseResult {
+        _ = product
+        return lock.withLock {
+            purchaseCalls += 1
+            return nextPurchaseResult
+        }
+    }
+
+    func restorePurchases() async -> NativeRestoreResult {
+        lock.withLock {
+            restoreCalls += 1
+            return .noPurchases
+        }
+    }
+
+    var purchaseCallCount: Int { lock.withLock { purchaseCalls } }
+    var restoreCallCount: Int { lock.withLock { restoreCalls } }
+}
+
+private actor PurchaseOutcomeDelegate: NuxiePurchaseDelegate {
+    private var purchaseResult: PurchaseResult = .purchased
+    private var restoreResult: RestoreResult = .restored
+
+    func setPurchaseResult(_ result: PurchaseResult) {
+        purchaseResult = result
+    }
+
+    func setRestoreResult(_ result: RestoreResult) {
+        restoreResult = result
+    }
+
+    func purchase(product: StoreProduct) async -> PurchaseResult {
+        _ = product
+        return purchaseResult
+    }
+
+    func restorePurchases() async -> RestoreResult { restoreResult }
+}
+
+private actor PurchaseOutcomeCommitRecorder: TransactionObserverProtocol {
+    private let observer: TransactionObserver
+    private var terminalOutcomes: [PurchaseCommitTerminalOutcome] = []
+
+    init(observer: TransactionObserver) {
+        self.observer = observer
+    }
+
+    // The fixture owns the real observer lifecycle directly. This seam exists
+    // only to observe the TransactionService -> committer boundary.
+    func startListening() {}
+
+    func stopListening() async {
+        await observer.stopListening()
+    }
+
+    func commit(_ outcome: PurchaseOutcome) async -> PurchaseCommitResult {
+        let result = await observer.commit(outcome)
+        switch outcome {
+        case .cancelled(let source):
+            terminalOutcomes.append(PurchaseCommitTerminalOutcome(
+                kind: "cancelled",
+                source: source.rawValue,
+                reason: nil,
+                terminal: result.isTerminal
+            ))
+        case .pending(let source):
+            terminalOutcomes.append(PurchaseCommitTerminalOutcome(
+                kind: "pending",
+                source: source.rawValue,
+                reason: nil,
+                terminal: result.isTerminal
+            ))
+        case .failed(let reason, let source):
+            terminalOutcomes.append(PurchaseCommitTerminalOutcome(
+                kind: "failed",
+                source: source.rawValue,
+                reason: reason,
+                terminal: result.isTerminal
+            ))
+        case .verified, .external:
+            break
+        }
+        return result
+    }
+
+    func syncCurrentEntitlements(distinctId: String) async {
+        await observer.syncCurrentEntitlements(distinctId: distinctId)
+    }
+
+    var observedTerminalOutcomes: [PurchaseCommitTerminalOutcome] {
+        terminalOutcomes
+    }
+}
+
+private struct PurchaseOutcomeDateProvider: DateProviderProtocol {
+    private let date = Date(timeIntervalSince1970: 2_000_000_000)
+
+    func now() -> Date { date }
+    func timeIntervalSince(_ date: Date) -> TimeInterval {
+        self.date.timeIntervalSince(date)
+    }
+    func date(byAddingTimeInterval interval: TimeInterval, to date: Date) -> Date {
+        date.addingTimeInterval(interval)
+    }
+}
+
+private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
+    let observer: TransactionObserver
+    let commitRecorder: PurchaseOutcomeCommitRecorder
+    let service: TransactionService
+    let evidenceStore = RecordingPurchaseEvidenceStore()
+    let pendingStore = RecordingPendingPurchaseStore()
+    let eventSink = PurchaseOutcomeEventSink()
+    let syncAPI = PurchaseOutcomeSyncAPI()
+    let projection = PurchaseOutcomeProjectionProbe()
+    let finishProbe = PurchaseOutcomeFinishProbe()
+    let recovery = PurchaseOutcomeRecoveryProbe()
+    let nativeAdapter = PurchaseOutcomeNativeAdapter()
+    let delegate = PurchaseOutcomeDelegate()
+    let identity = MockIdentityService()
+    let scope: PurchaseStorageScope
+
+    private let products: [String: PurchaseOutcomeCommitFixture.Product]
+    private let evidence: [String: PurchaseOutcomeCommitFixture.Evidence]
+
+    init(
+        fixture: PurchaseOutcomeCommitFixture,
+        vector: PurchaseOutcomeCommitFixture.Case,
+        vectorIndex: Int
+    ) {
+        products = fixture.products
+        evidence = fixture.evidence
+        identity.setDistinctId("fixture-customer")
+        scope = PurchaseStorageScope(
+            appIdentifierHash: "purchase-outcome-fixture-\(vectorIndex)",
+            environment: "test",
+            storeEnvironment: .appStore
+        )
+        let usesExternalDelegate = vector.actions.contains {
+            $0.entry == "external_delegate"
+        }
+        let settings = NuxieRuntimeSettings(
+            localeIdentifier: nil,
+            purchaseDelegate: usesExternalDelegate ? delegate : nil,
+            purchaseHandlingMode: .full
+        )
+        let featureService = PurchaseOutcomeFeatureService()
+        let serviceBox = LateBound<TransactionService>()
+        let realObserver = TransactionObserver(
+            api: syncAPI,
+            features: featureService,
+            identity: identity,
+            settings: settings,
+            eventSink: eventSink,
+            transactionServiceProvider: { serviceBox.get() },
+            evidenceStore: evidenceStore,
+            descriptorAllowanceProvider: { evidence in
+                evidence.productFeatureIds.map {
+                    OptimisticEntitlementAllowance(
+                        featureId: $0,
+                        kind: .boolean,
+                        unlimited: false,
+                        allowance: nil
+                    )
+                }
+            },
+            projectionPublisher: { [projection] evidence, allowances, distinctId, _ in
+                let overlay = OptimisticEntitlementProjection.derive(
+                    evidence: evidence,
+                    descriptorAllowances: allowances,
+                    distinctId: distinctId
+                ) != nil
+                await projection.observe(overlay)
+            },
+            purchaseStorageScope: scope,
+            dateProvider: PurchaseOutcomeDateProvider(),
+            unfinishedRecoveryTransactions: { [recovery] in
+                await recovery.drainUnfinished()
+            },
+            currentEntitlementRecoveryTransactions: { [recovery] in
+                await recovery.scanCurrentEntitlements()
+            }
+        )
+        observer = realObserver
+        let recorder = PurchaseOutcomeCommitRecorder(observer: realObserver)
+        commitRecorder = recorder
+        service = TransactionService(
+            productService: ProductService(),
+            transactionObserver: recorder,
+            pendingPurchaseStore: pendingStore,
+            dateProvider: PurchaseOutcomeDateProvider(),
+            settings: settings,
+            eventSink: eventSink,
+            purchaseStorageScope: scope,
+            identityService: identity,
+            nativePurchaseAdapter: nativeAdapter,
+            featureService: featureService
+        )
+        serviceBox.set(service)
+    }
+
+    func run(_ action: PurchaseOutcomeCommitFixture.Action) async throws -> String? {
+        switch action.entry {
+        case "checkout":
+            let productKey = try required(action.product, field: "product", action: action)
+            let product = try makeProduct(key: productKey)
+            nativeAdapter.setPurchaseResult(try nativeResult(for: action))
+            do {
+                let result = try await service.purchase(product)
+                _ = await result.syncTask?.value
+                return nil
+            } catch StoreKitError.purchaseCancelled {
+                return "cancelled"
+            } catch StoreKitError.purchasePending {
+                return "pending"
+            } catch StoreKitError.purchaseFailed(_) {
+                return "failed"
+            }
+
+        case "transaction_stream":
+            await observer.handleVerifiedTransaction(
+                try verifiedUpdate(for: action),
+                jwsRepresentation: try fixtureEvidence(for: action).signedPayload,
+                source: .transactionStream,
+                attributedDistinctId: identity.getDistinctId()
+            )
+            return nil
+
+        case "startup_recovery":
+            let fixtureEvidence = try fixtureEvidence(for: action)
+            await recovery.enqueueCurrentEntitlement(StoreTransactionRecoveryItem(
+                update: try verifiedUpdate(for: action),
+                jwsRepresentation: fixtureEvidence.signedPayload
+            ))
+            await observer.retryAfterProfileReady()
+            return nil
+
+        case "deferred_update":
+            await observer.handleVerifiedTransaction(
+                try verifiedUpdate(for: action),
+                jwsRepresentation: try fixtureEvidence(for: action).signedPayload,
+                source: .deferredUpdate,
+                attributedDistinctId: identity.getDistinctId()
+            )
+            return nil
+
+        case "external_delegate":
+            switch action.operation {
+            case "purchase":
+                let productKey = try required(
+                    action.product,
+                    field: "product",
+                    action: action
+                )
+                await delegate.setPurchaseResult(.purchased)
+                let result = try await service.purchase(try makeProduct(key: productKey))
+                _ = await result.syncTask?.value
+            case "restore":
+                await delegate.setRestoreResult(.restored)
+                try await service.restore()
+            default:
+                throw FixtureRunnerError.unsupportedAction(
+                    "external operation \(action.operation ?? "nil")"
+                )
+            }
+            return nil
+
+        default:
+            throw FixtureRunnerError.unsupportedAction(action.entry)
+        }
+    }
+
+    func shutdown() async {
+        await observer.stopListening()
+    }
+
+    func carriesKnownEvidenceIdentity(
+        _ event: RecordedPurchaseOutcomeEvent
+    ) -> Bool {
+        evidence.values.contains { $0.identity == event.transactionId }
+    }
+
+    func carriesKnownProductMapping(
+        _ event: RecordedPurchaseOutcomeEvent
+    ) -> Bool {
+        products.values.contains {
+            $0.productId == event.productId
+                && $0.storeProductId == event.storeProductId
+                && $0.placementId == event.placementId
+                && $0.experienceId == event.experienceId
+                && $0.displayPrice == event.displayPrice
+                && $0.price == event.price
+        }
+    }
+
+    func commitVerifiedOutcome(
+        evidenceKey: String,
+        source: PurchaseOutcomeSource
+    ) async throws -> PurchaseCommitResult {
+        guard let fixtureEvidence = evidence[evidenceKey] else {
+            throw FixtureRunnerError.missingFixtureValue(
+                "evidence.\(evidenceKey)"
+            )
+        }
+        let product = try makeProduct(key: fixtureEvidence.product)
+        return await observer.commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: fixtureEvidence.signedPayload,
+                transactionId: fixtureEvidence.identity,
+                originalTransactionId: fixtureEvidence.originalIdentity,
+                productId: product.storeProductId,
+                appAccountToken: scope.appAccountToken(
+                    distinctId: identity.getDistinctId()
+                ),
+                attributedDistinctId: identity.getDistinctId(),
+                productFeatureIds: storeProductFeatureIds(
+                    product.localEntitlementGrants
+                ),
+                commercialContext: product.purchaseContext,
+                finishRequired: true,
+                resolvesPendingPurchase: false,
+                allowsDurableCheckoutAuthority: false,
+                requiresAuthorityResolution: false,
+                finish: { [finishProbe] in await finishProbe.finish() }
+            ),
+            source: source
+        ))
+    }
+
+    private func nativeResult(
+        for action: PurchaseOutcomeCommitFixture.Action
+    ) throws -> NativePurchaseResult {
+        switch action.outcome {
+        case "verified":
+            let fixtureEvidence = try fixtureEvidence(for: action)
+            return .purchased(StoreTransactionEvidence(
+                transactionJws: fixtureEvidence.signedPayload,
+                transactionId: fixtureEvidence.identity,
+                originalTransactionId: fixtureEvidence.originalIdentity,
+                productId: try productFixture(for: fixtureEvidence).storeProductId,
+                finish: { [finishProbe] in await finishProbe.finish() }
+            ))
+        case "cancelled":
+            return .cancelled
+        case "pending":
+            return .pending
+        case "failed":
+            return .failed(FixturePurchaseFailure(
+                reason: action.reason ?? "fixture_failure"
+            ))
+        default:
+            throw FixtureRunnerError.unsupportedOutcome(action.outcome)
+        }
+    }
+
+    private func verifiedUpdate(
+        for action: PurchaseOutcomeCommitFixture.Action
+    ) throws -> VerifiedStoreTransactionUpdate {
+        let fixtureEvidence = try fixtureEvidence(for: action)
+        return VerifiedStoreTransactionUpdate(
+            transactionId: fixtureEvidence.identity,
+            originalTransactionId: fixtureEvidence.originalIdentity,
+            productId: try productFixture(for: fixtureEvidence).storeProductId,
+            appAccountToken: scope.appAccountToken(distinctId: identity.getDistinctId()),
+            isRevoked: false,
+            isUpgraded: false,
+            finish: { [finishProbe] in await finishProbe.finish() }
+        )
+    }
+
+    private func fixtureEvidence(
+        for action: PurchaseOutcomeCommitFixture.Action
+    ) throws -> PurchaseOutcomeCommitFixture.Evidence {
+        let key = try required(action.evidence, field: "evidence", action: action)
+        guard let fixtureEvidence = evidence[key] else {
+            throw FixtureRunnerError.missingFixtureValue("evidence.\(key)")
+        }
+        return fixtureEvidence
+    }
+
+    private func productFixture(
+        for fixtureEvidence: PurchaseOutcomeCommitFixture.Evidence
+    ) throws -> PurchaseOutcomeCommitFixture.Product {
+        guard let product = products[fixtureEvidence.product] else {
+            throw FixtureRunnerError.missingFixtureValue(
+                "products.\(fixtureEvidence.product)"
+            )
+        }
+        return product
+    }
+
+    private func makeProduct(key: String) throws -> StoreProduct {
+        guard let fixtureProduct = products[key] else {
+            throw FixtureRunnerError.missingFixtureValue("products.\(key)")
+        }
+        var product = StoreProduct(
+            productId: fixtureProduct.productId,
+            storeProductId: fixtureProduct.storeProductId,
+            placementId: fixtureProduct.placementId,
+            name: fixtureProduct.productId,
+            price: fixtureProduct.displayPrice,
+            period: nil
+        )
+        product.purchaseContext = PurchaseCommercialContext(
+            release: AuthenticatedExperienceReleaseID(
+                identity: ExperienceReleaseIdentity(
+                    appId: "fixture-app",
+                    environment: "test",
+                    experienceId: fixtureProduct.experienceId,
+                    experienceVersionId: fixtureProduct.experienceVersion,
+                    buildId: "fixture-build",
+                    versionNumber: 1,
+                    publishedAt: "2026-08-31T00:00:00Z",
+                    publishedAtSeq: 1
+                ),
+                descriptorSHA256: String(repeating: "f", count: 64)
+            ),
+            placementId: fixtureProduct.placementId,
+            productId: fixtureProduct.productId,
+            storeProductId: fixtureProduct.storeProductId,
+            displayPrice: fixtureProduct.displayPrice,
+            price: fixtureProduct.price
+        )
+        product.localEntitlementGrants = fixtureProduct.localEntitlementGrants.map {
+            StoreProduct.LocalEntitlementGrant(
+                featureId: $0.featureId,
+                featureExternalId: nil,
+                allowanceType: nil,
+                allowance: nil
+            )
+        }
+        return product
+    }
+
+    private func required(
+        _ value: String?,
+        field: String,
+        action: PurchaseOutcomeCommitFixture.Action
+    ) throws -> String {
+        guard let value else {
+            throw FixtureRunnerError.missingFixtureValue(
+                "\(field) for \(action.entry)"
+            )
+        }
+        return value
+    }
+}
+
+private enum FixtureRunnerError: Error {
+    case missingFixtureValue(String)
+    case unsupportedAction(String)
+    case unsupportedOutcome(String)
+}
+
+private struct FixturePurchaseFailure: LocalizedError, Sendable {
+    let reason: String
+    var errorDescription: String? { reason }
+}
+
+final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
+    func testProductionEntryPointsMatchCrossSDKOutcomeCommitContract() async throws {
+        let fixture = try Self.loadFixture()
+        XCTAssertEqual(fixture.suite, "purchases/outcome-commit")
+        XCTAssertEqual(fixture.version, 1)
+        XCTAssertEqual(fixture.sources, [
+            "checkout",
+            "transaction_stream",
+            "startup_recovery",
+            "deferred_update",
+            "external_delegate",
+        ])
+
+        for (index, vector) in fixture.cases.enumerated() {
+            let harness = PurchaseOutcomeFixtureHarness(
+                fixture: fixture,
+                vector: vector,
+                vectorIndex: index
+            )
+            var checkoutErrors: [String] = []
+            do {
+                for action in vector.actions {
+                    if let error = try await harness.run(action) {
+                        checkoutErrors.append(error)
+                    }
+                }
+            } catch {
+                XCTFail("\(vector.name): fixture action failed: \(error)")
+            }
+
+            await assert(vector, against: harness, checkoutErrors: checkoutErrors)
+            await harness.shutdown()
+        }
+    }
+
+    func testConcurrentVerifiedSourcesJoinOneLogicalCommit() async throws {
+        let fixture = try Self.loadFixture()
+        let vector = try XCTUnwrap(fixture.cases.first)
+        let harness = PurchaseOutcomeFixtureHarness(
+            fixture: fixture,
+            vector: vector,
+            vectorIndex: 100
+        )
+
+        let results: (PurchaseCommitResult, PurchaseCommitResult)
+        do {
+            async let checkout = harness.commitVerifiedOutcome(
+                evidenceKey: "pro-transaction",
+                source: .checkout
+            )
+            async let stream = harness.commitVerifiedOutcome(
+                evidenceKey: "pro-transaction",
+                source: .transactionStream
+            )
+            results = try await (checkout, stream)
+        } catch {
+            await harness.shutdown()
+            throw error
+        }
+        let checkoutSynced = await results.0.syncTask?.value
+        let streamSynced = await results.1.syncTask?.value
+        let completed = harness.eventSink.events(
+            named: SystemEventNames.purchaseCompleted
+        )
+        let requestCount = await harness.syncAPI.requestCount
+
+        XCTAssertTrue(results.0.committed)
+        XCTAssertTrue(results.1.committed)
+        XCTAssertEqual(checkoutSynced, true)
+        XCTAssertEqual(streamSynced, true)
+        XCTAssertEqual(harness.evidenceStore.uniquePersistedCount, 1)
+        XCTAssertEqual(completed.count, 1)
+        XCTAssertEqual(completed.filter(\.routed).count, 0)
+        XCTAssertEqual(harness.eventSink.captureOnlyAttemptCount, 1)
+        XCTAssertEqual(completed.first?.transactionId, "transaction-pro-1")
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(harness.finishProbe.count, 1)
+        await harness.shutdown()
+    }
+
+    func testVerifiedRetryResubmitsReceiptWithoutReplayingCompletion() async throws {
+        let fixture = try Self.loadFixture()
+        let vector = try XCTUnwrap(fixture.cases.first)
+        let harness = PurchaseOutcomeFixtureHarness(
+            fixture: fixture,
+            vector: vector,
+            vectorIndex: 101
+        )
+        await harness.syncAPI.setResponseSuccesses([false, true])
+
+        let first: PurchaseCommitResult
+        let retry: PurchaseCommitResult
+        do {
+            first = try await harness.commitVerifiedOutcome(
+                evidenceKey: "pro-transaction",
+                source: .checkout
+            )
+            let firstSynced = await first.syncTask?.value
+            XCTAssertEqual(firstSynced, false)
+            retry = try await harness.commitVerifiedOutcome(
+                evidenceKey: "pro-transaction",
+                source: .transactionStream
+            )
+        } catch {
+            await harness.shutdown()
+            throw error
+        }
+        let retrySynced = await retry.syncTask?.value
+        let completed = harness.eventSink.events(
+            named: SystemEventNames.purchaseCompleted
+        )
+        let requestCount = await harness.syncAPI.requestCount
+
+        XCTAssertTrue(first.committed)
+        XCTAssertTrue(retry.committed)
+        XCTAssertEqual(retrySynced, true)
+        XCTAssertEqual(harness.evidenceStore.uniquePersistedCount, 1)
+        XCTAssertEqual(completed.count, 1)
+        XCTAssertEqual(completed.filter(\.routed).count, 0)
+        XCTAssertEqual(harness.eventSink.captureOnlyAttemptCount, 1)
+        XCTAssertEqual(completed.first?.source, PurchaseOutcomeSource.checkout.rawValue)
+        XCTAssertEqual(requestCount, 2)
+        XCTAssertEqual(harness.finishProbe.count, 1)
+        await harness.shutdown()
+    }
+
+    func testExternalDeclarationDurablyCapturesCarrierBeforeRoutingCompletes() async throws {
+        let fixture = try Self.loadFixture()
+        let vector = try XCTUnwrap(fixture.cases.first(where: {
+            $0.actions.contains {
+                $0.entry == "external_delegate" && $0.operation == "purchase"
+            }
+        }))
+        let action = try XCTUnwrap(vector.actions.first)
+        let harness = PurchaseOutcomeFixtureHarness(
+            fixture: fixture,
+            vector: vector,
+            vectorIndex: 102
+        )
+        harness.eventSink.setRoutedCaptureResult(false)
+
+        let checkoutError = try await harness.run(action)
+        let completed = harness.eventSink.events(
+            named: SystemEventNames.purchaseCompleted
+        )
+
+        XCTAssertNil(checkoutError)
+        XCTAssertEqual(completed.count, 1)
+        XCTAssertEqual(completed.filter(\.routed).count, 0)
+        XCTAssertEqual(
+            completed.first?.source,
+            PurchaseOutcomeSource.externalDelegate.rawValue
+        )
+        XCTAssertGreaterThanOrEqual(harness.eventSink.captureOnlyAttemptCount, 2)
+        XCTAssertGreaterThanOrEqual(harness.eventSink.routedAttemptCount, 2)
+        await harness.shutdown()
+    }
+
+    func testVerifiedCommitRetainsJourneyRoutingUntilStableCaptureCompletes() async throws {
+        let fixture = try Self.loadFixture()
+        let vector = try XCTUnwrap(fixture.cases.first)
+        let action = try XCTUnwrap(vector.actions.first)
+        let harness = PurchaseOutcomeFixtureHarness(
+            fixture: fixture,
+            vector: vector,
+            vectorIndex: 103
+        )
+        harness.eventSink.setRoutedCaptureResult(false)
+
+        let checkoutError = try await harness.run(action)
+        XCTAssertNil(checkoutError)
+        XCTAssertEqual(harness.eventSink.events(
+            named: SystemEventNames.purchaseCompleted
+        ).filter(\.routed).count, 0)
+
+        harness.eventSink.setRoutedCaptureResult(true)
+        await harness.observer.retryStoredEvidence()
+        let completed = harness.eventSink.events(
+            named: SystemEventNames.purchaseCompleted
+        )
+        let commitCount = await harness.observer
+            .completedSuccessfulPurchaseCommitCount()
+
+        XCTAssertEqual(completed.count, 1)
+        XCTAssertEqual(completed.filter(\.routed).count, 1)
+        XCTAssertEqual(commitCount, 1)
+        XCTAssertEqual(harness.finishProbe.count, 1)
+        await harness.shutdown()
+    }
+
+    private static func loadFixture() throws -> PurchaseOutcomeCommitFixture {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("fixtures/purchases/outcome-commit.json")
+        return try JSONDecoder().decode(
+            PurchaseOutcomeCommitFixture.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+    }
+
+    private func assert(
+        _ vector: PurchaseOutcomeCommitFixture.Case,
+        against harness: PurchaseOutcomeFixtureHarness,
+        checkoutErrors: [String]
+    ) async {
+        let expectation = vector.expect
+        let completed = harness.eventSink.events(
+            named: SystemEventNames.purchaseCompleted
+        )
+        let restored = harness.eventSink.events(
+            named: SystemEventNames.restoreCompleted
+        )
+        let failed = harness.eventSink.events(
+            named: SystemEventNames.purchaseFailed
+        )
+        // Count logical commits from their dedupe identities, independently
+        // from Journey/event emission: verified evidence commits once per
+        // persisted identity, while declarations commit once per callback.
+        let successfulCommits = await harness.observer
+            .completedSuccessfulPurchaseCommitCount()
+        let journeyAdvancements = completed.filter(\.routed).count
+            + restored.filter(\.routed).count
+        let hasEvidenceIdentity = !completed.isEmpty
+            && completed.allSatisfy { harness.carriesKnownEvidenceIdentity($0) }
+        let hasProductMapping = !completed.isEmpty
+            && completed.allSatisfy { harness.carriesKnownProductMapping($0) }
+        let receiptSyncRequests = await harness.syncAPI.requestCount
+        let overlayEverPresent = await harness.projection.overlayEverPresent
+        let nativeEntitlementScans = await harness.recovery.nativeEntitlementScans
+        let terminalOutcomes = await harness.commitRecorder.observedTerminalOutcomes
+
+        XCTAssertEqual(
+            successfulCommits,
+            expectation.successfulCommits,
+            "\(vector.name): successful commits"
+        )
+        XCTAssertEqual(
+            harness.evidenceStore.uniquePersistedCount,
+            expectation.uniqueEvidenceRows,
+            "\(vector.name): unique evidence rows"
+        )
+        XCTAssertEqual(
+            journeyAdvancements,
+            expectation.journeyAdvancements,
+            "\(vector.name): journey advancements"
+        )
+        XCTAssertEqual(
+            completed.count,
+            expectation.purchaseCompletedEvents,
+            "\(vector.name): purchase completion events"
+        )
+        XCTAssertEqual(
+            restored.count,
+            expectation.restoreCompletedEvents,
+            "\(vector.name): restore completion events"
+        )
+        XCTAssertEqual(
+            failed.count,
+            expectation.purchaseFailedEvents,
+            "\(vector.name): purchase failure events"
+        )
+        XCTAssertEqual(
+            receiptSyncRequests,
+            expectation.receiptSyncRequests,
+            "\(vector.name): receipt sync requests"
+        )
+        XCTAssertEqual(
+            harness.pendingStore.count,
+            expectation.pendingRecords,
+            "\(vector.name): pending records"
+        )
+        XCTAssertEqual(
+            overlayEverPresent,
+            expectation.overlayEverPresent,
+            "\(vector.name): optimistic overlay"
+        )
+        XCTAssertEqual(
+            nativeEntitlementScans,
+            expectation.nativeEntitlementScans,
+            "\(vector.name): native entitlement scans"
+        )
+        if let nativeFinishCalls = expectation.nativeFinishCalls {
+            XCTAssertEqual(
+                harness.finishProbe.count,
+                nativeFinishCalls,
+                "\(vector.name): native finish calls"
+            )
+        }
+        XCTAssertEqual(
+            checkoutErrors,
+            expectation.checkoutErrors,
+            "\(vector.name): checkout errors"
+        )
+        XCTAssertEqual(
+            terminalOutcomes,
+            expectation.committerTerminalOutcomes,
+            "\(vector.name): terminal outcomes routed through committer"
+        )
+        XCTAssertEqual(
+            completed.compactMap(\.source),
+            expectation.completionSources,
+            "\(vector.name): completion provenance"
+        )
+        XCTAssertEqual(
+            hasEvidenceIdentity,
+            expectation.completionCarriesEvidenceIdentity,
+            "\(vector.name): evidence identity carrier"
+        )
+        XCTAssertEqual(
+            hasProductMapping,
+            expectation.completionCarriesProductMapping,
+            "\(vector.name): product mapping carrier"
+        )
+        if expectation.completionEventIdsDistinct == true {
+            XCTAssertEqual(
+                Set(completed.compactMap(\.eventId)).count,
+                completed.count,
+                "\(vector.name): callback operation event IDs"
+            )
+        }
+
+        if vector.actions.allSatisfy({ $0.entry == "external_delegate" }) {
+            XCTAssertEqual(
+                harness.nativeAdapter.purchaseCallCount,
+                0,
+                "\(vector.name): external billing must not open StoreKit checkout"
+            )
+            XCTAssertEqual(
+                harness.nativeAdapter.restoreCallCount,
+                0,
+                "\(vector.name): external restore must not invoke StoreKit restore"
+            )
+        }
+    }
+}

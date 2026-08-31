@@ -126,24 +126,6 @@ private actor SequencedRecoverySyncAPI: PurchaseSynchronizing {
     func requests() -> Int { requestCount }
 }
 
-private actor SuspendedOutcomePurchaseDelegate: NuxiePurchaseDelegate {
-    private var callCount = 0
-
-    func purchase(product _: StoreProduct) async -> PurchaseResult {
-        callCount += 1
-        do {
-            try await Task.sleep(nanoseconds: 60_000_000_000)
-            return .purchased
-        } catch {
-            return .failed(error)
-        }
-    }
-
-    func restorePurchases() async -> RestoreResult { .noPurchases }
-
-    func calls() -> Int { callCount }
-}
-
 private actor ShutdownControlledSyncAPI: PurchaseSynchronizing {
     private var started = false
     private var cancelled = false
@@ -556,69 +538,6 @@ private final class FeaturePurchaseSyncAPI: PurchaseSynchronizing, Sendable {
     }
 }
 
-private enum ProviderUpdateToken {
-    case exactCheckout
-    case historicalCustomer
-    case unrecognized
-    case missing
-}
-
-private struct ProviderUpdateHarness {
-    let appAccountToken: UUID?
-    let observer: TransactionObserver
-    let service: TransactionService
-    let api: RecoverySyncAPI
-    let evidenceStore: InMemoryTransactionEvidenceStore
-    let eventSink: RecoveryEventSink
-    let features: RecoveryFeatureRecorder
-    let finishes: FinishCounter
-    let pending: PendingPurchaseRecord
-
-    func handle(
-        source: TransactionProcessingSource = .storeUpdates
-    ) async {
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "provider-update",
-                originalTransactionId: "provider-original",
-                productId: "store-product-1",
-                appAccountToken: appAccountToken,
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "provider-update-jws",
-            source: source
-        )
-    }
-}
-
-private struct OutcomeOnlyDelegateUpdateHarness {
-    let appAccountToken: UUID
-    let observer: TransactionObserver
-    let service: TransactionService
-    let api: RecoverySyncAPI
-    let eventSink: RecoveryEventSink
-    let pendingStore: InMemoryPendingPurchaseStore
-    let finishes: FinishCounter
-
-    func handle() async {
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "outcome-only-update",
-                originalTransactionId: "outcome-only-original",
-                productId: "store-product-1",
-                appAccountToken: appAccountToken,
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "outcome-only-jws",
-            source: .storeUpdates
-        )
-    }
-}
-
 private final class FailingPendingPurchaseStore:
     PendingPurchaseStoreProtocol,
     @unchecked Sendable {
@@ -692,7 +611,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             featureInfo: FeatureInfo(),
             cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
-        func makeObserver(scope: PurchaseStorageScope) -> any TransactionObserverProtocol {
+        func makeObserver(scope: PurchaseStorageScope) -> TransactionObserver {
             TransactionObserver(
                 api: RecoverySyncAPI(succeeds: true),
                 features: features,
@@ -746,246 +665,40 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
     }
 
-    func testCanonicalCompletionPayloadIsIndependentOfRaceWinner() {
+    func testCanonicalCompletionPayloadChangesOnlyInSourceProvenance() {
         let context = commercialContext()
         let directCallback = purchaseCompletionProperties(
             context: context,
             transactionId: "transaction-1",
-            testStore: false
+            testStore: false,
+            source: .checkout
         )
         let storeUpdateRecovery = purchaseCompletionProperties(
             context: context,
             transactionId: "transaction-1",
-            testStore: false
+            testStore: false,
+            source: .transactionStream
         )
 
-        XCTAssertEqual(
-            directCallback as NSDictionary,
-            storeUpdateRecovery as NSDictionary
-        )
         XCTAssertEqual(directCallback["display_price"] as? String, "$9.99")
         XCTAssertEqual(directCallback["price"] as? Double, 9.99)
-        XCTAssertEqual(directCallback["source"] as? String, "purchase")
+        XCTAssertEqual(
+            directCallback["source"] as? String,
+            PurchaseOutcomeSource.checkout.rawValue
+        )
+        XCTAssertEqual(
+            storeUpdateRecovery["source"] as? String,
+            PurchaseOutcomeSource.transactionStream.rawValue
+        )
+        XCTAssertEqual(
+            directCallback["product_id"] as? String,
+            storeUpdateRecovery["product_id"] as? String
+        )
+        XCTAssertEqual(
+            directCallback["placement_id"] as? String,
+            storeUpdateRecovery["placement_id"] as? String
+        )
         XCTAssertEqual(directCallback["transaction_id"] as? String, "transaction-1")
-    }
-
-    private func providerUpdateHarness(
-        token: ProviderUpdateToken
-    ) -> ProviderUpdateHarness {
-        let mocks = MockFactory.shared
-        mocks.identityService.setDistinctId("customer-b")
-        let scope = PurchaseStorageScope(
-            appIdentifierHash: "app-a",
-            environment: "production",
-            storeEnvironment: .appStore
-        )
-        let ownershipStore = InMemoryPurchaseAccountOwnershipStore()
-        XCTAssertTrue(ownershipStore.upsert(StoredPurchaseAccountOwnership(
-            scope: scope,
-            appAccountToken: scope.appAccountToken(distinctId: "customer-b"),
-            distinctId: "customer-b",
-            productAuthorities: ["store-product-1": .providerConnector]
-        )))
-        let appAccountToken: UUID?
-        switch token {
-        case .exactCheckout:
-            appAccountToken = scope.appAccountToken(distinctId: "customer-b")
-        case .historicalCustomer:
-            let historicalToken = scope.appAccountToken(distinctId: "customer-a")
-            XCTAssertTrue(ownershipStore.upsert(StoredPurchaseAccountOwnership(
-                scope: scope,
-                appAccountToken: historicalToken,
-                distinctId: "customer-a",
-                productAuthorities: ["store-product-1": .providerConnector]
-            )))
-            appAccountToken = historicalToken
-        case .unrecognized:
-            appAccountToken = UUID()
-        case .missing:
-            appAccountToken = nil
-        }
-        let pendingStore = InMemoryPendingPurchaseStore()
-        let pending = PendingPurchaseRecord(
-            scope: scope,
-            distinctId: "customer-b",
-            appAccountToken: scope.appAccountToken(distinctId: "customer-b"),
-            commercialContext: commercialContext(),
-            recordedAt: mocks.dateProvider.now(),
-            localEntitlementGrants: [
-                StoredLocalEntitlementGrant(
-                    featureId: "premium",
-                    featureExternalId: nil,
-                    allowanceType: "boolean",
-                    allowance: nil
-                )
-            ],
-            state: .pending,
-            evidenceAuthority: .providerConnector
-        )
-        XCTAssertTrue(pendingStore.save([
-            "customer-b::store-product-1": pending,
-        ]))
-        let settings = NuxieRuntimeSettings(
-            configuration: NuxieConfiguration(apiKey: "app-a")
-        )
-        settings.setPurchaseDelegate(MockPurchaseDelegate())
-        let eventSink = RecoveryEventSink()
-        let features = RecoveryFeatureRecorder()
-        let service = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: pendingStore,
-            accountOwnershipStore: ownershipStore,
-            dateProvider: mocks.dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: mocks.identityService,
-            featureService: features,
-            activeProductEvidenceAuthority: { productId in
-                productId == "store-product-1"
-                    ? .providerConnector
-                    : .readyNoMatch
-            }
-        )
-        let api = RecoverySyncAPI(succeeds: true)
-        let evidenceStore = InMemoryTransactionEvidenceStore()
-        let observer = TransactionObserver(
-            api: api,
-            features: features,
-            identity: mocks.identityService,
-            settings: settings,
-            eventSink: eventSink,
-            transactionServiceProvider: { service },
-            evidenceStore: evidenceStore,
-            purchaseStorageScope: scope,
-            dateProvider: mocks.dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-        return ProviderUpdateHarness(
-            appAccountToken: appAccountToken,
-            observer: observer,
-            service: service,
-            api: api,
-            evidenceStore: evidenceStore,
-            eventSink: eventSink,
-            features: features,
-            finishes: FinishCounter(),
-            pending: pending
-        )
-    }
-
-    private func outcomeOnlyDelegateUpdateHarness(
-        observationExpired: Bool
-    ) -> OutcomeOnlyDelegateUpdateHarness {
-        let mocks = MockFactory.shared
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let dateProvider = MockDateProvider()
-        let scope = PurchaseStorageScope(
-            appIdentifierHash: "app-a",
-            environment: "production",
-            storeEnvironment: .appStore
-        )
-        let token = scope.appAccountToken(distinctId: "customer-a")
-        let pendingStore = InMemoryPendingPurchaseStore()
-        let pending = PendingPurchaseRecord(
-            scope: scope,
-            distinctId: "customer-a",
-            appAccountToken: token,
-            commercialContext: commercialContext(),
-            recordedAt: dateProvider.now(),
-            localEntitlementGrants: [
-                StoredLocalEntitlementGrant(
-                    featureId: "premium",
-                    featureExternalId: nil,
-                    allowanceType: "boolean",
-                    allowance: nil
-                ),
-            ],
-            state: .checkout,
-            evidenceAuthority: .outcomeOnlyDelegate,
-            storeKitObservationDeadline: dateProvider.date(
-                byAddingTimeInterval: TransactionService
-                    .outcomeOnlyStoreKitObservationTTL,
-                to: dateProvider.now()
-            )
-        )
-        XCTAssertTrue(pendingStore.save([
-            "customer-a::store-product-1": pending,
-        ]))
-        let ownershipStore = InMemoryPurchaseAccountOwnershipStore()
-        XCTAssertTrue(ownershipStore.upsert(StoredPurchaseAccountOwnership(
-            scope: scope,
-            appAccountToken: token,
-            distinctId: "customer-a",
-            productAuthorities: ["store-product-1": .nativeStoreKit]
-        )))
-        if observationExpired {
-            dateProvider.advance(
-                by: TransactionService.outcomeOnlyStoreKitObservationTTL + 1
-            )
-        }
-        let settings = NuxieRuntimeSettings(
-            configuration: NuxieConfiguration(apiKey: "app-a")
-        )
-        settings.setPurchaseDelegate(MockPurchaseDelegate())
-        let eventSink = RecoveryEventSink()
-        let features = RecoveryFeatureRecorder()
-        let service = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: pendingStore,
-            accountOwnershipStore: ownershipStore,
-            dateProvider: dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: identity,
-            featureService: features
-        )
-        let api = RecoverySyncAPI(succeeds: true)
-        let observer = TransactionObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            settings: settings,
-            eventSink: eventSink,
-            transactionServiceProvider: { service },
-            evidenceStore: InMemoryTransactionEvidenceStore(),
-            purchaseStorageScope: scope,
-            dateProvider: dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-        return OutcomeOnlyDelegateUpdateHarness(
-            appAccountToken: token,
-            observer: observer,
-            service: service,
-            api: api,
-            eventSink: eventSink,
-            pendingStore: pendingStore,
-            finishes: FinishCounter()
-        )
-    }
-
-    private func assertProviderUpdateIsIgnored(
-        token: ProviderUpdateToken,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) async {
-        let harness = providerUpdateHarness(token: token)
-        await harness.handle()
-
-        XCTAssertTrue(harness.api.recordedCustomers.isEmpty, file: file, line: line)
-        XCTAssertTrue(harness.evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty, file: file, line: line)
-        XCTAssertTrue(harness.eventSink.events.isEmpty, file: file, line: line)
-        let finishCount = await harness.finishes.count()
-        XCTAssertEqual(finishCount, 0, file: file, line: line)
-        let retainedPending = await harness.service.pendingPurchaseRecord(
-            productId: "store-product-1",
-            distinctId: "customer-b"
-        )
-        XCTAssertEqual(retainedPending, harness.pending, file: file, line: line)
     }
 
     func testAccountTokenIsStableOnlyInsideExactRuntimeScope() {
@@ -1192,87 +905,62 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(finishCount, 0)
     }
 
-    func testProviderUpdateDoesNotResolveAnotherCustomersPendingPurchaseFromNuxieToken() async {
-        await assertProviderUpdateIsIgnored(token: .historicalCustomer)
-    }
-
-    func testProviderUpdateWithoutAccountTokenDoesNotResolvePendingPurchase() async {
-        await assertProviderUpdateIsIgnored(token: .missing)
-    }
-
-    func testProviderUpdateWithUnrecognizedAccountTokenDoesNotResolvePendingPurchase() async {
-        await assertProviderUpdateIsIgnored(token: .unrecognized)
-    }
-
-    func testProviderUpdateWithExactCheckoutTokenResolvesPendingPurchase() async {
-        let harness = providerUpdateHarness(token: .exactCheckout)
-        await harness.handle()
-
-        XCTAssertTrue(harness.api.recordedCustomers.isEmpty)
-        XCTAssertTrue(harness.evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-        XCTAssertEqual(
-            harness.eventSink.events.map(\.name),
-            [SystemEventNames.purchaseCompleted]
-        )
-        XCTAssertEqual(harness.eventSink.routedCaptureCount, 0)
-        XCTAssertEqual(harness.eventSink.captureOnlyCount, 1)
-        let finishCount = await harness.finishes.count()
-        XCTAssertEqual(finishCount, 0)
-        let consumedPending = await harness.service.pendingPurchaseRecord(
-            productId: "store-product-1",
-            distinctId: "customer-b"
-        )
-        XCTAssertNil(consumedPending)
-    }
-
-    func testProviderCurrentEntitlementRemainsInConnectorPath() async {
-        let harness = providerUpdateHarness(token: .exactCheckout)
-        await harness.handle(
-            source: .nuxieEntitlementSync(distinctId: "customer-b")
-        )
-
-        XCTAssertTrue(harness.api.recordedCustomers.isEmpty)
-        XCTAssertTrue(harness.evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-        XCTAssertTrue(harness.eventSink.events.isEmpty)
-        let finishCount = await harness.finishes.count()
-        XCTAssertEqual(finishCount, 0)
-        let retainedPending = await harness.service.pendingPurchaseRecord(
-            productId: "store-product-1",
-            distinctId: "customer-b"
-        )
-        XCTAssertEqual(retainedPending, harness.pending)
-    }
-
-    func testUnsignedDelegateFreshRestoreSyncsAndFinishesCurrentEntitlement() async {
+    func testExternalBillingIgnoresVerifiedUpdatesForEveryAccountTokenMatch() async {
         let mocks = MockFactory.shared
         let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let dateProvider = MockDateProvider()
+        identity.setDistinctId("customer-b")
         let scope = PurchaseStorageScope(
             appIdentifierHash: "app-a",
             environment: "production",
             storeEnvironment: .appStore
         )
+        let customerAToken = scope.appAccountToken(distinctId: "customer-a")
+        let customerBToken = scope.appAccountToken(distinctId: "customer-b")
+        let pendingStore = InMemoryPendingPurchaseStore()
+        let pending = PendingPurchaseRecord(
+            scope: scope,
+            distinctId: "customer-b",
+            appAccountToken: customerBToken,
+            commercialContext: commercialContext(),
+            recordedAt: mocks.dateProvider.now(),
+            localEntitlementGrants: [],
+            state: .pending,
+            evidenceAuthority: .nativeStoreKit
+        )
+        XCTAssertTrue(pendingStore.save([
+            "customer-b::store-product-1": pending,
+        ]))
+        let ownershipStore = InMemoryPurchaseAccountOwnershipStore()
+        XCTAssertTrue(ownershipStore.upsert(StoredPurchaseAccountOwnership(
+            scope: scope,
+            appAccountToken: customerAToken,
+            distinctId: "customer-a",
+            productAuthorities: ["store-product-1": .nativeStoreKit]
+        )))
+        XCTAssertTrue(ownershipStore.upsert(StoredPurchaseAccountOwnership(
+            scope: scope,
+            appAccountToken: customerBToken,
+            distinctId: "customer-b",
+            productAuthorities: ["store-product-1": .nativeStoreKit]
+        )))
         let settings = NuxieRuntimeSettings(
             configuration: NuxieConfiguration(apiKey: "app-a")
         )
         settings.setPurchaseDelegate(MockPurchaseDelegate())
-        let eventSink = RecoveryEventSink()
+        let events = RecoveryEventSink()
         let features = RecoveryFeatureRecorder()
         let service = TransactionService(
             productService: mocks.productService,
             transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
-            accountOwnershipStore: InMemoryPurchaseAccountOwnershipStore(),
-            dateProvider: dateProvider,
+            pendingPurchaseStore: pendingStore,
+            accountOwnershipStore: ownershipStore,
+            dateProvider: mocks.dateProvider,
             settings: settings,
-            eventSink: eventSink,
+            eventSink: events,
             purchaseStorageScope: scope,
             identityService: identity,
             featureService: features,
-            activeProductEvidenceAuthority: { productId in
-                productId == "store-product-1" ? .nativeStoreKit : .readyNoMatch
-            }
+            activeProductEvidenceAuthority: { _ in .providerConnector }
         )
         let api = RecoverySyncAPI(succeeds: true)
         let evidenceStore = InMemoryTransactionEvidenceStore()
@@ -1281,38 +969,49 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             features: features,
             identity: identity,
             settings: settings,
-            eventSink: eventSink,
+            eventSink: events,
             transactionServiceProvider: { service },
             evidenceStore: evidenceStore,
             purchaseStorageScope: scope,
-            dateProvider: dateProvider,
+            dateProvider: mocks.dateProvider,
             activeStoreOriginalTransactionIDs: { [] }
         )
         let finishes = FinishCounter()
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "restored-transaction",
-                originalTransactionId: "restored-original",
-                productId: "store-product-1",
-                appAccountToken: scope.appAccountToken(
-                    distinctId: "customer-a"
-                ),
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "restored-jws",
-            source: .nuxieEntitlementSync(distinctId: "customer-a")
-        )
+        let accountTokens: [UUID?] = [
+            nil,
+            UUID(),
+            customerAToken,
+            customerBToken,
+        ]
 
-        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
-        let finishCount = await finishes.count()
-        XCTAssertEqual(finishCount, 1)
-        XCTAssertEqual(
-            eventSink.events.map(\.name),
-            [SystemEventNames.purchaseSynced]
+        for (index, appAccountToken) in accountTokens.enumerated() {
+            await observer.handleVerifiedTransaction(
+                VerifiedStoreTransactionUpdate(
+                    transactionId: "external-owned-update-\(index)",
+                    originalTransactionId: "external-owned-original-\(index)",
+                    productId: "store-product-1",
+                    appAccountToken: appAccountToken,
+                    isRevoked: false,
+                    isUpgraded: false,
+                    finish: { await finishes.increment() }
+                ),
+                jwsRepresentation: "external-owned-jws-\(index)",
+                source: .transactionStream
+            )
+        }
+
+        XCTAssertTrue(api.recordedCustomers.isEmpty)
+        XCTAssertTrue(events.events.isEmpty)
+        XCTAssertTrue(
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty
         )
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        let finishCount = await finishes.count()
+        XCTAssertEqual(finishCount, 0)
+        let retainedPending = await service.pendingPurchaseRecord(
+            productId: "store-product-1",
+            distinctId: "customer-b"
+        )
+        XCTAssertEqual(retainedPending, pending)
     }
 
     func testNoCacheOfflineStartupRecoversOnceAfterProductAuthorityAdmission() async {
@@ -1440,13 +1139,16 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         await nativeSource.setCurrentEntitlements([nativeRecoveryItem])
         let nativeAPI = RecoverySyncAPI(succeeds: true)
         let nativeFeatures = RecoveryFeatureRecorder()
+        let nativeSettings = NuxieRuntimeSettings(
+            configuration: NuxieConfiguration(apiKey: "app-a")
+        )
         let nativeService = TransactionService(
             productService: mocks.productService,
             transactionObserver: MockTransactionObserver(),
             pendingPurchaseStore: InMemoryPendingPurchaseStore(),
             accountOwnershipStore: InMemoryPurchaseAccountOwnershipStore(),
             dateProvider: dateProvider,
-            settings: settings,
+            settings: nativeSettings,
             eventSink: RecoveryEventSink(),
             purchaseStorageScope: scope,
             identityService: identity,
@@ -1459,7 +1161,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             api: nativeAPI,
             features: nativeFeatures,
             identity: identity,
-            settings: settings,
+            settings: nativeSettings,
             eventSink: RecoveryEventSink(),
             transactionServiceProvider: { nativeService },
             evidenceStore: InMemoryTransactionEvidenceStore(),
@@ -1513,7 +1215,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(nativeReadsAfterRepeatedAdmission.currentEntitlements, 1)
     }
 
-    func testSignedProviderFreshRestoreRemainsConnectorOwnedWithoutCheckoutHistory() async {
+    func testProviderStartupEvidenceRemainsConnectorOwnedWithoutCheckoutHistory() async {
         let mocks = MockFactory.shared
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
@@ -1571,7 +1273,10 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 finish: { await finishes.increment() }
             ),
             jwsRepresentation: "provider-restored-jws",
-            source: .nuxieEntitlementSync(distinctId: "customer-a")
+            source: .startupRecovery,
+            attributedDistinctId: "customer-a",
+            resolvesPendingPurchase: false,
+            allowsDurableCheckoutAuthority: false
         )
 
         XCTAssertTrue(api.recordedCustomers.isEmpty)
@@ -1604,744 +1309,15 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 finish: { await finishes.increment() }
             ),
             jwsRepresentation: "provider-restored-stale-jws",
-            source: .nuxieEntitlementSync(distinctId: "customer-a")
+            source: .startupRecovery,
+            attributedDistinctId: "customer-a",
+            resolvesPendingPurchase: false,
+            allowsDurableCheckoutAuthority: false
         )
         XCTAssertTrue(api.recordedCustomers.isEmpty)
         let retainedFinishCount = await finishes.count()
         XCTAssertEqual(retainedFinishCount, 0)
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-    }
-
-    func testLateNativeStoreUpdateKeepsDurableAuthorityAfterProviderRollout() async {
-        let mocks = MockFactory.shared
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let dateProvider = MockDateProvider()
-        let scope = PurchaseStorageScope(
-            appIdentifierHash: "app-a",
-            environment: "production",
-            storeEnvironment: .appStore
-        )
-        let settings = NuxieRuntimeSettings(
-            configuration: NuxieConfiguration(apiKey: "app-a")
-        )
-        settings.setPurchaseDelegate(MockPurchaseDelegate())
-        let token = scope.appAccountToken(distinctId: "customer-a")
-        let ownershipStore = InMemoryPurchaseAccountOwnershipStore()
-        XCTAssertTrue(ownershipStore.upsert(StoredPurchaseAccountOwnership(
-            scope: scope,
-            appAccountToken: token,
-            distinctId: "customer-a",
-            productAuthorities: ["store-product-1": .nativeStoreKit]
-        )))
-        let eventSink = RecoveryEventSink()
-        let features = RecoveryFeatureRecorder()
-        let service = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
-            accountOwnershipStore: ownershipStore,
-            dateProvider: dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: identity,
-            featureService: features,
-            activeProductEvidenceAuthority: { _ in .providerConnector }
-        )
-        let api = RecoverySyncAPI(succeeds: true)
-        let observer = TransactionObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            settings: settings,
-            eventSink: eventSink,
-            transactionServiceProvider: { service },
-            evidenceStore: InMemoryTransactionEvidenceStore(),
-            purchaseStorageScope: scope,
-            dateProvider: dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-        let finishes = FinishCounter()
-
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "late-native-transaction",
-                originalTransactionId: "late-native-original",
-                productId: "store-product-1",
-                appAccountToken: token,
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "late-native-jws",
-            source: .storeUpdates
-        )
-
-        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
-        let finishCount = await finishes.count()
-        XCTAssertEqual(finishCount, 1)
-        XCTAssertEqual(
-            eventSink.events.map(\.name),
-            [SystemEventNames.purchaseSynced]
-        )
-    }
-
-    func testOutcomeOnlyDelegateStoreUpdateInsideWindowRecoversExactCheckout() async {
-        let harness = outcomeOnlyDelegateUpdateHarness(
-            observationExpired: false
-        )
-
-        await harness.handle()
-
-        XCTAssertEqual(harness.api.recordedCustomers, ["customer-a"])
-        let finishCount = await harness.finishes.count()
-        XCTAssertEqual(finishCount, 1)
-        let retainedCoordination = harness.pendingStore.load().valueTreatingAbsentAsEmpty([:])!.values.first
-        XCTAssertEqual(
-            retainedCoordination?.observedTransactionId,
-            "outcome-only-update"
-        )
-        XCTAssertNotNil(retainedCoordination?.completionReportedAt)
-        XCTAssertEqual(
-            harness.eventSink.events.map(\.name),
-            [SystemEventNames.purchaseCompleted, SystemEventNames.purchaseSynced]
-        )
-    }
-
-    func testOutcomeOnlyStoreUpdateBeforeCallbackCompletesPurchaseOnce() async throws {
-        let mocks = MockFactory.shared
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let dateProvider = MockDateProvider()
-        let scope = PurchaseStorageScope(
-            appIdentifierHash: "app-a",
-            environment: "production",
-            storeEnvironment: .appStore
-        )
-        let delegate = MockPurchaseDelegate()
-        delegate.simulatedDelay = 0.2
-        delegate.purchaseResult = .purchased
-        let settings = NuxieRuntimeSettings(
-            configuration: NuxieConfiguration(apiKey: "app-a")
-        )
-        settings.setPurchaseDelegate(delegate)
-        let eventSink = RecoveryEventSink()
-        let features = RecoveryFeatureRecorder()
-        let service = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
-            accountOwnershipStore: InMemoryPurchaseAccountOwnershipStore(),
-            dateProvider: dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: identity,
-            featureService: features
-        )
-        let api = RecoverySyncAPI(succeeds: true)
-        let observer = TransactionObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            settings: settings,
-            eventSink: eventSink,
-            transactionServiceProvider: { service },
-            evidenceStore: InMemoryTransactionEvidenceStore(),
-            purchaseStorageScope: scope,
-            dateProvider: dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-        let native = MockStoreProduct(
-            id: "store-product-1",
-            displayName: "Premium",
-            price: 9.99,
-            displayPrice: "$9.99"
-        )
-        var product = StoreProduct(
-            productId: "product-1",
-            storeProductId: native.id,
-            placementId: "placement-1",
-            name: native.displayName,
-            price: native.displayPrice,
-            period: nil,
-            productType: native.productType,
-            appStoreProduct: native
-        )
-        product.purchaseContext = commercialContext()
-        let purchase = Task { try await service.purchase(product) }
-        for _ in 0..<100 where !delegate.purchaseCalled {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
-        XCTAssertTrue(delegate.purchaseCalled)
-
-        let finishes = FinishCounter()
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "race-transaction",
-                originalTransactionId: "race-original",
-                productId: product.storeProductId,
-                appAccountToken: scope.appAccountToken(
-                    distinctId: "customer-a"
-                ),
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "race-jws",
-            source: .storeUpdates
-        )
-        _ = try await purchase.value
-
-        XCTAssertEqual(
-            eventSink.events.filter {
-                $0.name == SystemEventNames.purchaseCompleted
-            }.count,
-            1
-        )
-        XCTAssertEqual(eventSink.routedCaptureCount, 1)
-        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
-        let finishCount = await finishes.count()
-        XCTAssertEqual(finishCount, 1)
-    }
-
-    func testOutcomeOnlyCallbackBeforeStoreUpdateCompletesPurchaseOnce() async throws {
-        let mocks = MockFactory.shared
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let dateProvider = MockDateProvider()
-        let scope = PurchaseStorageScope(
-            appIdentifierHash: "app-a",
-            environment: "production",
-            storeEnvironment: .appStore
-        )
-        let delegate = MockPurchaseDelegate()
-        delegate.simulatedDelay = 0
-        delegate.purchaseResult = .purchased
-        let settings = NuxieRuntimeSettings(
-            configuration: NuxieConfiguration(apiKey: "app-a")
-        )
-        settings.setPurchaseDelegate(delegate)
-        let eventSink = RecoveryEventSink()
-        let features = RecoveryFeatureRecorder()
-        let service = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
-            accountOwnershipStore: InMemoryPurchaseAccountOwnershipStore(),
-            dateProvider: dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: identity,
-            featureService: features
-        )
-        let api = RecoverySyncAPI(succeeds: true)
-        let observer = TransactionObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            settings: settings,
-            eventSink: eventSink,
-            transactionServiceProvider: { service },
-            evidenceStore: InMemoryTransactionEvidenceStore(),
-            purchaseStorageScope: scope,
-            dateProvider: dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-        let native = MockStoreProduct(
-            id: "store-product-1",
-            displayName: "Premium",
-            price: 9.99,
-            displayPrice: "$9.99"
-        )
-        var product = StoreProduct(
-            productId: "product-1",
-            storeProductId: native.id,
-            placementId: "placement-1",
-            name: native.displayName,
-            price: native.displayPrice,
-            period: nil,
-            productType: native.productType,
-            appStoreProduct: native
-        )
-        product.purchaseContext = commercialContext()
-
-        _ = try await service.purchase(product)
-        XCTAssertEqual(
-            eventSink.events.filter {
-                $0.name == SystemEventNames.purchaseCompleted
-            }.count,
-            1
-        )
-        XCTAssertEqual(eventSink.routedCaptureCount, 1)
-
-        let finishes = FinishCounter()
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "race-transaction",
-                originalTransactionId: "race-original",
-                productId: product.storeProductId,
-                appAccountToken: scope.appAccountToken(
-                    distinctId: "customer-a"
-                ),
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "race-jws",
-            source: .storeUpdates
-        )
-
-        XCTAssertEqual(
-            eventSink.events.filter {
-                $0.name == SystemEventNames.purchaseCompleted
-            }.count,
-            1
-        )
-        XCTAssertEqual(eventSink.routedCaptureCount, 1)
-        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
-        let finishCount = await finishes.count()
-        XCTAssertEqual(finishCount, 1)
-    }
-
-    func testCallbackCaptureFailureRetainsDurableCheckoutCompletionForStoreUpdate() async throws {
-        let mocks = MockFactory.shared
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let dateProvider = MockDateProvider()
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("callback-capture-failure-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let scope = PurchaseStorageScope(
-            appIdentifierHash: "app-a",
-            environment: "production",
-            storeEnvironment: .appStore
-        )
-        let delegate = MockPurchaseDelegate()
-        delegate.purchaseResult = .purchased
-        let settings = NuxieRuntimeSettings(
-            configuration: NuxieConfiguration(apiKey: "app-a")
-        )
-        settings.setPurchaseDelegate(delegate)
-        let eventSink = ControlledRecoveryEventSink(captureSucceeds: false)
-        let pendingStore = PendingPurchaseStore(
-            customStoragePath: root,
-            scope: scope
-        )
-        let service = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: pendingStore,
-            accountOwnershipStore: PurchaseAccountOwnershipStore(
-                customStoragePath: root,
-                scope: scope
-            ),
-            dateProvider: dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: identity
-        )
-        let api = RecoverySyncAPI(succeeds: true)
-        let evidenceStore = TransactionEvidenceStore(
-            customStoragePath: root,
-            scope: scope
-        )
-        let observer = TransactionObserver(
-            api: api,
-            features: RecoveryFeatureRecorder(),
-            identity: identity,
-            settings: settings,
-            eventSink: eventSink,
-            transactionServiceProvider: { service },
-            evidenceStore: evidenceStore,
-            purchaseStorageScope: scope,
-            dateProvider: dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-        let native = MockStoreProduct(
-            id: "store-product-1",
-            displayName: "Premium",
-            price: 9.99,
-            displayPrice: "$9.99"
-        )
-        var product = StoreProduct(
-            productId: "product-1",
-            storeProductId: native.id,
-            placementId: "placement-1",
-            name: native.displayName,
-            price: native.displayPrice,
-            period: nil,
-            productType: native.productType,
-            appStoreProduct: native
-        )
-        product.purchaseContext = commercialContext()
-
-        // The commercial purchase succeeded. Capture failure must retain
-        // recovery without surfacing a false failure that invites repurchase.
-        _ = try await service.purchase(product)
-        let retained = try XCTUnwrap(pendingStore.load().valueTreatingAbsentAsEmpty([:])!.values.first)
-        XCTAssertNil(retained.completionReportedAt)
-        XCTAssertFalse(retained.checkoutCompletionEventId.isEmpty)
-        XCTAssertEqual(eventSink.routedAttemptCount, 1)
-
-        eventSink.setCaptureSucceeds(true)
-        let finishes = FinishCounter()
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "capture-retry-transaction",
-                originalTransactionId: "capture-retry-original",
-                productId: product.storeProductId,
-                appAccountToken: scope.appAccountToken(
-                    distinctId: "customer-a"
-                ),
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "capture-retry-jws",
-            source: .storeUpdates
-        )
-
-        XCTAssertEqual(eventSink.routedAttemptCount, 1)
-        XCTAssertEqual(eventSink.captureOnlyAttemptCount, 1)
-        XCTAssertEqual(eventSink.routedCaptureCount, 0)
-        XCTAssertEqual(eventSink.captureOnlyCount, 1)
-        XCTAssertEqual(
-            Set(eventSink.attemptedCompletionEventIds),
-            [retained.checkoutCompletionEventId]
-        )
-        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
-        let finishCount = await finishes.count()
-        XCTAssertEqual(finishCount, 1)
-    }
-
-    func testProviderUpdateRetriesFailedCheckoutCompletionWithoutOwningReceipt() async throws {
-        let mocks = MockFactory.shared
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let dateProvider = MockDateProvider()
-        let scope = PurchaseStorageScope(
-            appIdentifierHash: "app-a",
-            environment: "production",
-            storeEnvironment: .appStore
-        )
-        let delegate = MockPurchaseDelegate()
-        delegate.purchaseResult = .purchased
-        let settings = NuxieRuntimeSettings(
-            configuration: NuxieConfiguration(apiKey: "app-a")
-        )
-        settings.setPurchaseDelegate(delegate)
-        let eventSink = ControlledRecoveryEventSink(captureSucceeds: false)
-        let pendingStore = InMemoryPendingPurchaseStore()
-        let ownershipStore = InMemoryPurchaseAccountOwnershipStore()
-        let features = RecoveryFeatureRecorder()
-        let service = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: pendingStore,
-            accountOwnershipStore: ownershipStore,
-            dateProvider: dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: identity,
-            featureService: features,
-            activeProductEvidenceAuthority: { _ in .providerConnector }
-        )
-        let api = RecoverySyncAPI(succeeds: true)
-        let observer = TransactionObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            settings: settings,
-            eventSink: eventSink,
-            transactionServiceProvider: { service },
-            evidenceStore: InMemoryTransactionEvidenceStore(),
-            purchaseStorageScope: scope,
-            dateProvider: dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-        let native = MockStoreProduct(
-            id: "store-product-1",
-            displayName: "Premium",
-            price: 9.99,
-            displayPrice: "$9.99"
-        )
-        var product = StoreProduct(
-            productId: "product-1",
-            storeProductId: native.id,
-            placementId: "placement-1",
-            name: native.displayName,
-            price: native.displayPrice,
-            period: nil,
-            productType: native.productType,
-            appStoreProduct: native
-        )
-        product.purchaseContext = commercialContext()
-        product.providerFeatureAccess = "revenuecat"
-        product.localEntitlementGrants = [StoreProduct.LocalEntitlementGrant(
-            featureId: "premium",
-            featureExternalId: "premium",
-            allowanceType: "boolean",
-            allowance: nil
-        )]
-
-        _ = try await service.purchase(product)
-        let retained = try XCTUnwrap(pendingStore.load().valueTreatingAbsentAsEmpty([:])!.values.first)
-        XCTAssertEqual(retained.state, .checkout)
-        XCTAssertNil(retained.completionReportedAt)
-        XCTAssertEqual(eventSink.routedAttemptCount, 1)
-        eventSink.setCaptureSucceeds(true)
-        let finishes = FinishCounter()
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "provider-capture-retry-transaction",
-                originalTransactionId: "provider-capture-retry-original",
-                productId: product.storeProductId,
-                appAccountToken: retained.appAccountToken,
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "provider-capture-retry-jws",
-            source: .storeUpdates
-        )
-
-        XCTAssertEqual(eventSink.captureOnlyAttemptCount, 1)
-        XCTAssertEqual(eventSink.captureOnlyCount, 1)
-        XCTAssertEqual(
-            Set(eventSink.attemptedCompletionEventIds),
-            [retained.checkoutCompletionEventId]
-        )
-        XCTAssertTrue(api.recordedCustomers.isEmpty)
-        let finishCount = await finishes.count()
-        XCTAssertEqual(finishCount, 0)
-        XCTAssertTrue(pendingStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-    }
-
-    func testRelaunchAfterPreCallbackWindowUsesOnlyStableTokenOwnership() async throws {
-        let mocks = MockFactory.shared
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let dateProvider = MockDateProvider()
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pre-callback-relaunch-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let scope = PurchaseStorageScope(
-            appIdentifierHash: "app-a",
-            environment: "production",
-            storeEnvironment: .appStore
-        )
-        let delegate = SuspendedOutcomePurchaseDelegate()
-        let settings = NuxieRuntimeSettings(
-            configuration: NuxieConfiguration(apiKey: "app-a")
-        )
-        settings.setPurchaseDelegate(delegate)
-        let eventSink = RecoveryEventSink()
-        let features = RecoveryFeatureRecorder()
-        let service = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: PendingPurchaseStore(
-                customStoragePath: root,
-                scope: scope
-            ),
-            accountOwnershipStore: PurchaseAccountOwnershipStore(
-                customStoragePath: root,
-                scope: scope
-            ),
-            dateProvider: dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: identity,
-            featureService: features
-        )
-        let native = MockStoreProduct(
-            id: "store-product-1",
-            displayName: "Premium",
-            price: 9.99,
-            displayPrice: "$9.99"
-        )
-        var product = StoreProduct(
-            productId: "product-1",
-            storeProductId: native.id,
-            placementId: "placement-1",
-            name: native.displayName,
-            price: native.displayPrice,
-            period: nil,
-            productType: native.productType,
-            appStoreProduct: native
-        )
-        product.purchaseContext = commercialContext()
-        product.localEntitlementGrants = [
-            StoreProduct.LocalEntitlementGrant(
-                featureId: "premium",
-                featureExternalId: "premium",
-                allowanceType: "boolean",
-                allowance: nil
-            ),
-        ]
-        let purchase = Task { try await service.purchase(product) }
-        for _ in 0..<100 where await delegate.calls() < 1 {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
-        let delegateCalls = await delegate.calls()
-        XCTAssertEqual(delegateCalls, 1)
-
-        identity.setDistinctId("customer-b")
-        let timelyPurchase = Task { try await service.purchase(product) }
-        for _ in 0..<100 where await delegate.calls() < 2 {
-            try await Task.sleep(nanoseconds: 5_000_000)
-        }
-        let api = RecoverySyncAPI(succeeds: true)
-        let finishes = FinishCounter()
-        let timelyRelaunch = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: PendingPurchaseStore(
-                customStoragePath: root,
-                scope: scope
-            ),
-            accountOwnershipStore: PurchaseAccountOwnershipStore(
-                customStoragePath: root,
-                scope: scope
-            ),
-            dateProvider: dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: identity,
-            featureService: features
-        )
-        let timelyObserver = TransactionObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            settings: settings,
-            eventSink: eventSink,
-            transactionServiceProvider: { timelyRelaunch },
-            evidenceStore: InMemoryTransactionEvidenceStore(),
-            purchaseStorageScope: scope,
-            dateProvider: dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-        await timelyObserver.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "inside-window-transaction",
-                originalTransactionId: "inside-window-original",
-                productId: product.storeProductId,
-                appAccountToken: scope.appAccountToken(
-                    distinctId: "customer-b"
-                ),
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "inside-window-jws",
-            source: .storeUpdates
-        )
-        XCTAssertEqual(
-            eventSink.events.map(\.name),
-            [
-                SystemEventNames.purchaseCompleted,
-                SystemEventNames.purchaseSynced,
-            ]
-        )
-
-        dateProvider.advance(
-            by: TransactionService.outcomeOnlyStoreKitObservationTTL + 1
-        )
-        identity.setDistinctId("customer-a")
-        let relaunchedService = TransactionService(
-            productService: mocks.productService,
-            transactionObserver: MockTransactionObserver(),
-            pendingPurchaseStore: PendingPurchaseStore(
-                customStoragePath: root,
-                scope: scope
-            ),
-            accountOwnershipStore: PurchaseAccountOwnershipStore(
-                customStoragePath: root,
-                scope: scope
-            ),
-            dateProvider: dateProvider,
-            settings: settings,
-            eventSink: eventSink,
-            purchaseStorageScope: scope,
-            identityService: identity,
-            featureService: features
-        )
-        let observer = TransactionObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            settings: settings,
-            eventSink: eventSink,
-            transactionServiceProvider: { relaunchedService },
-            evidenceStore: InMemoryTransactionEvidenceStore(),
-            purchaseStorageScope: scope,
-            dateProvider: dateProvider,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-        await observer.handleVerifiedTransaction(
-            VerifiedStoreTransactionUpdate(
-                transactionId: "post-crash-transaction",
-                originalTransactionId: "post-crash-original",
-                productId: product.storeProductId,
-                appAccountToken: scope.appAccountToken(
-                    distinctId: "customer-a"
-                ),
-                isRevoked: false,
-                isUpgraded: false,
-                finish: { await finishes.increment() }
-            ),
-            jwsRepresentation: "post-crash-jws",
-            source: .storeUpdates
-        )
-
-        XCTAssertEqual(
-            api.recordedCustomers,
-            ["customer-b", "customer-a"]
-        )
-        let finishCount = await finishes.count()
-        XCTAssertEqual(finishCount, 2)
-        XCTAssertEqual(
-            eventSink.events.map(\.name),
-            [
-                SystemEventNames.purchaseCompleted,
-                SystemEventNames.purchaseSynced,
-                SystemEventNames.purchaseSynced,
-            ]
-        )
-        XCTAssertTrue(PendingPurchaseStore(
-            customStoragePath: root,
-            scope: scope
-        ).load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-
-        purchase.cancel()
-        timelyPurchase.cancel()
-        _ = try? await purchase.value
-        _ = try? await timelyPurchase.value
-    }
-
-    func testExpiredOutcomeOnlyCorrelationStillSyncsAndFinishesByStableToken() async {
-        let harness = outcomeOnlyDelegateUpdateHarness(
-            observationExpired: true
-        )
-
-        await harness.handle()
-
-        XCTAssertEqual(harness.api.recordedCustomers, ["customer-a"])
-        let finishCount = await harness.finishes.count()
-        XCTAssertEqual(finishCount, 1)
-        XCTAssertTrue(harness.pendingStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-        XCTAssertEqual(
-            harness.eventSink.events.map(\.name),
-            [SystemEventNames.purchaseSynced]
-        )
     }
 
     func testReinstallRecognizesNuxieTokenWithoutAttributingHostToken() async {
@@ -2579,12 +1555,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 )
             ],
             state: .checkout,
-            evidenceAuthority: .outcomeOnlyDelegate,
-            storeKitObservationDeadline: mocks.dateProvider.date(
-                byAddingTimeInterval: TransactionService
-                    .outcomeOnlyStoreKitObservationTTL,
-                to: mocks.dateProvider.now()
-            )
+            evidenceAuthority: .nativeStoreKit
         )
         XCTAssertTrue(recoveryStore.save(["customer-a::store-product-1": recovery]))
 
@@ -2600,7 +1571,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let settings = NuxieRuntimeSettings(
             configuration: NuxieConfiguration(apiKey: "app-a")
         )
-        settings.setPurchaseDelegate(MockPurchaseDelegate())
         let service = TransactionService(
             productService: mocks.productService,
             transactionObserver: MockTransactionObserver(),
@@ -2650,12 +1620,9 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 1)
         XCTAssertEqual(api.recordedCustomers, ["customer-a"])
-        let retainedCoordination = recoveryStore.load().valueTreatingAbsentAsEmpty([:])!.values.first
-        XCTAssertEqual(
-            retainedCoordination?.observedTransactionId,
-            evidence.transactionId
+        XCTAssertTrue(
+            recoveryStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty
         )
-        XCTAssertNil(retainedCoordination?.completionReportedAt)
         XCTAssertEqual(
             evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.commercialContext,
             commercialContext()
@@ -2971,7 +1938,12 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 1)
         XCTAssertTrue(recoveryStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-        XCTAssertEqual(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.finishRequired, false)
+        XCTAssertEqual(
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])![
+                evidence.transactionId
+            ]?.finishRequired,
+            false
+        )
         XCTAssertEqual(api.recordedCustomers, ["customer-a", "customer-a"])
         let completions = eventSink.events.filter {
             $0.name == SystemEventNames.purchaseCompleted
@@ -3004,7 +1976,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
         XCTAssertEqual(
             completions.first?.properties?["source"] as? String,
-            "purchase"
+            PurchaseOutcomeSource.startupRecovery.rawValue
         )
         XCTAssertEqual(completions.first?.properties?["test_store"] as? Bool, false)
     }

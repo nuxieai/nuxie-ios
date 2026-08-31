@@ -130,7 +130,7 @@ public enum DismissReason: String, Sendable {
   case host
 }
 
-/// Commerce details captured at the presentation boundary.
+/// Purchase details captured at the presentation boundary.
 public struct PurchaseInfo: Sendable {
   /// Nuxie's catalog product identity, when product resolution succeeded.
   public let productId: String?

@@ -1351,7 +1351,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     pendingPurchaseStore: InMemoryPendingPurchaseStore(),
                     dateProvider: MockDateProvider(),
                     settings: NuxieRuntimeSettings(
-                        configuration: NuxieConfiguration(apiKey: "host-dismiss-commerce")
+                        configuration: NuxieConfiguration(apiKey: "host-dismiss-purchase")
                     ),
                     eventSink: DiscardingSystemEventSink(),
                     testStore: testStore
@@ -1452,7 +1452,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 expect(recorder.hostDismissalFinished).to(beTrue())
             }
 
-            it("serializes replacement behind commerce-gated host dismissal") { @MainActor in
+            it("serializes replacement behind purchase-gated host dismissal") { @MainActor in
                 let testStore = SuspendedExperienceTestStore()
                 let transactionService = TransactionService(
                     productService: ProductService(),
@@ -1473,13 +1473,13 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     period: nil
                 )
                 product.isTestStoreProduct = true
-                let currentFlowId = "commerce-current"
+                let currentFlowId = "purchase-current"
                 let currentVC = MockExperienceViewController(
                     mockExperienceVersionId: currentFlowId,
                     products: [product],
                     transactionService: transactionService
                 )
-                let replacementFlowId = "commerce-replacement"
+                let replacementFlowId = "purchase-replacement"
                 let replacementVC = MockExperienceViewController(
                     mockExperienceVersionId: replacementFlowId
                 )

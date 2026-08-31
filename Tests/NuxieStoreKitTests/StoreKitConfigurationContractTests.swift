@@ -6,7 +6,7 @@ final class StoreKitConfigurationContractTests: XCTestCase {
         let bundle = Bundle(for: NativeStoreKitTestHarness.self)
         let url = try XCTUnwrap(
             bundle.url(
-                forResource: "NuxieNativeCommerce",
+                forResource: "NuxieNativePurchase",
                 withExtension: "storekit"
             )
         )

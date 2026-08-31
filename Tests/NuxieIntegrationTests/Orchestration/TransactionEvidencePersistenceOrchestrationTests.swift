@@ -4,9 +4,9 @@ import Quick
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
-final class CommercePersistenceOrchestrationTests: AsyncSpec {
+final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
     override class func spec() {
-        describe("unreadable commerce persistence") {
+        describe("unreadable transaction evidence persistence") {
             var storageURLs: [URL] = []
             var stacks: [OrchestrationStack] = []
 
@@ -22,10 +22,10 @@ final class CommercePersistenceOrchestrationTests: AsyncSpec {
             }
 
             it("keeps all three stores unknown until their files are readable") {
-                let distinctId = "commerce-corruption-customer"
+                let distinctId = "purchase-corruption-customer"
                 let storageURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent(
-                        "commerce-orchestration-\(UUID().uuidString)",
+                        "purchase-orchestration-\(UUID().uuidString)",
                         isDirectory: true
                     )
                 storageURLs.append(storageURL)
@@ -74,13 +74,20 @@ final class CommercePersistenceOrchestrationTests: AsyncSpec {
                     distinctId: distinctId
                 )
 
-                let receiptAccepted = await stack.core.transactionObserver
-                    .syncTransaction(
-                        transactionJws: "signed-corrupt-transaction",
-                        transactionId: "corrupt-transaction",
-                        productId: "corrupt-product",
-                        originalTransactionId: "corrupt-original"
+                let receiptAccepted = await stack.core.transactionObserver.commit(
+                    .verified(
+                        VerifiedPurchaseEvidence(
+                            transactionJws: "signed-corrupt-transaction",
+                            transactionId: "corrupt-transaction",
+                            originalTransactionId: "corrupt-original",
+                            productId: "corrupt-product",
+                            resolvesPendingPurchase: false,
+                            allowsDurableCheckoutAuthority: false,
+                            requiresAuthorityResolution: false
+                        ),
+                        source: .startupRecovery
                     )
+                ).committed
                 expect(receiptAccepted).to(beFalse())
 
                 let pendingOwnership = await stack.core.transactionService
@@ -147,28 +154,22 @@ final class CommercePersistenceOrchestrationTests: AsyncSpec {
                         ),
                     ],
                 ]
-                let product = StoreProduct(
-                    productId: "product-1",
-                    storeProductId: "store-product-1",
-                    placementId: "placement-1",
-                    name: "Projection product",
-                    price: "$9.99",
-                    period: nil
-                )
-
-                let recorded = await stack.core.transactionObserver
-                    .recordVerifiedPurchase(
-                        evidence: StoreTransactionEvidence(
+                let recorded = await stack.core.transactionObserver.commit(
+                    .verified(
+                        VerifiedPurchaseEvidence(
                             transactionJws: "signed-transaction",
                             transactionId: "transaction-1",
                             originalTransactionId: "original-1",
                             productId: "store-product-1",
-                            finish: {}
+                            attributedDistinctId: distinctId,
+                            finishRequired: false,
+                            resolvesPendingPurchase: false,
+                            allowsDurableCheckoutAuthority: false,
+                            requiresAuthorityResolution: false
                         ),
-                        product: product,
-                        distinctId: distinctId,
-                        finishRequired: false
-                )
+                        source: .checkout
+                    )
+                ).committed
                 expect(recorded).to(beTrue())
                 let featureInfo = stack.core.featureInfo
                 let projected = await MainActor.run {

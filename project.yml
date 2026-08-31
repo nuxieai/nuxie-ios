@@ -322,7 +322,7 @@ targets:
         name: NuxieStoreKitTests
         excludes:
           - Fixtures/*.storekit
-      - path: Tests/NuxieStoreKitTests/Fixtures/NuxieNativeCommerce.storekit
+      - path: Tests/NuxieStoreKitTests/Fixtures/NuxieNativePurchase.storekit
         buildPhase: resources
     dependencies:
       - target: NuxieStoreKitTestHost

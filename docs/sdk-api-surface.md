@@ -17,7 +17,7 @@ All entry points live on the `NuxieSDK.shared` singleton facade.
 
 The supported public contract is the facade; configuration and delegates;
 feature and trigger-result values; the presentation types returned by the
-facade; and the commerce types used by the purchase seam. Signed release-wire,
+facade; and the purchase types used by the purchase seam. Signed release-wire,
 journey-document, view-model, and IR representations are internal alongside
 networking clients and response DTOs, persistence stores, service protocols,
 query adapters, evaluators, clocks, and mutable journey runtime state. Tests
@@ -155,10 +155,17 @@ back to an ordinary post-request feature-use event.
 `logLevel`, `enableConsoleLogging`, `redactSensitiveData`, `localeIdentifier`,
 `beforeSend`, `testStoreEnabled`, `purchaseDelegate`, and
 `purchaseHandlingMode` (`.full` default / `.observer` — observer mode never
-finishes transactions the host app owns). For development-only commerce
+finishes transactions the host app owns). For development-only purchase
 qualification, `testStoreEnabled` requires a `pk_test_` key and `.development`
 environment; it uses Nuxie's isolated no-charge Test Store instead of StoreKit
 or a purchase delegate.
+
+A configured `purchaseDelegate` is the billing ownership boundary. Each
+delegate `.purchased` callback is reported once as a `$purchase_completed`
+external declaration with the authenticated Product mapping and immediately
+advances the Journey. It creates no StoreKit evidence or optimistic overlay.
+A delegate `.restored` is also an external declaration; neither delegate path
+invokes Nuxie's native entitlement scanner or finishes a StoreKit transaction.
 
 Application lifecycle events are always captured. `beforeSend` is the escape
 hatch for applications that need to transform or drop those events before

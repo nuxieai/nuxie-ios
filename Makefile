@@ -50,7 +50,7 @@ help:
 	@echo "  test             - Run the full unit + native-runtime + integration + macOS gate"
 	@echo "  test-ios         - Alias for the full test gate"
 	@echo "  test-unit        - Run unit tests"
-	@echo "  test-storekit    - Run real StoreKitTest native-commerce qualification (Xcode 26.6+)"
+	@echo "  test-storekit    - Run real StoreKitTest native-purchase qualification (Xcode 26.6+)"
 	@echo "  test-native-runtime - Test the Swift-owned runtime and product harness"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
 	@echo "  test-macos-unit  - Run unit tests on macOS"

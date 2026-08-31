@@ -526,7 +526,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         await observer.handleVerifiedTransaction(
             active,
             jwsRepresentation: "active-jws",
-            source: .storeUpdates
+            source: .transactionStream
         )
         let activeProjection = await recorder.latest()
         XCTAssertEqual(activeProjection?.first?.revoked, false)
@@ -543,7 +543,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
                 finish: {}
             ),
             jwsRepresentation: "revoked-jws",
-            source: .storeUpdates
+            source: .transactionStream
         )
         let revokedProjection = await recorder.latest()
         XCTAssertEqual(revokedProjection?.first?.revoked, true)
@@ -615,7 +615,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
                 finish: {}
             ),
             jwsRepresentation: "revoked-jws",
-            source: .storeUpdates
+            source: .transactionStream
         )
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
 
@@ -818,81 +818,6 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         XCTAssertEqual(retained?.finishRequired, true)
         XCTAssertEqual(retained?.transactionJws, "")
         XCTAssertNotNil(retained?.backendSyncedAt)
-    }
-
-    func testDeduplicatedSyncDrainsEvidencePersistedAfterObserverWonRace() async {
-        let mocks = MockFactory.shared
-        let configuration = NuxieConfiguration(apiKey: "isolated")
-        let settings = NuxieRuntimeSettings(configuration: configuration)
-        let evidenceStore = InMemoryTransactionEvidenceStore()
-        let features = FeatureService(
-            api: mocks.nuxieApi,
-            identity: mocks.identityService,
-            profile: mocks.profileService,
-            dateProvider: mocks.dateProvider,
-            featureInfo: FeatureInfo(),
-            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
-        )
-        let observer = TransactionObserver(
-            api: mocks.nuxieApi,
-            features: features,
-            identity: mocks.identityService,
-            settings: settings,
-            eventSink: TransactionEvidenceEventSink(),
-            transactionServiceProvider: { fatalError("unused in this test") },
-            evidenceStore: evidenceStore
-        )
-        let evidence = StoreTransactionEvidence(
-            transactionJws: "signed-jws",
-            transactionId: "transaction-race",
-            originalTransactionId: "original-race",
-            productId: "product-race",
-            finish: {}
-        )
-        let product = StoreProduct(
-            productId: "product-race",
-            placementId: "placement-race",
-            name: "Product",
-            price: "$1.00",
-            period: nil
-        )
-
-        let firstRecord = await observer.recordVerifiedPurchase(
-            evidence: evidence,
-            product: product,
-            distinctId: "customer-1",
-            finishRequired: true
-        )
-        XCTAssertTrue(firstRecord)
-        let firstSync = await observer.syncTransaction(
-            transactionJws: evidence.transactionJws,
-            transactionId: evidence.transactionId,
-            productId: evidence.productId,
-            originalTransactionId: evidence.originalTransactionId
-        )
-        XCTAssertTrue(firstSync)
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.finishRequired == true)
-        await observer.markTransactionFinished(transactionId: evidence.transactionId)
-        XCTAssertNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
-
-        // Model the direct purchase callback persisting after the observer has
-        // already completed the same transaction from Transaction.updates.
-        let lateRecord = await observer.recordVerifiedPurchase(
-            evidence: evidence,
-            product: product,
-            distinctId: "customer-1",
-            finishRequired: true
-        )
-        XCTAssertTrue(lateRecord)
-        XCTAssertNotNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
-        let deduplicatedSync = await observer.syncTransaction(
-            transactionJws: evidence.transactionJws,
-            transactionId: evidence.transactionId,
-            productId: evidence.productId,
-            originalTransactionId: evidence.originalTransactionId
-        )
-        XCTAssertTrue(deduplicatedSync)
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.finishRequired == true)
     }
 
     @MainActor

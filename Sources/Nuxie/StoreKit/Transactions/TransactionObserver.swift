@@ -2,16 +2,143 @@ import CryptoKit
 import Foundation
 import StoreKit
 
-enum TransactionProcessingSource {
-    case storeUpdates
-    case nuxieEntitlementSync(distinctId: String)
+enum PurchaseOutcomeSource: String, Equatable, Sendable {
+    case checkout
+    case transactionStream = "transaction_stream"
+    case startupRecovery = "startup_recovery"
+    case deferredUpdate = "deferred_update"
+    case externalDelegate = "external_delegate"
+}
 
-    var distinctId: String? {
-        guard case .nuxieEntitlementSync(let distinctId) = self else {
-            return nil
-        }
-        return distinctId
+struct VerifiedPurchaseEvidence: Sendable {
+    let transactionJws: String
+    let transactionId: String
+    let originalTransactionId: String
+    let productId: String
+    let appAccountToken: UUID?
+    let attributedDistinctId: String?
+    let recordedAt: Date?
+    let productFeatureIds: [String]
+    let commercialContext: PurchaseCommercialContext?
+    let checkoutCompletionEventId: String?
+    let completionDeliveredAt: Date?
+    let backendSyncedAt: Date?
+    let finishRequired: Bool?
+    let resolvesPendingPurchase: Bool
+    let allowsDurableCheckoutAuthority: Bool
+    let requiresAuthorityResolution: Bool
+    /// Checkout recovery claims a transaction BECAUSE its account token says
+    /// it is ours: attribution must come from token-derived ownership alone,
+    /// never from the caller's expectation or the active customer.
+    let requiresTokenOwnership: Bool
+    let isRevoked: Bool
+    let isUpgraded: Bool
+    let finish: (@Sendable () async -> Void)?
+
+    init(
+        transactionJws: String,
+        transactionId: String,
+        originalTransactionId: String,
+        productId: String,
+        appAccountToken: UUID? = nil,
+        attributedDistinctId: String? = nil,
+        recordedAt: Date? = nil,
+        productFeatureIds: [String] = [],
+        commercialContext: PurchaseCommercialContext? = nil,
+        checkoutCompletionEventId: String? = nil,
+        completionDeliveredAt: Date? = nil,
+        backendSyncedAt: Date? = nil,
+        finishRequired: Bool? = nil,
+        resolvesPendingPurchase: Bool,
+        allowsDurableCheckoutAuthority: Bool,
+        requiresAuthorityResolution: Bool = true,
+        requiresTokenOwnership: Bool = false,
+        isRevoked: Bool = false,
+        isUpgraded: Bool = false,
+        finish: (@Sendable () async -> Void)? = nil
+    ) {
+        self.transactionJws = transactionJws
+        self.transactionId = transactionId
+        self.originalTransactionId = originalTransactionId
+        self.productId = productId
+        self.appAccountToken = appAccountToken
+        self.attributedDistinctId = attributedDistinctId
+        self.recordedAt = recordedAt
+        self.productFeatureIds = productFeatureIds
+        self.commercialContext = commercialContext
+        self.checkoutCompletionEventId = checkoutCompletionEventId
+        self.completionDeliveredAt = completionDeliveredAt
+        self.backendSyncedAt = backendSyncedAt
+        self.finishRequired = finishRequired
+        self.resolvesPendingPurchase = resolvesPendingPurchase
+        self.allowsDurableCheckoutAuthority = allowsDurableCheckoutAuthority
+        self.requiresAuthorityResolution = requiresAuthorityResolution
+        self.requiresTokenOwnership = requiresTokenOwnership
+        self.isRevoked = isRevoked
+        self.isUpgraded = isUpgraded
+        self.finish = finish
     }
+}
+
+struct ExternalPurchaseDeclaration: Sendable {
+    enum Kind: Sendable {
+        case purchased(
+            context: PurchaseCommercialContext,
+            transactionId: String?,
+            testStore: Bool
+        )
+        case restored(testStore: Bool)
+    }
+
+    let operationId: String
+    let distinctId: String
+    let kind: Kind
+}
+
+enum PurchaseOutcome: Sendable {
+    case verified(VerifiedPurchaseEvidence, source: PurchaseOutcomeSource)
+    case external(ExternalPurchaseDeclaration, source: PurchaseOutcomeSource)
+    case cancelled(source: PurchaseOutcomeSource)
+    case pending(source: PurchaseOutcomeSource)
+    case failed(reason: String, source: PurchaseOutcomeSource)
+
+    var source: PurchaseOutcomeSource {
+        switch self {
+        case .verified(_, let source),
+             .external(_, let source),
+             .cancelled(let source),
+             .pending(let source),
+             .failed(_, let source):
+            return source
+        }
+    }
+}
+
+struct PurchaseCommitResult: Sendable {
+    let committed: Bool
+    let syncTask: Task<Bool, Never>?
+    let isTerminal: Bool
+
+    init(
+        committed: Bool,
+        syncTask: Task<Bool, Never>?,
+        isTerminal: Bool? = nil
+    ) {
+        self.committed = committed
+        self.syncTask = syncTask
+        self.isTerminal = isTerminal ?? committed
+    }
+
+    static let handled = Self(
+        committed: false,
+        syncTask: nil,
+        isTerminal: true
+    )
+    static let rejected = Self(
+        committed: false,
+        syncTask: nil,
+        isTerminal: false
+    )
 }
 
 /// Immutable verified StoreKit update consumed by the transaction handler.
@@ -113,56 +240,24 @@ struct TransactionProcessingPolicy: Equatable {
 }
 
 func transactionProcessingPolicy(
-    source: TransactionProcessingSource,
+    resolvesPendingPurchase: Bool,
     evidenceAuthority: PurchaseEvidenceAuthority,
     observerMode: Bool
 ) -> TransactionProcessingPolicy {
-    switch source {
-    case .storeUpdates:
-        let providerOwnsTransaction = evidenceAuthority == .providerConnector
-            || evidenceAuthority == .ambiguous
-        return TransactionProcessingPolicy(
-            providerOwnsTransaction: providerOwnsTransaction,
-            finishAfterRecording: !providerOwnsTransaction && !observerMode,
-            resolvesPendingPurchase: true
-        )
-    case .nuxieEntitlementSync:
-        // Restore outcomes carry no receipt-ownership assertion. Preserve the
-        // product authority captured before checkout: native/outcome-only
-        // StoreKit evidence belongs to Nuxie, while signed Connector evidence
-        // remains in the provider synchronization path. Native current
-        // entitlements are durably recorded before Nuxie finishes them.
-        let providerOwnsTransaction = evidenceAuthority == .providerConnector
-            || evidenceAuthority == .ambiguous
-        return TransactionProcessingPolicy(
-            providerOwnsTransaction: providerOwnsTransaction,
-            finishAfterRecording: !providerOwnsTransaction && !observerMode,
-            resolvesPendingPurchase: false
-        )
-    }
+    let providerOwnsTransaction = evidenceAuthority == .providerConnector
+        || evidenceAuthority == .ambiguous
+    return TransactionProcessingPolicy(
+        providerOwnsTransaction: providerOwnsTransaction,
+        finishAfterRecording: !providerOwnsTransaction && !observerMode,
+        resolvesPendingPurchase: resolvesPendingPurchase
+    )
 }
 
 protocol TransactionObserverProtocol: Actor {
     func startListening()
     func stopListening() async
-    func syncTransaction(
-        transactionJws: String,
-        transactionId: String,
-        productId: String?,
-        originalTransactionId: String?
-    ) async -> Bool
+    func commit(_ outcome: PurchaseOutcome) async -> PurchaseCommitResult
     func syncCurrentEntitlements(distinctId: String) async
-    func recordVerifiedPurchase(
-        evidence: StoreTransactionEvidence,
-        product: StoreProduct,
-        distinctId: String,
-        finishRequired: Bool
-    ) async -> Bool
-    func markTransactionFinished(transactionId: String) async
-    func claimPurchaseCompletion(transactionId: String) async -> Bool
-    func markPurchaseCompletionCaptured(transactionId: String) async -> Bool
-    func releasePurchaseCompletionClaim(transactionId: String) async
-    func purchaseCompletionEventId(transactionId: String) async -> String
     func retryStoredEvidence() async
     func retryAfterProfileReady() async
     /// Atomically reconciles a matching unsynchronized StoreKit purchase and
@@ -179,16 +274,14 @@ protocol TransactionObserverProtocol: Actor {
 }
 
 extension TransactionObserverProtocol {
-    func recordVerifiedPurchase(
-        evidence: StoreTransactionEvidence,
-        product: StoreProduct,
-        distinctId: String,
-        finishRequired: Bool
-    ) async -> Bool { true }
-    func markTransactionFinished(transactionId: String) async {}
-    func claimPurchaseCompletion(transactionId: String) async -> Bool { true }
-    func markPurchaseCompletionCaptured(transactionId: String) async -> Bool { true }
-    func releasePurchaseCompletionClaim(transactionId: String) async {}
+    func commit(_ outcome: PurchaseOutcome) async -> PurchaseCommitResult {
+        switch outcome {
+        case .verified, .external:
+            return PurchaseCommitResult(committed: true, syncTask: nil)
+        case .cancelled, .pending, .failed:
+            return .handled
+        }
+    }
     func retryStoredEvidence() async {}
     func retryAfterProfileReady() async { await retryStoredEvidence() }
     func useFeatureWithPendingPurchase(
@@ -252,6 +345,35 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private var lifecycleGeneration: UInt64 = 0
     private var isStopped = false
 
+    private enum PurchaseCommitKey: Hashable, Sendable {
+        case verified(transactionId: String, revoked: Bool)
+        case external(operationId: String)
+    }
+
+    private struct PurchaseCommitOperation: Sendable {
+        let id: UUID
+        let task: Task<PurchaseCommitResult, Never>
+    }
+
+    private struct CompletedPurchaseCommit: Sendable {
+        let id: UUID
+        let result: PurchaseCommitResult
+    }
+
+    /// The actor may re-enter while evidence or events are being persisted.
+    /// Install the whole-commit operation before the first suspension so every
+    /// producer of the same evidence joins one ordered interpretation.
+    private var purchaseCommitOperations: [PurchaseCommitKey: PurchaseCommitOperation] = [:]
+    private var completedPurchaseCommits: [PurchaseCommitKey: CompletedPurchaseCommit] = [:]
+    /// A nonterminal stable-event/Journey capture retries the exact same
+    /// committer identity. External callbacks are never invoked again, and a
+    /// verified retry reuses its durable evidence rather than finishing twice.
+    private var retryablePurchaseOutcomes: [PurchaseCommitKey: PurchaseOutcome] = [:]
+    private var purchaseCommitRetryTask: Task<Void, Never>?
+    /// Journey authority is process-local. Preserve it across a transient
+    /// routed-capture failure, but never across observer teardown/relaunch.
+    private var purchaseCommitJourneyRouting: Set<PurchaseCommitKey> = []
+
     /// Set of transaction IDs we've already synced (to avoid duplicates within session)
     private var syncedTransactionIds: Set<String> = []
     private struct TransactionSyncOperation: Sendable {
@@ -263,7 +385,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// while the same backend request is suspended. The observer owns one task
     /// per receipt identity so every caller and shutdown can join it.
     private var transactionSyncOperations: [String: TransactionSyncOperation] = [:]
-    private var completedPurchaseEventTransactionIds: Set<String> = []
     private var evidenceByTransactionId: [String: StoredTransactionEvidence]?
     private var evidenceStoreUnreadable = false
     /// Purchase-backed use and projection refresh share this actor-owned
@@ -274,7 +395,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private var optimisticProjectionIsActive = false
     private var optimisticProjectionDistinctId: String?
     /// Verified revocations retained for the observer lifetime even when a
-    /// commerce store is unreadable. This revocation evidence is not persisted
+    /// transaction evidence store is unreadable. This revocation evidence is not persisted
     /// entitlement state and prevents a later recompute from resurrecting access
     /// before the durable evidence record can be updated.
     private var revokedOriginalTransactionIds: Set<String> = []
@@ -427,7 +548,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 guard let self = self else { break }
                 _ = await self.handleTransactionResult(
                     result,
-                    source: .storeUpdates
+                    source: .transactionStream
                 )
             }
         }
@@ -440,11 +561,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let listeningTask = updateTask
         updateTask = nil
         let recoveryTask = evidenceRecoveryTask
+        let commitRetryTask = purchaseCommitRetryTask
+        let commitTasks = purchaseCommitOperations.values.map(\.task)
         let syncTasks = transactionSyncOperations.values.map(\.task)
         listeningTask?.cancel()
         recoveryTask?.cancel()
+        commitRetryTask?.cancel()
+        commitTasks.forEach { $0.cancel() }
         syncTasks.forEach { $0.cancel() }
+        for task in commitTasks { _ = await task.value }
         for task in syncTasks { _ = await task.value }
+        await commitRetryTask?.value
         await recoveryTask?.value
         await listeningTask?.value
         if !purchaseUsageClaims.isEmpty {
@@ -452,8 +579,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 purchaseUsageDrainWaiters.append(continuation)
             }
         }
+        purchaseCommitOperations.removeAll()
+        retryablePurchaseOutcomes.removeAll()
+        purchaseCommitJourneyRouting.removeAll()
         transactionSyncOperations.removeAll()
         evidenceRecoveryTask = nil
+        purchaseCommitRetryTask = nil
         let usageWaiters = purchaseUsageWaiters.values.flatMap { $0 }
         purchaseUsageWaiters.removeAll()
         purchaseUsageClaims.removeAll()
@@ -464,120 +595,58 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     // MARK: - Transaction Processing
 
     /// Process any unfinished transactions from previous app sessions
-    private func processUnfinishedTransactions() async -> (
-        processed: Set<String>,
-        finished: Set<String>
-    ) {
+    private func processUnfinishedTransactions() async {
         LogDebug("TransactionObserver: Checking for unfinished transactions")
 
-        var processedTransactionIds: Set<String> = []
-        var finishedTransactionIds: Set<String> = []
         for item in await unfinishedRecoveryTransactions() {
-            processedTransactionIds.insert(item.update.transactionId)
             await handleVerifiedTransaction(
                 item.update,
                 jwsRepresentation: item.jwsRepresentation,
-                source: .storeUpdates
+                source: .startupRecovery
             )
-            if item.finishOutcome?.didFinish == true {
-                finishedTransactionIds.insert(item.update.transactionId)
-            }
         }
 
         LogDebug("TransactionObserver: Finished processing unfinished transactions")
-        return (processedTransactionIds, finishedTransactionIds)
     }
 
     /// Retry evidence that was safely recorded and finished locally while the
     /// backend was unavailable. StoreKit will not replay a transaction after
     /// finishing, so this queue is the recovery source on relaunch.
-    private func processStoredEvidence(
-        finishedTransactionIds: Set<String>
-    ) async {
-        let currentDistinctId = identityService.getDistinctId()
+    private func processStoredEvidence() async {
         for evidence in storedEvidence().values {
             guard !Task.isCancelled else { return }
-            // Clear lifecycle ownership only when this exact unfinished
-            // transaction was matched and its StoreKit finish returned.
-            if evidence.finishRequired,
-               finishedTransactionIds.contains(evidence.transactionId) {
-                await markTransactionFinished(
-                    transactionId: evidence.transactionId
-                )
-            }
-
-            // A successful store purchase changes local UX independently of
-            // backend availability. Preserve its canonical commercial event
-            // before retrying receipt submission. Journey routing is allowed
-            // only while the exact checkout remains active in this process.
-            var retainedEvidence = storedEvidence()[evidence.transactionId]
-                ?? evidence
-
-            // Commercial completion is a local-first consequence of verified
-            // StoreKit evidence. Capture it durably before attempting the
-            // backend so an outage cannot suppress the successful Journey.
-            if !retainedEvidence.isRevoked,
-               retainedEvidence.commercialContext != nil,
-               retainedEvidence.distinctId == currentDistinctId {
-                let routeToJourneys = await transactionServiceProvider()
-                    .isActiveCheckout(
-                        appAccountToken: retainedEvidence.scope.appAccountToken(
-                            distinctId: retainedEvidence.distinctId
-                        ),
-                        productId: retainedEvidence.productId,
-                        distinctId: retainedEvidence.distinctId
-                    )
-                let delivered = await emitRecoveredPurchaseCompletion(
-                    evidence: retainedEvidence,
-                    routeToJourneys: routeToJourneys
-                )
-                guard !Task.isCancelled else { return }
-                if delivered {
-                    retainedEvidence = storedEvidence()[evidence.transactionId]
-                        ?? retainedEvidence
-                }
-            }
-
-            let synced: Bool
-            if retainedEvidence.backendSyncedAt == nil {
-                synced = await syncTransactionWithOptions(
-                    transactionJws: retainedEvidence.transactionJws,
-                    transactionId: retainedEvidence.transactionId,
-                    productId: retainedEvidence.productId,
-                    originalTransactionId: retainedEvidence.originalTransactionId,
-                    updateLocalFeatures: retainedEvidence.distinctId == currentDistinctId,
-                    isRevoked: retainedEvidence.isRevoked,
-                    retainEvidenceAfterSync: true
-                )
-                guard !Task.isCancelled else { return }
-                if synced {
-                    // syncTransactionWithOptions durably records backend
-                    // acceptance and scrubs the accepted JWS. Reload that
-                    // canonical record instead of restoring stale receipt
-                    // material from this loop's pre-sync snapshot.
-                    retainedEvidence = storedEvidence()[evidence.transactionId]
-                        ?? retainedEvidence
-                }
-            } else {
-                synced = true
-            }
-            if synced {
-                if retainedEvidence.finishRequired {
-                    // Receipt acceptance is independent, but only StoreKit's
-                    // exact unfinished result can retire finish ownership.
-                    continue
-                }
-                if retainedEvidence.commercialContext != nil,
-                   retainedEvidence.completionDeliveredAt == nil {
-                    // Preserve exact bounded commercial context until its
-                    // stable completion event is durably captured. Backend
-                    // acknowledgement remains independent and prevents
-                    // duplicate receipt submissions meanwhile.
-                    continue
-                }
-                _ = await removeEvidence(
-                    transactionId: retainedEvidence.transactionId
-                )
+            let result = await commit(.verified(
+                VerifiedPurchaseEvidence(
+                    transactionJws: evidence.transactionJws,
+                    transactionId: evidence.transactionId,
+                    originalTransactionId: evidence.originalTransactionId,
+                    productId: evidence.productId,
+                    appAccountToken: evidence.scope.appAccountToken(
+                        distinctId: evidence.distinctId
+                    ),
+                    attributedDistinctId: evidence.distinctId,
+                    recordedAt: evidence.recordedAt,
+                    productFeatureIds: evidence.productFeatureIds,
+                    commercialContext: evidence.commercialContext,
+                    checkoutCompletionEventId: evidence.checkoutCompletionEventId,
+                    completionDeliveredAt: evidence.completionDeliveredAt,
+                    backendSyncedAt: evidence.backendSyncedAt,
+                    finishRequired: evidence.finishRequired,
+                    resolvesPendingPurchase: false,
+                    allowsDurableCheckoutAuthority: false,
+                    requiresAuthorityResolution: false,
+                    isRevoked: evidence.isRevoked
+                ),
+                source: .startupRecovery
+            ))
+            _ = await result.syncTask?.value
+            guard !Task.isCancelled else { return }
+            if let retained = storedEvidence()[evidence.transactionId],
+               retained.backendSyncedAt != nil,
+               !retained.finishRequired,
+               retained.commercialContext == nil
+                || retained.completionDeliveredAt != nil {
+                _ = await removeEvidence(transactionId: evidence.transactionId)
             }
         }
     }
@@ -616,29 +685,31 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             let processingGeneration = evidenceRecoveryRequestGeneration
             let scanCurrentEntitlements = profileReadyEntitlementScanRequested
             profileReadyEntitlementScanRequested = false
+            await retryPendingPurchaseOutcomes()
+            guard !Task.isCancelled else {
+                evidenceRecoveryTask = nil
+                return
+            }
             await refreshOptimisticProjection()
             guard !Task.isCancelled else {
                 evidenceRecoveryTask = nil
                 return
             }
-            let unfinishedRecovery = await processUnfinishedTransactions()
+            await processUnfinishedTransactions()
             guard !Task.isCancelled else {
                 evidenceRecoveryTask = nil
                 return
             }
             if scanCurrentEntitlements {
                 await processCurrentEntitlements(
-                    distinctId: identityService.getDistinctId(),
-                    excludingTransactionIds: unfinishedRecovery.processed
+                    distinctId: identityService.getDistinctId()
                 )
             }
             guard !Task.isCancelled else {
                 evidenceRecoveryTask = nil
                 return
             }
-            await processStoredEvidence(
-                finishedTransactionIds: unfinishedRecovery.finished
-            )
+            await processStoredEvidence()
             guard !Task.isCancelled else {
                 evidenceRecoveryTask = nil
                 return
@@ -657,7 +728,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// Handle a transaction verification result
     private func handleTransactionResult(
         _ result: VerificationResult<Transaction>,
-        source: TransactionProcessingSource
+        source: PurchaseOutcomeSource
     ) async -> String? {
         switch result {
         case .verified(let transaction):
@@ -688,397 +759,744 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
     }
 
-    /// Provider-owned StoreKit updates may complete a deferred paywall action,
-    /// but the provider remains the sole receipt, entitlement, and finishing
-    /// authority. Historical Nuxie token ownership must not change that.
-    private func processProviderOwnedTransaction(
-        _ transaction: VerifiedStoreTransactionUpdate,
-        checkoutRecovery: PendingPurchaseRecord?
-    ) async {
-        let currentDistinctId = identityService.getDistinctId()
-        let transactionService = transactionServiceProvider()
-        if let checkoutRecovery,
-           checkoutRecovery.state == .checkout,
-           checkoutRecovery.evidenceAuthority == .providerConnector {
-            if checkoutRecovery.completionReportedAt == nil {
-                let captured = await eventSink.captureOnly(
-                    SystemEventNames.purchaseCompleted,
-                    properties: purchaseCompletionProperties(
-                        context: checkoutRecovery.commercialContext,
-                        transactionId: transaction.transactionId,
-                        testStore: checkoutRecovery.scope.storeEnvironment == .testStore
-                    ),
-                    eventId: checkoutRecovery.checkoutCompletionEventId,
-                    distinctId: checkoutRecovery.distinctId
-                )
-                guard captured else { return }
-                guard await transactionService.markCheckoutCompletionReported(
-                    appAccountToken: checkoutRecovery.appAccountToken,
-                    productId: transaction.productId,
-                    completionEventId: checkoutRecovery.checkoutCompletionEventId,
-                    reportedAt: dateProvider.now()
-                ) else { return }
-            }
-            _ = await transactionService.retireCheckoutRecovery(
-                appAccountToken: checkoutRecovery.appAccountToken,
-                productId: transaction.productId
-            )
-            LogDebug(
-                "TransactionObserver: Provider completion recovered without receipt ownership"
-            )
-            return
-        }
-        if let pending = await transactionService.pendingPurchaseRecord(
-            productId: transaction.productId,
-            distinctId: currentDistinctId
-        ) {
-            let context = pending.commercialContext
-            let captured = await eventSink.captureOnly(
-                SystemEventNames.purchaseCompleted,
-                properties: purchaseCompletionProperties(
-                    context: context,
-                    transactionId: transaction.transactionId,
-                    testStore: pending.scope.storeEnvironment == .testStore
-                ),
-                eventId: await purchaseCompletionEventId(
-                    transactionId: transaction.transactionId
-                ),
-                distinctId: currentDistinctId
-            )
-            if captured {
-                _ = await transactionService.consumePendingPurchase(
-                productId: transaction.productId,
-                distinctId: currentDistinctId
-                )
-            }
-        }
-        LogDebug(
-            "TransactionObserver: Provider-owned transaction \(transaction.transactionId) left to delegate"
-        )
-    }
-
-    /// Handle a verified transaction by syncing with backend
     private func resolvedEvidenceAuthority(
         transactionService: TransactionService,
         appAccountToken: UUID?,
         productId: String,
         checkoutRecovery: PendingPurchaseRecord?,
-        source: TransactionProcessingSource
+        allowsDurableCheckoutAuthority: Bool
     ) async -> PurchaseEvidenceAuthority? {
+        // A configured external billing delegate owns receipt processing. Its
+        // declarations never open a StoreKit reconciliation window in Nuxie.
+        if settings.purchaseDelegate() != nil {
+            return .providerConnector
+        }
         let active = await transactionService.activePurchaseEvidenceAuthority(
             productId: productId
         )
         guard active != .unavailable else { return nil }
-        switch source {
-        case .storeUpdates:
-            let durableResult = await transactionService.durablePurchaseEvidenceAuthority(
-                appAccountToken: appAccountToken,
-                productId: productId
-            )
-            let durable: PurchaseEvidenceAuthority?
-            switch durableResult {
-            case .absent:
-                durable = nil
-            case .value(let authority):
-                durable = authority
-            case .unreadable:
-                return nil
-            }
-            return checkoutRecovery?.evidenceAuthority.durableProductAuthority
-                ?? durable
-                ?? active.resolvedAuthority
-        case .nuxieEntitlementSync:
+        guard allowsDurableCheckoutAuthority else {
             return active.resolvedAuthority
         }
+        let durableResult = await transactionService.durablePurchaseEvidenceAuthority(
+            appAccountToken: appAccountToken,
+            productId: productId
+        )
+        let durable: PurchaseEvidenceAuthority?
+        switch durableResult {
+        case .absent:
+            durable = nil
+        case .value(let authority):
+            durable = authority
+        case .unreadable:
+            return nil
+        }
+        return checkoutRecovery?.evidenceAuthority.durableProductAuthority
+            ?? durable
+            ?? active.resolvedAuthority
     }
 
     func handleVerifiedTransaction(
         _ transaction: VerifiedStoreTransactionUpdate,
         jwsRepresentation transactionJwt: String,
-        source: TransactionProcessingSource
+        source: PurchaseOutcomeSource,
+        attributedDistinctId: String? = nil,
+        resolvesPendingPurchase: Bool = true,
+        allowsDurableCheckoutAuthority: Bool = true
     ) async {
-        let transactionIdString = transaction.transactionId
-        let isRevoked = transaction.isRevoked
-        var stored = storedEvidence()[transactionIdString]
-        if isRevoked {
-            // Revocation narrows immediately, even if durable commerce stores
-            // are temporarily unreadable and later processing must defer.
+        var resolvedSource = source
+        if source == .transactionStream,
+           resolvesPendingPurchase,
+           case .unique = await transactionServiceProvider()
+            .pendingPurchaseOwnership(productId: transaction.productId) {
+            resolvedSource = .deferredUpdate
+        }
+        _ = await commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: transactionJwt,
+                transactionId: transaction.transactionId,
+                originalTransactionId: transaction.originalTransactionId,
+                productId: transaction.productId,
+                appAccountToken: transaction.appAccountToken,
+                attributedDistinctId: attributedDistinctId,
+                resolvesPendingPurchase: resolvesPendingPurchase,
+                allowsDurableCheckoutAuthority: allowsDurableCheckoutAuthority,
+                isRevoked: transaction.isRevoked,
+                isUpgraded: transaction.isUpgraded,
+                finish: transaction.finish
+            ),
+            source: resolvedSource
+        ))
+    }
+
+    func commit(_ outcome: PurchaseOutcome) async -> PurchaseCommitResult {
+        guard !isStopped else { return .rejected }
+        guard let key = purchaseCommitKey(for: outcome) else {
+            LogDebug(
+                "TransactionObserver: Handled \(outcome.source.rawValue) purchase outcome"
+            )
+            return .handled
+        }
+
+        while true {
+            if let completed = completedPurchaseCommits[key] {
+                // Keep one exact sync task for every accepted commit attempt. A
+                // failed receipt submission invalidates only the in-memory
+                // marker; durable evidence and completion state make the next
+                // producer a safe retry without replaying Journey advancement.
+                if case .verified = outcome,
+                   let syncTask = completed.result.syncTask {
+                    let synced = await syncTask.value
+                    guard !isStopped else { return .rejected }
+                    // Another waiter may have invalidated and replaced this
+                    // completion while the actor was suspended. Re-evaluate
+                    // the newest completed/in-flight state before proceeding.
+                    guard completedPurchaseCommits[key]?.id == completed.id else {
+                        continue
+                    }
+                    if synced {
+                        return completed.result
+                    }
+                    completedPurchaseCommits.removeValue(forKey: key)
+                    // A duplicate checkout-recovery producer reports the
+                    // recovery; it never resubmits a failed receipt itself.
+                    // The invalidated completion leaves the retry to the
+                    // stored-evidence pump's next pass.
+                    if case .verified(let evidence, _) = outcome,
+                       evidence.requiresTokenOwnership {
+                        return completed.result
+                    }
+                    continue
+                }
+                return completed.result
+            }
+            guard !isStopped else { return .rejected }
+            if let operation = purchaseCommitOperations[key] {
+                return await operation.task.value
+            }
+
+            let operationId = UUID()
+            let task = Task { [weak self] in
+                guard let self else { return PurchaseCommitResult.rejected }
+                return await self.performPurchaseCommit(outcome)
+            }
+            purchaseCommitOperations[key] = PurchaseCommitOperation(
+                id: operationId,
+                task: task
+            )
+            let result = await task.value
+            if purchaseCommitOperations[key]?.id == operationId {
+                purchaseCommitOperations.removeValue(forKey: key)
+            }
+            if result.isTerminal {
+                completedPurchaseCommits[key] = CompletedPurchaseCommit(
+                    id: UUID(),
+                    result: result
+                )
+                retryablePurchaseOutcomes.removeValue(forKey: key)
+                purchaseCommitJourneyRouting.remove(key)
+            } else if shouldRetainPurchaseCommitRetry(outcome, key: key) {
+                retryablePurchaseOutcomes[key] = preferredPurchaseCommitRetry(
+                    existing: retryablePurchaseOutcomes[key],
+                    candidate: outcome
+                )
+                if shouldSchedulePurchaseCommitRetry(outcome, key: key) {
+                    schedulePurchaseCommitRetry()
+                }
+            }
+            return result
+        }
+    }
+
+    /// Read-only acceptance probe for the cross-SDK fixture. The committer's
+    /// completed identities are independent from evidence-row and event counts.
+    func completedSuccessfulPurchaseCommitCount() -> Int {
+        completedPurchaseCommits.values.filter(\.result.committed).count
+    }
+
+    private func schedulePurchaseCommitRetry() {
+        guard !isStopped, purchaseCommitRetryTask == nil else { return }
+        purchaseCommitRetryTask = Task { [weak self] in
+            guard let self else { return }
+            await self.performPurchaseCommitRetryPump()
+        }
+    }
+
+    private func performPurchaseCommitRetryPump() async {
+        var delayNanoseconds: UInt64 = 250_000_000
+        while !isStopped, !Task.isCancelled {
+            guard retryablePurchaseOutcomes.contains(where: {
+                shouldSchedulePurchaseCommitRetry($0.value, key: $0.key)
+            }) else {
+                purchaseCommitRetryTask = nil
+                return
+            }
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !isStopped, !Task.isCancelled else { break }
+            await retryPendingPurchaseOutcomes(immediateOnly: true)
+            delayNanoseconds = min(delayNanoseconds * 2, 5_000_000_000)
+        }
+        purchaseCommitRetryTask = nil
+    }
+
+    private func retryPendingPurchaseOutcomes(
+        immediateOnly: Bool = false
+    ) async {
+        let pending = retryablePurchaseOutcomes
+        for (key, outcome) in pending {
+            guard !isStopped, !Task.isCancelled else { return }
+            if immediateOnly,
+               !shouldSchedulePurchaseCommitRetry(outcome, key: key) {
+                continue
+            }
+            let result = await commit(outcome)
+            if result.isTerminal,
+               retryablePurchaseOutcomes[key] != nil {
+                retryablePurchaseOutcomes.removeValue(forKey: key)
+            }
+        }
+    }
+
+    private func shouldRetainPurchaseCommitRetry(
+        _ outcome: PurchaseOutcome,
+        key: PurchaseCommitKey
+    ) -> Bool {
+        switch outcome {
+        case .external:
+            return true
+        case .verified:
+            return purchaseCommitJourneyRouting.contains(key)
+        case .cancelled, .pending, .failed:
+            return false
+        }
+    }
+
+    private func preferredPurchaseCommitRetry(
+        existing: PurchaseOutcome?,
+        candidate: PurchaseOutcome
+    ) -> PurchaseOutcome {
+        guard let existing,
+              case .verified(let existingEvidence, _) = existing,
+              case .verified(let candidateEvidence, _) = candidate,
+              existingEvidence.finish != nil,
+              candidateEvidence.finish == nil else {
+            return candidate
+        }
+        // Stored-evidence replay intentionally has no StoreKit finish closure.
+        // Never let it replace the exact producer outcome still needed to
+        // clear a durable finishRequired flag after a failed state save.
+        return existing
+    }
+
+    private func shouldSchedulePurchaseCommitRetry(
+        _ outcome: PurchaseOutcome,
+        key: PurchaseCommitKey
+    ) -> Bool {
+        switch outcome {
+        case .external:
+            return true
+        case .verified(let evidence, _):
+            guard purchaseCommitJourneyRouting.contains(key) else {
+                return false
+            }
+            let distinctId = storedEvidence()[evidence.transactionId]?.distinctId
+                ?? evidence.attributedDistinctId
+            return distinctId == nil
+                || distinctId == identityService.getDistinctId()
+        case .cancelled, .pending, .failed:
+            return false
+        }
+    }
+
+    private func purchaseCommitKey(
+        for outcome: PurchaseOutcome
+    ) -> PurchaseCommitKey? {
+        switch outcome {
+        case .verified(let evidence, _):
+            return .verified(
+                transactionId: evidence.transactionId,
+                revoked: evidence.isRevoked
+            )
+        case .external(let declaration, _):
+            return .external(operationId: declaration.operationId)
+        case .cancelled, .pending, .failed:
+            return nil
+        }
+    }
+
+    private func performPurchaseCommit(
+        _ outcome: PurchaseOutcome
+    ) async -> PurchaseCommitResult {
+        switch outcome {
+        case .verified(let evidence, let source):
+            return await performVerifiedCommit(evidence, source: source)
+        case .external(let declaration, let source):
+            return await performExternalCommit(declaration, source: source)
+        case .cancelled, .pending, .failed:
+            return .handled
+        }
+    }
+
+    private func performExternalCommit(
+        _ declaration: ExternalPurchaseDeclaration,
+        source: PurchaseOutcomeSource
+    ) async -> PurchaseCommitResult {
+        let eventId = (["purchase-outcome", source.rawValue]
+            + purchaseStorageScope.storageComponents
+            + [declaration.operationId]).joined(separator: ":")
+        let routeToJourneys = declaration.distinctId
+            == identityService.getDistinctId()
+        var captured = false
+        // A false result can mean that the stable event is already durable but
+        // local Journey routing was temporarily unavailable. Retry the exact
+        // operation once immediately; later recovery hooks retain the same
+        // operation ID until routing reports terminal completion.
+        for _ in 0..<2 where !captured {
+            switch declaration.kind {
+            case .purchased(let context, let transactionId, let testStore):
+                captured = await capturePurchaseCompletion(
+                    properties: purchaseCompletionProperties(
+                        context: context,
+                        transactionId: transactionId,
+                        testStore: testStore,
+                        source: source
+                    ),
+                    eventId: eventId,
+                    distinctId: declaration.distinctId,
+                    routeToJourneys: routeToJourneys,
+                    ensureDurableCarrier: true
+                )
+            case .restored(let testStore):
+                captured = await eventSink.captureStableSystemEvent(
+                    SystemEventNames.restoreCompleted,
+                    properties: [
+                        "source": source.rawValue,
+                        "test_store": testStore,
+                    ],
+                    eventId: eventId,
+                    distinctId: declaration.distinctId,
+                    routeToJourneys: routeToJourneys,
+                    ensureDurableCarrier: true
+                )
+            }
+        }
+        if !captured {
+            LogWarning(
+                "TransactionObserver: External declaration accepted before event routing completed"
+            )
+        }
+        // The host has already completed the commercial operation. A local
+        // EventLog/Journey routing failure must never turn that declaration
+        // into a repurchase-safe failure. Keep the operation nonterminal so an
+        // exact same-operation retry can re-enter the stable event capture.
+        return PurchaseCommitResult(
+            committed: true,
+            syncTask: nil,
+            isTerminal: captured
+        )
+    }
+
+    private func performVerifiedCommit(
+        _ verified: VerifiedPurchaseEvidence,
+        source: PurchaseOutcomeSource
+    ) async -> PurchaseCommitResult {
+        let commitKey = PurchaseCommitKey.verified(
+            transactionId: verified.transactionId,
+            revoked: verified.isRevoked
+        )
+        var existing = storedEvidence()[verified.transactionId]
+        if verified.isRevoked {
             await publishImmediateRevocation(
-                originalTransactionId: transaction.originalTransactionId
+                originalTransactionId: verified.originalTransactionId
             )
             await persistImmediateRevocation(
-                transactionId: transactionIdString,
-                originalTransactionId: transaction.originalTransactionId,
-                transactionJws: transactionJwt
+                transactionId: verified.transactionId,
+                originalTransactionId: verified.originalTransactionId,
+                transactionJws: verified.transactionJws
             )
-            stored = storedEvidence()[transactionIdString]
+            existing = storedEvidence()[verified.transactionId]
         }
-        guard !evidenceStoreUnreadable else { return }
-        let transactionService = transactionServiceProvider()
-        let checkoutRecovery = await transactionService.checkoutRecoveryRecord(
-            appAccountToken: transaction.appAccountToken,
-            productId: transaction.productId
-        )
-        guard !(await transactionService.pendingPurchaseStoreIsUnreadable()) else { return }
-        guard let evidenceAuthority = await resolvedEvidenceAuthority(
-            transactionService: transactionService,
-            appAccountToken: transaction.appAccountToken,
-            productId: transaction.productId,
-            checkoutRecovery: checkoutRecovery,
-            source: source
-        ) else { return }
-        let policy = transactionProcessingPolicy(
-            source: source,
-            evidenceAuthority: evidenceAuthority,
-            observerMode: settings.purchaseHandlingMode() == .observer
-        )
-        let tokenExpectedDistinctId = source.distinctId
-            ?? identityService.getDistinctId()
-        let deterministicAccountOwner: String? = if transaction.appAccountToken
+        guard !evidenceStoreUnreadable else { return .rejected }
+
+        let needsTransactionService = verified.resolvesPendingPurchase
+            || (existing == nil && verified.requiresAuthorityResolution)
+        let transactionService = needsTransactionService
+            ? transactionServiceProvider()
+            : nil
+        let checkoutRecovery: PendingPurchaseRecord?
+        if let transactionService {
+            checkoutRecovery = await transactionService.checkoutRecoveryRecord(
+                appAccountToken: verified.appAccountToken,
+                productId: verified.productId
+            )
+            guard !(await transactionService.pendingPurchaseStoreIsUnreadable()) else {
+                return .rejected
+            }
+        } else {
+            checkoutRecovery = nil
+        }
+
+        let policy: TransactionProcessingPolicy
+        if existing != nil || !verified.requiresAuthorityResolution {
+            policy = TransactionProcessingPolicy(
+                providerOwnsTransaction: false,
+                finishAfterRecording: verified.finishRequired
+                    ?? (settings.purchaseHandlingMode() != .observer),
+                resolvesPendingPurchase: verified.resolvesPendingPurchase
+            )
+        } else {
+            guard let transactionService else { return .rejected }
+            guard let authority = await resolvedEvidenceAuthority(
+                transactionService: transactionService,
+                appAccountToken: verified.appAccountToken,
+                productId: verified.productId,
+                checkoutRecovery: checkoutRecovery,
+                allowsDurableCheckoutAuthority: verified
+                    .allowsDurableCheckoutAuthority
+            ) else { return .rejected }
+            policy = transactionProcessingPolicy(
+                resolvesPendingPurchase: verified.resolvesPendingPurchase,
+                evidenceAuthority: authority,
+                observerMode: settings.purchaseHandlingMode() == .observer
+            )
+        }
+
+        if policy.providerOwnsTransaction {
+            LogDebug(
+                "TransactionObserver: Verified transaction left to external billing"
+            )
+            // Provider ownership reflects the CURRENT release profile's
+            // authority, not this transaction forever: a later authority
+            // convergence must be able to reprocess it, so never cache
+            // this decision as a terminal commit.
+            return PurchaseCommitResult(
+                committed: false,
+                syncTask: nil,
+                isTerminal: false
+            )
+        }
+        if verified.isUpgraded {
+            if policy.finishAfterRecording, let finish = verified.finish {
+                await finish()
+            }
+            return PurchaseCommitResult(committed: true, syncTask: nil)
+        }
+        guard !verified.transactionJws.isEmpty || existing?.backendSyncedAt != nil else {
+            LogError(
+                "TransactionObserver: Empty JWS for transaction \(verified.transactionId)"
+            )
+            return .rejected
+        }
+
+        let activeDistinctId = identityService.getDistinctId()
+        if let existing,
+           let attributedDistinctId = verified.attributedDistinctId,
+           existing.distinctId != attributedDistinctId {
+            LogWarning(
+                "TransactionObserver: Refusing to move a purchase between customers"
+            )
+            return .rejected
+        }
+
+        let expectedDistinctId = verified.attributedDistinctId ?? activeDistinctId
+        let deterministicAccountOwner: String? = if verified.appAccountToken
             == purchaseStorageScope.appAccountToken(
-                distinctId: tokenExpectedDistinctId
+                distinctId: expectedDistinctId
             ) {
-            tokenExpectedDistinctId
+            expectedDistinctId
         } else {
             nil
         }
-        let purchaseAccountOwnerResult = await transactionService.purchaseAccountOwner(
-            appAccountToken: transaction.appAccountToken
-        )
-        guard !purchaseAccountOwnerResult.isUnreadable else { return }
-        let purchaseAccountOwner = purchaseAccountOwnerResult.readableValue
-            ?? deterministicAccountOwner
-        // Signed connector authority owns its StoreKit updates. An unsigned
-        // outcome-only delegate is deliberately different: exact checkout
-        // context is bounded, but the deterministic Nuxie account token keeps
-        // later native evidence in the SDK sync/finish pipeline.
-        if policy.providerOwnsTransaction, !isRevoked,
-           stored?.finishRequired != true {
-            guard policy.resolvesPendingPurchase else {
-                LogDebug(
-                    "TransactionObserver: Provider current entitlement left to Connector"
-                )
-                return
-            }
-            guard checkoutRecovery?.distinctId
-                    == identityService.getDistinctId() else {
-                LogDebug(
-                    "TransactionObserver: Uncorrelated transaction left to configured provider without resolving pending purchase"
-                )
-                return
-            }
-            await processProviderOwnedTransaction(
-                transaction,
-                checkoutRecovery: checkoutRecovery
+        let accountOwner: String?
+        if existing == nil, let transactionService {
+            let accountOwnerResult = await transactionService.purchaseAccountOwner(
+                appAccountToken: verified.appAccountToken
             )
-            return
-        }
-        if !isRevoked, !transaction.isUpgraded, stored == nil,
-           checkoutRecovery != nil || purchaseAccountOwner != nil {
-            let result = await recoverCheckoutTransaction(
-                evidence: StoreTransactionEvidence(
-                    transactionJws: transactionJwt,
-                    transactionId: transactionIdString,
-                    originalTransactionId: transaction.originalTransactionId,
-                    productId: transaction.productId,
-                    finish: transaction.finish
-                ),
-                appAccountToken: transaction.appAccountToken,
-                finishRequired: policy.finishAfterRecording,
-                attributedDistinctId: tokenExpectedDistinctId
-            )
-            if result == .recovered { return }
+            guard !accountOwnerResult.isUnreadable else { return .rejected }
+            accountOwner = accountOwnerResult.readableValue
+        } else {
+            accountOwner = nil
         }
 
-        if isRevoked {
-            LogDebug("TransactionObserver: Transaction \(transaction.transactionId) is revoked")
-        }
-
-        // A delegate may transfer verified StoreKit evidence to Nuxie and the
-        // process may terminate before its finish closure runs. Recover that
-        // explicit ownership before the provider-owned early return. If the
-        // transaction was revoked while the process was down, replace the
-        // purchase evidence with StoreKit's current revocation evidence.
-        if let stored, stored.finishRequired {
-            let recoveryEvidence: StoredTransactionEvidence
-            if isRevoked {
-                guard !transactionJwt.isEmpty else {
-                    LogError("TransactionObserver: Empty revocation JWS for transaction \(transaction.transactionId)")
-                    return
-                }
-                recoveryEvidence = StoredTransactionEvidence(
-                    scope: stored.scope,
-                    transactionJws: transactionJwt,
-                    transactionId: transactionIdString,
-                    originalTransactionId: transaction.originalTransactionId,
-                    productId: transaction.productId,
-                    distinctId: stored.distinctId,
-                    recordedAt: stored.recordedAt,
-                    productFeatureIds: stored.productFeatureIds,
-                    isRevoked: true,
-                    finishRequired: true,
-                    commercialContext: stored.commercialContext,
-                    checkoutCompletionEventId: stored.checkoutCompletionEventId,
-                    completionDeliveredAt: stored.completionDeliveredAt,
-                    backendSyncedAt: stored.backendSyncedAt
-                )
-                guard await persistEvidence(recoveryEvidence) else { return }
-            } else {
-                recoveryEvidence = stored
-            }
-            guard await completeStoredTransactionRecovery(
-                recoveryEvidence,
-                appAccountToken: transaction.appAccountToken,
-                checkoutRecoveryExists: checkoutRecovery != nil,
-                finish: transaction.finish
-            ) else { return }
-            return
-        }
-
-        if isRevoked, policy.providerOwnsTransaction {
-            LogDebug("TransactionObserver: Revoked provider-owned transaction left to delegate")
-            return
-        }
-
-        // A configured provider owns receipt submission, entitlement state,
-        // and transaction finishing. Nuxie only observes the delegate result
-        // for Journey UX; it must not become a second transaction owner.
-        guard !policy.providerOwnsTransaction else { return }
-
-        LogInfo("TransactionObserver: Processing verified transaction \(transaction.transactionId) for product \(transaction.productId)")
-
-        // Skip upgraded subscriptions (user has a higher tier now)
-        if transaction.isUpgraded {
-            LogDebug("TransactionObserver: Skipping upgraded transaction \(transaction.transactionId)")
-            if policy.finishAfterRecording {
-                await transaction.finish()
-            }
-            return
-        }
-
-        guard !transactionJwt.isEmpty else {
-            LogError("TransactionObserver: Empty JWS for transaction \(transaction.transactionId)")
-            // Don't finish - let StoreKit retry
-            return
-        }
-
-        let sourceDistinctId = source.distinctId
-        let activeDistinctId = identityService.getDistinctId()
-        let expectedDistinctId = sourceDistinctId ?? activeDistinctId
-        if let stored, stored.distinctId != expectedDistinctId {
-            LogWarning("TransactionObserver: Ignoring evidence for a different Nuxie customer")
-            // Durable evidence has already captured this transaction. Drain
-            // StoreKit's unfinished queue when Nuxie owns finishing; otherwise
-            // observer mode intentionally leaves finishing to the host.
-            if policy.finishAfterRecording {
-                await transaction.finish()
-            }
-            return
-        }
         let pendingRecord: PendingPurchaseRecord?
         if policy.resolvesPendingPurchase {
             if let checkoutRecovery {
                 pendingRecord = checkoutRecovery
             } else {
-                let pendingOwnership = await transactionServiceProvider()
-                    .pendingPurchaseOwnership(productId: transaction.productId)
-                switch pendingOwnership {
+                guard let transactionService else { return .rejected }
+                switch await transactionService.pendingPurchaseOwnership(
+                    productId: verified.productId
+                ) {
                 case .none:
                     pendingRecord = nil
                 case .unique(let record):
                     pendingRecord = record
                 case .ambiguous:
                     LogWarning(
-                        "TransactionObserver: Deferred purchase owner is ambiguous; leaving transaction unfinished"
+                        "TransactionObserver: Deferred purchase owner is ambiguous"
                     )
-                    return
+                    return .rejected
                 case .unavailable:
-                    return
+                    return .rejected
                 }
             }
         } else {
             pendingRecord = nil
         }
-        let pendingDistinctId = pendingRecord?.distinctId
-        let evidenceDistinctId = stored?.distinctId
-            ?? sourceDistinctId
-            ?? pendingDistinctId
-            ?? purchaseAccountOwner
-            ?? activeDistinctId
-        let evidenceRecordedAt = stored?.recordedAt
-            ?? pendingRecord?.recordedAt
-            ?? dateProvider.now()
-        let evidenceFeatureIds = stored?.productFeatureIds
-            ?? pendingRecord?.productFeatureIds
-            ?? []
-        let evidence = StoredTransactionEvidence(
-            scope: stored?.scope ?? pendingRecord?.scope ?? purchaseStorageScope,
-            transactionJws: transactionJwt,
-            transactionId: transactionIdString,
-            originalTransactionId: transaction.originalTransactionId,
-            productId: transaction.productId,
-            distinctId: evidenceDistinctId,
-            recordedAt: evidenceRecordedAt,
-            productFeatureIds: evidenceFeatureIds,
-            isRevoked: isRevoked,
-            finishRequired: stored?.finishRequired ?? false,
-            commercialContext: stored?.commercialContext
+
+        // Recovery attributes strictly from token-derived ownership: a
+        // checkout record, durable account ownership, or the deterministic
+        // Nuxie token. An unrecognized token is not ours — never fall back
+        // to the caller's expectation or the active customer.
+        let recoveredOwner = checkoutRecovery?.distinctId
+            ?? pendingRecord?.distinctId
+            ?? accountOwner
+            ?? deterministicAccountOwner
+        if verified.requiresTokenOwnership, existing == nil,
+           recoveredOwner == nil {
+            LogDebug(
+                "TransactionObserver: Leaving unrecognized account token unattributed"
+            )
+            // Ownership may still arrive later (durable attribution from a
+            // checkout on another path); do not cache the refusal.
+            return PurchaseCommitResult(
+                committed: false,
+                syncTask: nil,
+                isTerminal: false
+            )
+        }
+
+        // Once durable state records that finishing completed (or that the host
+        // owns it in observer mode), a retrying producer must not reassert its
+        // original finish requirement and finish the transaction twice.
+        let shouldFinish = existing?.finishRequired
+            ?? verified.finishRequired
+            ?? policy.finishAfterRecording
+        var committedEvidence = StoredTransactionEvidence(
+            scope: existing?.scope ?? pendingRecord?.scope ?? purchaseStorageScope,
+            // A revoked row's signed payload is authoritative: an active
+            // producer arriving after revocation must not rewrite it
+            // (monotonic revocation; the row stays exactly as revoked).
+            transactionJws: (existing?.isRevoked == true && !verified.isRevoked)
+                ? existing!.transactionJws
+                : (verified.transactionJws.isEmpty
+                    ? existing?.transactionJws ?? ""
+                    : verified.transactionJws),
+            transactionId: verified.transactionId,
+            originalTransactionId: verified.originalTransactionId,
+            productId: verified.productId,
+            distinctId: existing?.distinctId
+                ?? (verified.requiresTokenOwnership
+                    // Recovery: token-derived ownership outranks the
+                    // caller's expected customer (see the guard above).
+                    ? recoveredOwner ?? activeDistinctId
+                    : verified.attributedDistinctId
+                        ?? pendingRecord?.distinctId
+                        ?? accountOwner
+                        ?? deterministicAccountOwner
+                        ?? activeDistinctId),
+            recordedAt: existing?.recordedAt
+                ?? verified.recordedAt
+                ?? pendingRecord?.recordedAt
+                ?? dateProvider.now(),
+            productFeatureIds: existing?.productFeatureIds.isEmpty == false
+                ? existing!.productFeatureIds
+                : (verified.productFeatureIds.isEmpty
+                    ? pendingRecord?.productFeatureIds ?? []
+                    : verified.productFeatureIds),
+            isRevoked: verified.isRevoked || existing?.isRevoked == true,
+            finishRequired: shouldFinish,
+            commercialContext: existing?.commercialContext
+                ?? verified.commercialContext
                 ?? pendingRecord?.commercialContext,
-            checkoutCompletionEventId: stored?.checkoutCompletionEventId
+            checkoutCompletionEventId: existing?.checkoutCompletionEventId
+                ?? verified.checkoutCompletionEventId
                 ?? pendingRecord?.checkoutCompletionEventId,
-            completionDeliveredAt: stored?.completionDeliveredAt,
-            backendSyncedAt: stored?.backendSyncedAt
+            completionDeliveredAt: existing?.completionDeliveredAt
+                ?? verified.completionDeliveredAt,
+            backendSyncedAt: existing?.backendSyncedAt
+                ?? verified.backendSyncedAt
         )
-        guard await persistEvidence(evidence) else {
-            LogError("TransactionObserver: Could not durably record transaction (transaction.id); leaving it unfinished")
-            return
+        let routeCompletionToJourneys: Bool
+        if purchaseCommitJourneyRouting.contains(commitKey) {
+            routeCompletionToJourneys = true
+        } else if pendingRecord?.state == .pending {
+            // A deferred purchase explicitly survives the original checkout;
+            // its pending marker is the authority to resume the Journey.
+            routeCompletionToJourneys = true
+        } else if let transactionService {
+            routeCompletionToJourneys = await transactionService.isActiveCheckout(
+                appAccountToken: verified.appAccountToken,
+                productId: verified.productId,
+                distinctId: committedEvidence.distinctId
+            )
+        } else {
+            // Stored evidence on a later process launch preserves analytics
+            // and server delivery without resurrecting the ended paywall.
+            routeCompletionToJourneys = false
         }
-        guard await retireCheckoutRecovery(
-            appAccountToken: transaction.appAccountToken,
-            productId: transaction.productId,
-            checkoutRecoveryExists: checkoutRecovery != nil
-        ) else { return }
-
-        // StoreKit finishing is local lifecycle work. It follows durable
-        // evidence/access recording and never waits for Nuxie's backend.
-        if policy.finishAfterRecording {
-            await transaction.finish()
+        if routeCompletionToJourneys {
+            purchaseCommitJourneyRouting.insert(commitKey)
+        }
+        // A replay whose row is already durable exactly as computed must not
+        // die on a failing store write: completion capture comes first (the
+        // claim is persisted only after the event is durably captured), and
+        // the unchanged row carries everything the capture needs.
+        var evidenceChanged = false
+        if existing != committedEvidence {
+            guard await persistEvidence(
+                committedEvidence,
+                refreshProjection: false
+            ) else { return .rejected }
+            evidenceChanged = true
         }
 
-        let synced = await syncTransactionWithOptions(
-            transactionJws: transactionJwt,
-            transactionId: transactionIdString,
-            productId: transaction.productId,
-            originalTransactionId: transaction.originalTransactionId,
-            updateLocalFeatures: true,
-            isRevoked: isRevoked
+        if let checkoutRecovery {
+            guard await retireCheckoutRecovery(
+                appAccountToken: checkoutRecovery.appAccountToken,
+                productId: verified.productId,
+                checkoutRecoveryExists: true
+            ) else { return .rejected }
+        } else if pendingRecord?.state == .pending {
+            guard let transactionService else { return .rejected }
+            guard await transactionService.consumePendingPurchase(
+                productId: verified.productId,
+                distinctId: committedEvidence.distinctId
+            ) else { return .rejected }
+        }
+
+        if committedEvidence.finishRequired, let finish = verified.finish {
+            await finish()
+            committedEvidence = replacingCommitState(
+                committedEvidence,
+                finishRequired: false
+            )
+            guard await persistEvidence(
+                committedEvidence,
+                refreshProjection: false
+            ) else { return .rejected }
+            evidenceChanged = true
+        }
+
+        var completionAccepted = committedEvidence.commercialContext == nil
+            || committedEvidence.isRevoked
+            || committedEvidence.completionDeliveredAt != nil
+        if !committedEvidence.isRevoked,
+           committedEvidence.completionDeliveredAt == nil,
+           committedEvidence.distinctId == identityService.getDistinctId(),
+           let context = committedEvidence.commercialContext {
+            let captured = await capturePurchaseCompletion(
+                properties: purchaseCompletionProperties(
+                    context: context,
+                    transactionId: committedEvidence.transactionId,
+                    testStore: committedEvidence.scope.storeEnvironment == .testStore,
+                    source: source
+                ),
+                eventId: committedEvidence.checkoutCompletionEventId
+                    ?? purchaseCompletionEventId(
+                        transactionId: committedEvidence.transactionId
+                    ),
+                distinctId: committedEvidence.distinctId,
+                routeToJourneys: routeCompletionToJourneys
+            )
+            if captured {
+                purchaseCommitJourneyRouting.remove(commitKey)
+                committedEvidence = replacingCommitState(
+                    committedEvidence,
+                    completionDeliveredAt: dateProvider.now()
+                )
+                completionAccepted = await persistEvidence(
+                    committedEvidence,
+                    refreshProjection: false
+                )
+                evidenceChanged = evidenceChanged || completionAccepted
+            }
+        }
+        let commitComplete = completionAccepted
+            && !committedEvidence.finishRequired
+
+        // A commit that changed no durable evidence must not re-derive the
+        // projection: recovery scans refresh once per pass, and per-commit
+        // re-derivation for unchanged replays double-counts allowances work.
+        if evidenceChanged {
+            await refreshOptimisticProjection()
+        }
+        // A duplicate token-ownership recovery producer whose commit changed
+        // nothing durable never resubmits the receipt; the stored-evidence
+        // pump owns retries of previously recorded failures.
+        let syncTask = (verified.requiresTokenOwnership && !evidenceChanged)
+            ? nil
+            : scheduleSync(for: committedEvidence)
+        return PurchaseCommitResult(
+            committed: true,
+            syncTask: syncTask,
+            isTerminal: commitComplete
         )
+    }
 
-        if synced {
-            LogDebug("TransactionObserver: Transaction \(transaction.transactionId) finished")
-
-            // Resolve an Ask-to-Buy/SCA purchase that the paywall is still
-            // waiting on: the deferred transaction arrives via
-            // Transaction.updates, not the original purchase() call.
-            let resolvedPending = if policy.resolvesPendingPurchase {
-                await transactionServiceProvider().consumePendingPurchase(
-                    productId: transaction.productId,
-                    distinctId: evidence.distinctId
-                )
-            } else {
-                false
-            }
-            if resolvedPending,
-               evidence.distinctId == identityService.getDistinctId() {
-                let completed = await emitRecoveredPurchaseCompletion(
-                    evidence: evidence,
-                    routeToJourneys: false
-                )
-                if completed {
-                    _ = await removeEvidence(transactionId: transactionIdString)
-                }
-            }
+    private func scheduleSync(
+        for evidence: StoredTransactionEvidence
+    ) -> Task<Bool, Never>? {
+        guard evidence.backendSyncedAt == nil,
+              !evidence.transactionJws.isEmpty else { return nil }
+        return Task { [weak self] in
+            guard let self else { return false }
+            return await self.syncTransactionWithOptions(
+                transactionJws: evidence.transactionJws,
+                transactionId: evidence.transactionId,
+                productId: evidence.productId,
+                originalTransactionId: evidence.originalTransactionId,
+                updateLocalFeatures: evidence.distinctId
+                    == self.identityService.getDistinctId(),
+                isRevoked: evidence.isRevoked
+            )
         }
+    }
+
+    private func capturePurchaseCompletion(
+        properties: [String: Any],
+        eventId: String,
+        distinctId: String,
+        routeToJourneys: Bool,
+        ensureDurableCarrier: Bool = false
+    ) async -> Bool {
+        await eventSink.captureStableSystemEvent(
+            SystemEventNames.purchaseCompleted,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId,
+            routeToJourneys: routeToJourneys,
+            ensureDurableCarrier: ensureDurableCarrier
+        )
+    }
+
+    func purchaseCompletionEventId(transactionId: String) -> String {
+        (["purchase-completed"] + purchaseStorageScope.storageComponents
+            + [transactionId]).joined(separator: ":")
+    }
+
+    private func replacingCommitState(
+        _ evidence: StoredTransactionEvidence,
+        finishRequired: Bool? = nil,
+        completionDeliveredAt: Date? = nil
+    ) -> StoredTransactionEvidence {
+        StoredTransactionEvidence(
+            scope: evidence.scope,
+            transactionJws: evidence.transactionJws,
+            transactionId: evidence.transactionId,
+            originalTransactionId: evidence.originalTransactionId,
+            productId: evidence.productId,
+            distinctId: evidence.distinctId,
+            recordedAt: evidence.recordedAt,
+            productFeatureIds: evidence.productFeatureIds,
+            isRevoked: evidence.isRevoked,
+            finishRequired: finishRequired ?? evidence.finishRequired,
+            commercialContext: evidence.commercialContext,
+            checkoutCompletionEventId: evidence.checkoutCompletionEventId,
+            completionDeliveredAt: completionDeliveredAt
+                ?? evidence.completionDeliveredAt,
+            backendSyncedAt: evidence.backendSyncedAt
+        )
     }
 
     /// Completes the crash-recovery boundary in durable order: retire exact
@@ -1089,63 +1507,53 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         appAccountToken: UUID?,
         productId: String,
         checkoutRecoveryExists: Bool,
-        finish: @Sendable () async -> Void
+        finish: @escaping @Sendable () async -> Void
     ) async -> Bool {
         guard await retireCheckoutRecovery(
             appAccountToken: appAccountToken,
             productId: productId,
             checkoutRecoveryExists: checkoutRecoveryExists
         ) else { return false }
-        // `finishRequired` is set only when Nuxie accepted lifecycle ownership
-        // (native default mode or explicit delegate transfer).
+        // `finishRequired` is set only when Nuxie's native transaction path
+        // accepted lifecycle ownership.
         await finish()
         return true
     }
 
-    /// Completes recovery from persisted evidence. StoreKit finishing and
-    /// stable analytics capture do not wait for the backend.
-    /// Journey routing occurs only if the exact checkout is still active in
-    /// this process; relaunch recovery is capture-only.
+    /// Compatibility entry point for recovery tests and callers that already
+    /// hold durable evidence. Recovery still enters the single committer.
     func completeStoredTransactionRecovery(
         _ evidence: StoredTransactionEvidence,
         appAccountToken: UUID?,
         checkoutRecoveryExists: Bool,
-        finish: @Sendable () async -> Void
+        finish: @escaping @Sendable () async -> Void
     ) async -> Bool {
-        let routeToJourneys = await transactionServiceProvider().isActiveCheckout(
-            appAccountToken: appAccountToken,
-            productId: evidence.productId,
-            distinctId: evidence.distinctId
-        )
-        guard await finishRecoveredTransaction(
-            appAccountToken: appAccountToken,
-            productId: evidence.productId,
-            checkoutRecoveryExists: checkoutRecoveryExists,
-            finish: finish
-        ) else { return false }
-
-        await markTransactionFinished(transactionId: evidence.transactionId)
-        if !evidence.isRevoked {
-            _ = await emitRecoveredPurchaseCompletion(
-                evidence: evidence,
-                routeToJourneys: routeToJourneys
-            )
-        }
-        let synced = await syncTransactionWithOptions(
-            transactionJws: evidence.transactionJws,
-            transactionId: evidence.transactionId,
-            productId: evidence.productId,
-            originalTransactionId: evidence.originalTransactionId,
-            updateLocalFeatures: evidence.distinctId
-                == identityService.getDistinctId(),
-            isRevoked: evidence.isRevoked,
-            retainEvidenceAfterSync: evidence.commercialContext != nil
-        )
-        if synced,
-           storedEvidence()[evidence.transactionId]?.completionDeliveredAt != nil {
-            await removeEvidence(transactionId: evidence.transactionId)
-        }
-        return true
+        _ = checkoutRecoveryExists
+        let result = await commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: evidence.transactionJws,
+                transactionId: evidence.transactionId,
+                originalTransactionId: evidence.originalTransactionId,
+                productId: evidence.productId,
+                appAccountToken: appAccountToken,
+                attributedDistinctId: evidence.distinctId,
+                recordedAt: evidence.recordedAt,
+                productFeatureIds: evidence.productFeatureIds,
+                commercialContext: evidence.commercialContext,
+                checkoutCompletionEventId: evidence.checkoutCompletionEventId,
+                completionDeliveredAt: evidence.completionDeliveredAt,
+                backendSyncedAt: evidence.backendSyncedAt,
+                finishRequired: true,
+                resolvesPendingPurchase: true,
+                allowsDurableCheckoutAuthority: true,
+                requiresAuthorityResolution: false,
+                isRevoked: evidence.isRevoked,
+                finish: finish
+            ),
+            source: .startupRecovery
+        ))
+        _ = await result.syncTask?.value
+        return result.committed
     }
 
     private func retireCheckoutRecovery(
@@ -1366,7 +1774,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 return true
             }
 
-            LogError("TransactionObserver: Backend sync failed for transaction \(transactionId): \(response.error ?? "Unknown error")")
+            LogError(
+                "TransactionObserver: Backend sync failed for transaction \(transactionId): \(response.error ?? "Unknown error")"
+            )
             return false
         } catch {
             LogError("TransactionObserver: Failed to sync transaction \(transactionId): \(error)")
@@ -1386,18 +1796,20 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         LogInfo("TransactionObserver: Finished syncing current entitlements")
     }
 
-    private func processCurrentEntitlements(
-        distinctId: String,
-        excludingTransactionIds: Set<String> = []
-    ) async {
+    private func processCurrentEntitlements(distinctId: String) async {
         for item in await currentEntitlementRecoveryTransactions() {
-            guard !excludingTransactionIds.contains(
-                item.update.transactionId
-            ) else { continue }
             await handleVerifiedTransaction(
                 item.update,
                 jwsRepresentation: item.jwsRepresentation,
-                source: .nuxieEntitlementSync(distinctId: distinctId)
+                source: .startupRecovery,
+                attributedDistinctId: distinctId,
+                // A current-entitlement scan can race unfinished/updates for
+                // the same deferred native purchase. Let the committer attach
+                // and retire any exact pending marker so the scan cannot win
+                // with a context-free terminal commit that suppresses Journey
+                // advancement from the later producer.
+                resolvesPendingPurchase: true,
+                allowsDurableCheckoutAuthority: false
             )
         }
     }
@@ -1412,37 +1824,27 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogWarning("TransactionObserver: Refusing mismatched StoreKit evidence")
             return false
         }
-        let existing = storedEvidence()[evidence.transactionId]
-        guard existing?.distinctId == nil || existing?.distinctId == distinctId else {
-            LogWarning("TransactionObserver: Refusing to move a purchase between customers")
-            return false
-        }
-        guard existing?.productId == nil || existing?.productId == evidence.productId else {
-            LogWarning("TransactionObserver: Refusing to move evidence between products")
-            return false
-        }
-        let featureIds = storeProductFeatureIds(product.localEntitlementGrants)
-        let retainedFeatureIds = existing?.productFeatureIds.isEmpty == false
-            ? existing!.productFeatureIds
-            : featureIds
-        let stored = StoredTransactionEvidence(
-            scope: purchaseStorageScope,
-            transactionJws: evidence.transactionJws,
-            transactionId: evidence.transactionId,
-            originalTransactionId: evidence.originalTransactionId,
-            productId: evidence.productId,
-            distinctId: distinctId,
-            recordedAt: existing?.recordedAt ?? dateProvider.now(),
-            productFeatureIds: retainedFeatureIds,
-            isRevoked: false,
-            finishRequired: existing?.finishRequired == true || finishRequired,
-            commercialContext: existing?.commercialContext ?? product.purchaseContext,
-            checkoutCompletionEventId: existing?.checkoutCompletionEventId,
-            completionDeliveredAt: existing?.completionDeliveredAt,
-            backendSyncedAt: existing?.backendSyncedAt
-        )
-        guard await persistEvidence(stored) else { return false }
-        return true
+        let result = await commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: evidence.transactionJws,
+                transactionId: evidence.transactionId,
+                originalTransactionId: evidence.originalTransactionId,
+                productId: evidence.productId,
+                appAccountToken: product.nativeCheckoutAppAccountToken,
+                attributedDistinctId: distinctId,
+                productFeatureIds: storeProductFeatureIds(
+                    product.localEntitlementGrants
+                ),
+                commercialContext: product.purchaseContext,
+                finishRequired: finishRequired,
+                resolvesPendingPurchase: false,
+                allowsDurableCheckoutAuthority: true,
+                requiresAuthorityResolution: false,
+                finish: evidence.finish
+            ),
+            source: .checkout
+        ))
+        return result.committed
     }
 
     func useFeatureWithPendingPurchase(
@@ -1452,10 +1854,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         entityId: String?,
         metadata: [String: AnyCodable]?
     ) async throws -> FeatureUsageResult? {
-        // Provider-owned delegate results never create transaction evidence.
-        // A delegate that returns StoreKit evidence explicitly transfers that
-        // native transaction to Nuxie, so delegate configuration alone must
-        // not make an otherwise eligible record unusable here.
+        // External declarations never create transaction evidence.
         guard !isStopped,
               purchaseStorageScope.storeEnvironment == .appStore,
               amount.isFinite,
@@ -1480,7 +1879,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 // An unreadable evidence file must not demote a protected
                 // purchase to the ordinary usage command; the caller retries
                 // once the store is readable again (A12).
-                throw CommerceStoreError.evidenceUnreadable
+                throw TransactionEvidenceError.unreadable
             }
             let candidates = evidenceById.values
                 .filter({ evidence in
@@ -1686,252 +2085,31 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         attributedDistinctId: String? = nil
     ) async -> CheckoutRecoveryResult {
         guard let appAccountToken else { return .noMatch }
-        let transactionService = transactionServiceProvider()
-        let recovery = await transactionService.checkoutRecoveryRecord(
-            appAccountToken: appAccountToken,
-            productId: evidence.productId
-        )
-        guard !(await transactionService.pendingPurchaseStoreIsUnreadable()) else {
-            return .noMatch
-        }
-        if recovery?.observedTransactionId == evidence.transactionId {
-            return .recovered
-        }
-        guard let evidenceAuthority = await resolvedEvidenceAuthority(
-            transactionService: transactionService,
-            appAccountToken: appAccountToken,
-            productId: evidence.productId,
-            checkoutRecovery: recovery,
-            source: .storeUpdates
-        ) else { return .noMatch }
-        guard evidenceAuthority != .providerConnector,
-              evidenceAuthority != .ambiguous else { return .noMatch }
-        let durableAccountOwnerResult = await transactionService.purchaseAccountOwner(
-            appAccountToken: appAccountToken
-        )
-        guard !durableAccountOwnerResult.isUnreadable else { return .noMatch }
-        let durableAccountOwner = durableAccountOwnerResult.readableValue
-        let expectedDistinctId = attributedDistinctId
-            ?? identityService.getDistinctId()
-        let deterministicAccountOwner = appAccountToken
-            == purchaseStorageScope.appAccountToken(
-                distinctId: expectedDistinctId
-            )
-            ? expectedDistinctId
-            : nil
-        let distinctId = recovery?.distinctId
-            ?? durableAccountOwner
-            ?? deterministicAccountOwner
-        guard let distinctId else { return .noMatch }
-        let routeToJourneys = await transactionService.isActiveCheckout(
-            appAccountToken: appAccountToken,
-            productId: evidence.productId,
-            distinctId: distinctId
-        )
-        let completionReportedAt = recovery?.completionReportedAt
-        let stored = StoredTransactionEvidence(
-            scope: recovery?.scope ?? purchaseStorageScope,
-            transactionJws: evidence.transactionJws,
-            transactionId: evidence.transactionId,
-            originalTransactionId: evidence.originalTransactionId,
-            productId: evidence.productId,
-            distinctId: distinctId,
-            recordedAt: recovery?.recordedAt ?? dateProvider.now(),
-            productFeatureIds: recovery?.productFeatureIds ?? [],
-            isRevoked: false,
-            finishRequired: finishRequired,
-            commercialContext: recovery?.commercialContext,
-            checkoutCompletionEventId: recovery?.checkoutCompletionEventId,
-            completionDeliveredAt: completionReportedAt,
-            backendSyncedAt: nil
-        )
-        guard await persistEvidence(stored) else {
-            return .recovered
-        }
-        if let recovery,
-           recovery.evidenceAuthority == .outcomeOnlyDelegate,
-           recovery.state == .checkout,
-           completionReportedAt == nil {
-            guard await transactionService.markOutcomeOnlyTransactionObserved(
-                recovery,
-                transactionId: evidence.transactionId
-            ) else { return .recovered }
-        } else {
-            guard await retireCheckoutRecovery(
-                appAccountToken: appAccountToken,
-                productId: evidence.productId,
-                checkoutRecoveryExists: recovery != nil
-            ) else { return .recovered }
-        }
-        if finishRequired {
-            await evidence.finish()
-            await markTransactionFinished(transactionId: evidence.transactionId)
-        }
-        let completionDelivered = if completionReportedAt != nil {
-            true
-        } else {
-            await emitRecoveredPurchaseCompletion(
-                evidence: stored,
-                routeToJourneys: routeToJourneys
-            )
-        }
-        if completionDelivered,
-           completionReportedAt == nil,
-           recovery?.evidenceAuthority == .outcomeOnlyDelegate,
-           recovery?.state == .checkout {
-            guard await transactionService.markOutcomeOnlyCompletionReported(
-                appAccountToken: appAccountToken,
-                productId: evidence.productId,
+        let result = await commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: evidence.transactionJws,
                 transactionId: evidence.transactionId,
-                reportedAt: dateProvider.now()
-            ) else { return .recovered }
+                originalTransactionId: evidence.originalTransactionId,
+                productId: evidence.productId,
+                appAccountToken: appAccountToken,
+                attributedDistinctId: attributedDistinctId,
+                finishRequired: finishRequired,
+                resolvesPendingPurchase: true,
+                allowsDurableCheckoutAuthority: true,
+                requiresTokenOwnership: true,
+                finish: evidence.finish
+            ),
+            source: .startupRecovery
+        ))
+        // Checkout recovery completes its backend submission before
+        // reporting: callers (and the crash-recovery boundary) treat a
+        // recovered transaction as durably attributed and synced.
+        if let syncTask = result.syncTask {
+            _ = await syncTask.value
         }
-        let synced = await syncTransactionWithOptions(
-            transactionJws: evidence.transactionJws,
-            transactionId: evidence.transactionId,
-            productId: evidence.productId,
-            originalTransactionId: evidence.originalTransactionId,
-            updateLocalFeatures: distinctId == identityService.getDistinctId(),
-            retainEvidenceAfterSync: stored.commercialContext != nil
-        )
-        let durablyCompleted = completionDelivered
-            || storedEvidence()[evidence.transactionId]?
-                .completionDeliveredAt != nil
-        if synced, durablyCompleted {
-            await removeEvidence(transactionId: evidence.transactionId)
-        }
-        return .recovered
-    }
-
-    private func emitRecoveredPurchaseCompletion(
-        evidence: StoredTransactionEvidence,
-        routeToJourneys: Bool
-    ) async -> Bool {
-        guard evidence.distinctId == identityService.getDistinctId(),
-              let context = evidence.commercialContext else { return false }
-        if storedEvidence()[evidence.transactionId]?.completionDeliveredAt != nil {
-            return true
-        }
-        guard await claimPurchaseCompletion(
-            transactionId: evidence.transactionId
-        ) else { return false }
-        let properties = purchaseCompletionProperties(
-            context: context,
-            transactionId: evidence.transactionId,
-            testStore: evidence.scope.storeEnvironment == .testStore
-        )
-        let transactionCompletionEventId = await purchaseCompletionEventId(
-            transactionId: evidence.transactionId
-        )
-        let eventId = evidence.checkoutCompletionEventId
-            ?? transactionCompletionEventId
-        let captured = if routeToJourneys {
-            await eventSink.capture(
-                SystemEventNames.purchaseCompleted,
-                properties: properties,
-                eventId: eventId,
-                distinctId: evidence.distinctId
-            )
-        } else {
-            await eventSink.captureOnly(
-                SystemEventNames.purchaseCompleted,
-                properties: properties,
-                eventId: eventId,
-                distinctId: evidence.distinctId
-            )
-        }
-        guard captured else {
-            await releasePurchaseCompletionClaim(
-                transactionId: evidence.transactionId
-            )
-            return false
-        }
-        let marked = await markPurchaseCompletionCaptured(
-            transactionId: evidence.transactionId
-        )
-        if !marked {
-            await releasePurchaseCompletionClaim(
-                transactionId: evidence.transactionId
-            )
-        }
-        return marked
-    }
-
-    func markTransactionFinished(transactionId: String) async {
-        guard var stored = storedEvidence()[transactionId] else { return }
-        stored = StoredTransactionEvidence(
-            scope: stored.scope,
-            transactionJws: stored.transactionJws,
-            transactionId: stored.transactionId,
-            originalTransactionId: stored.originalTransactionId,
-            productId: stored.productId,
-            distinctId: stored.distinctId,
-            recordedAt: stored.recordedAt,
-            productFeatureIds: stored.productFeatureIds,
-            isRevoked: stored.isRevoked,
-            finishRequired: false,
-            commercialContext: stored.commercialContext,
-            checkoutCompletionEventId: stored.checkoutCompletionEventId,
-            completionDeliveredAt: stored.completionDeliveredAt,
-            backendSyncedAt: stored.backendSyncedAt
-        )
-        if syncedTransactionIds.contains(transactionId),
-           stored.commercialContext == nil || stored.completionDeliveredAt != nil {
-            _ = await removeEvidence(transactionId: transactionId)
-        } else {
-            _ = await persistEvidence(stored)
-        }
-    }
-
-    func claimPurchaseCompletion(transactionId: String) async -> Bool {
-        guard !completedPurchaseEventTransactionIds.contains(transactionId) else {
-            return false
-        }
-        let stored = storedEvidence()[transactionId]
-        guard !evidenceStoreUnreadable else { return false }
-        if let stored {
-            guard stored.completionDeliveredAt == nil else { return false }
-        }
-        completedPurchaseEventTransactionIds.insert(transactionId)
-        return true
-    }
-
-    func markPurchaseCompletionCaptured(transactionId: String) async -> Bool {
-        let stored = storedEvidence()[transactionId]
-        guard !evidenceStoreUnreadable else { return false }
-        guard let stored else { return true }
-        guard stored.completionDeliveredAt == nil else { return true }
-        let delivered = StoredTransactionEvidence(
-                scope: stored.scope,
-                transactionJws: stored.transactionJws,
-                transactionId: stored.transactionId,
-                originalTransactionId: stored.originalTransactionId,
-                productId: stored.productId,
-                distinctId: stored.distinctId,
-                recordedAt: stored.recordedAt,
-                productFeatureIds: stored.productFeatureIds,
-                isRevoked: stored.isRevoked,
-                finishRequired: stored.finishRequired,
-                commercialContext: stored.commercialContext,
-                checkoutCompletionEventId: stored.checkoutCompletionEventId,
-                completionDeliveredAt: dateProvider.now(),
-                backendSyncedAt: stored.backendSyncedAt
-        )
-        guard await persistEvidence(delivered) else { return false }
-        if syncedTransactionIds.contains(transactionId),
-           !delivered.finishRequired {
-            return await removeEvidence(transactionId: transactionId)
-        }
-        return true
-    }
-
-    func releasePurchaseCompletionClaim(transactionId: String) async {
-        completedPurchaseEventTransactionIds.remove(transactionId)
-    }
-
-    func purchaseCompletionEventId(transactionId: String) async -> String {
-        (["purchase-completed"] + purchaseStorageScope.storageComponents
-            + [transactionId]).joined(separator: ":")
+        let matched = result.committed
+            || storedEvidence()[evidence.transactionId] != nil
+        return matched ? .recovered : .noMatch
     }
 
     private func storedEvidence() -> [String: StoredTransactionEvidence] {
@@ -1983,7 +2161,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return retained
     }
 
-    private func persistEvidence(_ evidence: StoredTransactionEvidence) async -> Bool {
+    private func persistEvidence(
+        _ evidence: StoredTransactionEvidence,
+        refreshProjection: Bool = true
+    ) async -> Bool {
         guard evidence.scope == purchaseStorageScope else { return false }
         var entries = storedEvidence()
         guard !evidenceStoreUnreadable else { return false }
@@ -2002,7 +2183,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         entries[evidence.transactionId] = evidenceToPersist
         guard evidenceStore.save(entries) else { return false }
         evidenceByTransactionId = entries
-        await refreshOptimisticProjection()
+        if refreshProjection {
+            await refreshOptimisticProjection()
+        }
         return true
     }
 

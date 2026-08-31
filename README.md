@@ -211,7 +211,7 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 Create with `NuxieConfiguration(apiKey:)` and optionally set:
 
 - `environment`: `.production` (default) or `.development`.
-- `testStoreEnabled`: the isolated, local-only commerce sheet (development +
+- `testStoreEnabled`: the isolated, local-only purchase sheet (development +
   `pk_test_` key only).
 - Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`.
 - Locale: `localeIdentifier` for the initial locale; use
@@ -258,9 +258,9 @@ purchase endpoint.
 
 This is different from an Xcode StoreKit Configuration file (which exercises
 real StoreKit APIs with local products) and from Apple Sandbox (which exercises
-Apple's commerce and receipt lifecycle). Test Store is for Nuxie Experience
+Apple's purchase and receipt lifecycle). Test Store is for Nuxie Experience
 qualification; use StoreKit Configuration or Sandbox before shipping native
-commerce behavior.
+purchase behavior.
 
 SDK contributors can run the checked-in real StoreKitTest qualification suite
 with `make test-storekit`; see [Native StoreKit qualification](docs/storekit-test-qualification.md).
@@ -298,7 +298,8 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
       ) {
       case .success(let verification):
         switch verification {
-        case .verified:
+        case .verified(let transaction):
+          await transaction.finish()
           return .purchased
         case .unverified(_, let error): return .failed(error)
         }
@@ -330,14 +331,16 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
 
 The delegate reports only `.purchased`, `.pending`, `.cancelled`, or `.failed`
 and `.restored`, `.noPurchases`, or `.failed`. It never transports receipts,
-transaction identifiers, or finish closures. Before a signed Connector cutover,
-Nuxie's StoreKit listener may separately record and sync a verified native update;
-`.observer` suppresses only Nuxie's finish call. Signed provider authority then
-suppresses Nuxie's native receipt path, and the Connector synchronizes durable
-state. Set
-`purchaseHandlingMode = .observer` whenever the app or another SDK owns
-StoreKit finishing; configuring a delegate does not silently change that
-explicit choice.
+transaction identifiers, or finish closures. Each `.purchased` callback is an
+external declaration: Nuxie immediately advances the purchase Journey and
+durably reports one `$purchase_completed` event with `source:
+"external_delegate"` plus the authenticated Product and Placement mapping.
+That event is the server carrier, not receipt evidence. It creates no evidence
+row or optimistic Feature overlay and never asks StoreKit to finish anything.
+A delegate `.restored` is handled the same way as an external declaration and
+does not invoke Nuxie's native entitlement scanner. The host app or provider
+continues to own checkout, restore, receipt submission, transaction finishing,
+and durable billing state.
 
 Native checkout records the authenticated release, Experience, Placement,
 Product, customer, and StoreKit account token before Apple opens checkout. The
@@ -354,21 +357,16 @@ evidence is removed after backend acceptance and expires after 90 days. While
 that evidence is unreconciled, Feature Access is derived in memory from the
 evidence and cached signed Product allowances; no separate access ledger is
 persisted.
-For an outcome-only custom delegate without signed Connector authority, Nuxie
-starts a 30-second exact-checkout window before invoking the delegate and
-re-bounds it for 30 seconds after a successful callback. A crash while the
-callback is suspended therefore cannot retain context for the ordinary pending
-TTL. After the bound, the one-shot Experience/Placement context is retired; a
-later verified update carrying Nuxie's deterministic account token still syncs
-and finishes, but cannot resurrect stale Journey context.
-Before delegate invocation, Nuxie also persists one checkout-scoped completion
-ID. The callback and StoreKit observer both attempt to claim that same ID. The
-winner durably captures Journey and analytics completion; the loser observes
-that it is already complete and does nothing. The 30-second window helps
-correlate a StoreKit update to the checkout, but this shared claim prevents
-duplicates. Receipt synchronization and finishing remain separately
-idempotent by StoreKit transaction ID. Capture or storage failure leaves recovery
-retryable without turning a successful charge into a failed purchase result.
+
+Verified StoreKit outcomes from checkout, the transaction stream, startup
+recovery, and deferred updates enter one transaction committer. It deduplicates
+by transaction identity, persists evidence, signals eligible Journey
+advancement, refreshes the optimistic projection, and schedules backend receipt
+synchronization in that order. The same transaction surfacing through several StoreKit paths
+therefore produces one completion and one sync. External
+delegate declarations enter the
+same committer but deduplicate only per callback operation and bypass every
+receipt and projection step.
 
 Fresh-device current-entitlement recovery uses authenticated Products from the
 active release profile as receipt authority. A Product with signed Connector
@@ -415,15 +413,13 @@ metadata.
 #### Before Connector cutover
 
 The app keeps using its RevenueCat, Superwall, or custom-provider access checks.
-A delegate success completes the purchase Journey but is not purchase evidence.
-If StoreKit separately emits a verified update, Nuxie may sync it and apply the
-authenticated Product's Boolean, metered, or credit allowance as a temporary
-optimistic projection while the receipt is unreconciled. Observer mode still
-leaves finishing to the app or provider.
+A delegate success immediately completes the purchase Journey and reports its
+external `$purchase_completed` declaration, but is not purchase evidence.
+Nuxie does not scan, sync, finish, or optimistically project StoreKit
+transactions while an external purchase delegate owns billing.
 
 #### After Connector cutover
 
-Signed provider authority suppresses Nuxie's native receipt sync and finish path.
 A successful delegate purchase advances the purchase Journey, but it does not
 create an optimistic Feature overlay. The configured provider Connector's
 server snapshot is the first Nuxie Feature authority for Boolean, fixed-quota,

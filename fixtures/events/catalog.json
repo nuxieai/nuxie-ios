@@ -1761,40 +1761,22 @@
   },
   "$purchase_completed": {
     "authoredBy": "platform",
-    "beforeSend": [
-      "governed",
-      "governed"
-    ],
+    "beforeSend": "governed",
     "constant": "SystemEventNames.purchaseCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1830",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1837",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:705",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:737",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:599",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:622",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:631",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:637"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1391"
     ],
-    "endpoint": [
-      "batch",
-      "/i/event response lane"
+    "endpoint": "batch",
+    "fixtures": [
+      "fixtures/purchases/outcome-commit.json"
     ],
-    "fixtures": [],
     "forwarding": "purchaseCompleted",
-    "lane": [
-      "captureStableSystemEvent",
-      "trackForTrigger"
-    ],
+    "lane": "captureStableSystemEvent",
     "pathNotes": [
-      "Transaction-backed paths use captureStableSystemEvent under a stable event id and queue batch delivery.",
-      "The no-id fallback uses SystemEventSink.emit, which enters trackForTrigger and sends through /i/event."
+      "The TransactionObserver committer captures every verified or external declaration under its evidence or callback-operation identity and queues batch delivery."
     ],
-    "persists": [
-      true,
-      true
-    ],
+    "persists": true,
     "properties": {
       "display_price": {
         "required": false,
@@ -1823,7 +1805,7 @@
       },
       "source": {
         "required": true,
-        "source": "purchaseCompletionProperties constant purchase",
+        "source": "PurchaseOutcomeSource provenance",
         "type": "String"
       },
       "store_product_id": {
@@ -1843,10 +1825,7 @@
       }
     },
     "status": "active",
-    "wire": [
-      true,
-      true
-    ]
+    "wire": true
   },
   "$purchase_failed": {
     "authoredBy": "platform",
@@ -1857,9 +1836,9 @@
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:2158",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:2216",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:2239",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:693",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:706",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:727"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:559",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:572",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:593"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -1948,8 +1927,8 @@
     "constant": "SystemEventNames.purchaseSynced",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1361",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1565"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1696",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1892"
     ],
     "endpoint": [
       "batch",
@@ -2069,26 +2048,53 @@
   },
   "$restore_completed": {
     "authoredBy": "platform",
-    "beforeSend": "governed",
+    "beforeSend": [
+      "governed",
+      "governed"
+    ],
     "constant": "SystemEventNames.restoreCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1135"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1057",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:934"
     ],
-    "endpoint": "/i/event response lane",
-    "fixtures": [],
+    "endpoint": [
+      "batch",
+      "/i/event response lane"
+    ],
+    "fixtures": [
+      "fixtures/purchases/outcome-commit.json"
+    ],
     "forwarding": "restoreCompleted",
-    "lane": "trackForTrigger",
-    "persists": true,
+    "lane": [
+      "captureStableSystemEvent",
+      "trackForTrigger"
+    ],
+    "pathNotes": [
+      "External delegate restore declarations are captured under their callback-operation identity and queue batch delivery.",
+      "Native and test-store restore outcomes use SystemEventSink.emit and send through /i/event."
+    ],
+    "persists": [
+      true,
+      true
+    ],
     "properties": {
+      "source": {
+        "required": false,
+        "source": "external PurchaseOutcomeSource provenance",
+        "type": "String"
+      },
       "test_store": {
         "required": false,
-        "source": "present and true for test-store restore",
+        "source": "external declaration store flag or present and true for test-store restore",
         "type": "Bool"
       }
     },
     "status": "active",
-    "wire": true
+    "wire": [
+      true,
+      true
+    ]
   },
   "$restore_failed": {
     "authoredBy": "platform",
@@ -2096,8 +2102,9 @@
     "constant": "SystemEventNames.restoreFailed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1144",
-      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2262"
+      "Sources/Nuxie/Experiences/ExperienceViewController.swift:2262",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:880",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:943"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],
@@ -2125,7 +2132,8 @@
     "constant": "SystemEventNames.restoreNoPurchases",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1155"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:889",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:954"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [],

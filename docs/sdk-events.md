@@ -21,7 +21,18 @@ events carry `experience_id`. `$experiment_exposure` carries both
 `experience_id` and `experience_version`. Authored script events receive
 `journey_id`, `experience_id`, and `screen_id` from the runner.
 
-## Commerce behavior
+## Purchase behavior
+
+Checkout, transaction-stream, startup-recovery, and deferred verified outcomes
+share one transaction committer. It deduplicates by verified transaction
+identity, so one purchase produces one `$purchase_completed` event even when
+several StoreKit entry points surface it. The event's `source` records the
+winning producer only; provenance does not change persistence, Journey,
+projection, or synchronization semantics. External delegate callbacks use the
+same committer with `source: "external_delegate"`, deduplicate per callback,
+advance Journeys immediately, and create neither receipt evidence nor an
+optimistic projection. The portable contract is
+`fixtures/purchases/outcome-commit.json`.
 
 For an atomic purchase-backed feature use, transport errors and non-2xx
 responses retain the scoped receipt evidence, emit no `$purchase_synced`, and

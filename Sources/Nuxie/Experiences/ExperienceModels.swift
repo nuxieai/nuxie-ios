@@ -51,7 +51,7 @@ struct Experience: Codable, Sendable {
     let definition: ExperienceDefinition?
     /// StoreKit products resolved only after descriptor authentication.
     var products: [StoreProduct]
-    /// Server-owned Journey authority used only while resolving live commerce.
+    /// Server-owned Journey authority used only while resolving live purchases.
     var introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
 
     /// Descriptor-authenticated screen and action document.

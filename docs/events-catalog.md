@@ -47,11 +47,11 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 | `$screen_shown` | active | platform | yes | governed | batch | `screenShown` | A Journey screen becomes active. |
 | `$screen_dismissed` | active | platform | yes | governed | batch | `screenDismissed` | A Journey screen is dismissed. |
 
-## Commerce
+## Purchases
 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `$purchase_completed` | active | platform | yes | governed | batch or `/i/event` | `purchaseCompleted` | Stable transaction paths queue batch delivery; the no-id SystemEventSink fallback uses the trigger lane. |
+| `$purchase_completed` | active | platform | yes | governed | batch | `purchaseCompleted` | The purchase outcome committer captures verified evidence and external declarations under a stable evidence or callback-operation identity. |
 | `$purchase_failed` | active | platform | yes | governed | `/i/event` | `purchaseFailed` | Purchase setup or execution fails. |
 | `$purchase_cancelled` | active | platform | yes | governed | `/i/event` | `purchaseCancelled` | Customer cancels a purchase. |
 | `$purchase_pending` | active | platform | yes | governed | `/i/event` | `purchasePending` | Purchase awaits later approval. |
@@ -61,7 +61,7 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `$restore_completed` | active | platform | yes | governed | `/i/event` | `restoreCompleted` | Restore finishes with purchases. |
+| `$restore_completed` | active | platform | yes | governed | batch or `/i/event` | `restoreCompleted` | External declarations use stable callback-operation capture; native and test-store restores use the trigger lane. |
 | `$restore_failed` | active | platform | yes | governed | `/i/event` | `restoreFailed` | Restore fails. |
 | `$restore_no_purchases` | active | platform | yes | governed | `/i/event` | `restoreNoPurchases` | Restore finishes without purchases. |
 

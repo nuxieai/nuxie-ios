@@ -410,8 +410,8 @@ class ExperienceViewController: NuxiePlatformViewController {
     private let recoveryAffordanceDelay: TimeInterval
     private let presentationDiagnosticsEnabled: Bool
     private var recoveryAffordanceTask: Task<Void, Never>?
-    private var inFlightCommerceOperationCount = 0
-    private var commerceOperationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var inFlightPurchaseOperationCount = 0
+    private var purchaseOperationWaiters: [CheckedContinuation<Void, Never>] = []
     private var hostDismissalRequested = false
     private let screenEmissionDispatcher: ScreenEmissionDispatcher
     private let screenEmissionPublicationGate = ExperienceInteractiveOperationGate()
@@ -2116,31 +2116,31 @@ extension ExperienceViewController {
         hostDismissalRequested = false
     }
 
-    func waitForInFlightCommerceBeforeHostDismissal() async {
+    func waitForInFlightPurchaseBeforeHostDismissal() async {
         beginHostDismissal()
-        guard inFlightCommerceOperationCount > 0 else { return }
+        guard inFlightPurchaseOperationCount > 0 else { return }
         await withCheckedContinuation { continuation in
-            commerceOperationWaiters.append(continuation)
+            purchaseOperationWaiters.append(continuation)
         }
     }
 
-    private func beginCommerceOperation(
+    private func beginPurchaseOperation(
         _ operation: @escaping @MainActor () async -> Void
     ) {
         guard !hostDismissalRequested else { return }
-        inFlightCommerceOperationCount += 1
+        inFlightPurchaseOperationCount += 1
         Task { @MainActor [weak self] in
-            defer { self?.finishCommerceOperation() }
+            defer { self?.finishPurchaseOperation() }
             await operation()
         }
     }
 
-    private func finishCommerceOperation() {
-        guard inFlightCommerceOperationCount > 0 else { return }
-        inFlightCommerceOperationCount -= 1
-        guard inFlightCommerceOperationCount == 0 else { return }
-        let waiters = commerceOperationWaiters
-        commerceOperationWaiters.removeAll()
+    private func finishPurchaseOperation() {
+        guard inFlightPurchaseOperationCount > 0 else { return }
+        inFlightPurchaseOperationCount -= 1
+        guard inFlightPurchaseOperationCount == 0 else { return }
+        let waiters = purchaseOperationWaiters
+        purchaseOperationWaiters.removeAll()
         waiters.forEach { $0.resume() }
     }
 
@@ -2148,7 +2148,7 @@ extension ExperienceViewController {
         LogDebug("ExperienceViewController: Native purchase for placement: \(placementId)")
         let transactionService = self.transactionService
 
-        beginCommerceOperation {
+        beginPurchaseOperation {
             let resolvedStoreProduct = self.products.first(where: {
                 $0.placementId == placementId
             })
@@ -2252,7 +2252,7 @@ extension ExperienceViewController {
     fileprivate func handleNativeRestore() {
         LogDebug("ExperienceViewController: Native restore purchases")
         let transactionService = self.transactionService
-        beginCommerceOperation {
+        beginPurchaseOperation {
             do {
                 try await transactionService.restore()
             } catch StoreKitError.restoreFailed(_) {
