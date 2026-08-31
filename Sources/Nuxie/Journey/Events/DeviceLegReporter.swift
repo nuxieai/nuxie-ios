@@ -32,7 +32,7 @@ struct DeviceLegReporter {
         if completion, let result = run.completion {
             properties["completed_at"] = Self.timestamp(result.at)
             properties["outcome"] = result.outcome
-            guard let data = try? JSONEncoder().encode(run.outputs),
+            guard let data = try? ExactJSONCodec.encode(run.outputs),
                   let outputs = try? JSONSerialization.jsonObject(with: data) else { return false }
             properties["outputs"] = outputs
         }

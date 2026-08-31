@@ -116,7 +116,7 @@ struct DeviceLegRunJournal {
         try await read { $0.checklist[experienceId] }
     }
 
-    func recordResponses(_ id: String, values: [String: ExperienceReleaseJSONValue]) async throws {
+    func recordResponses(_ id: String, values: ExactJSONObject<ExperienceReleaseJSONValue>) async throws {
         try await update { state in
             guard var run = state.runs[id], run.completion == nil else { throw DeviceLegJournalError.invalidState }
             let responses = run.context.responses.merging(values) { _, new in new }
@@ -164,7 +164,7 @@ struct DeviceLegRunJournal {
     }
 
     func complete(_ id: String, outcome: String, at: Date,
-                  eventOutputs: [String: ExperienceReleaseJSONValue] = [:]) async throws {
+                  eventOutputs: ExactJSONObject<ExperienceReleaseJSONValue> = [:]) async throws {
         try await update { state in
             guard var run = state.runs[id] else { throw DeviceLegJournalError.invalidState }
             // A retry cannot rewrite the outcome, outputs, or occurrence time.
@@ -213,7 +213,7 @@ struct DeviceLegRunJournal {
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(to: file, lockScope: lockScope) {
             var state = try Self.load(file)
             let value = try operation(&state)
-            let bytes = try JSONEncoder().encode(state)
+            let bytes = try ExactJSONCodec.encode(state)
             guard bytes.count <= Self.maximumBytes else { throw DeviceLegJournalError.storageLimit }
             try bytes.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             return value
@@ -223,7 +223,7 @@ struct DeviceLegRunJournal {
     private static func load(_ file: URL) throws -> Snapshot {
         guard FileManager.default.fileExists(atPath: file.path) else { return .init() }
         let bytes = try BoundedFileIO.read(at: file, maximumBytes: maximumBytes).data
-        let state = try JSONDecoder().decode(Snapshot.self, from: bytes)
+        let state = try ExactJSONCodec.decode(Snapshot.self, from: bytes)
         guard state.schemaVersion == "nuxie.device-leg-journal.v1" else { throw DeviceLegJournalError.unsupportedVersion }
         return state
     }

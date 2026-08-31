@@ -259,7 +259,7 @@ enum ExperienceReleaseJSONValue: Codable, Sendable {
     case number(Double)
     case string(String)
     case array([Self])
-    case object([String: Self])
+    case object(ExactJSONObject<Self>)
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer()
@@ -274,7 +274,7 @@ enum ExperienceReleaseJSONValue: Codable, Sendable {
         } else if let decoded = try? value.decode([Self].self) {
             self = .array(decoded)
         } else {
-            self = .object(try value.decode([String: Self].self))
+            self = .object(try value.decode(ExactJSONObject<Self>.self))
         }
     }
 

@@ -826,7 +826,7 @@ private extension ExperienceReleaseJSONValue {
         case .number(let value): .number(value)
         case .string(let value): .string(value)
         case .array(let values): .array(values.map(\.screenEmissionValue))
-        case .object(let values): .object(values.mapValues(\.screenEmissionValue))
+        case .object(let values): .object(values.mapValues(\.screenEmissionValue).dictionary)
         }
     }
 
@@ -837,7 +837,7 @@ private extension ExperienceReleaseJSONValue {
         case .number(let value): value
         case .string(let value): value
         case .array(let values): values.map(\.foundationValue)
-        case .object(let values): values.mapValues(\.foundationValue)
+        case .object(let values): values.mapValues(\.foundationValue).dictionary
         }
     }
 }

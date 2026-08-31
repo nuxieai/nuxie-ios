@@ -33,11 +33,11 @@ enum StrictJSONDuplicateKeyValidator {
         mutating func parseObject(depth: Int) throws {
             index += 1
             skipWhitespace()
-            var keys = Set<String>()
+            var keys = Set<[UInt16]>()
             if consumeIf(0x7d) { return }
             while true {
                 let key = try parseString()
-                guard keys.insert(key).inserted else { throw Failure.duplicate }
+                guard keys.insert(Array(key.utf16)).inserted else { throw Failure.duplicate }
                 skipWhitespace()
                 guard consumeIf(0x3a) else { throw Failure.invalid }
                 skipWhitespace()

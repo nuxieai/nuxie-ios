@@ -20,7 +20,7 @@ enum DeviceLegValues {
             }
             return .array(result)
         case .object(let fields):
-            var result: [String: ExperienceReleaseJSONValue] = [:]
+            var result: ExactJSONObject<ExperienceReleaseJSONValue> = [:]
             for (key, value) in fields {
                 guard let resolved = resolve(value, context: context) else { return nil }
                 result[key] = resolved
@@ -49,12 +49,7 @@ enum DeviceLegValues {
             switch (collection, value) {
             case (.array(let items), _): return items.contains { equal($0, value) }
             case (.string(let text), .string(let needle)):
-                let source = Array(text.utf16), target = Array(needle.utf16)
-                guard !target.isEmpty else { return true }
-                guard source.count >= target.count else { return false }
-                return (0...(source.count - target.count)).contains { start in
-                    source[start..<(start + target.count)].elementsEqual(target)
-                }
+                return contains(text, needle)
             default: return false
             }
         case .compare(let op, let left, let right):
@@ -80,10 +75,31 @@ enum DeviceLegValues {
         }
     }
 
-    private static func exactField(_ key: String, in fields: [String: ExperienceReleaseJSONValue]) -> ExperienceReleaseJSONValue? {
+    /// KMP keeps adversarial repeated-prefix strings linear in input size,
+    /// while comparing exact code units instead of Swift's normalized text.
+    private static func contains(_ text: String, _ needle: String) -> Bool {
+        let target = Array(needle.utf16)
+        guard !target.isEmpty else { return true }
+        var prefixes = [Int](repeating: 0, count: target.count)
+        var matched = 0
+        for index in target.indices.dropFirst() {
+            while matched > 0 && target[index] != target[matched] { matched = prefixes[matched - 1] }
+            if target[index] == target[matched] { matched += 1 }
+            prefixes[index] = matched
+        }
+        matched = 0
+        for unit in text.utf16 {
+            while matched > 0 && unit != target[matched] { matched = prefixes[matched - 1] }
+            if unit == target[matched] { matched += 1 }
+            if matched == target.count { return true }
+        }
+        return false
+    }
+
+    private static func exactField(_ key: String, in fields: ExactJSONObject<ExperienceReleaseJSONValue>) -> ExperienceReleaseJSONValue? {
         // Swift String equality normalizes Unicode; the wire contract uses
         // exact JSON keys and ordinal UTF-16 string comparisons like JS/Kotlin.
-        fields.first { $0.key.utf16.elementsEqual(key.utf16) }?.value
+        fields[key]
     }
 
     private static func truthy(_ value: ExperienceReleaseJSONValue) -> Bool {
