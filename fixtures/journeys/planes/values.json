@@ -1,0 +1,547 @@
+{
+  "context": {
+    "event": {
+      "null": null,
+      "number": 1,
+      "text": "1",
+      "é": 1
+    },
+    "responses": {
+      "answer": "yes",
+      "nested": {
+        "z": [
+          1,
+          true,
+          null
+        ],
+        "a": {}
+      },
+      "empty": []
+    }
+  },
+  "values": [
+    {
+      "id": "missing_event",
+      "expression": {
+        "type": "Event.Field",
+        "key": "missing"
+      },
+      "known": false,
+      "expected": null
+    },
+    {
+      "id": "explicit_null",
+      "expression": {
+        "type": "Event.Field",
+        "key": "null"
+      },
+      "known": true,
+      "expected": null
+    },
+    {
+      "id": "response",
+      "expression": {
+        "type": "Response.Field",
+        "key": "answer"
+      },
+      "known": true,
+      "expected": "yes"
+    },
+    {
+      "id": "unknown_array",
+      "expression": {
+        "type": "Array",
+        "items": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "Response.Field",
+            "key": "missing"
+          }
+        ]
+      },
+      "known": false,
+      "expected": null
+    },
+    {
+      "id": "unknown_object",
+      "expression": {
+        "type": "Object",
+        "fields": {
+          "a": {
+            "type": "Event.Field",
+            "key": "missing"
+          }
+        }
+      },
+      "known": false,
+      "expected": null
+    },
+    {
+      "id": "literal_tree",
+      "expression": {
+        "type": "Object",
+        "fields": {
+          "a": {
+            "type": "Array",
+            "items": [
+              {
+                "type": "Null"
+              },
+              {
+                "type": "Boolean",
+                "value": false
+              },
+              {
+                "type": "String",
+                "value": "x"
+              }
+            ]
+          }
+        }
+      },
+      "known": true,
+      "expected": {
+        "a": [
+          null,
+          false,
+          "x"
+        ]
+      }
+    },
+    {
+      "id": "unicode_key_unknown",
+      "expression": {
+        "type": "Event.Field",
+        "key": "é"
+      },
+      "known": false,
+      "expected": null
+    }
+  ],
+  "conditions": [
+    {
+      "id": "unknown_negation",
+      "expression": {
+        "type": "Not",
+        "condition": {
+          "type": "Truthy",
+          "value": {
+            "type": "Response.Field",
+            "key": "missing"
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "id": "null_truthy",
+      "expression": {
+        "type": "Truthy",
+        "value": {
+          "type": "Event.Field",
+          "key": "null"
+        }
+      },
+      "expected": false
+    },
+    {
+      "id": "empty_array_truthy",
+      "expression": {
+        "type": "Truthy",
+        "value": {
+          "type": "Response.Field",
+          "key": "empty"
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "empty_object_truthy",
+      "expression": {
+        "type": "Truthy",
+        "value": {
+          "type": "Object",
+          "fields": {}
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "zero_truthy",
+      "expression": {
+        "type": "Truthy",
+        "value": {
+          "type": "Number",
+          "value": 0
+        }
+      },
+      "expected": false
+    },
+    {
+      "id": "empty_string_truthy",
+      "expression": {
+        "type": "Truthy",
+        "value": {
+          "type": "String",
+          "value": ""
+        }
+      },
+      "expected": false
+    },
+    {
+      "id": "false_and_unknown",
+      "expression": {
+        "type": "All",
+        "conditions": [
+          {
+            "type": "Truthy",
+            "value": {
+              "type": "Response.Field",
+              "key": "missing"
+            }
+          },
+          {
+            "type": "Truthy",
+            "value": {
+              "type": "Boolean",
+              "value": false
+            }
+          }
+        ]
+      },
+      "expected": false
+    },
+    {
+      "id": "true_or_unknown",
+      "expression": {
+        "type": "Any",
+        "conditions": [
+          {
+            "type": "Truthy",
+            "value": {
+              "type": "Response.Field",
+              "key": "missing"
+            }
+          },
+          {
+            "type": "Truthy",
+            "value": {
+              "type": "Boolean",
+              "value": true
+            }
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "id": "true_and_unknown",
+      "expression": {
+        "type": "All",
+        "conditions": [
+          {
+            "type": "Truthy",
+            "value": {
+              "type": "Response.Field",
+              "key": "missing"
+            }
+          },
+          {
+            "type": "Truthy",
+            "value": {
+              "type": "Boolean",
+              "value": true
+            }
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "id": "false_or_unknown",
+      "expression": {
+        "type": "Any",
+        "conditions": [
+          {
+            "type": "Truthy",
+            "value": {
+              "type": "Response.Field",
+              "key": "missing"
+            }
+          },
+          {
+            "type": "Truthy",
+            "value": {
+              "type": "Boolean",
+              "value": false
+            }
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "id": "unknown_equality",
+      "expression": {
+        "type": "Compare",
+        "op": "==",
+        "left": {
+          "type": "Event.Field",
+          "key": "missing"
+        },
+        "right": {
+          "type": "Null"
+        }
+      },
+      "expected": null
+    },
+    {
+      "id": "null_equality",
+      "expression": {
+        "type": "Compare",
+        "op": "==",
+        "left": {
+          "type": "Event.Field",
+          "key": "null"
+        },
+        "right": {
+          "type": "Null"
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "no_number_coercion",
+      "expression": {
+        "type": "Compare",
+        "op": "==",
+        "left": {
+          "type": "Event.Field",
+          "key": "number"
+        },
+        "right": {
+          "type": "Event.Field",
+          "key": "text"
+        }
+      },
+      "expected": false
+    },
+    {
+      "id": "mixed_order_unknown",
+      "expression": {
+        "type": "Compare",
+        "op": "<",
+        "left": {
+          "type": "Number",
+          "value": 1
+        },
+        "right": {
+          "type": "String",
+          "value": "2"
+        }
+      },
+      "expected": null
+    },
+    {
+      "id": "boolean_order_unknown",
+      "expression": {
+        "type": "Compare",
+        "op": "<",
+        "left": {
+          "type": "Boolean",
+          "value": false
+        },
+        "right": {
+          "type": "Boolean",
+          "value": true
+        }
+      },
+      "expected": null
+    },
+    {
+      "id": "string_utf16_order",
+      "expression": {
+        "type": "Compare",
+        "op": "<",
+        "left": {
+          "type": "String",
+          "value": "𐀀"
+        },
+        "right": {
+          "type": "String",
+          "value": ""
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "string_no_unicode_normalization",
+      "expression": {
+        "type": "Compare",
+        "op": "==",
+        "left": {
+          "type": "String",
+          "value": "é"
+        },
+        "right": {
+          "type": "String",
+          "value": "é"
+        }
+      },
+      "expected": false
+    },
+    {
+      "id": "string_ordinal_compare",
+      "expression": {
+        "type": "Compare",
+        "op": ">",
+        "left": {
+          "type": "String",
+          "value": "b"
+        },
+        "right": {
+          "type": "String",
+          "value": "a"
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "number_compare",
+      "expression": {
+        "type": "Compare",
+        "op": "<=",
+        "left": {
+          "type": "Number",
+          "value": 2
+        },
+        "right": {
+          "type": "Number",
+          "value": 2
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "negative_zero_equal",
+      "expression": {
+        "type": "Compare",
+        "op": "==",
+        "left": {
+          "type": "Number",
+          "value": -0.0
+        },
+        "right": {
+          "type": "Number",
+          "value": 0
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "deep_equality",
+      "expression": {
+        "type": "Compare",
+        "op": "==",
+        "left": {
+          "type": "Response.Field",
+          "key": "nested"
+        },
+        "right": {
+          "type": "Object",
+          "fields": {
+            "a": {
+              "type": "Object",
+              "fields": {}
+            },
+            "z": {
+              "type": "Array",
+              "items": [
+                {
+                  "type": "Number",
+                  "value": 1
+                },
+                {
+                  "type": "Boolean",
+                  "value": true
+                },
+                {
+                  "type": "Null"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "contains_deep",
+      "expression": {
+        "type": "Contains",
+        "collection": {
+          "type": "Array",
+          "items": [
+            {
+              "type": "Response.Field",
+              "key": "nested"
+            }
+          ]
+        },
+        "value": {
+          "type": "Response.Field",
+          "key": "nested"
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "contains_string",
+      "expression": {
+        "type": "Contains",
+        "collection": {
+          "type": "String",
+          "value": "answer"
+        },
+        "value": {
+          "type": "String",
+          "value": "swer"
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "contains_no_unicode_normalization",
+      "expression": {
+        "type": "Contains",
+        "collection": {
+          "type": "String",
+          "value": "é"
+        },
+        "value": {
+          "type": "String",
+          "value": "é"
+        }
+      },
+      "expected": false
+    },
+    {
+      "id": "contains_object_is_false",
+      "expression": {
+        "type": "Contains",
+        "collection": {
+          "type": "Response.Field",
+          "key": "nested"
+        },
+        "value": {
+          "type": "String",
+          "value": "a"
+        }
+      },
+      "expected": false
+    }
+  ]
+}
