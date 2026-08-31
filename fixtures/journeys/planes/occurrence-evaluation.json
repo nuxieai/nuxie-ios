@@ -1722,6 +1722,155 @@
           }
         ]
       }
+    },
+    {
+      "name": "unknown upper bound cannot become an unbounded query",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              },
+              "until": {
+                "type": "Events.Count",
+                "name": "purchase"
+              }
+            },
+            "op": ">=",
+            "right": {
+              "type": "Number",
+              "value": 2
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "an empty result cannot skip unknown predicate inputs",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Events.Count",
+              "name": "missing",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              },
+              "where": {
+                "type": "Pred",
+                "op": "eq",
+                "key": "price",
+                "value": {
+                  "type": "Events.Count",
+                  "name": "purchase"
+                }
+              }
+            },
+            "right": {
+              "type": "Number",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
     }
   ]
 }
