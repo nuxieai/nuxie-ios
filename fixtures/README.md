@@ -2,6 +2,9 @@
 
 These language-neutral vectors pin the cross-plane experience-execution contract:
 
+- `journeys/planes/admission.json`: local-program admission mutations over the
+  signed release goldens: cursor and render closure, flat controls, fact proof,
+  boundary schemas, and host-dismissal safety, shared by native validators.
 - `journeys/planes/occurrence-evaluation.json`: horizon-fenced occurrence counts,
   predicates, numeric aggregates, relative windows, and unknown propagation.
 - `journeys/planes/history-coverage.json`: durable count/age retention fences,
