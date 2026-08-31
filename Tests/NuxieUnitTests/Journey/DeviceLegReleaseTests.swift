@@ -6,6 +6,24 @@ import XCTest
 final class DeviceLegReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testAuthenticatesBothOrdinalOutputDeclarations() throws {
+        let fixture = try golden()
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+        let fields: [[String: Any]] = [
+            ["key": "é", "type": "boolean", "required": false],
+            ["key": "e\u{0301}", "type": "boolean", "required": false],
+        ]
+        leg["outputs"] = fields
+        leg["completionOutputs"] = ["continue": ["eventFields": [], "responseFields": fields]]
+        root["leg"] = leg
+        let release = try authenticate(sign(JSONSerialization.data(withJSONObject: root)),
+                                       key: signingKey.publicKey.rawRepresentation, identity: fixture.identity)
+        XCTAssertEqual(release.descriptor.leg.outputs.count, 2)
+        XCTAssertEqual(release.descriptor.leg.completionOutputs["continue"]?.responseFields.count, 2)
+    }
+
     func testSharedAdmissionCases() throws {
         let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/admission.json")

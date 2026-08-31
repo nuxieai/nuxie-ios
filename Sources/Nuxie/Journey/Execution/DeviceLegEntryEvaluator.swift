@@ -20,9 +20,9 @@ struct DeviceLegFactTable {
         let isHoldout: Bool
     }
 
-    let properties: [String: Property]
-    let memberships: [String: Bool]
-    let assignments: [String: Assignment?]
+    let properties: ExactJSONObject<Property>
+    let memberships: ExactJSONObject<Bool>
+    let assignments: ExactJSONObject<Assignment?>
 }
 
 struct DeviceLegEntryCondition {

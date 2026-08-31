@@ -64,14 +64,14 @@ struct JourneyPlaneProfile {
         let root = try exact(JSONSerialization.jsonObject(with: data), ["schemaVersion", "status", "delivery", "features", "facts", "armedLegs", "releases"])
         guard root["schemaVersion"] as? String == "nuxie.journey-plane-profile.v1", root["status"] as? String == "ok" else { throw invalid }
         let facts = try exact(root["facts"], ["properties", "memberships", "assignments"])
-        for (key, value) in try record(facts["properties"]) {
+        for (key, value) in try entries(facts["properties"]) {
             try id(key)
             let property = try record(value)
             guard let present = property["present"] as? Bool else { throw invalid }
             _ = try exact(property, present ? ["present", "value"] : ["present"])
         }
-        for key in try record(facts["memberships"]).keys { try id(key) }
-        for (key, value) in try record(facts["assignments"]) {
+        for (key, _) in try entries(facts["memberships"]) { try id(key) }
+        for (key, value) in try entries(facts["assignments"]) {
             try id(key)
             if value is NSNull { continue }
             let assignment = try exact(value, ["variantId", "isHoldout"])
@@ -96,7 +96,7 @@ struct JourneyPlaneProfile {
             }
             try DeviceLegSchemaValidator.validateEntry(arm["entryCondition"])
             let context = try exact(arm["context"], ["event", "responses"])
-            for key in ["event", "responses"] { for name in try record(context[key]).keys { try id(name) } }
+            for key in ["event", "responses"] { for (name, _) in try entries(context[key]) { try id(name) } }
         }
         for value in try list(root["releases"]) {
             let release = try exact(value, ["locator", "envelope"])
@@ -137,6 +137,12 @@ struct JourneyPlaneProfile {
     }
 
     private static var invalid: ExperienceReleaseDescriptorAuthenticationError { .invalidDescriptor }
+    private static func entries(_ value: Any?) throws -> [(String, Any)] {
+        guard let value = value as? NSDictionary else { throw invalid }
+        return try value.map { key, value in
+            guard let key = key as? String else { throw invalid }; return (key, value)
+        }
+    }
     private static func record(_ value: Any?) throws -> [String: Any] {
         guard let value = value as? [String: Any] else { throw invalid }; return value
     }

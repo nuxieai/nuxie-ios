@@ -3,6 +3,24 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 final class JourneyPlaneProfileTests: XCTestCase {
+    func testOrdinalFactNamesRemainDistinctAtEntryEvaluation() async throws {
+        var root = try fixture()
+        root["facts"] = try JSONSerialization.jsonObject(with: Data(#"{"properties":{"é":{"present":true,"value":false},"e\u0301":{"present":true,"value":true}},"memberships":{"é":false,"e\u0301":true},"assignments":{"é":{"variantId":"one","isHoldout":false},"e\u0301":{"variantId":"two","isHoldout":true}}}"#.utf8))
+        let profile = try JourneyPlaneProfile.decode(JSONSerialization.data(withJSONObject: root))
+        XCTAssertEqual(profile.facts.properties.count, 2)
+        XCTAssertEqual(profile.facts.properties["é"]?.value?.value as? Bool, false)
+        XCTAssertEqual(profile.facts.properties["e\u{0301}"]?.value?.value as? Bool, true)
+        XCTAssertEqual(profile.facts.assignments["é"]??.variantId, "one")
+        XCTAssertEqual(profile.facts.assignments["e\u{0301}"]??.variantId, "two")
+        for (key, expected) in [("é", false), ("e\u{0301}", true)] {
+            let matches = await DeviceLegEntryEvaluator.matches(
+                .init(type: .segment, eventName: nil, segmentId: key, member: true, condition: nil),
+                facts: profile.facts, references: .init(propertyKeys: [], segmentIds: [key], experimentIds: []),
+                foreground: true, event: nil, now: Date())
+            XCTAssertEqual(matches, expected)
+        }
+    }
+
     func testDecodesFlatFactsAndExactContinuationWithoutLegacyProtocol() throws {
         let profile = try JourneyPlaneProfile.decode(JSONSerialization.data(withJSONObject: fixture()))
         XCTAssertEqual(profile.armedLegs.first?.binding.generation, 7)

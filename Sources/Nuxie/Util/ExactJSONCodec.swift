@@ -83,34 +83,44 @@ private struct JSONReader: Decoder, SingleValueDecodingContainer {
         let result = Float(try decode(Double.self)); guard result.isFinite else { throw mismatch(type) }; return result
     }
     func decode(_ type: Int.Type) throws -> Int {
-        guard let result = Int(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
     }
     func decode(_ type: Int8.Type) throws -> Int8 {
-        guard let result = Int8(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
     }
     func decode(_ type: Int16.Type) throws -> Int16 {
-        guard let result = Int16(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
     }
     func decode(_ type: Int32.Type) throws -> Int32 {
-        guard let result = Int32(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
     }
     func decode(_ type: Int64.Type) throws -> Int64 {
-        guard let result = Int64(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
     }
     func decode(_ type: UInt.Type) throws -> UInt {
-        guard let result = UInt(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
     }
     func decode(_ type: UInt8.Type) throws -> UInt8 {
-        guard let result = UInt8(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
     }
     func decode(_ type: UInt16.Type) throws -> UInt16 {
-        guard let result = UInt16(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
     }
     func decode(_ type: UInt32.Type) throws -> UInt32 {
-        guard let result = UInt32(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
     }
     func decode(_ type: UInt64.Type) throws -> UInt64 {
-        guard let result = UInt64(exactly: try decode(Double.self)) else { throw mismatch(type) }; return result
+        try integer(type)
+    }
+    private func integer<T: FixedWidthInteger>(_ type: T.Type) throws -> T {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { throw mismatch(type) }
+        // Integral NSNumbers can exceed Double's exact range (including the
+        // signed and unsigned 64-bit endpoints). Parse their decimal spelling.
+        let spelling = number.stringValue
+        if let result = T(spelling) { return result }
+        guard spelling.contains(".") || spelling.contains("e") || spelling.contains("E"),
+              let result = T(exactly: number.doubleValue) else { throw mismatch(type) }
+        return result
     }
     func decode<T: Decodable>(_ type: T.Type) throws -> T { try T(from: self) }
     func child(_ value: Any, key: CodingKey) -> Self { .init(value: value, codingPath: codingPath + [key]) }
@@ -157,33 +167,32 @@ private struct JSONArrayReader: UnkeyedDecodingContainer {
     var count: Int? { array.count }
     var currentIndex = 0
     var isAtEnd: Bool { currentIndex >= array.count }
-    mutating func next() throws -> JSONReader {
+    func current() throws -> JSONReader {
         guard !isAtEnd else { throw DecodingError.valueNotFound(Any.self, .init(codingPath: codingPath, debugDescription: "End of JSON array")) }
-        defer { currentIndex += 1 }
         return reader.child(array[currentIndex], key: ExactJSONCodingKey(intValue: currentIndex))
     }
     mutating func decodeNil() throws -> Bool {
-        guard !isAtEnd else { _ = try next(); return false }
+        guard !isAtEnd else { _ = try current(); return false }
         if array[currentIndex] is NSNull { currentIndex += 1; return true }; return false
     }
-    mutating func decode(_ type: Bool.Type) throws -> Bool { try next().decode(type) }
-    mutating func decode(_ type: String.Type) throws -> String { try next().decode(type) }
-    mutating func decode(_ type: Double.Type) throws -> Double { try next().decode(type) }
-    mutating func decode(_ type: Float.Type) throws -> Float { try next().decode(type) }
-    mutating func decode(_ type: Int.Type) throws -> Int { try next().decode(type) }
-    mutating func decode(_ type: Int8.Type) throws -> Int8 { try next().decode(type) }
-    mutating func decode(_ type: Int16.Type) throws -> Int16 { try next().decode(type) }
-    mutating func decode(_ type: Int32.Type) throws -> Int32 { try next().decode(type) }
-    mutating func decode(_ type: Int64.Type) throws -> Int64 { try next().decode(type) }
-    mutating func decode(_ type: UInt.Type) throws -> UInt { try next().decode(type) }
-    mutating func decode(_ type: UInt8.Type) throws -> UInt8 { try next().decode(type) }
-    mutating func decode(_ type: UInt16.Type) throws -> UInt16 { try next().decode(type) }
-    mutating func decode(_ type: UInt32.Type) throws -> UInt32 { try next().decode(type) }
-    mutating func decode(_ type: UInt64.Type) throws -> UInt64 { try next().decode(type) }
-    mutating func decode<T: Decodable>(_ type: T.Type) throws -> T { try next().decode(type) }
-    mutating func nestedContainer<NestedKey: CodingKey>(keyedBy: NestedKey.Type) throws -> KeyedDecodingContainer<NestedKey> { try next().container(keyedBy: keyedBy) }
-    mutating func nestedUnkeyedContainer() throws -> UnkeyedDecodingContainer { try next().unkeyedContainer() }
-    mutating func superDecoder() throws -> Decoder { try next() }
+    mutating func decode(_ type: Bool.Type) throws -> Bool { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: String.Type) throws -> String { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: Double.Type) throws -> Double { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: Float.Type) throws -> Float { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: Int.Type) throws -> Int { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: Int8.Type) throws -> Int8 { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: Int16.Type) throws -> Int16 { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: Int32.Type) throws -> Int32 { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: Int64.Type) throws -> Int64 { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: UInt.Type) throws -> UInt { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: UInt8.Type) throws -> UInt8 { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: UInt16.Type) throws -> UInt16 { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: UInt32.Type) throws -> UInt32 { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode(_ type: UInt64.Type) throws -> UInt64 { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func decode<T: Decodable>(_ type: T.Type) throws -> T { let value = try current().decode(type); currentIndex += 1; return value }
+    mutating func nestedContainer<NestedKey: CodingKey>(keyedBy: NestedKey.Type) throws -> KeyedDecodingContainer<NestedKey> { let value = try current().container(keyedBy: keyedBy); currentIndex += 1; return value }
+    mutating func nestedUnkeyedContainer() throws -> UnkeyedDecodingContainer { let value = try current().unkeyedContainer(); currentIndex += 1; return value }
+    mutating func superDecoder() throws -> Decoder { let value = try current(); currentIndex += 1; return value }
 }
 
 private final class JSONNode {

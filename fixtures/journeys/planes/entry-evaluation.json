@@ -529,6 +529,58 @@
         "segmentIds": [],
         "experimentIds": []
       }
+    },
+    {
+      "name": "composed membership key keeps its own fact",
+      "condition": {
+        "type": "segment",
+        "segmentId": "é",
+        "member": true
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {
+          "é": false,
+          "é": true
+        },
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [
+          "é"
+        ],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "decomposed membership key keeps its own fact",
+      "condition": {
+        "type": "segment",
+        "segmentId": "é",
+        "member": true
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {
+          "é": false,
+          "é": true
+        },
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [
+          "é"
+        ],
+        "experimentIds": []
+      }
     }
   ]
 }
