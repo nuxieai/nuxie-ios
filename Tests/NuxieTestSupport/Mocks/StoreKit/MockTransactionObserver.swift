@@ -1,25 +1,43 @@
 import Foundation
 @_spi(Testing) @testable import Nuxie
 
+/// A test-friendly classification of purchase outcomes committed by the mock observer.
 public enum MockPurchaseOutcomeKind: String, Equatable, Sendable {
+    /// A purchase backed by verified store transaction evidence.
     case verified
+    /// A host-declared completed purchase.
     case externalPurchased
+    /// A host-declared completed restore.
     case externalRestored
+    /// A purchase cancelled before completion.
     case cancelled
+    /// A purchase awaiting a terminal store result.
     case pending
+    /// A purchase that ended in failure.
     case failed
 }
 
+/// A flattened snapshot of a purchase outcome received by ``MockTransactionObserver``.
 public struct MockPurchaseOutcomeRecord: Sendable {
+    /// The outcome's test-friendly classification.
     public let kind: MockPurchaseOutcomeKind
+    /// The raw provenance value supplied with the outcome.
     public let source: String
+    /// The stable operation identifier for an external declaration, when present.
     public let operationId: String?
+    /// The store or host transaction identifier, when present.
     public let transactionId: String?
+    /// The customer identifier attributed to the outcome, when present.
     public let distinctId: String?
+    /// The Nuxie product identifier associated with the outcome, when present.
     public let productId: String?
+    /// The placement identifier associated with the outcome, when present.
     public let placementId: String?
+    /// The platform store product identifier associated with the outcome, when present.
     public let storeProductId: String?
+    /// Whether the outcome originated from a test store, when known.
     public let testStore: Bool?
+    /// The failure reason supplied by a failed outcome, when present.
     public let failureReason: String?
 }
 
@@ -29,6 +47,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
     public private(set) var syncCurrentEntitlementsCalled = false
     public private(set) var syncCurrentEntitlementsDistinctIds: [String] = []
     public private(set) var profileReadyRecoveryCalls = 0
+    /// Purchase outcomes received by ``commit(_:)``, in call order.
     public private(set) var committedOutcomes: [MockPurchaseOutcomeRecord] = []
     public private(set) var recordedPurchaseIds: [String] = []
     public private(set) var recordedPurchaseDistinctIds: [String] = []
@@ -64,6 +83,9 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
         profileReadyRecoveryCalls += 1
     }
 
+    /// Records an outcome and returns the mock's configured commit and sync result.
+    /// - Parameter outcome: The purchase outcome to record.
+    /// - Returns: The configured commit result, including a sync task when requested.
     public func commit(_ outcome: PurchaseOutcome) async -> PurchaseCommitResult {
         let override = nextCommitOverride
         nextCommitOverride = nil
@@ -234,6 +256,10 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
         nextSyncResult = value
     }
 
+    /// Configures the result returned by the next call to ``commit(_:)``.
+    /// - Parameters:
+    ///   - committed: Whether the next outcome should report a successful commit.
+    ///   - syncResult: The optional value returned by the next commit's sync task.
     public func configureNextCommitResult(
         committed: Bool,
         syncResult: Bool? = nil

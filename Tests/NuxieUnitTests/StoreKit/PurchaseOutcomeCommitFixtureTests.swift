@@ -42,6 +42,7 @@ private struct PurchaseOutcomeCommitFixture: Decodable {
         let evidence: String?
         let product: String?
         let reason: String?
+        let carrierCaptureSucceeds: Bool?
     }
 
     struct Expectation: Decodable {
@@ -51,17 +52,21 @@ private struct PurchaseOutcomeCommitFixture: Decodable {
         let purchaseCompletedEvents: Int
         let restoreCompletedEvents: Int
         let purchaseFailedEvents: Int
-        let receiptSyncRequests: Int
+        let serverSyncRequests: Int
+        let scheduledSyncTasks: Int
         let pendingRecords: Int
         let overlayEverPresent: Bool
-        let nativeEntitlementScans: Int
-        let nativeFinishCalls: Int?
+        let storeEntitlementQueries: Int
+        let storeFinalizationCalls: Int?
         let checkoutErrors: [String]
         let committerTerminalOutcomes: [PurchaseCommitTerminalOutcome]
         let completionSources: [String]
         let completionCarriesEvidenceIdentity: Bool
         let completionCarriesProductMapping: Bool
         let completionEventIdsDistinct: Bool?
+        let minimumCarrierCaptureAttempts: Int?
+        let successfulCarrierCaptures: Int?
+        let carrierCaptureOperationIdentityCount: Int?
     }
 
     struct Case: Decodable {
@@ -92,12 +97,15 @@ private struct RecordedPurchaseOutcomeEvent: Sendable {
     let price: Double?
 }
 
-private final class PurchaseOutcomeEventSink: SystemEventSink, @unchecked Sendable {
+private final class PurchaseOutcomeEventSink {
     private let lock = NSLock()
     private var storage: [RecordedPurchaseOutcomeEvent] = []
     private var routedCaptureResult = true
+    private var carrierCaptureResult = true
     private var routedCaptureAttempts = 0
     private var captureOnlyAttempts = 0
+    private var captureOnlyEventIds: [String] = []
+    private var successfulCarrierCaptures = 0
 
     func emit(_ name: String, properties: [String: Any]?) {
         append(name: name, properties: properties, eventId: nil, routed: false)
@@ -114,7 +122,9 @@ private final class PurchaseOutcomeEventSink: SystemEventSink, @unchecked Sendab
             routedCaptureAttempts += 1
             return routedCaptureResult
         }
-        append(name: name, properties: properties, eventId: eventId, routed: routes)
+        if routes {
+            append(name: name, properties: properties, eventId: eventId, routed: true)
+        }
         return routes
     }
 
@@ -125,13 +135,24 @@ private final class PurchaseOutcomeEventSink: SystemEventSink, @unchecked Sendab
         distinctId: String
     ) async -> Bool {
         _ = distinctId
-        lock.withLock { captureOnlyAttempts += 1 }
-        append(name: name, properties: properties, eventId: eventId, routed: false)
+        let captures = lock.withLock {
+            captureOnlyAttempts += 1
+            captureOnlyEventIds.append(eventId)
+            return carrierCaptureResult
+        }
+        guard captures else { return false }
+        if append(name: name, properties: properties, eventId: eventId, routed: false) {
+            lock.withLock { successfulCarrierCaptures += 1 }
+        }
         return true
     }
 
     func setRoutedCaptureResult(_ result: Bool) {
         lock.withLock { routedCaptureResult = result }
+    }
+
+    func setCarrierCaptureResult(_ result: Bool) {
+        lock.withLock { carrierCaptureResult = result }
     }
 
     var routedAttemptCount: Int {
@@ -142,16 +163,25 @@ private final class PurchaseOutcomeEventSink: SystemEventSink, @unchecked Sendab
         lock.withLock { captureOnlyAttempts }
     }
 
+    var successfulCarrierCaptureCount: Int {
+        lock.withLock { successfulCarrierCaptures }
+    }
+
+    var carrierCaptureOperationIdentityCount: Int {
+        lock.withLock { Set(captureOnlyEventIds).count }
+    }
+
     func events(named name: String) -> [RecordedPurchaseOutcomeEvent] {
         lock.withLock { storage.filter { $0.name == name } }
     }
 
+    @discardableResult
     private func append(
         name: String,
         properties: [String: Any]?,
         eventId: String?,
         routed: Bool
-    ) {
+    ) -> Bool {
         let event = RecordedPurchaseOutcomeEvent(
             name: name,
             routed: routed,
@@ -165,7 +195,7 @@ private final class PurchaseOutcomeEventSink: SystemEventSink, @unchecked Sendab
             displayPrice: properties?["display_price"] as? String,
             price: properties?["price"] as? Double
         )
-        lock.withLock {
+        return lock.withLock {
             if let eventId,
                let index = storage.firstIndex(where: { $0.eventId == eventId }) {
                 // Stable EventLog identity is idempotent. A later successful
@@ -173,17 +203,18 @@ private final class PurchaseOutcomeEventSink: SystemEventSink, @unchecked Sendab
                 if routed, !storage[index].routed {
                     storage[index] = event
                 }
+                return false
             } else {
                 storage.append(event)
+                return true
             }
         }
     }
 }
 
-private final class RecordingPurchaseEvidenceStore:
-    TransactionEvidenceStoreProtocol,
-    @unchecked Sendable
-{
+extension PurchaseOutcomeEventSink: SystemEventSink, @unchecked Sendable {}
+
+private final class RecordingPurchaseEvidenceStore {
     private let lock = NSLock()
     private var entries: [String: StoredTransactionEvidence] = [:]
     private var persistedTransactionIds: Set<String> = []
@@ -204,12 +235,18 @@ private final class RecordingPurchaseEvidenceStore:
     var uniquePersistedCount: Int {
         lock.withLock { persistedTransactionIds.count }
     }
+
+    func evidence(transactionId: String) -> StoredTransactionEvidence? {
+        lock.withLock { entries[transactionId] }
+    }
 }
 
-private final class RecordingPendingPurchaseStore:
-    PendingPurchaseStoreProtocol,
+extension RecordingPurchaseEvidenceStore:
+    TransactionEvidenceStoreProtocol,
     @unchecked Sendable
-{
+{}
+
+private final class RecordingPendingPurchaseStore {
     private let lock = NSLock()
     private var entries: [String: PendingPurchaseRecord] = [:]
 
@@ -226,7 +263,12 @@ private final class RecordingPendingPurchaseStore:
     var count: Int { lock.withLock { entries.count } }
 }
 
-private actor PurchaseOutcomeSyncAPI: PurchaseSynchronizing {
+extension RecordingPendingPurchaseStore:
+    PendingPurchaseStoreProtocol,
+    @unchecked Sendable
+{}
+
+private actor PurchaseOutcomeSyncAPI {
     private var requests: [(transactionJwt: String, distinctId: String)] = []
     private var responseSuccesses: [Bool] = []
 
@@ -253,7 +295,22 @@ private actor PurchaseOutcomeSyncAPI: PurchaseSynchronizing {
     var requestCount: Int { requests.count }
 }
 
-private actor PurchaseOutcomeFeatureService: FeatureServiceProtocol {
+extension PurchaseOutcomeSyncAPI: PurchaseSynchronizing {}
+
+private final class PurchaseOutcomeSyncTaskProbe {
+    private let lock = NSLock()
+    private var scheduledTransactionIds: [String] = []
+
+    func record(transactionId: String) {
+        lock.withLock { scheduledTransactionIds.append(transactionId) }
+    }
+
+    var count: Int { lock.withLock { scheduledTransactionIds.count } }
+}
+
+extension PurchaseOutcomeSyncTaskProbe: @unchecked Sendable {}
+
+private actor PurchaseOutcomeFeatureService {
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess? {
         _ = featureId
         _ = entityId
@@ -292,6 +349,8 @@ private actor PurchaseOutcomeFeatureService: FeatureServiceProtocol {
     func updateFromPurchase(_ features: [PurchaseFeature], distinctId: String) async {}
 }
 
+extension PurchaseOutcomeFeatureService: FeatureServiceProtocol {}
+
 private actor PurchaseOutcomeProjectionProbe {
     private var observedOverlay = false
 
@@ -302,20 +361,22 @@ private actor PurchaseOutcomeProjectionProbe {
     var overlayEverPresent: Bool { observedOverlay }
 }
 
-private final class PurchaseOutcomeFinishProbe: @unchecked Sendable {
+private final class PurchaseOutcomeFinalizationProbe {
     private let lock = NSLock()
-    private var finishCount = 0
+    private var finalizationCount = 0
 
-    func finish() async {
-        lock.withLock { finishCount += 1 }
+    func finalize() async {
+        lock.withLock { finalizationCount += 1 }
     }
 
-    var count: Int { lock.withLock { finishCount } }
+    var count: Int { lock.withLock { finalizationCount } }
 }
 
-private actor PurchaseOutcomeRecoveryProbe {
+extension PurchaseOutcomeFinalizationProbe: @unchecked Sendable {}
+
+private actor PurchaseOutcomeStoreRecoveryProbe {
     private var currentEntitlements: [StoreTransactionRecoveryItem] = []
-    private var currentEntitlementScanCount = 0
+    private var storeEntitlementQueryCount = 0
 
     func enqueueCurrentEntitlement(_ item: StoreTransactionRecoveryItem) {
         currentEntitlements.append(item)
@@ -325,19 +386,16 @@ private actor PurchaseOutcomeRecoveryProbe {
         []
     }
 
-    func scanCurrentEntitlements() -> [StoreTransactionRecoveryItem] {
-        currentEntitlementScanCount += 1
+    func queryCurrentEntitlements() -> [StoreTransactionRecoveryItem] {
+        storeEntitlementQueryCount += 1
         defer { currentEntitlements.removeAll() }
         return currentEntitlements
     }
 
-    var nativeEntitlementScans: Int { currentEntitlementScanCount }
+    var entitlementQueryCount: Int { storeEntitlementQueryCount }
 }
 
-private final class PurchaseOutcomeNativeAdapter:
-    NativeStoreKitPurchasing,
-    @unchecked Sendable
-{
+private final class PurchaseOutcomeStoreAdapter {
     private let lock = NSLock()
     private var nextPurchaseResult: NativePurchaseResult = .cancelled
     private var purchaseCalls = 0
@@ -366,7 +424,9 @@ private final class PurchaseOutcomeNativeAdapter:
     var restoreCallCount: Int { lock.withLock { restoreCalls } }
 }
 
-private actor PurchaseOutcomeDelegate: NuxiePurchaseDelegate {
+extension PurchaseOutcomeStoreAdapter: NativeStoreKitPurchasing, @unchecked Sendable {}
+
+private actor PurchaseOutcomeDelegate {
     private var purchaseResult: PurchaseResult = .purchased
     private var restoreResult: RestoreResult = .restored
 
@@ -386,7 +446,9 @@ private actor PurchaseOutcomeDelegate: NuxiePurchaseDelegate {
     func restorePurchases() async -> RestoreResult { restoreResult }
 }
 
-private actor PurchaseOutcomeCommitRecorder: TransactionObserverProtocol {
+extension PurchaseOutcomeDelegate: NuxiePurchaseDelegate {}
+
+private actor PurchaseOutcomeCommitRecorder {
     private let observer: TransactionObserver
     private var terminalOutcomes: [PurchaseCommitTerminalOutcome] = []
 
@@ -441,7 +503,9 @@ private actor PurchaseOutcomeCommitRecorder: TransactionObserverProtocol {
     }
 }
 
-private struct PurchaseOutcomeDateProvider: DateProviderProtocol {
+extension PurchaseOutcomeCommitRecorder: TransactionObserverProtocol {}
+
+private struct PurchaseOutcomeDateProvider {
     private let date = Date(timeIntervalSince1970: 2_000_000_000)
 
     func now() -> Date { date }
@@ -453,6 +517,8 @@ private struct PurchaseOutcomeDateProvider: DateProviderProtocol {
     }
 }
 
+extension PurchaseOutcomeDateProvider: DateProviderProtocol {}
+
 private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
     let observer: TransactionObserver
     let commitRecorder: PurchaseOutcomeCommitRecorder
@@ -461,10 +527,11 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
     let pendingStore = RecordingPendingPurchaseStore()
     let eventSink = PurchaseOutcomeEventSink()
     let syncAPI = PurchaseOutcomeSyncAPI()
+    let syncTaskProbe = PurchaseOutcomeSyncTaskProbe()
     let projection = PurchaseOutcomeProjectionProbe()
-    let finishProbe = PurchaseOutcomeFinishProbe()
-    let recovery = PurchaseOutcomeRecoveryProbe()
-    let nativeAdapter = PurchaseOutcomeNativeAdapter()
+    let finalizationProbe = PurchaseOutcomeFinalizationProbe()
+    let storeRecovery = PurchaseOutcomeStoreRecoveryProbe()
+    let storeAdapter = PurchaseOutcomeStoreAdapter()
     let delegate = PurchaseOutcomeDelegate()
     let identity = MockIdentityService()
     let scope: PurchaseStorageScope
@@ -523,11 +590,14 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
             },
             purchaseStorageScope: scope,
             dateProvider: PurchaseOutcomeDateProvider(),
-            unfinishedRecoveryTransactions: { [recovery] in
-                await recovery.drainUnfinished()
+            unfinishedRecoveryTransactions: { [storeRecovery] in
+                await storeRecovery.drainUnfinished()
             },
-            currentEntitlementRecoveryTransactions: { [recovery] in
-                await recovery.scanCurrentEntitlements()
+            currentEntitlementRecoveryTransactions: { [storeRecovery] in
+                await storeRecovery.queryCurrentEntitlements()
+            },
+            syncTaskScheduled: { [syncTaskProbe] transactionId in
+                syncTaskProbe.record(transactionId: transactionId)
             }
         )
         observer = realObserver
@@ -542,18 +612,21 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
             eventSink: eventSink,
             purchaseStorageScope: scope,
             identityService: identity,
-            nativePurchaseAdapter: nativeAdapter,
+            nativePurchaseAdapter: storeAdapter,
             featureService: featureService
         )
         serviceBox.set(service)
     }
 
     func run(_ action: PurchaseOutcomeCommitFixture.Action) async throws -> String? {
+        if let carrierCaptureSucceeds = action.carrierCaptureSucceeds {
+            eventSink.setCarrierCaptureResult(carrierCaptureSucceeds)
+        }
         switch action.entry {
         case "checkout":
             let productKey = try required(action.product, field: "product", action: action)
             let product = try makeProduct(key: productKey)
-            nativeAdapter.setPurchaseResult(try nativeResult(for: action))
+            storeAdapter.setPurchaseResult(try nativeResult(for: action))
             do {
                 let result = try await service.purchase(product)
                 _ = await result.syncTask?.value
@@ -577,7 +650,7 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
 
         case "startup_recovery":
             let fixtureEvidence = try fixtureEvidence(for: action)
-            await recovery.enqueueCurrentEntitlement(StoreTransactionRecoveryItem(
+            await storeRecovery.enqueueCurrentEntitlement(StoreTransactionRecoveryItem(
                 update: try verifiedUpdate(for: action),
                 jwsRepresentation: fixtureEvidence.signedPayload
             ))
@@ -588,7 +661,7 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
             await observer.handleVerifiedTransaction(
                 try verifiedUpdate(for: action),
                 jwsRepresentation: try fixtureEvidence(for: action).signedPayload,
-                source: .deferredUpdate,
+                source: .transactionStream,
                 attributedDistinctId: identity.getDistinctId()
             )
             return nil
@@ -612,6 +685,10 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
                     "external operation \(action.operation ?? "nil")"
                 )
             }
+            return nil
+
+        case "retry_retained_outcomes":
+            await observer.retryStoredEvidence()
             return nil
 
         default:
@@ -670,7 +747,7 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
                 resolvesPendingPurchase: false,
                 allowsDurableCheckoutAuthority: false,
                 requiresAuthorityResolution: false,
-                finish: { [finishProbe] in await finishProbe.finish() }
+                finish: { [finalizationProbe] in await finalizationProbe.finalize() }
             ),
             source: source
         ))
@@ -687,7 +764,7 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
                 transactionId: fixtureEvidence.identity,
                 originalTransactionId: fixtureEvidence.originalIdentity,
                 productId: try productFixture(for: fixtureEvidence).storeProductId,
-                finish: { [finishProbe] in await finishProbe.finish() }
+                finish: { [finalizationProbe] in await finalizationProbe.finalize() }
             ))
         case "cancelled":
             return .cancelled
@@ -713,7 +790,7 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
             appAccountToken: scope.appAccountToken(distinctId: identity.getDistinctId()),
             isRevoked: false,
             isUpgraded: false,
-            finish: { [finishProbe] in await finishProbe.finish() }
+            finish: { [finalizationProbe] in await finalizationProbe.finalize() }
         )
     }
 
@@ -882,7 +959,8 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
         XCTAssertEqual(harness.eventSink.captureOnlyAttemptCount, 1)
         XCTAssertEqual(completed.first?.transactionId, "transaction-pro-1")
         XCTAssertEqual(requestCount, 1)
-        XCTAssertEqual(harness.finishProbe.count, 1)
+        XCTAssertEqual(harness.syncTaskProbe.count, 1)
+        XCTAssertEqual(harness.finalizationProbe.count, 1)
         await harness.shutdown()
     }
 
@@ -928,7 +1006,7 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
         XCTAssertEqual(harness.eventSink.captureOnlyAttemptCount, 1)
         XCTAssertEqual(completed.first?.source, PurchaseOutcomeSource.checkout.rawValue)
         XCTAssertEqual(requestCount, 2)
-        XCTAssertEqual(harness.finishProbe.count, 1)
+        XCTAssertEqual(harness.finalizationProbe.count, 1)
         await harness.shutdown()
     }
 
@@ -964,10 +1042,45 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
         await harness.shutdown()
     }
 
+    func testExternalDeclarationDropsAfterBoundedCarrierRetries() async throws {
+        let fixture = try Self.loadFixture()
+        let vector = try XCTUnwrap(fixture.cases.first(where: {
+            $0.name == "external carrier failure retries one operation without failing checkout"
+        }))
+        let action = try XCTUnwrap(vector.actions.first)
+        let harness = PurchaseOutcomeFixtureHarness(
+            fixture: fixture,
+            vector: vector,
+            vectorIndex: 104
+        )
+
+        let checkoutError = try await harness.run(action)
+        for _ in 0..<4 {
+            await harness.observer.retryStoredEvidence()
+        }
+        let attemptsAtLimit = harness.eventSink.captureOnlyAttemptCount
+        harness.eventSink.setCarrierCaptureResult(true)
+        await harness.observer.retryStoredEvidence()
+        let commitCount = await harness.observer
+            .completedSuccessfulPurchaseCommitCount()
+
+        XCTAssertNil(checkoutError)
+        XCTAssertTrue(harness.eventSink.events(
+            named: SystemEventNames.purchaseCompleted
+        ).isEmpty)
+        XCTAssertEqual(commitCount, 0)
+        XCTAssertEqual(harness.eventSink.captureOnlyAttemptCount, attemptsAtLimit)
+        XCTAssertLessThanOrEqual(attemptsAtLimit, 8)
+        await harness.shutdown()
+    }
+
     func testVerifiedCommitRetainsJourneyRoutingUntilStableCaptureCompletes() async throws {
         let fixture = try Self.loadFixture()
         let vector = try XCTUnwrap(fixture.cases.first)
-        let action = try XCTUnwrap(vector.actions.first)
+        let checkoutAction = try XCTUnwrap(vector.actions.first)
+        let streamAction = try XCTUnwrap(vector.actions.first(where: {
+            $0.entry == "transaction_stream"
+        }))
         let harness = PurchaseOutcomeFixtureHarness(
             fixture: fixture,
             vector: vector,
@@ -975,24 +1088,40 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
         )
         harness.eventSink.setRoutedCaptureResult(false)
 
-        let checkoutError = try await harness.run(action)
+        let checkoutError = try await harness.run(checkoutAction)
+        let retainedAfterCaptureFailure = try XCTUnwrap(
+            harness.evidenceStore.evidence(transactionId: "transaction-pro-1")
+        )
         XCTAssertNil(checkoutError)
-        XCTAssertEqual(harness.eventSink.events(
+        XCTAssertTrue(harness.eventSink.events(
             named: SystemEventNames.purchaseCompleted
-        ).filter(\.routed).count, 0)
+        ).isEmpty)
+        XCTAssertNotNil(retainedAfterCaptureFailure.commercialContext)
+        XCTAssertNotNil(retainedAfterCaptureFailure.checkoutCompletionEventId)
+        XCTAssertNil(retainedAfterCaptureFailure.completionDeliveredAt)
+        XCTAssertNotNil(retainedAfterCaptureFailure.backendSyncedAt)
+        XCTAssertEqual(retainedAfterCaptureFailure.transactionJws, "")
 
         harness.eventSink.setRoutedCaptureResult(true)
-        await harness.observer.retryStoredEvidence()
+        _ = try await harness.run(streamAction)
         let completed = harness.eventSink.events(
             named: SystemEventNames.purchaseCompleted
         )
         let commitCount = await harness.observer
             .completedSuccessfulPurchaseCommitCount()
+        let retainedAfterStoreUpdate = try XCTUnwrap(
+            harness.evidenceStore.evidence(transactionId: "transaction-pro-1")
+        )
+        let requestCount = await harness.syncAPI.requestCount
 
         XCTAssertEqual(completed.count, 1)
         XCTAssertEqual(completed.filter(\.routed).count, 1)
         XCTAssertEqual(commitCount, 1)
-        XCTAssertEqual(harness.finishProbe.count, 1)
+        XCTAssertNotNil(retainedAfterStoreUpdate.completionDeliveredAt)
+        XCTAssertEqual(retainedAfterStoreUpdate.transactionJws, "")
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(harness.syncTaskProbe.count, 1)
+        XCTAssertEqual(harness.finalizationProbe.count, 1)
         await harness.shutdown()
     }
 
@@ -1035,9 +1164,10 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
             && completed.allSatisfy { harness.carriesKnownEvidenceIdentity($0) }
         let hasProductMapping = !completed.isEmpty
             && completed.allSatisfy { harness.carriesKnownProductMapping($0) }
-        let receiptSyncRequests = await harness.syncAPI.requestCount
+        let serverSyncRequests = await harness.syncAPI.requestCount
+        let scheduledSyncTasks = harness.syncTaskProbe.count
         let overlayEverPresent = await harness.projection.overlayEverPresent
-        let nativeEntitlementScans = await harness.recovery.nativeEntitlementScans
+        let storeEntitlementQueries = await harness.storeRecovery.entitlementQueryCount
         let terminalOutcomes = await harness.commitRecorder.observedTerminalOutcomes
 
         XCTAssertEqual(
@@ -1071,9 +1201,14 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
             "\(vector.name): purchase failure events"
         )
         XCTAssertEqual(
-            receiptSyncRequests,
-            expectation.receiptSyncRequests,
-            "\(vector.name): receipt sync requests"
+            serverSyncRequests,
+            expectation.serverSyncRequests,
+            "\(vector.name): server sync requests"
+        )
+        XCTAssertEqual(
+            scheduledSyncTasks,
+            expectation.scheduledSyncTasks,
+            "\(vector.name): scheduled sync tasks"
         )
         XCTAssertEqual(
             harness.pendingStore.count,
@@ -1086,15 +1221,15 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
             "\(vector.name): optimistic overlay"
         )
         XCTAssertEqual(
-            nativeEntitlementScans,
-            expectation.nativeEntitlementScans,
-            "\(vector.name): native entitlement scans"
+            storeEntitlementQueries,
+            expectation.storeEntitlementQueries,
+            "\(vector.name): store entitlement queries"
         )
-        if let nativeFinishCalls = expectation.nativeFinishCalls {
+        if let storeFinalizationCalls = expectation.storeFinalizationCalls {
             XCTAssertEqual(
-                harness.finishProbe.count,
-                nativeFinishCalls,
-                "\(vector.name): native finish calls"
+                harness.finalizationProbe.count,
+                storeFinalizationCalls,
+                "\(vector.name): store finalization calls"
             )
         }
         XCTAssertEqual(
@@ -1130,14 +1265,38 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
             )
         }
 
-        if vector.actions.allSatisfy({ $0.entry == "external_delegate" }) {
+        if let minimumAttempts = expectation.minimumCarrierCaptureAttempts {
+            XCTAssertGreaterThanOrEqual(
+                harness.eventSink.captureOnlyAttemptCount,
+                minimumAttempts,
+                "\(vector.name): carrier capture attempts"
+            )
+        }
+        if let successfulCaptures = expectation.successfulCarrierCaptures {
             XCTAssertEqual(
-                harness.nativeAdapter.purchaseCallCount,
+                harness.eventSink.successfulCarrierCaptureCount,
+                successfulCaptures,
+                "\(vector.name): successful carrier captures"
+            )
+        }
+        if let identityCount = expectation.carrierCaptureOperationIdentityCount {
+            XCTAssertEqual(
+                harness.eventSink.carrierCaptureOperationIdentityCount,
+                identityCount,
+                "\(vector.name): retained carrier operation identity"
+            )
+        }
+
+        if vector.actions.allSatisfy({
+            $0.entry == "external_delegate" || $0.entry == "retry_retained_outcomes"
+        }) {
+            XCTAssertEqual(
+                harness.storeAdapter.purchaseCallCount,
                 0,
                 "\(vector.name): external billing must not open StoreKit checkout"
             )
             XCTAssertEqual(
-                harness.nativeAdapter.restoreCallCount,
+                harness.storeAdapter.restoreCallCount,
                 0,
                 "\(vector.name): external restore must not invoke StoreKit restore"
             )

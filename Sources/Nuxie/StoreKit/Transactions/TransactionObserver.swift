@@ -330,6 +330,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         @Sendable () async -> [StoreTransactionRecoveryItem]
     private let currentEntitlementRecoveryTransactions:
         @Sendable () async -> [StoreTransactionRecoveryItem]
+    private let syncTaskScheduled: @Sendable (String) -> Void
     // MARK: - Properties
 
     /// Task observing Transaction.updates
@@ -360,15 +361,21 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let result: PurchaseCommitResult
     }
 
+    private struct PurchaseCommitRetryState: Sendable {
+        var outcome: PurchaseOutcome
+        var externalRetryRounds = 0
+        var retryInProgress = false
+    }
+
     /// The actor may re-enter while evidence or events are being persisted.
     /// Install the whole-commit operation before the first suspension so every
     /// producer of the same evidence joins one ordered interpretation.
     private var purchaseCommitOperations: [PurchaseCommitKey: PurchaseCommitOperation] = [:]
     private var completedPurchaseCommits: [PurchaseCommitKey: CompletedPurchaseCommit] = [:]
     /// A nonterminal stable-event/Journey capture retries the exact same
-    /// committer identity. External callbacks are never invoked again, and a
-    /// verified retry reuses its durable evidence rather than finishing twice.
-    private var retryablePurchaseOutcomes: [PurchaseCommitKey: PurchaseOutcome] = [:]
+    /// committer identity. External callbacks are never invoked again and have
+    /// a bounded in-process tail; verified retries retain their finish closure.
+    private var retryablePurchaseCommits: [PurchaseCommitKey: PurchaseCommitRetryState] = [:]
     private var purchaseCommitRetryTask: Task<Void, Never>?
     /// Journey authority is process-local. Preserve it across a transient
     /// routed-capture failure, but never across observer teardown/relaunch.
@@ -413,6 +420,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// Receipt/JWS evidence is a retry queue, not permanent customer state.
     /// StoreKit remains the durable transaction authority after this window.
     static let evidenceRetention: TimeInterval = 90 * 24 * 3600
+    private static let externalPurchaseCommitRetryLimit = 3
 
     // MARK: - Init
 
@@ -503,7 +511,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 }
                 return items
             },
-        recoverySources: StoreTransactionRecoverySources? = nil
+        recoverySources: StoreTransactionRecoverySources? = nil,
+        syncTaskScheduled: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.api = api
         self.featureService = features
@@ -521,6 +530,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             ?? unfinishedRecoveryTransactions
         self.currentEntitlementRecoveryTransactions = recoverySources?.currentEntitlements
             ?? currentEntitlementRecoveryTransactions
+        self.syncTaskScheduled = syncTaskScheduled
     }
 
     // MARK: - Lifecycle
@@ -580,7 +590,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             }
         }
         purchaseCommitOperations.removeAll()
-        retryablePurchaseOutcomes.removeAll()
+        retryablePurchaseCommits.removeAll()
         purchaseCommitJourneyRouting.removeAll()
         transactionSyncOperations.removeAll()
         evidenceRecoveryTask = nil
@@ -893,16 +903,21 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     id: UUID(),
                     result: result
                 )
-                retryablePurchaseOutcomes.removeValue(forKey: key)
+                retryablePurchaseCommits.removeValue(forKey: key)
                 purchaseCommitJourneyRouting.remove(key)
             } else if shouldRetainPurchaseCommitRetry(outcome, key: key) {
-                retryablePurchaseOutcomes[key] = preferredPurchaseCommitRetry(
-                    existing: retryablePurchaseOutcomes[key],
+                var retry = retryablePurchaseCommits[key]
+                    ?? PurchaseCommitRetryState(outcome: outcome)
+                retry.outcome = preferredPurchaseCommitRetry(
+                    existing: retry.outcome,
                     candidate: outcome
                 )
-                if shouldSchedulePurchaseCommitRetry(outcome, key: key) {
+                retryablePurchaseCommits[key] = retry
+                if shouldSchedulePurchaseCommitRetry(retry.outcome, key: key) {
                     schedulePurchaseCommitRetry()
                 }
+            } else {
+                retryablePurchaseCommits.removeValue(forKey: key)
             }
             return result
         }
@@ -925,8 +940,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func performPurchaseCommitRetryPump() async {
         var delayNanoseconds: UInt64 = 250_000_000
         while !isStopped, !Task.isCancelled {
-            guard retryablePurchaseOutcomes.contains(where: {
-                shouldSchedulePurchaseCommitRetry($0.value, key: $0.key)
+            guard retryablePurchaseCommits.contains(where: {
+                shouldSchedulePurchaseCommitRetry($0.value.outcome, key: $0.key)
             }) else {
                 purchaseCommitRetryTask = nil
                 return
@@ -942,19 +957,49 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func retryPendingPurchaseOutcomes(
         immediateOnly: Bool = false
     ) async {
-        let pending = retryablePurchaseOutcomes
-        for (key, outcome) in pending {
+        let pendingKeys = Array(retryablePurchaseCommits.keys)
+        for key in pendingKeys {
             guard !isStopped, !Task.isCancelled else { return }
+            guard var retry = retryablePurchaseCommits[key],
+                  !retry.retryInProgress else { continue }
             if immediateOnly,
-               !shouldSchedulePurchaseCommitRetry(outcome, key: key) {
+               !shouldSchedulePurchaseCommitRetry(retry.outcome, key: key) {
                 continue
             }
-            let result = await commit(outcome)
-            if result.isTerminal,
-               retryablePurchaseOutcomes[key] != nil {
-                retryablePurchaseOutcomes.removeValue(forKey: key)
+
+            if case .external = key {
+                guard retry.externalRetryRounds
+                    < Self.externalPurchaseCommitRetryLimit else {
+                    abandonExternalPurchaseCommitRetry(for: key)
+                    continue
+                }
+                retry.externalRetryRounds += 1
+            }
+            retry.retryInProgress = true
+            retryablePurchaseCommits[key] = retry
+
+            let result = await commit(retry.outcome)
+            guard !result.isTerminal,
+                  var retained = retryablePurchaseCommits[key] else { continue }
+            retained.retryInProgress = false
+            if case .external = key,
+               retained.externalRetryRounds >= Self.externalPurchaseCommitRetryLimit {
+                abandonExternalPurchaseCommitRetry(for: key)
+            } else if shouldRetainPurchaseCommitRetry(retained.outcome, key: key) {
+                retryablePurchaseCommits[key] = retained
+            } else {
+                retryablePurchaseCommits.removeValue(forKey: key)
+                purchaseCommitJourneyRouting.remove(key)
             }
         }
+    }
+
+    private func abandonExternalPurchaseCommitRetry(for key: PurchaseCommitKey) {
+        guard case .external = key,
+              retryablePurchaseCommits.removeValue(forKey: key) != nil else { return }
+        LogWarning(
+            "TransactionObserver: External declaration event was lost after bounded in-process retries"
+        )
     }
 
     private func shouldRetainPurchaseCommitRetry(
@@ -1049,8 +1094,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         var captured = false
         // A false result can mean that the stable event is already durable but
         // local Journey routing was temporarily unavailable. Retry the exact
-        // operation once immediately; later recovery hooks retain the same
-        // operation ID until routing reports terminal completion.
+        // operation once immediately; later recovery hooks use the same
+        // operation ID for the bounded in-process retry tail.
         for _ in 0..<2 where !captured {
             switch declaration.kind {
             case .purchased(let context, let transactionId, let testStore):
@@ -1080,15 +1125,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 )
             }
         }
-        if !captured {
-            LogWarning(
-                "TransactionObserver: External declaration accepted before event routing completed"
-            )
-        }
         // The host has already completed the commercial operation. A local
         // EventLog/Journey routing failure must never turn that declaration
-        // into a repurchase-safe failure. Keep the operation nonterminal so an
-        // exact same-operation retry can re-enter the stable event capture.
+        // into a repurchase-safe failure. Keep the operation nonterminal for a
+        // bounded set of exact same-operation retries.
         return PurchaseCommitResult(
             committed: true,
             syncTask: nil,
@@ -1272,16 +1312,25 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let shouldFinish = existing?.finishRequired
             ?? verified.finishRequired
             ?? policy.finishAfterRecording
+        let transactionJws: String
+        if purchaseCommitJourneyRouting.contains(commitKey), let existing {
+            // A routed-capture retry rebuilds from the current durable row.
+            // Backend acknowledgement may already have cleared the signed
+            // receipt while the Journey signal remained pending.
+            transactionJws = existing.transactionJws
+        } else if existing?.isRevoked == true && !verified.isRevoked {
+            transactionJws = existing!.transactionJws
+        } else if verified.transactionJws.isEmpty {
+            transactionJws = existing?.transactionJws ?? ""
+        } else {
+            transactionJws = verified.transactionJws
+        }
         var committedEvidence = StoredTransactionEvidence(
             scope: existing?.scope ?? pendingRecord?.scope ?? purchaseStorageScope,
             // A revoked row's signed payload is authoritative: an active
             // producer arriving after revocation must not rewrite it
             // (monotonic revocation; the row stays exactly as revoked).
-            transactionJws: (existing?.isRevoked == true && !verified.isRevoked)
-                ? existing!.transactionJws
-                : (verified.transactionJws.isEmpty
-                    ? existing?.transactionJws ?? ""
-                    : verified.transactionJws),
+            transactionJws: transactionJws,
             transactionId: verified.transactionId,
             originalTransactionId: verified.originalTransactionId,
             productId: verified.productId,
@@ -1344,10 +1393,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // the unchanged row carries everything the capture needs.
         var evidenceChanged = false
         if existing != committedEvidence {
-            guard await persistEvidence(
+            guard let currentEvidence = await persistEvidenceAndReload(
                 committedEvidence,
                 refreshProjection: false
             ) else { return .rejected }
+            committedEvidence = currentEvidence
             evidenceChanged = true
         }
 
@@ -1371,11 +1421,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 committedEvidence,
                 finishRequired: false
             )
-            guard await persistEvidence(
+            guard let currentEvidence = await persistEvidenceAndReload(
                 committedEvidence,
                 refreshProjection: false
             ) else { return .rejected }
+            committedEvidence = currentEvidence
             evidenceChanged = true
+        }
+
+        // Actor reentrancy in pending-record retirement or StoreKit finishing
+        // can admit a revocation commit under its separate key. Completion is
+        // always interpreted from the current canonical row.
+        if let currentEvidence = storedEvidence()[verified.transactionId] {
+            committedEvidence = currentEvidence
         }
 
         var completionAccepted = committedEvidence.commercialContext == nil
@@ -1405,11 +1463,18 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     committedEvidence,
                     completionDeliveredAt: dateProvider.now()
                 )
-                completionAccepted = await persistEvidence(
+                if let currentEvidence = await persistEvidenceAndReload(
                     committedEvidence,
                     refreshProjection: false
-                )
-                evidenceChanged = evidenceChanged || completionAccepted
+                ) {
+                    committedEvidence = currentEvidence
+                    completionAccepted = committedEvidence.commercialContext == nil
+                        || committedEvidence.isRevoked
+                        || committedEvidence.completionDeliveredAt != nil
+                    evidenceChanged = true
+                } else {
+                    completionAccepted = false
+                }
             }
         }
         let commitComplete = completionAccepted
@@ -1424,9 +1489,21 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // A duplicate token-ownership recovery producer whose commit changed
         // nothing durable never resubmits the receipt; the stored-evidence
         // pump owns retries of previously recorded failures.
-        let syncTask = (verified.requiresTokenOwnership && !evidenceChanged)
-            ? nil
-            : scheduleSync(for: committedEvidence)
+        let currentEvidence = storedEvidence()[verified.transactionId]
+        let syncTask: Task<Bool, Never>?
+        if verified.requiresTokenOwnership && !evidenceChanged {
+            syncTask = nil
+        } else if currentEvidence?.isRevoked == true && !verified.isRevoked {
+            // A revocation announced while this active producer was suspended
+            // may coerce its persist before the revocation JWS itself lands.
+            // The revoked producer exclusively owns that sync; never submit
+            // the active producer's receipt under revoked semantics.
+            syncTask = nil
+        } else if let currentEvidence {
+            syncTask = scheduleSync(for: currentEvidence)
+        } else {
+            syncTask = nil
+        }
         return PurchaseCommitResult(
             committed: true,
             syncTask: syncTask,
@@ -1439,6 +1516,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     ) -> Task<Bool, Never>? {
         guard evidence.backendSyncedAt == nil,
               !evidence.transactionJws.isEmpty else { return nil }
+        syncTaskScheduled(evidence.transactionId)
         return Task { [weak self] in
             guard let self else { return false }
             return await self.syncTransactionWithOptions(
@@ -2161,6 +2239,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return retained
     }
 
+    private func persistEvidenceAndReload(
+        _ evidence: StoredTransactionEvidence,
+        refreshProjection: Bool
+    ) async -> StoredTransactionEvidence? {
+        guard await persistEvidence(
+            evidence,
+            refreshProjection: refreshProjection
+        ) else { return nil }
+        return storedEvidence()[evidence.transactionId]
+    }
+
     private func persistEvidence(
         _ evidence: StoredTransactionEvidence,
         refreshProjection: Bool = true
@@ -2278,11 +2367,18 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         guard !evidenceStoreUnreadable else { return }
         var changed = false
         for (key, stored) in entries
-        where stored.originalTransactionId == originalTransactionId
-            && !stored.isRevoked {
+        where stored.originalTransactionId == originalTransactionId {
+            // An active writer can be coerced by the volatile revocation
+            // marker before this producer persists. Replace that row's active
+            // payload with the matching incoming revocation payload.
+            let replacesTransactionJws = key == transactionId
+                && !transactionJws.isEmpty
+                && stored.transactionJws != transactionJws
+                && (!stored.isRevoked || stored.backendSyncedAt == nil)
+            guard !stored.isRevoked || replacesTransactionJws else { continue }
             entries[key] = StoredTransactionEvidence(
                 scope: stored.scope,
-                transactionJws: key == transactionId && !transactionJws.isEmpty
+                transactionJws: replacesTransactionJws
                     ? transactionJws
                     : stored.transactionJws,
                 transactionId: stored.transactionId,

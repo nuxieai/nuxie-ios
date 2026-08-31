@@ -444,6 +444,9 @@ public actor MockNuxieApi: NuxieApiProtocol {
     /// acknowledge evidence before the unsynced window can be observed).
     public var syncTransactionShouldSucceed = true
 
+    /// Configures whether mocked transaction sync requests report success.
+    /// - Parameter succeeds: `true` to return a successful purchase response;
+    ///   otherwise, the mock returns a rejected response without throwing.
     public func setSyncTransactionShouldSucceed(_ succeeds: Bool) {
         syncTransactionShouldSucceed = succeeds
     }

@@ -680,8 +680,6 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             source: .transactionStream
         )
 
-        XCTAssertEqual(directCallback["display_price"] as? String, "$9.99")
-        XCTAssertEqual(directCallback["price"] as? Double, 9.99)
         XCTAssertEqual(
             directCallback["source"] as? String,
             PurchaseOutcomeSource.checkout.rawValue
@@ -690,15 +688,29 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             storeUpdateRecovery["source"] as? String,
             PurchaseOutcomeSource.transactionStream.rawValue
         )
+
+        var directPayload = directCallback
+        var recoveryPayload = storeUpdateRecovery
+        directPayload.removeValue(forKey: "source")
+        recoveryPayload.removeValue(forKey: "source")
+
         XCTAssertEqual(
-            directCallback["product_id"] as? String,
-            storeUpdateRecovery["product_id"] as? String
+            directPayload as NSDictionary,
+            recoveryPayload as NSDictionary
         )
         XCTAssertEqual(
-            directCallback["placement_id"] as? String,
-            storeUpdateRecovery["placement_id"] as? String
+            directPayload as NSDictionary,
+            [
+                "product_id": "product-1",
+                "placement_id": "placement-1",
+                "store_product_id": "store-product-1",
+                "experience_id": "experience-1",
+                "test_store": false,
+                "transaction_id": "transaction-1",
+                "display_price": "$9.99",
+                "price": 9.99,
+            ] as NSDictionary
         )
-        XCTAssertEqual(directCallback["transaction_id"] as? String, "transaction-1")
     }
 
     func testAccountTokenIsStableOnlyInsideExactRuntimeScope() {

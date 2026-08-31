@@ -11,6 +11,10 @@
   "notes": [
     "Runners MUST drive production producer entry points and MUST NOT invoke the committer directly.",
     "Evidence identity is portable: iOS maps it to the StoreKit transaction ID and Android maps it to the verified purchase-token identity.",
+    "signedPayload maps to a StoreKit JWS on Apple and to Play originalJson plus signature on Android.",
+    "originalIdentity maps to the StoreKit original transaction ID; Play runners use the purchase token when no separate lineage identity exists.",
+    "Store finalization maps to StoreKit finish on Apple and acknowledge or consume on Play.",
+    "Store entitlement queries map to StoreKit current-entitlement scans on Apple and queryPurchases on Play.",
     "A verified identity commits once across every source; source is provenance and never changes the commit semantics.",
     "Each external_delegate purchase action is one delegate callback boundary and MUST mint a fresh operation ID. Identical callbacks therefore commit independently.",
     "External declarations create no evidence, no optimistic overlay, no StoreKit finish, and no native entitlement scan. Their durable server carrier is $purchase_completed.",
@@ -18,7 +22,9 @@
     "uniqueEvidenceRows counts distinct evidence identities ever durably persisted, even if an acknowledged row is later retired.",
     "journeyAdvancements counts routed success signals: capture for purchase completion and the ordinary restore-completed signal for restore.",
     "committerTerminalOutcomes records cancelled, pending, and failed outcomes observed at the real checkout-to-committer boundary.",
-    "checkoutErrors records only public checkout calls; observer and recovery producer actions do not add entries."
+    "checkoutErrors records only public checkout calls; observer and recovery producer actions do not add entries.",
+    "retry_retained_outcomes drives the platform's production recovery hook and never calls the committer directly.",
+    "A declaration's stable event identity is derived from its operation ID, so one attempted event identity across retries proves that the operation ID was retained."
   ],
   "products": {
     "pro": {
@@ -82,10 +88,11 @@
         "purchaseCompletedEvents": 1,
         "restoreCompletedEvents": 0,
         "purchaseFailedEvents": 0,
-        "receiptSyncRequests": 1,
+        "serverSyncRequests": 1,
+        "scheduledSyncTasks": 1,
         "pendingRecords": 0,
         "overlayEverPresent": true,
-        "nativeEntitlementScans": 1,
+        "storeEntitlementQueries": 1,
         "checkoutErrors": [],
         "committerTerminalOutcomes": [],
         "completionSources": [
@@ -96,7 +103,7 @@
       }
     },
     {
-      "name": "deferred update after startup recovery is deduplicated",
+      "name": "transaction stream with pending ownership derives deferred update and startup recovery deduplicates",
       "actions": [
         {
           "entry": "checkout",
@@ -104,12 +111,12 @@
           "product": "pro"
         },
         {
-          "entry": "startup_recovery",
+          "entry": "deferred_update",
           "outcome": "verified",
           "evidence": "pro-transaction"
         },
         {
-          "entry": "deferred_update",
+          "entry": "startup_recovery",
           "outcome": "verified",
           "evidence": "pro-transaction"
         }
@@ -121,10 +128,11 @@
         "purchaseCompletedEvents": 1,
         "restoreCompletedEvents": 0,
         "purchaseFailedEvents": 0,
-        "receiptSyncRequests": 1,
+        "serverSyncRequests": 1,
+        "scheduledSyncTasks": 1,
         "pendingRecords": 0,
         "overlayEverPresent": true,
-        "nativeEntitlementScans": 1,
+        "storeEntitlementQueries": 1,
         "checkoutErrors": [
           "pending"
         ],
@@ -136,7 +144,7 @@
           }
         ],
         "completionSources": [
-          "startup_recovery"
+          "deferred_update"
         ],
         "completionCarriesEvidenceIdentity": true,
         "completionCarriesProductMapping": true
@@ -159,11 +167,12 @@
         "purchaseCompletedEvents": 1,
         "restoreCompletedEvents": 0,
         "purchaseFailedEvents": 0,
-        "receiptSyncRequests": 0,
+        "serverSyncRequests": 0,
+        "scheduledSyncTasks": 0,
         "pendingRecords": 0,
         "overlayEverPresent": false,
-        "nativeEntitlementScans": 0,
-        "nativeFinishCalls": 0,
+        "storeEntitlementQueries": 0,
+        "storeFinalizationCalls": 0,
         "checkoutErrors": [],
         "committerTerminalOutcomes": [],
         "completionSources": [
@@ -171,6 +180,47 @@
         ],
         "completionCarriesEvidenceIdentity": false,
         "completionCarriesProductMapping": true
+      }
+    },
+    {
+      "name": "external carrier failure retries one operation without failing checkout",
+      "actions": [
+        {
+          "entry": "external_delegate",
+          "operation": "purchase",
+          "outcome": "external",
+          "product": "pro",
+          "carrierCaptureSucceeds": false
+        },
+        {
+          "entry": "retry_retained_outcomes",
+          "outcome": "retry",
+          "carrierCaptureSucceeds": true
+        }
+      ],
+      "expect": {
+        "successfulCommits": 1,
+        "uniqueEvidenceRows": 0,
+        "journeyAdvancements": 1,
+        "purchaseCompletedEvents": 1,
+        "restoreCompletedEvents": 0,
+        "purchaseFailedEvents": 0,
+        "serverSyncRequests": 0,
+        "scheduledSyncTasks": 0,
+        "pendingRecords": 0,
+        "overlayEverPresent": false,
+        "storeEntitlementQueries": 0,
+        "storeFinalizationCalls": 0,
+        "checkoutErrors": [],
+        "committerTerminalOutcomes": [],
+        "completionSources": [
+          "external_delegate"
+        ],
+        "completionCarriesEvidenceIdentity": false,
+        "completionCarriesProductMapping": true,
+        "minimumCarrierCaptureAttempts": 3,
+        "successfulCarrierCaptures": 1,
+        "carrierCaptureOperationIdentityCount": 1
       }
     },
     {
@@ -196,11 +246,12 @@
         "purchaseCompletedEvents": 2,
         "restoreCompletedEvents": 0,
         "purchaseFailedEvents": 0,
-        "receiptSyncRequests": 0,
+        "serverSyncRequests": 0,
+        "scheduledSyncTasks": 0,
         "pendingRecords": 0,
         "overlayEverPresent": false,
-        "nativeEntitlementScans": 0,
-        "nativeFinishCalls": 0,
+        "storeEntitlementQueries": 0,
+        "storeFinalizationCalls": 0,
         "checkoutErrors": [],
         "committerTerminalOutcomes": [],
         "completionSources": [
@@ -228,11 +279,12 @@
         "purchaseCompletedEvents": 0,
         "restoreCompletedEvents": 1,
         "purchaseFailedEvents": 0,
-        "receiptSyncRequests": 0,
+        "serverSyncRequests": 0,
+        "scheduledSyncTasks": 0,
         "pendingRecords": 0,
         "overlayEverPresent": false,
-        "nativeEntitlementScans": 0,
-        "nativeFinishCalls": 0,
+        "storeEntitlementQueries": 0,
+        "storeFinalizationCalls": 0,
         "checkoutErrors": [],
         "committerTerminalOutcomes": [],
         "completionSources": [],
@@ -256,10 +308,11 @@
         "purchaseCompletedEvents": 0,
         "restoreCompletedEvents": 0,
         "purchaseFailedEvents": 0,
-        "receiptSyncRequests": 0,
+        "serverSyncRequests": 0,
+        "scheduledSyncTasks": 0,
         "pendingRecords": 0,
         "overlayEverPresent": false,
-        "nativeEntitlementScans": 0,
+        "storeEntitlementQueries": 0,
         "checkoutErrors": [
           "cancelled"
         ],
@@ -291,10 +344,11 @@
         "purchaseCompletedEvents": 0,
         "restoreCompletedEvents": 0,
         "purchaseFailedEvents": 0,
-        "receiptSyncRequests": 0,
+        "serverSyncRequests": 0,
+        "scheduledSyncTasks": 0,
         "pendingRecords": 1,
         "overlayEverPresent": false,
-        "nativeEntitlementScans": 0,
+        "storeEntitlementQueries": 0,
         "checkoutErrors": [
           "pending"
         ],
@@ -327,10 +381,11 @@
         "purchaseCompletedEvents": 0,
         "restoreCompletedEvents": 0,
         "purchaseFailedEvents": 1,
-        "receiptSyncRequests": 0,
+        "serverSyncRequests": 0,
+        "scheduledSyncTasks": 0,
         "pendingRecords": 0,
         "overlayEverPresent": false,
-        "nativeEntitlementScans": 0,
+        "storeEntitlementQueries": 0,
         "checkoutErrors": [
           "failed"
         ],
