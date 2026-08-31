@@ -47,6 +47,12 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var trackEventCallCount = 0
     public var checkFeatureCallCount = 0
     private var acceptedTrackEventIds: Set<String> = []
+    private var shouldSuspendNextProfileFetch = false
+    private var suspendedProfileFetch: (
+        id: UUID,
+        continuation: CheckedContinuation<Void, Never>
+    )?
+    private var profileFetchSuspensionWaiters: [CheckedContinuation<Void, Never>] = []
     public private(set) var appliedFeatureTrackEventIds: [String] = []
     private var shouldSuspendNextFeatureTrackEvent = false
     private var suspendedFeatureTrackEvent: (
@@ -148,6 +154,27 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public func setProfileDelay(_ delay: TimeInterval) {
         self.profileDelay = delay
     }
+
+    func suspendNextProfileFetch() {
+        shouldSuspendNextProfileFetch = true
+    }
+
+    func waitForSuspendedProfileFetch() async {
+        if suspendedProfileFetch != nil { return }
+        await withCheckedContinuation { continuation in
+            profileFetchSuspensionWaiters.append(continuation)
+        }
+    }
+
+    func resumeSuspendedProfileFetch() {
+        suspendedProfileFetch?.continuation.resume()
+        suspendedProfileFetch = nil
+    }
+
+    private func cancelSuspendedProfileFetch(id: UUID) {
+        guard suspendedProfileFetch?.id == id else { return }
+        resumeSuspendedProfileFetch()
+    }
     
     public func setShouldFailBatch(_ shouldFail: Bool) {
         shouldFailBatch = shouldFail
@@ -237,15 +264,33 @@ public actor MockNuxieApi: NuxieApiProtocol {
         fetchProfileCallCount += 1
         lastProfileLocale = locale
 
+        let response = profileResponse!
+        let failure = shouldFailProfile
+        if shouldSuspendNextProfileFetch {
+            shouldSuspendNextProfileFetch = false
+            let suspensionId = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    suspendedProfileFetch = (suspensionId, continuation)
+                    let waiters = profileFetchSuspensionWaiters
+                    profileFetchSuspensionWaiters.removeAll()
+                    waiters.forEach { $0.resume() }
+                }
+            } onCancel: {
+                Task { await self.cancelSuspendedProfileFetch(id: suspensionId) }
+            }
+            try Task.checkCancellation()
+        }
+
         if profileDelay > 0 {
             try await Task.sleep(nanoseconds: UInt64(profileDelay * 1_000_000_000))
         }
 
-        if shouldFailProfile {
+        if failure {
             throw NuxieNetworkError.httpError(statusCode: 500, message: "Mock server error")
         }
 
-        return profileResponse!
+        return response
     }
 
     public func fetchProfileWithTimeout(for distinctId: String, locale: String?, timeout: TimeInterval) async throws -> ProfileResponse {
@@ -473,6 +518,11 @@ public actor MockNuxieApi: NuxieApiProtocol {
         trackEventError = nil
         trackEventDelay = 0
         acceptedTrackEventTimeouts = 0
+        shouldSuspendNextProfileFetch = false
+        resumeSuspendedProfileFetch()
+        let profileSuspensionWaiters = profileFetchSuspensionWaiters
+        profileFetchSuspensionWaiters.removeAll()
+        profileSuspensionWaiters.forEach { $0.resume() }
         shouldSuspendNextFeatureTrackEvent = false
         resumeSuspendedFeatureTrackEvent()
         let suspensionWaiters = featureTrackSuspensionWaiters

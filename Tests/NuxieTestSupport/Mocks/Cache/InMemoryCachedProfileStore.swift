@@ -21,6 +21,17 @@ public actor InMemoryCachedProfileStore: CachedProfileStore {
     public func store(_ item: CachedProfile, forKey key: String) async throws {
         storage[key] = Entry(value: item, mtime: Date())
     }
+
+    @discardableResult
+    public func store(
+        _ item: CachedProfile,
+        forKey key: String,
+        admission: CachedProfileStoreAdmission
+    ) async throws -> Bool {
+        guard admission() else { return false }
+        storage[key] = Entry(value: item, mtime: Date())
+        return true
+    }
     
     public func retrieve(forKey key: String, allowStale: Bool) async -> CachedProfile? {
         guard var entry = storage[key] else { return nil }
@@ -36,6 +47,15 @@ public actor InMemoryCachedProfileStore: CachedProfileStore {
     
     public func remove(forKey key: String) async {
         storage.removeValue(forKey: key)
+    }
+
+    public func remove(
+        forKey key: String,
+        admission: CachedProfileStoreAdmission
+    ) async -> Bool {
+        guard admission() else { return false }
+        storage.removeValue(forKey: key)
+        return true
     }
     
     public func clearAll() async {
@@ -70,8 +90,21 @@ public actor InMemoryCachedProfileStore: CachedProfileStore {
 public actor NullCachedProfileStore: CachedProfileStore {
     public init() {}
     public func store(_ item: CachedProfile, forKey key: String) async throws {}
+    public func store(
+        _ item: CachedProfile,
+        forKey key: String,
+        admission: CachedProfileStoreAdmission
+    ) async throws -> Bool {
+        admission()
+    }
     public func retrieve(forKey key: String, allowStale: Bool) async -> CachedProfile? { nil }
     public func remove(forKey key: String) async {}
+    public func remove(
+        forKey key: String,
+        admission: CachedProfileStoreAdmission
+    ) async -> Bool {
+        admission()
+    }
     public func clearAll() async {}
     public func cleanupExpired() async -> Int { 0 }
     public func getAllKeys() async -> [String] { [] }
