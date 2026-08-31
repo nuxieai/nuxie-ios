@@ -647,6 +647,13 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard installedMembership,
               isCurrentAdmission(admission) else { return false }
 
+        // Advance the customer-commit tracker before the first customer-
+        // scoped write so a stale reduced fallback cannot interleave with
+        // this admission's own customer commits.
+        latestCustomerScopedCommitGeneration = max(
+            latestCustomerScopedCommitGeneration,
+            admission.generation
+        )
         if let userProps = profile.userProperties {
             let properties = Dictionary(uniqueKeysWithValues: userProps.map { ($0.key, $0.value.value) })
             guard identityService.setUserProperties(
@@ -678,17 +685,15 @@ internal actor ProfileService: ProfileServiceProtocol {
         // committing them from a response fetched under an older locale is
         // harmless (the same facts arrive under any locale, and their dedupe
         // is correct), so they gate on identity only.
-        latestCustomerScopedCommitGeneration = max(
-            latestCustomerScopedCommitGeneration,
-            admission.generation
-        )
         if let facts = profile.facts, !facts.isEmpty {
-            guard isCurrentIdentity(admission) else { return true }
+            guard admission.generation >= latestCustomerScopedCommitGeneration,
+                  isCurrentIdentity(admission) else { return true }
             await eventLog.commitServerFacts(facts, distinctId: distinctId)
             guard isCurrentIdentity(admission) else { return true }
         }
         if let mailbox = profile.mailbox, !mailbox.isEmpty {
-            guard isCurrentIdentity(admission) else { return true }
+            guard admission.generation >= latestCustomerScopedCommitGeneration,
+                  isCurrentIdentity(admission) else { return true }
             await journeyMailboxHandler?(mailbox, distinctId)
             guard isCurrentIdentity(admission) else { return true }
         }
@@ -1027,12 +1032,17 @@ internal actor ProfileService: ProfileServiceProtocol {
                 ifCurrentDistinctIdMatches: admission.distinctId
             )
         }
+        // Each awaited step re-checks the tracker: a fuller, newer admission
+        // that commits while this reduced one is suspended fences out its
+        // remaining steps (one coherent customer commit, never interleaved).
         if let facts = profile.facts, !facts.isEmpty {
-            guard isCurrentIdentity(admission) else { return }
+            guard admission.generation >= latestCustomerScopedCommitGeneration,
+                  isCurrentIdentity(admission) else { return }
             await eventLog.commitServerFacts(facts, distinctId: admission.distinctId)
         }
         if let mailbox = profile.mailbox, !mailbox.isEmpty {
-            guard isCurrentIdentity(admission) else { return }
+            guard admission.generation >= latestCustomerScopedCommitGeneration,
+                  isCurrentIdentity(admission) else { return }
             await journeyMailboxHandler?(mailbox, admission.distinctId)
         }
     }
