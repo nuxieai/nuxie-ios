@@ -185,11 +185,23 @@ actor ExperienceLoader {
         _ prepared: PreparedExperienceReleaseProfile,
         generation: UInt64
     ) async throws -> ExperienceRoutingCatalog? {
+        try await commitReleaseProfile(prepared, generation: generation, admission: nil)
+    }
+
+    func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64,
+        admission: ProfileSideEffectAdmission?
+    ) async throws -> ExperienceRoutingCatalog? {
         guard generation >= latestProfileGeneration else { return nil }
+        // Mutation-point admission: rejects an invalidated (identity or
+        // locale) admission before any newer commit raises the floor.
+        if let admission, !admission() { return nil }
         latestProfileGeneration = generation
         return try await installPreparedReleaseProfile(
             prepared,
-            guardedBy: generation
+            guardedBy: generation,
+            admission: admission
         )
     }
 
@@ -206,7 +218,8 @@ actor ExperienceLoader {
 
     private func installPreparedReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
-        guardedBy generation: UInt64?
+        guardedBy generation: UInt64?,
+        admission: ProfileSideEffectAdmission? = nil
     ) async throws -> ExperienceRoutingCatalog? {
 
         guard let catalog = prepared.catalog else {
@@ -221,7 +234,8 @@ actor ExperienceLoader {
             productMappingsByReleaseAndStoreID.removeAll()
             preparedReleasesByVersion.removeAll()
             await interactivePreparationCache.removeAll()
-            guard generation == nil || generation == latestProfileGeneration else { return nil }
+            guard generation == nil || generation == latestProfileGeneration,
+              admission?() != false else { return nil }
             preloadMetricsByRelease.removeAll()
             reportedPreloadMetricsByRelease.removeAll()
             if authorityChanged || allowancesChanged {
@@ -296,7 +310,8 @@ actor ExperienceLoader {
         await interactivePreparationCache.retainPreparations(
             for: Set(installed.values.map { $0.releaseID.descriptorSHA256 })
         )
-        guard generation == nil || generation == latestProfileGeneration else { return nil }
+        guard generation == nil || generation == latestProfileGeneration,
+              admission?() != false else { return nil }
         preloadMetricsByRelease.removeAll()
         reportedPreloadMetricsByRelease.removeAll()
         beginWarming(installed.values)

@@ -37,6 +37,110 @@ private actor ConditionalProfileAPI: ProfileFetching {
     ) async throws -> ProfileResponse {
         try await fetchProfile(for: distinctId, locale: locale)
     }
+
+}
+
+private actor SuspendingCachedProfileStore {
+    private var storage: [String: CachedProfile] = [:]
+    private var shouldSuspendNextStore = false
+    private var suspendedStore = false
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func suspendNextStore() {
+        shouldSuspendNextStore = true
+    }
+
+    func waitUntilStoreSuspends() async {
+        guard !suspendedStore else { return }
+        await withCheckedContinuation { suspensionWaiters.append($0) }
+    }
+
+    func resumeStore() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
+    }
+
+    private func suspendStoreIfRequested() async {
+        guard shouldSuspendNextStore else { return }
+        shouldSuspendNextStore = false
+        suspendedStore = true
+        suspensionWaiters.forEach { $0.resume() }
+        suspensionWaiters.removeAll()
+        await withCheckedContinuation { resumeContinuation = $0 }
+        suspendedStore = false
+    }
+}
+
+extension SuspendingCachedProfileStore: CachedProfileStore {
+    func store(_ item: CachedProfile, forKey key: String) async throws {
+        await suspendStoreIfRequested()
+        storage[key] = item
+    }
+
+    func store(
+        _ item: CachedProfile,
+        forKey key: String,
+        admission: ProfileSideEffectAdmission
+    ) async throws -> Bool {
+        await suspendStoreIfRequested()
+        guard admission() else { return false }
+        storage[key] = item
+        return true
+    }
+
+    func retrieve(forKey key: String, allowStale: Bool) async -> CachedProfile? {
+        _ = allowStale
+        return storage[key]
+    }
+
+    func remove(forKey key: String) async {
+        storage.removeValue(forKey: key)
+    }
+
+    func remove(
+        forKey key: String,
+        admission: ProfileSideEffectAdmission
+    ) async -> Bool {
+        guard admission() else { return false }
+        storage.removeValue(forKey: key)
+        return true
+    }
+
+    func clearAll() async {
+        storage.removeAll()
+    }
+
+    func cleanupExpired() async -> Int {
+        0
+    }
+
+    func getAllKeys() async -> [String] {
+        Array(storage.keys)
+    }
+
+    func getMetadata(forKey key: String) async -> DiskCacheMetadata? {
+        _ = key
+        return nil
+    }
+}
+
+private actor ProfileMailboxProbe {
+    private var entries: [JourneyMailboxEntry] = []
+    private var distinctIds: [String] = []
+
+    func record(_ delivered: [JourneyMailboxEntry], distinctId: String) {
+        entries.append(contentsOf: delivered)
+        distinctIds.append(distinctId)
+    }
+
+    func journeyIds() -> [String] {
+        entries.map(\.journeyId)
+    }
+
+    func deliveredDistinctIds() -> [String] {
+        distinctIds
+    }
 }
 
 final class ProfileServiceCacheTests: AsyncSpec {
@@ -94,14 +198,14 @@ final class ProfileServiceCacheTests: AsyncSpec {
 
             it("cancels a stale fetch without reporting a configuration error") {
                 mockFactory.identityService.setDistinctId("user-a")
-                await mockFactory.nuxieApi.setProfileDelay(0.1)
+                await mockFactory.nuxieApi.suspendNextProfileFetch()
 
                 let fetch = Task {
                     try await profileService.refetchProfile(distinctId: "user-a")
                 }
-                await expect { await mockFactory.nuxieApi.fetchProfileCallCount }
-                    .toEventually(equal(1), timeout: .seconds(1))
+                await mockFactory.nuxieApi.waitForSuspendedProfileFetch()
                 mockFactory.identityService.setDistinctId("user-b")
+                await mockFactory.nuxieApi.resumeSuspendedProfileFetch()
 
                 do {
                     _ = try await fetch.value
@@ -121,6 +225,409 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     .to(equal("en_US"))
             }
 
+            it("discards a modified response when locale changes while its fetch is suspended") {
+                let distinctId = "locale-race-user"
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let segments = SegmentService()
+                let mailbox = ProfileMailboxProbe()
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "en_US",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.eventLog.reset()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "english")
+                )
+                await mockFactory.nuxieApi.suspendNextProfileFetch()
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                await profileService.setJourneyMailboxHandler { entries, deliveredDistinctId in
+                    await mailbox.record(entries, distinctId: deliveredDistinctId)
+                }
+
+                let service = profileService!
+                let fetch = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await mockFactory.nuxieApi.waitForSuspendedProfileFetch()
+                settings.setLocaleIdentifier("fr_FR")
+                await mockFactory.nuxieApi.resumeSuspendedProfileFetch()
+                _ = try await fetch.value
+
+                let stored = await cache.retrieve(forKey: distinctId, allowStale: true)
+                let resident = await service.getCachedProfile(distinctId: distinctId)
+                let triggerAdmission = await service.getTriggerAdmission(distinctId: distinctId)
+                expect(stored).to(beNil())
+                expect(resident).to(beNil())
+                expect(triggerAdmission).to(beNil())
+                expect(mockFactory.experienceService.committedReleaseProfiles).to(beEmpty())
+                // Customer-scoped payloads are locale-independent and still
+                // commit from the discarded response (D2).
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("english"))
+                await expect { await segments.snapshot(for: distinctId) }.to(equal(.empty))
+                expect(mockFactory.eventLog.committedServerFacts.flatMap { $0.facts }.map(\.id))
+                    .to(equal(["english-fact"]))
+                await expect { await mailbox.journeyIds() }.to(equal(["english-journey"]))
+                await expect { await mockFactory.nuxieApi.lastProfileLocale }
+                    .to(equal("en_US"))
+            }
+
+            it("keeps the newer admission when network fetches complete in reverse order") {
+                let distinctId = "reverse-fetch-user"
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let segments = SegmentService()
+                let mailbox = ProfileMailboxProbe()
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "en_US",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.eventLog.reset()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "older")
+                )
+                await mockFactory.nuxieApi.suspendNextProfileFetch()
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                await profileService.setJourneyMailboxHandler { entries, deliveredDistinctId in
+                    await mailbox.record(entries, distinctId: deliveredDistinctId)
+                }
+
+                let service = profileService!
+                let olderFetch = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await mockFactory.nuxieApi.waitForSuspendedProfileFetch()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "newer")
+                )
+                _ = try await service.refetchProfile(distinctId: distinctId)
+                await mockFactory.nuxieApi.resumeSuspendedProfileFetch()
+                _ = try await olderFetch.value
+
+                let stored = await cache.retrieve(forKey: distinctId, allowStale: true)
+                let resident = await service.getCachedProfile(distinctId: distinctId)
+                let triggerAdmission = await service.getTriggerAdmission(distinctId: distinctId)
+                expect(stored?.response.userProperties?["admission_marker"])
+                    .to(equal(AnyCodable("newer")))
+                expect(stored?.locale).to(equal("en_US"))
+                expect(resident?.userProperties?["admission_marker"])
+                    .to(equal(AnyCodable("newer")))
+                expect(triggerAdmission?.activeExperienceReferences.map(\.experienceId))
+                    .to(equal(["newer-release"]))
+                expect(mockFactory.experienceService.committedReleaseProfiles.compactMap { $0 }
+                    .map { $0.active.first?.locator.experienceId })
+                    .to(equal(["newer-release"]))
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("newer"))
+                await expect { await segments.isInSegment("newer-segment") }.to(beTrue())
+                await expect { await segments.isInSegment("older-segment") }.to(beFalse())
+                expect(mockFactory.eventLog.committedServerFacts.flatMap { $0.facts }.map(\.id))
+                    .to(equal(["newer-fact"]))
+                await expect { await mailbox.journeyIds() }.to(equal(["newer-journey"]))
+                await expect { await mailbox.deliveredDistinctIds() }.to(equal([distinctId]))
+            }
+
+            it("keeps the newer disk snapshot when an older store resumes last") {
+                let distinctId = "reverse-store-user"
+                let cache = SuspendingCachedProfileStore()
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "en_US",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                mockFactory.identityService.setDistinctId(distinctId)
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "older-store")
+                )
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: mockFactory.segmentService,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                await cache.suspendNextStore()
+
+                let service = profileService!
+                let olderFetch = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await cache.waitUntilStoreSuspends()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "newer-store")
+                )
+                _ = try await service.refetchProfile(distinctId: distinctId)
+                await cache.resumeStore()
+                _ = try await olderFetch.value
+
+                let stored = await cache.retrieve(forKey: distinctId, allowStale: true)
+                let resident = await service.getCachedProfile(distinctId: distinctId)
+                expect(stored?.response.userProperties?["admission_marker"])
+                    .to(equal(AnyCodable("newer-store")))
+                expect(resident?.userProperties?["admission_marker"])
+                    .to(equal(AnyCodable("newer-store")))
+            }
+
+            it("discards a prepared response when locale changes during release authentication") {
+                let distinctId = "locale-auth-race-user"
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let segments = SegmentService()
+                let mailbox = ProfileMailboxProbe()
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "en_US",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                let authentication = ReleaseProfileAuthenticationGate()
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.eventLog.reset()
+                mockFactory.experienceService.releaseProfileAuthenticationGate = authentication
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "english-auth")
+                )
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                await profileService.setJourneyMailboxHandler { entries, deliveredDistinctId in
+                    await mailbox.record(entries, distinctId: deliveredDistinctId)
+                }
+
+                let service = profileService!
+                let fetch = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await authentication.waitUntilSuspended()
+                settings.setLocaleIdentifier("fr_FR")
+                await authentication.resume()
+                _ = try await fetch.value
+
+                let stored = await cache.retrieve(forKey: distinctId, allowStale: true)
+                let resident = await service.getCachedProfile(distinctId: distinctId)
+                let triggerAdmission = await service.getTriggerAdmission(distinctId: distinctId)
+                expect(mockFactory.experienceService.releaseProfiles.compactMap { $0 })
+                    .to(haveCount(1))
+                expect(mockFactory.experienceService.committedReleaseProfiles).to(beEmpty())
+                expect(stored).to(beNil())
+                expect(resident).to(beNil())
+                expect(triggerAdmission).to(beNil())
+                // Customer-scoped payloads still commit from a mid-admission
+                // locale-flip discard (D2): facts and mailbox had not yet run
+                // inside admitProfile, and the reduced commit is idempotent.
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("english-auth"))
+                await expect { await segments.snapshot(for: distinctId) }.to(equal(.empty))
+                expect(mockFactory.eventLog.committedServerFacts.flatMap { $0.facts }.map(\.id))
+                    .to(equal(["english-auth-fact"]))
+                await expect { await mailbox.journeyIds() }.to(equal(["english-auth-journey"]))
+            }
+
+            it("completes the reduced fallback when locale flips after its own tracker advance") {
+                let distinctId = "locale-post-tracker-flip-user"
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let segments = SegmentService()
+                let mailbox = ProfileMailboxProbe()
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "en_US",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                mockFactory.identityService.reset(keepAnonymousId: true)
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.eventLog.reset()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "post-tracker")
+                )
+                // Flip the runtime locale inside the user-properties write:
+                // by then the full path has already advanced the customer-
+                // commit tracker to this admission's own generation, and the
+                // very next admission re-check fails. The reduced fallback
+                // must not be fenced out by its own advance (generation
+                // equality means "mine"), or facts and mailbox are lost.
+                mockFactory.identityService.onGuardedUserPropertiesWrite = {
+                    settings.setLocaleIdentifier("fr_FR")
+                }
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                await profileService.setJourneyMailboxHandler { entries, deliveredDistinctId in
+                    await mailbox.record(entries, distinctId: deliveredDistinctId)
+                }
+
+                let service = profileService!
+                _ = try await service.refetchProfile(distinctId: distinctId)
+                mockFactory.identityService.onGuardedUserPropertiesWrite = nil
+
+                let resident = await service.getCachedProfile(distinctId: distinctId)
+                let triggerAdmission = await service.getTriggerAdmission(distinctId: distinctId)
+                expect(resident).to(beNil())
+                expect(triggerAdmission).to(beNil())
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("post-tracker"))
+                expect(mockFactory.eventLog.committedServerFacts.flatMap { $0.facts }.map(\.id))
+                    .to(equal(["post-tracker-fact"]))
+                await expect { await mailbox.journeyIds() }.to(equal(["post-tracker-journey"]))
+                await service.clearAllCache()
+            }
+
+            it("keeps the replacement's customer state when a stale locale-flip request resumes") {
+                let distinctId = "flip-then-replace-user"
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let segments = SegmentService()
+                let mailbox = ProfileMailboxProbe()
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "en_US",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                mockFactory.identityService.reset(keepAnonymousId: true)
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.eventLog.reset()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "english")
+                )
+                await mockFactory.nuxieApi.suspendNextProfileFetch()
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                await profileService.setJourneyMailboxHandler { entries, deliveredDistinctId in
+                    await mailbox.record(entries, distinctId: deliveredDistinctId)
+                }
+
+                let service = profileService!
+                let staleFetch = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await mockFactory.nuxieApi.waitForSuspendedProfileFetch()
+
+                // The locale-change entry point, then a replacement fetch that
+                // fully admits under the new locale.
+                settings.setLocaleIdentifier("fr_FR")
+                await service.localeDidChange()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "french")
+                )
+                _ = try await service.refetchProfile(distinctId: distinctId)
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("french"))
+
+                // The stale request resumes: its locale differs, but the
+                // replacement's newer customer commit fences it out entirely.
+                await mockFactory.nuxieApi.resumeSuspendedProfileFetch()
+                _ = try? await staleFetch.value
+
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("french"))
+                expect(mockFactory.eventLog.committedServerFacts.flatMap { $0.facts }.map(\.id))
+                    .to(equal(["french-fact"]))
+                await expect { await mailbox.journeyIds() }.to(equal(["french-journey"]))
+                await service.clearAllCache()
+            }
+
+            it("does not admit startup disk state from another locale") {
+                let distinctId = "startup-locale-user"
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let segments = SegmentService()
+                let mailbox = ProfileMailboxProbe()
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "fr_FR",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                try await cache.store(
+                    CachedProfile(
+                        response: Self.makeAdmissionProfile(marker: "english-startup"),
+                        distinctId: distinctId,
+                        cachedAt: mockFactory.dateProvider.now(),
+                        locale: "en_US"
+                    ),
+                    forKey: distinctId
+                )
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.eventLog.reset()
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                await profileService.setJourneyMailboxHandler { entries, deliveredDistinctId in
+                    await mailbox.record(entries, distinctId: deliveredDistinctId)
+                }
+
+                let resident = await profileService.getCachedProfile(distinctId: distinctId)
+                let triggerAdmission = await profileService.getTriggerAdmission(
+                    distinctId: distinctId
+                )
+                let stored = await cache.retrieve(forKey: distinctId, allowStale: true)
+
+                expect(resident).to(beNil())
+                expect(triggerAdmission).to(beNil())
+                expect(stored).to(beNil())
+                expect(mockFactory.experienceService.releaseProfiles).to(beEmpty())
+                expect(mockFactory.experienceService.committedReleaseProfiles).to(beEmpty())
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"])
+                    .to(beNil())
+                await expect { await segments.snapshot(for: distinctId) }.to(equal(.empty))
+                expect(mockFactory.eventLog.committedServerFacts).to(beEmpty())
+                await expect { await mailbox.journeyIds() }.to(beEmpty())
+            }
+
             it("re-registers signed releases from the disk cache before use") {
                 let cache = InMemoryCachedProfileStore(ttl: nil)
                 let profile = Self.makeProfile(
@@ -135,7 +642,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     CachedProfile(
                         response: profile,
                         distinctId: "cached-user",
-                        cachedAt: Date()
+                        cachedAt: Date(),
+                        locale: "en_US"
                     ),
                     forKey: "cached-user"
                 )
@@ -181,7 +689,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     CachedProfile(
                         response: profile,
                         distinctId: distinctId,
-                        cachedAt: mockFactory.dateProvider.now()
+                        cachedAt: mockFactory.dateProvider.now(),
+                        locale: "en_US"
                     ),
                     forKey: distinctId
                 )
@@ -438,6 +947,60 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 expect(stored?.response.releases).to(equal(profile.releases))
             }
 
+            it("does not refresh an old-locale cache when its 304 store resumes after a locale change") {
+                let cache = SuspendingCachedProfileStore()
+                let distinctId = "stale-locale-validator-user"
+                let profile = Self.makeProfile(experienceId: "english-validator")
+                let validator = ProfileCacheValidator(rawValue: "\"profile-en\"")
+                let cachedAt = mockFactory.dateProvider.now()
+                try await cache.store(
+                    CachedProfile(
+                        response: profile,
+                        distinctId: distinctId,
+                        cachedAt: cachedAt,
+                        validator: validator,
+                        locale: "en_US"
+                    ),
+                    forKey: distinctId
+                )
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "en_US",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                mockFactory.identityService.setDistinctId(distinctId)
+                let api = ConditionalProfileAPI(result: .notModified)
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: api,
+                    segments: mockFactory.segmentService,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                _ = await profileService.getCachedProfile(distinctId: distinctId)
+                mockFactory.dateProvider.advance(by: 24 * 60 * 60 + 1)
+                await cache.suspendNextStore()
+
+                let service = profileService!
+                let refresh = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await cache.waitUntilStoreSuspends()
+                settings.setLocaleIdentifier("fr_FR")
+                await cache.resumeStore()
+                _ = try await refresh.value
+
+                let stored = await cache.retrieve(forKey: distinctId, allowStale: true)
+                let resident = await service.getCachedProfile(distinctId: distinctId)
+                expect(stored?.cachedAt).to(equal(cachedAt))
+                expect(stored?.locale).to(equal("en_US"))
+                expect(resident).to(beNil())
+            }
+
             it("does not reuse a validator from another locale") {
                 let cache = InMemoryCachedProfileStore(ttl: nil)
                 let distinctId = "locale-validator-user"
@@ -508,7 +1071,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     CachedProfile(
                         response: invalidCached,
                         distinctId: distinctId,
-                        cachedAt: Date()
+                        cachedAt: Date(),
+                        locale: "en_US"
                     ),
                     forKey: distinctId
                 )
@@ -572,7 +1136,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                             )
                         ),
                         distinctId: oldId,
-                        cachedAt: Date()
+                        cachedAt: Date(),
+                        locale: "en_US"
                     ),
                     forKey: oldId
                 )
@@ -588,7 +1153,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     CachedProfile(
                         response: newProfile,
                         distinctId: newId,
-                        cachedAt: Date()
+                        cachedAt: Date(),
+                        locale: "en_US"
                     ),
                     forKey: newId
                 )
@@ -676,11 +1242,21 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     )
                 )
                 try await cache.store(
-                    CachedProfile(response: oldProfile, distinctId: oldId, cachedAt: Date()),
+                    CachedProfile(
+                        response: oldProfile,
+                        distinctId: oldId,
+                        cachedAt: Date(),
+                        locale: "en_US"
+                    ),
                     forKey: oldId
                 )
                 try await cache.store(
-                    CachedProfile(response: newProfile, distinctId: newId, cachedAt: Date()),
+                    CachedProfile(
+                        response: newProfile,
+                        distinctId: newId,
+                        cachedAt: Date(),
+                        locale: "en_US"
+                    ),
                     forKey: newId
                 )
                 let gate = ReleaseProfileAuthenticationGate()
@@ -738,7 +1314,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     CachedProfile(
                         response: poisoned,
                         distinctId: distinctId,
-                        cachedAt: Date()
+                        cachedAt: Date(),
+                        locale: "en_US"
                     ),
                     forKey: distinctId
                 )
@@ -816,7 +1393,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                         response: expired,
                         distinctId: distinctId,
                         cachedAt: mockFactory.dateProvider.now()
-                            .addingTimeInterval(-(24 * 60 * 60 + 1))
+                            .addingTimeInterval(-(24 * 60 * 60 + 1)),
+                        locale: "en_US"
                     ),
                     forKey: distinctId
                 )
@@ -1005,6 +1583,263 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 )]))
             }
         }
+
+        describe("locale admission fixture") {
+            struct Fixture: Decodable {
+                let suite: String
+                let version: Int
+                let cases: [Case]
+                struct Expectation: Decodable {
+                    let localeScopedAdmitted: Bool
+                    let customerScopedCommitted: Bool?
+                    let nextRequestLocale: String?
+                    let diskEvicted: Bool?
+                    let segmentsCleared: Bool?
+                }
+                struct Case: Decodable {
+                    let name: String
+                    let flow: String
+                    let fetchLocale: String?
+                    let localeChangesDuringFetch: [String]?
+                    let diskLocale: String?
+                    let effectiveLocale: String?
+                    let expect: Expectation
+                }
+            }
+
+            it("matches the cross-SDK locale admission contract") {
+                let mockFactory = MockFactory.shared
+                let fixtureURL = URL(fileURLWithPath: #filePath)
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("fixtures/profile/locale-admission.json")
+                let fixture = try JSONDecoder().decode(
+                    Fixture.self,
+                    from: Data(contentsOf: fixtureURL)
+                )
+                expect(fixture.suite).to(equal("profile/locale-admission"))
+                expect(fixture.version).to(equal(1))
+
+                for vector in fixture.cases {
+                    let distinctId = "fixture-\(vector.name.hashValue.magnitude)"
+                    let cache = InMemoryCachedProfileStore(ttl: nil)
+                    let segments = SegmentService()
+                    let mailbox = ProfileMailboxProbe()
+                    // Fresh api/identity per vector: a service leaked with a
+                    // pending background refresh must never observe a later
+                    // test's shared response or identity.
+                    let api = MockNuxieApi()
+                    let identity = MockIdentityService()
+                    mockFactory.experienceService.reset()
+                    mockFactory.eventLog.reset()
+                    identity.setDistinctId(distinctId)
+
+                    switch vector.flow {
+                    case "network":
+                        let settings = NuxieRuntimeSettings(
+                            localeIdentifier: vector.fetchLocale,
+                            purchaseDelegate: nil,
+                            purchaseHandlingMode: .full
+                        )
+                        await api.setProfileResponse(
+                            Self.makeAdmissionProfile(marker: "fixture")
+                        )
+                        await api.suspendNextProfileFetch()
+                        let service = ProfileService(
+                            cache: cache,
+                            identity: identity,
+                            api: api,
+                            segments: segments,
+                            experiences: mockFactory.experienceService,
+                            eventLog: mockFactory.eventLog,
+                            dateProvider: mockFactory.dateProvider,
+                            sleepProvider: mockFactory.sleepProvider,
+                            localeProvider: settings
+                        )
+                        await service.setJourneyMailboxHandler { entries, deliveredId in
+                            await mailbox.record(entries, distinctId: deliveredId)
+                        }
+                        let fetch = Task {
+                            try await service.refetchProfile(distinctId: distinctId)
+                        }
+                        await api.waitForSuspendedProfileFetch()
+                        for locale in vector.localeChangesDuringFetch ?? [] {
+                            // The platform locale-change entry point: settings
+                            // mutation plus admission invalidation.
+                            settings.setLocaleIdentifier(locale)
+                            await service.localeDidChange()
+                        }
+                        await api.resumeSuspendedProfileFetch()
+                        _ = try? await fetch.value
+
+                        let resident = await service.getCachedProfile(distinctId: distinctId)
+                        if vector.expect.localeScopedAdmitted {
+                            expect(resident).toNot(beNil(), description: vector.name)
+                        } else {
+                            expect(resident).to(beNil(), description: vector.name)
+                            await expect { await segments.snapshot(for: distinctId) }
+                                .to(equal(.empty), description: vector.name)
+                        }
+                        if let committed = vector.expect.customerScopedCommitted {
+                            let facts = mockFactory.eventLog.committedServerFacts
+                            expect(facts.isEmpty).to(
+                                equal(!committed),
+                                description: vector.name
+                            )
+                            let marker = identity.getUserProperties()["admission_marker"] as? String
+                            expect(marker != nil).to(
+                                equal(committed),
+                                description: vector.name
+                            )
+                            await expect { await mailbox.journeyIds().isEmpty }.to(
+                                equal(!committed),
+                                description: vector.name
+                            )
+                        }
+                        if let nextLocale = vector.expect.nextRequestLocale {
+                            _ = try? await service.refetchProfile(distinctId: distinctId)
+                            await expect { await api.lastProfileLocale }
+                                .to(equal(nextLocale), description: vector.name)
+                        }
+                        await service.clearAllCache()
+
+                    case "disk":
+                        let settings = NuxieRuntimeSettings(
+                            localeIdentifier: vector.effectiveLocale,
+                            purchaseDelegate: nil,
+                            purchaseHandlingMode: .full
+                        )
+                        try await cache.store(
+                            CachedProfile(
+                                response: Self.makeAdmissionProfile(marker: "fixture"),
+                                distinctId: distinctId,
+                                cachedAt: mockFactory.dateProvider.now(),
+                                locale: vector.diskLocale ?? "en_US"
+                            ),
+                            forKey: distinctId
+                        )
+                        let service = ProfileService(
+                            cache: cache,
+                            identity: identity,
+                            api: api,
+                            segments: segments,
+                            experiences: mockFactory.experienceService,
+                            eventLog: mockFactory.eventLog,
+                            dateProvider: mockFactory.dateProvider,
+                            sleepProvider: mockFactory.sleepProvider,
+                            localeProvider: settings
+                        )
+                        let resident = await service.getCachedProfile(distinctId: distinctId)
+                        if vector.expect.localeScopedAdmitted {
+                            expect(resident).toNot(beNil(), description: vector.name)
+                        } else {
+                            expect(resident).to(beNil(), description: vector.name)
+                        }
+                        if vector.expect.diskEvicted == true {
+                            let stored = await cache.retrieve(
+                                forKey: distinctId,
+                                allowStale: true
+                            )
+                            expect(stored).to(beNil(), description: vector.name)
+                        }
+                        if vector.expect.segmentsCleared == true {
+                            await expect { await segments.snapshot(for: distinctId) }
+                                .to(equal(.empty), description: vector.name)
+                        }
+                        await service.clearAllCache()
+
+                    default:
+                        fail("Unsupported fixture flow: \(vector.flow)")
+                    }
+                }
+            }
+        }
+
+        describe("mutation-point side-effect admission") {
+            it("rejects a segment snapshot whose admission was invalidated") {
+                let segments = SegmentService()
+                let seed = SegmentMembershipSeed(
+                    evaluatedAt: Date(),
+                    memberships: [
+                        SeededSegmentMembership(segmentId: "s1", enteredAt: Date())
+                    ]
+                )
+                let rejected = await segments.replaceSnapshot(
+                    seed,
+                    definitions: [Segment(id: "s1", name: "s1")],
+                    for: "customer-a",
+                    profileGeneration: 5,
+                    admission: ProfileSideEffectAdmission { false }
+                )
+                expect(rejected).to(beFalse())
+                await expect { await segments.snapshot(for: "customer-a") }.to(equal(.empty))
+
+                let admitted = await segments.replaceSnapshot(
+                    seed,
+                    definitions: [Segment(id: "s1", name: "s1")],
+                    for: "customer-a",
+                    profileGeneration: 5,
+                    admission: ProfileSideEffectAdmission { true }
+                )
+                expect(admitted).to(beTrue())
+            }
+        }
+    }
+
+    private static func makeAdmissionProfile(marker: String) -> ProfileResponse {
+        let timestamp = Date(timeIntervalSince1970: 1_788_000_000)
+        let segment = Segment(id: "\(marker)-segment", name: marker)
+        let versionId = "\(marker)-version"
+        let fact = JourneyDownFact(
+            id: "\(marker)-fact",
+            timestamp: timestamp,
+            properties: JourneyConvertedProperties(
+                journeyId: "\(marker)-journey",
+                experienceId: "\(marker)-release",
+                experienceVersion: versionId,
+                at: timestamp,
+                sourceFactRef: "\(marker)-source"
+            )
+        )
+        let mailbox = JourneyMailboxEntry(
+            journeyId: "\(marker)-journey",
+            experienceId: "\(marker)-release",
+            experienceVersion: versionId,
+            epoch: 1,
+            stateVersion: JourneyStateEnvelope.currentVersion,
+            envelope: JourneyStateEnvelope(
+                context: ["marker": AnyCodable(marker)],
+                executionState: JourneyExecutionState(),
+                snapshots: [
+                    "segmentMemberships": AnyCodable([
+                        "memberships": []
+                    ] as [String: Any])
+                ],
+                responseSession: nil
+            ),
+            expiresAt: timestamp.addingTimeInterval(3_600)
+        )
+        return ProfileResponse(
+            segments: [segment],
+            releases: releaseProfile(
+                experienceId: "\(marker)-release",
+                versionId: versionId
+            ),
+            userProperties: ["admission_marker": AnyCodable(marker)],
+            segmentMemberships: SegmentMembershipSeed(
+                evaluatedAt: timestamp,
+                memberships: [
+                    SeededSegmentMembership(
+                        segmentId: segment.id,
+                        enteredAt: timestamp
+                    )
+                ]
+            ),
+            facts: [fact],
+            mailbox: [mailbox]
+        )
     }
 
     private static func makeProfile(

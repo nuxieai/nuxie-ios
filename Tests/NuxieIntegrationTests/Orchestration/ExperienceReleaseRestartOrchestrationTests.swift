@@ -130,6 +130,64 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                 expect(FileManager.default.fileExists(atPath: ledger.path)).to(beTrue())
             }
 
+            it("evicts a persisted profile when the configured locale changes across restart") {
+                let fixture = try ExperienceReleaseTestFixture.make()
+                let distinctId = "locale-restart-user"
+                let profile = ProfileResponse(
+                    segments: [],
+                    releases: .init(
+                        delivery: fixture.delivery,
+                        active: [fixture.entry],
+                        pinned: []
+                    )
+                )
+                let api = MockNuxieApi()
+                await api.setProfileResponse(profile)
+
+                core = makeCore(
+                    storageURL: storageURL,
+                    api: api,
+                    localeIdentifier: "en_US"
+                )
+                core?.identity.setDistinctId(distinctId)
+                _ = try await core?.profile.refetchProfile(distinctId: distinctId)
+                let firstReferences = await core?.profile.getEffectiveExperienceReferences(
+                    distinctId: distinctId
+                )
+                expect(firstReferences?.map(\.experienceId))
+                    .to(equal([fixture.entry.locator.experienceId]))
+
+                await core?.journeys.shutdown()
+                await core?.eventLog.close()
+                core = nil
+
+                core = makeCore(
+                    storageURL: storageURL,
+                    api: api,
+                    localeIdentifier: "fr_FR"
+                )
+                core?.identity.setDistinctId(distinctId)
+                let mismatched = await core?.profile.getCachedProfile(distinctId: distinctId)
+                let mismatchedReferences = await core?.profile.getEffectiveExperienceReferences(
+                    distinctId: distinctId
+                )
+                expect(mismatched).to(beNil())
+                expect(mismatchedReferences).to(beNil())
+
+                await core?.journeys.shutdown()
+                await core?.eventLog.close()
+                core = nil
+
+                core = makeCore(
+                    storageURL: storageURL,
+                    api: api,
+                    localeIdentifier: "en_US"
+                )
+                core?.identity.setDistinctId(distinctId)
+                let evicted = await core?.profile.getCachedProfile(distinctId: distinctId)
+                expect(evicted).to(beNil())
+            }
+
             it("prepares one signed multi-screen RIV and opens isolated screen sessions") {
                 let fixture = URL(fileURLWithPath: #filePath)
                     .deletingLastPathComponent()
@@ -309,10 +367,12 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
     private static func makeCore(
         storageURL: URL,
         api: MockNuxieApi,
+        localeIdentifier: String? = nil,
         productService: ProductService? = nil
     ) -> NuxieCore {
         let configuration = NuxieConfiguration(apiKey: "release-restart-key")
         configuration.environment = .development
+        configuration.localeIdentifier = localeIdentifier
         configuration.testingOverrides.customStoragePath = storageURL
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [StubURLProtocol.self]

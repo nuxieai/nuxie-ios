@@ -60,6 +60,14 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         _ prepared: PreparedExperienceReleaseProfile,
         generation: UInt64
     ) async throws -> ExperienceRoutingCatalog?
+    /// Commits a prepared release profile, additionally evaluating the
+    /// supplied admission at the mutation points so an invalidated admission
+    /// (identity or locale change) cannot install stale release authority.
+    func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64,
+        admission: ProfileSideEffectAdmission?
+    ) async throws -> ExperienceRoutingCatalog?
 
     func fetchExperience(id: String) async throws -> Experience
 
@@ -197,6 +205,15 @@ extension ExperienceServiceProtocol {
     ) async throws -> PreparedExperienceReleaseProfile {
         PreparedExperienceReleaseProfile(profile: profile, catalog: nil)
     }
+    func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64,
+        admission: ProfileSideEffectAdmission?
+    ) async throws -> ExperienceRoutingCatalog? {
+        if let admission, !admission() { return nil }
+        return try await commitReleaseProfile(prepared, generation: generation)
+    }
+
     func commitReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
         generation: UInt64
@@ -359,6 +376,20 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         generation: UInt64
     ) async throws -> ExperienceRoutingCatalog? {
         try await experienceLoader.commitReleaseProfile(prepared, generation: generation)
+    }
+
+    func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64,
+        admission: ProfileSideEffectAdmission?
+    ) async throws -> ExperienceRoutingCatalog? {
+        // Forward the admission to the loader so its mutation-point checks
+        // run in production; the protocol default would swallow it.
+        try await experienceLoader.commitReleaseProfile(
+            prepared,
+            generation: generation,
+            admission: admission
+        )
     }
 
     func replaceReleaseProfile(

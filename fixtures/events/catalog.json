@@ -655,7 +655,7 @@
     "emitters": [
       "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:550",
       "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:705",
-      "Sources/Nuxie/NuxieSDK.swift:1193"
+      "Sources/Nuxie/NuxieSDK.swift:1196"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [

@@ -13,6 +13,10 @@ protocol ProfileServiceProtocol: AnyObject, Sendable {
     /// Get cached profile if available and valid
     func getCachedProfile(distinctId: String) async -> ProfileResponse?
 
+    /// Invalidates in-flight profile admissions after the effective locale
+    /// mutates, before the replacing fetch begins.
+    func localeDidChange() async
+
     /// Authenticated identities available for routing. Behavior is loaded
     /// through ExperienceService and never projected through legacy delivery.
     func getEffectiveExperienceReferences(
@@ -131,12 +135,34 @@ private actor FallbackCachedProfileStore: CachedProfileStore {
         storage[key] = Entry(value: item, storedAt: Date(), sizeBytes: Int64(encoded.count))
     }
 
+    @discardableResult
+    func store(
+        _ item: CachedProfile,
+        forKey key: String,
+        admission: ProfileSideEffectAdmission
+    ) async throws -> Bool {
+        guard admission() else { return false }
+        let encoded = try JSONEncoder().encode(item)
+        storage[key] = Entry(value: item, storedAt: Date(), sizeBytes: Int64(encoded.count))
+        return true
+    }
+
     func retrieve(forKey key: String, allowStale: Bool) async -> CachedProfile? {
         storage[key]?.value
     }
 
     func remove(forKey key: String) async {
         storage.removeValue(forKey: key)
+    }
+
+    @discardableResult
+    func remove(
+        forKey key: String,
+        admission: ProfileSideEffectAdmission
+    ) async -> Bool {
+        guard admission() else { return false }
+        storage.removeValue(forKey: key)
+        return true
     }
 
     func clearAll() async {
@@ -163,9 +189,40 @@ private actor FallbackCachedProfileStore: CachedProfileStore {
     }
 }
 
+/// Lock-backed because cache actors must validate a generation without hopping
+/// back through the reentrant ProfileService actor.
+private final class ProfileAdmissionGeneration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: UInt64 = 0
+
+    func claim() -> UInt64 {
+        lock.withLock {
+            current &+= 1
+            return current
+        }
+    }
+
+    func invalidate() {
+        _ = claim()
+    }
+
+    func matches(_ generation: UInt64) -> Bool {
+        lock.withLock { current == generation }
+    }
+}
+
 /// Profile manager for user profile data with memory-first caching and disk backup.
 /// Profile execution fields follow `nuxie-dev/specs/experience-execution-model-spec.md`.
 internal actor ProfileService: ProfileServiceProtocol {
+
+    /// Immutable authority claimed before any profile work suspends. Locale is
+    /// intentionally re-read by `isCurrentAdmission` because runtime settings
+    /// can change without first entering this actor.
+    private struct ProfileAdmission: Sendable {
+        let distinctId: String
+        let generation: UInt64
+        let locale: String
+    }
 
     // MARK: - Properties
 
@@ -182,10 +239,14 @@ internal actor ProfileService: ProfileServiceProtocol {
     
     // Background refresh timer
     private var refreshTimer: Task<Void, Never>?
-    private var nextProfileGeneration: UInt64 = 0
+    private let profileAdmissionGeneration = ProfileAdmissionGeneration()
     private var journeyMailboxHandler:
         (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     private var mailboxRefreshInFlight = false
+    /// Highest admission generation whose customer-scoped portions committed.
+    /// A stale request's reduced commit must not land after a NEWER admission
+    /// (a replacement fetch under the new locale) already committed.
+    private var latestCustomerScopedCommitGeneration: UInt64 = 0
 
     /// The startup disk-cache load. `getCachedProfile` awaits it on a memory
     /// miss so init-time readers (JourneyService.initialize resuming an
@@ -352,29 +413,35 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Load profile from disk cache into memory on startup
     private func loadFromDisk() async {
         let distinctId = identityService.getDistinctId()
-        let generation = beginProfileRequest()
+        let admission = beginProfileRequest(distinctId: distinctId)
         if let cached = await diskCache.retrieve(forKey: distinctId, allowStale: true) {
-            guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
+            guard isCurrentAdmission(admission) else { return }
+            guard cached.locale == admission.locale else {
+                LogDebug("Discarding cached profile from a different locale")
+                _ = await diskCache.remove(
+                    forKey: distinctId,
+                    admission: cacheStoreAdmission(for: admission)
+                )
+                return
+            }
             guard isFresh(cached) else {
                 LogDebug("Discarding expired cached profile before admission")
                 await discardInvalidCachedProfileAndRefresh(
-                    distinctId: distinctId,
-                    generation: generation
+                    admission: admission
                 )
                 return
             }
             do {
                 _ = try await admitProfile(
                     cached,
-                    generation: generation,
+                    admission: admission,
                     persistToDisk: false
                 )
             } catch {
                 LogError("Cached release profile authentication failed: \(error)")
-                guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
+                guard isCurrentAdmission(admission) else { return }
                 await discardInvalidCachedProfileAndRefresh(
-                    distinctId: distinctId,
-                    generation: generation
+                    admission: admission
                 )
                 return
             }
@@ -384,29 +451,33 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Refresh profile from network
     private func refreshProfile(distinctId: String) async throws -> ProfileResponse {
         do {
-            let locale = effectiveLocale
+            let admission = beginProfileRequest(distinctId: distinctId)
+            let locale = admission.locale
             let cached = cachedProfileForDistinctId(distinctId)
             let validator = cached?.locale == locale ? cached?.validator : nil
-            let generation = beginProfileRequest()
             let result = try await api.fetchProfile(
                 for: distinctId,
                 locale: locale,
                 revalidating: validator
             )
 
-            // Staleness guard: if the user changed while this fetch was in
-            // flight, applying it would push the OLD user's properties,
-            // segments and journeys onto the NEW user (and clobber their
-            // cache). Discard instead — the transition coordinator triggers a
-            // fresh fetch for the new user.
+            // Identity changes have a dedicated cancellation contract. The
+            // admission checks below additionally reject superseding profile
+            // generations and runtime-locale changes.
             guard identityService.getDistinctId() == distinctId else {
                 LogWarning("Discarding stale profile fetch for \(NuxieLogger.shared.logDistinctID(distinctId)) — user changed mid-flight")
                 throw ProfileRefreshCancellationError()
             }
             switch result {
             case .modified(let fresh, let nextValidator):
-                guard isCurrentAdmission(generation, distinctId: distinctId) else {
-                    LogDebug("Discarding stale profile generation \(generation)")
+                guard isCurrentAdmission(admission) else {
+                    LogDebug("Discarding stale profile generation \(admission.generation)")
+                    // Customer-scoped payloads are locale-independent: the
+                    // same facts, properties, and mailbox work arrive under
+                    // any locale and their dedupe is correct, so an identity-
+                    // current response still commits them even though its
+                    // locale-scoped state is discarded.
+                    await commitIdentityScopedPortions(of: fresh, admission: admission)
                     return fresh
                 }
 
@@ -419,11 +490,16 @@ internal actor ProfileService: ProfileServiceProtocol {
                         validator: nextValidator,
                         locale: locale
                     ),
-                    generation: generation,
+                    admission: admission,
                     persistToDisk: true
                 )
                 guard admitted else {
-                    LogDebug("Discarding stale profile generation \(generation) after authentication")
+                    LogDebug("Discarding stale profile generation \(admission.generation) after authentication")
+                    // A locale flip during authentication or a locale-scoped
+                    // commit lands here with facts/mailbox not yet reached
+                    // inside admitProfile (they run last), so the customer-
+                    // scoped portions still commit once, idempotently.
+                    await commitIdentityScopedPortions(of: fresh, admission: admission)
                     return fresh
                 }
                 return fresh
@@ -435,8 +511,8 @@ internal actor ProfileService: ProfileServiceProtocol {
                       cached.locale == locale else {
                     throw NuxieNetworkError.invalidResponse
                 }
-                guard isCurrentAdmission(generation, distinctId: distinctId) else {
-                    LogDebug("Discarding stale profile generation \(generation)")
+                guard isCurrentAdmission(admission) else {
+                    LogDebug("Discarding stale profile generation \(admission.generation)")
                     return cached.response
                 }
 
@@ -448,12 +524,20 @@ internal actor ProfileService: ProfileServiceProtocol {
                     locale: locale
                 )
                 do {
-                    try await diskCache.store(refreshed, forKey: distinctId)
+                    let stored = try await diskCache.store(
+                        refreshed,
+                        forKey: distinctId,
+                        admission: cacheStoreAdmission(for: admission)
+                    )
+                    guard stored else {
+                        LogDebug("Discarding stale profile cache revalidation")
+                        return cached.response
+                    }
                 } catch {
                     LogWarning("Failed to revalidate disk cache: \(error)")
                 }
-                guard isCurrentAdmission(generation, distinctId: distinctId) else {
-                    LogDebug("Discarding stale profile generation \(generation) after revalidation")
+                guard isCurrentAdmission(admission) else {
+                    LogDebug("Discarding stale profile generation \(admission.generation) after revalidation")
                     return cached.response
                 }
                 cachedProfile = refreshed
@@ -482,72 +566,94 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Remove it before fetching so later startup readers cannot repeatedly
     /// encounter the same poison entry or observe stale release authority.
     private func discardInvalidCachedProfileAndRefresh(
-        distinctId: String,
-        generation: UInt64
+        admission: ProfileAdmission
     ) async {
-        await diskCache.remove(forKey: distinctId)
-        guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
+        guard isCurrentAdmission(admission) else { return }
+        guard await diskCache.remove(
+            forKey: admission.distinctId,
+            admission: cacheStoreAdmission(for: admission)
+        ) else { return }
+        guard isCurrentAdmission(admission) else { return }
         cachedProfile = nil
         triggerAdmission = nil
         let clearedReleases = try? await experienceService.prepareReleaseProfile(nil)
-        guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
+        guard isCurrentAdmission(admission) else { return }
         if let clearedReleases {
             _ = try? await experienceService.commitReleaseProfile(
                 clearedReleases,
-                generation: generation
+                generation: admission.generation,
+                admission: cacheStoreAdmission(for: admission)
             )
         }
-        guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
+        guard isCurrentAdmission(admission) else { return }
         _ = await segmentService.replaceSnapshot(
             .empty,
             definitions: [],
-            for: distinctId,
-            profileGeneration: generation
+            for: admission.distinctId,
+            profileGeneration: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
         )
-        guard isCurrentAdmission(generation, distinctId: distinctId) else { return }
-        await refreshInBackground(distinctId: distinctId)
+        guard isCurrentAdmission(admission) else { return }
+        await refreshInBackground(distinctId: admission.distinctId)
     }
 
     /// Stages every suspending dependency before publishing the in-memory
     /// profile. Generation-stamped collaborators reject late older commits;
-    /// the final synchronous block is the sole observable admission point.
+    /// every side effect is preceded by the same identity/generation/locale
+    /// admission check.
     private func admitProfile(
         _ item: CachedProfile,
-        generation: UInt64,
+        admission: ProfileAdmission,
         persistToDisk: Bool
     ) async throws -> Bool {
         let profile = item.response
         let distinctId = item.distinctId
-        guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+        guard distinctId == admission.distinctId,
+              item.locale == admission.locale,
+              isCurrentAdmission(admission) else { return false }
 
         let prepared = try await experienceService.prepareReleaseProfile(profile.releases)
-        guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+        guard isCurrentAdmission(admission) else { return false }
 
         if persistToDisk {
             do {
-                try await diskCache.store(item, forKey: distinctId)
+                let stored = try await diskCache.store(
+                    item,
+                    forKey: distinctId,
+                    admission: cacheStoreAdmission(for: admission)
+                )
+                guard stored else { return false }
                 LogDebug("Updated disk cache for \(NuxieLogger.shared.logDistinctID(distinctId))")
             } catch {
                 LogWarning("Failed to update disk cache: \(error)")
             }
-            guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+            guard isCurrentAdmission(admission) else { return false }
         }
 
         guard let routingCatalog = try await experienceService.commitReleaseProfile(
             prepared,
-            generation: generation
+            generation: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
         ) else { return false }
-        guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+        guard isCurrentAdmission(admission) else { return false }
 
         let installedMembership = await segmentService.replaceSnapshot(
             profile.segmentMemberships,
             definitions: profile.segments,
             for: distinctId,
-            profileGeneration: generation
+            profileGeneration: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
         )
         guard installedMembership,
-              isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+              isCurrentAdmission(admission) else { return false }
 
+        // Advance the customer-commit tracker before the first customer-
+        // scoped write so a stale reduced fallback cannot interleave with
+        // this admission's own customer commits.
+        latestCustomerScopedCommitGeneration = max(
+            latestCustomerScopedCommitGeneration,
+            admission.generation
+        )
         if let userProps = profile.userProperties {
             let properties = Dictionary(uniqueKeysWithValues: userProps.map { ($0.key, $0.value.value) })
             guard identityService.setUserProperties(
@@ -557,7 +663,7 @@ internal actor ProfileService: ProfileServiceProtocol {
             LogInfo("Updated \(properties.count) user properties from server")
         }
 
-        guard isCurrentAdmission(generation, distinctId: distinctId) else { return false }
+        guard isCurrentAdmission(admission) else { return false }
         let nextEffective = routingCatalog.references
         let nextActive = activeReferences(
             in: profile,
@@ -575,13 +681,21 @@ internal actor ProfileService: ProfileServiceProtocol {
         LogInfo("Admitted segment membership snapshot for user \(NuxieLogger.shared.logDistinctID(distinctId))")
         startRefreshTimer()
 
+        // Server facts and mailbox work are customer-scoped, not localized:
+        // committing them from a response fetched under an older locale is
+        // harmless (the same facts arrive under any locale, and their dedupe
+        // is correct), so they gate on identity only.
         if let facts = profile.facts, !facts.isEmpty {
+            guard admission.generation >= latestCustomerScopedCommitGeneration,
+                  isCurrentIdentity(admission) else { return true }
             await eventLog.commitServerFacts(facts, distinctId: distinctId)
-            guard isCurrentAdmission(generation, distinctId: distinctId) else { return true }
+            guard isCurrentIdentity(admission) else { return true }
         }
         if let mailbox = profile.mailbox, !mailbox.isEmpty {
+            guard admission.generation >= latestCustomerScopedCommitGeneration,
+                  isCurrentIdentity(admission) else { return true }
             await journeyMailboxHandler?(mailbox, distinctId)
-            guard isCurrentAdmission(generation, distinctId: distinctId) else { return true }
+            guard isCurrentIdentity(admission) else { return true }
         }
         return true
     }
@@ -665,7 +779,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     func clearCache(distinctId: String) async {
-        _ = beginProfileRequest()
+        invalidateProfileRequests()
         // Clear memory
         cachedProfile = nil
         triggerAdmission = nil
@@ -681,7 +795,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     func clearAllCache() async {
-        _ = beginProfileRequest()
+        invalidateProfileRequests()
         // Clear memory
         cachedProfile = nil
         triggerAdmission = nil
@@ -731,10 +845,9 @@ internal actor ProfileService: ProfileServiceProtocol {
         let distinctId = identityService.getDistinctId()
         guard isFresh(cached) else {
             LogDebug("Discarding expired resident profile before refresh")
-            let generation = beginProfileRequest()
+            let admission = beginProfileRequest(distinctId: distinctId)
             await discardInvalidCachedProfileAndRefresh(
-                distinctId: distinctId,
-                generation: generation
+                admission: admission
             )
             return
         }
@@ -779,9 +892,9 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Handle user change - clear old cache and load new
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
         LogInfo("User changed from \(NuxieLogger.shared.logDistinctID(oldDistinctId)) to \(NuxieLogger.shared.logDistinctID(newDistinctId))")
-        let generation = beginProfileRequest()
+        let admission = beginProfileRequest(distinctId: newDistinctId)
 
-        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+        guard isCurrentAdmission(admission) else { return }
         cachedProfile = nil
         triggerAdmission = nil
         refreshTimer?.cancel()
@@ -793,48 +906,60 @@ internal actor ProfileService: ProfileServiceProtocol {
             .empty,
             definitions: [],
             for: newDistinctId,
-            profileGeneration: generation
+            profileGeneration: admission.generation
         )
-        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+        guard isCurrentAdmission(admission) else { return }
 
         // Clear old user's disk cache
-        await diskCache.remove(forKey: oldDistinctId)
-        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+        guard await diskCache.remove(
+            forKey: oldDistinctId,
+            admission: cacheStoreAdmission(for: admission)
+        ) else { return }
+        guard isCurrentAdmission(admission) else { return }
 
         let clearedReleases = try? await experienceService.prepareReleaseProfile(nil)
-        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+        guard isCurrentAdmission(admission) else { return }
         if let clearedReleases {
             _ = try? await experienceService.commitReleaseProfile(
                 clearedReleases,
-                generation: generation
+                generation: admission.generation,
+                admission: cacheStoreAdmission(for: admission)
             )
         }
-        guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+        guard isCurrentAdmission(admission) else { return }
         
         // Try to load new user's cache from disk
         if let cached = await diskCache.retrieve(forKey: newDistinctId, allowStale: true) {
-            guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+            guard isCurrentAdmission(admission) else { return }
+            guard cached.locale == admission.locale else {
+                LogDebug("Discarding new user's cached profile from a different locale")
+                guard await diskCache.remove(
+                    forKey: newDistinctId,
+                    admission: cacheStoreAdmission(for: admission)
+                ) else { return }
+                guard isCurrentAdmission(admission) else { return }
+                await refreshInBackground(distinctId: newDistinctId)
+                return
+            }
             guard isFresh(cached) else {
                 LogDebug("Discarding expired cached profile before user-change admission")
                 await discardInvalidCachedProfileAndRefresh(
-                    distinctId: newDistinctId,
-                    generation: generation
+                    admission: admission
                 )
                 return
             }
             do {
                 let admitted = try await admitProfile(
                     cached,
-                    generation: generation,
+                    admission: admission,
                     persistToDisk: false
                 )
                 guard admitted else { return }
             } catch {
                 LogError("Cached release profile authentication failed: \(error)")
-                guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+                guard isCurrentAdmission(admission) else { return }
                 await discardInvalidCachedProfileAndRefresh(
-                    distinctId: newDistinctId,
-                    generation: generation
+                    admission: admission
                 )
                 return
             }
@@ -843,11 +968,11 @@ internal actor ProfileService: ProfileServiceProtocol {
             // Refresh if stale
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
             if age > backgroundRefreshAge {
-                guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+                guard isCurrentAdmission(admission) else { return }
                 await refreshInBackground(distinctId: newDistinctId)
             }
         } else {
-            guard isCurrentAdmission(generation, distinctId: newDistinctId) else { return }
+            guard isCurrentAdmission(admission) else { return }
             // No cache for new user, fetch fresh
             await refreshInBackground(distinctId: newDistinctId)
         }
@@ -864,14 +989,88 @@ internal actor ProfileService: ProfileServiceProtocol {
         dateProvider.timeIntervalSince(cached.cachedAt) < cacheTTL
     }
     
-    private func beginProfileRequest() -> UInt64 {
-        nextProfileGeneration &+= 1
-        return nextProfileGeneration
+    private func beginProfileRequest(distinctId: String) -> ProfileAdmission {
+        return ProfileAdmission(
+            distinctId: distinctId,
+            generation: profileAdmissionGeneration.claim(),
+            locale: effectiveLocale
+        )
     }
 
-    private func isCurrentAdmission(_ generation: UInt64, distinctId: String) -> Bool {
-        generation == nextProfileGeneration
-            && identityService.getDistinctId() == distinctId
+    private func invalidateProfileRequests() {
+        profileAdmissionGeneration.invalidate()
+    }
+
+    /// Called synchronously after the effective locale mutates, before the
+    /// replacing fetch begins: an in-flight fetch under the old locale is
+    /// invalidated even though no new request has claimed a generation yet.
+    func localeDidChange() {
+        invalidateProfileRequests()
+    }
+
+    /// Commits the customer-scoped, locale-independent portions of a profile
+    /// response whose locale-scoped state was discarded as stale.
+    private func commitIdentityScopedPortions(
+        of profile: ProfileResponse,
+        admission: ProfileAdmission
+    ) async {
+        // Only the locale-flip discard qualifies: a generation-superseded
+        // fetch is plain old data and must not overwrite the newer
+        // admission's customer state. That includes the combined case where
+        // a replacement fetch under the new locale has ALREADY committed:
+        // its generation is newer, so the stale request skips entirely.
+        // Generations are claim-unique, so equality means this admission's
+        // own full-path advance (it flipped mid-admission after advancing
+        // the tracker); its reduced fallback must still complete.
+        guard admission.locale != effectiveLocale,
+              admission.generation >= latestCustomerScopedCommitGeneration,
+              isCurrentIdentity(admission) else { return }
+        latestCustomerScopedCommitGeneration = admission.generation
+        if let userProps = profile.userProperties {
+            let properties = Dictionary(
+                uniqueKeysWithValues: userProps.map { ($0.key, $0.value.value) }
+            )
+            _ = identityService.setUserProperties(
+                properties,
+                ifCurrentDistinctIdMatches: admission.distinctId
+            )
+        }
+        // Each awaited step re-checks the tracker: a fuller, newer admission
+        // that commits while this reduced one is suspended fences out its
+        // remaining steps (one coherent customer commit, never interleaved).
+        if let facts = profile.facts, !facts.isEmpty {
+            guard admission.generation >= latestCustomerScopedCommitGeneration,
+                  isCurrentIdentity(admission) else { return }
+            await eventLog.commitServerFacts(facts, distinctId: admission.distinctId)
+        }
+        if let mailbox = profile.mailbox, !mailbox.isEmpty {
+            guard admission.generation >= latestCustomerScopedCommitGeneration,
+                  isCurrentIdentity(admission) else { return }
+            await journeyMailboxHandler?(mailbox, admission.distinctId)
+        }
+    }
+
+    private func isCurrentIdentity(_ admission: ProfileAdmission) -> Bool {
+        identityService.getDistinctId() == admission.distinctId
+    }
+
+    private func isCurrentAdmission(_ admission: ProfileAdmission) -> Bool {
+        profileAdmissionGeneration.matches(admission.generation)
+            && identityService.getDistinctId() == admission.distinctId
+            && effectiveLocale == admission.locale
+    }
+
+    private func cacheStoreAdmission(
+        for admission: ProfileAdmission
+    ) -> ProfileSideEffectAdmission {
+        let generation = profileAdmissionGeneration
+        let identity = identityService
+        let locale = localeProvider
+        return ProfileSideEffectAdmission {
+            generation.matches(admission.generation)
+                && identity.getDistinctId() == admission.distinctId
+                && locale.localeIdentifier() == admission.locale
+        }
     }
 
 }

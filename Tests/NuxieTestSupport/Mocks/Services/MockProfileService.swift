@@ -103,6 +103,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
         return response
     }
 
+    public func localeDidChange() async {}
+
     public func getCachedProfile(distinctId: String) async -> ProfileResponse? {
         lock.withLock { _cache[distinctId] }
     }
