@@ -6,6 +6,27 @@ import XCTest
 final class DeviceLegReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testSharedAdmissionCases() throws {
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/admission.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        for item in try XCTUnwrap(fixture["cases"] as? [[String: Any]]) {
+            let golden = try golden(entryKey: XCTUnwrap(item["entry"] as? String))
+            let bytes = try XCTUnwrap(Data(base64Encoded: golden.envelope.descriptorBytesBase64))
+            var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+            leg.merge(try XCTUnwrap(item["leg"] as? [String: Any])) { _, new in new }
+            root["leg"] = leg
+            root.merge(try XCTUnwrap(item["descriptor"] as? [String: Any])) { _, new in new }
+            let name = try XCTUnwrap(item["name"] as? String)
+            if item["valid"] as? Bool == true {
+                XCTAssertNoThrow(try DeviceLegSchemaValidator.validate(root), name)
+            } else {
+                XCTAssertThrowsError(try DeviceLegSchemaValidator.validate(root), name)
+            }
+        }
+    }
+
     func testAuthenticatesPublisherGoldenBytesWithoutRenderOrChain() throws {
         let fixture = try golden()
         let release = try authenticate(fixture.envelope, key: fixture.publicKey, identity: fixture.identity)

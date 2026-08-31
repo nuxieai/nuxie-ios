@@ -1,0 +1,613 @@
+{
+  "suite": "device-leg-admission-v1",
+  "cases": [
+    {
+      "name": "report-only golden",
+      "valid": true,
+      "entry": "entry",
+      "leg": {},
+      "descriptor": {}
+    },
+    {
+      "name": "rendered golden",
+      "valid": true,
+      "entry": "renderedEntry",
+      "leg": {},
+      "descriptor": {}
+    },
+    {
+      "name": "cross-leg outlet",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "send_event",
+              "eventName": "hello"
+            },
+            "outlets": {
+              "next": "another-leg"
+            }
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "unknown action",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "future_action"
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "server action grant_entitlement",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "grant_entitlement",
+              "featureId": "paid",
+              "unlimited": true
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "server action connector_action",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "connector_action",
+              "accountRef": "account",
+              "toolKey": "email",
+              "payload": {},
+              "timeoutMs": 1000
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "server action device_available",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "device_available",
+              "claimWithinMs": 1000
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "chain fields",
+      "valid": false,
+      "entry": "entry",
+      "leg": {},
+      "descriptor": {
+        "serverLegs": []
+      }
+    },
+    {
+      "name": "unproven membership",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "entryCondition": {
+          "type": "segment",
+          "segmentId": "opaque",
+          "member": false
+        }
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "proven opaque membership",
+      "valid": true,
+      "entry": "entry",
+      "leg": {
+        "entryCondition": {
+          "type": "segment",
+          "segmentId": "opaque",
+          "member": false
+        },
+        "facts": {
+          "propertyKeys": [],
+          "segmentIds": [
+            "opaque"
+          ],
+          "experimentIds": []
+        }
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "future schema",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "schemaVersion": "future"
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "duplicate steps",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "complete",
+            "id": "report",
+            "outcome": "continue"
+          },
+          {
+            "kind": "complete",
+            "id": "report",
+            "outcome": "continue"
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "missing local entry",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "entryStepId": "other-leg"
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "renderless screen",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "screens": [
+          {
+            "id": "screen",
+            "responseCaptures": []
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "zero reentry window",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "reentry": {
+          "type": "once_per_window",
+          "windowSeconds": 0
+        }
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "boolean entitlement gate",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "entitlementGate": {
+          "enabled": 1,
+          "products": []
+        }
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "unknown entitlement product",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "entitlementGate": {
+          "enabled": true,
+          "products": [
+            {
+              "productId": "missing",
+              "featureIds": [
+                "paid"
+              ]
+            }
+          ]
+        }
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "host dismiss immediately presents",
+      "valid": false,
+      "entry": "renderedEntry",
+      "leg": {
+        "routes": [
+          {
+            "host": {
+              "kind": "journey"
+            },
+            "eventName": "host_dismissed",
+            "entryStepId": "present"
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "host dismiss reports",
+      "valid": true,
+      "entry": "renderedEntry",
+      "leg": {
+        "routes": [
+          {
+            "host": {
+              "kind": "journey"
+            },
+            "eventName": "host_dismissed",
+            "entryStepId": "report"
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "duplicate routes",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "routes": [
+          {
+            "host": {
+              "kind": "journey"
+            },
+            "eventName": "hello",
+            "entryStepId": "report"
+          },
+          {
+            "host": {
+              "kind": "journey"
+            },
+            "eventName": "hello",
+            "entryStepId": "report"
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "foreign route screen",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "routes": [
+          {
+            "host": {
+              "kind": "screen",
+              "screenId": "missing"
+            },
+            "eventName": "hello",
+            "entryStepId": "report"
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "compiled condition",
+      "valid": true,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "condition",
+              "branches": [
+                {
+                  "id": "match",
+                  "condition": {
+                    "type": "Truthy",
+                    "value": {
+                      "type": "Boolean",
+                      "value": true
+                    }
+                  }
+                }
+              ]
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "unlowered condition",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "condition",
+              "branches": [
+                {
+                  "id": "match",
+                  "condition": {
+                    "type": "Truthy",
+                    "value": {
+                      "type": "Boolean",
+                      "value": true
+                    }
+                  },
+                  "program": []
+                }
+              ]
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "unknown condition",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "condition",
+              "branches": [
+                {
+                  "id": "match",
+                  "condition": {
+                    "type": "future"
+                  }
+                }
+              ]
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "invalid wait payload",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "wait_until",
+              "trigger": {
+                "kind": "event",
+                "eventName": "paid",
+                "payloadSchema": {
+                  "garbage": true
+                }
+              },
+              "condition": {
+                "type": "Truthy",
+                "value": {
+                  "type": "Boolean",
+                  "value": true
+                }
+              },
+              "maxTimeMs": 1000
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "valid wait payload",
+      "valid": true,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "wait_until",
+              "trigger": {
+                "kind": "event",
+                "eventName": "paid",
+                "payloadSchema": {
+                  "type": "object",
+                  "fields": [
+                    {
+                      "key": "plan",
+                      "type": "string",
+                      "required": true
+                    }
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "condition": {
+                "type": "Truthy",
+                "value": {
+                  "type": "Boolean",
+                  "value": true
+                }
+              },
+              "maxTimeMs": 1000
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "negative delay",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "delay",
+              "durationMs": -1
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "nested restore callbacks",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "steps": [
+          {
+            "kind": "action",
+            "id": "report",
+            "action": {
+              "type": "restore",
+              "onFailed": []
+            },
+            "outlets": {}
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "boundary duplicate field",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "inputs": {
+          "eventFields": [
+            {
+              "key": "answer",
+              "type": "number",
+              "required": true
+            },
+            {
+              "key": "answer",
+              "type": "number",
+              "required": true
+            }
+          ],
+          "responseFields": []
+        }
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "invalid response field bounds",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "outputs": [
+          {
+            "key": "answer",
+            "type": "number",
+            "required": true,
+            "min": 2,
+            "max": 1
+          }
+        ]
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "unknown entry condition",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "entryCondition": {
+          "type": "claim"
+        }
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "segment transition read",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "entryCondition": {
+          "type": "app_foregrounded",
+          "condition": {
+            "ir_version": 1,
+            "expr": {
+              "type": "Segment",
+              "id": "opaque",
+              "op": "entered_within",
+              "within": {
+                "type": "Duration",
+                "value": 10,
+                "unit": "seconds"
+              }
+            }
+          }
+        },
+        "facts": {
+          "propertyKeys": [],
+          "segmentIds": [
+            "opaque"
+          ],
+          "experimentIds": []
+        }
+      },
+      "descriptor": {}
+    }
+  ]
+}
