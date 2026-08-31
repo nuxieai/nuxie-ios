@@ -100,7 +100,12 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var lastEventTimes: [String: Date] = [:]
 
     /// Canned mock results represent the complete test fixture history.
-    public func historyCoverage() async -> EventHistoryCoverage { .complete }
+    private var _historyCoverageResult: EventHistoryCoverage = .complete
+    public var historyCoverageResult: EventHistoryCoverage {
+        get { lock.withLock { _historyCoverageResult } }
+        set { lock.withLock { _historyCoverageResult = newValue } }
+    }
+    public func historyCoverage() async -> EventHistoryCoverage { historyCoverageResult }
     
     // Primary protocol method - matches EventLogProtocol
     public func track(
