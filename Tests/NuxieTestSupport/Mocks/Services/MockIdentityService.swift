@@ -116,6 +116,7 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
     }
 
     public func reset(keepAnonymousId: Bool) {
+        onGuardedUserPropertiesWrite = nil
         identityPublicationLock.withLock {
             lock.withLock {
                 let previousDistinctId = _distinctId
@@ -200,18 +201,26 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
         }
     }
 
+    /// Runs after a successful guarded property write, outside the lock.
+    /// Lets tests inject an externally concurrent mutation (for example a
+    /// runtime-settings locale flip) into the window between a service's
+    /// property write and its next admission re-check.
+    public var onGuardedUserPropertiesWrite: (@Sendable () -> Void)?
+
     @discardableResult
     public func setUserProperties(
         _ properties: [String: Any],
         ifCurrentDistinctIdMatches expectedDistinctId: String
     ) -> Bool {
-        lock.withLock {
+        let wrote = lock.withLock { () -> Bool in
             guard _distinctId == expectedDistinctId else { return false }
             for (key, value) in properties {
                 _userProperties[key] = value
             }
             return true
         }
+        if wrote { onGuardedUserPropertiesWrite?() }
+        return wrote
     }
 
     public func performIfCurrentDistinctIdMatches<T>(

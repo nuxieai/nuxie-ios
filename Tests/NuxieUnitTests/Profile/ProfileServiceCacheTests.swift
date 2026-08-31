@@ -456,6 +456,62 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 await expect { await mailbox.journeyIds() }.to(equal(["english-auth-journey"]))
             }
 
+            it("completes the reduced fallback when locale flips after its own tracker advance") {
+                let distinctId = "locale-post-tracker-flip-user"
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let segments = SegmentService()
+                let mailbox = ProfileMailboxProbe()
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "en_US",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                mockFactory.identityService.reset(keepAnonymousId: true)
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.eventLog.reset()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "post-tracker")
+                )
+                // Flip the runtime locale inside the user-properties write:
+                // by then the full path has already advanced the customer-
+                // commit tracker to this admission's own generation, and the
+                // very next admission re-check fails. The reduced fallback
+                // must not be fenced out by its own advance (generation
+                // equality means "mine"), or facts and mailbox are lost.
+                mockFactory.identityService.onGuardedUserPropertiesWrite = {
+                    settings.setLocaleIdentifier("fr_FR")
+                }
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                await profileService.setJourneyMailboxHandler { entries, deliveredDistinctId in
+                    await mailbox.record(entries, distinctId: deliveredDistinctId)
+                }
+
+                let service = profileService!
+                _ = try await service.refetchProfile(distinctId: distinctId)
+                mockFactory.identityService.onGuardedUserPropertiesWrite = nil
+
+                let resident = await service.getCachedProfile(distinctId: distinctId)
+                let triggerAdmission = await service.getTriggerAdmission(distinctId: distinctId)
+                expect(resident).to(beNil())
+                expect(triggerAdmission).to(beNil())
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("post-tracker"))
+                expect(mockFactory.eventLog.committedServerFacts.flatMap { $0.facts }.map(\.id))
+                    .to(equal(["post-tracker-fact"]))
+                await expect { await mailbox.journeyIds() }.to(equal(["post-tracker-journey"]))
+                await service.clearAllCache()
+            }
+
             it("keeps the replacement's customer state when a stale locale-flip request resumes") {
                 let distinctId = "flip-then-replace-user"
                 let cache = InMemoryCachedProfileStore(ttl: nil)

@@ -1019,8 +1019,11 @@ internal actor ProfileService: ProfileServiceProtocol {
         // admission's customer state. That includes the combined case where
         // a replacement fetch under the new locale has ALREADY committed:
         // its generation is newer, so the stale request skips entirely.
+        // Generations are claim-unique, so equality means this admission's
+        // own full-path advance (it flipped mid-admission after advancing
+        // the tracker); its reduced fallback must still complete.
         guard admission.locale != effectiveLocale,
-              admission.generation > latestCustomerScopedCommitGeneration,
+              admission.generation >= latestCustomerScopedCommitGeneration,
               isCurrentIdentity(admission) else { return }
         latestCustomerScopedCommitGeneration = admission.generation
         if let userProps = profile.userProperties {
