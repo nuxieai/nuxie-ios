@@ -2,6 +2,10 @@
 
 These language-neutral vectors pin the cross-plane experience-execution contract:
 
+- `journeys/planes/history-coverage.json`: durable count/age retention fences,
+  tied timestamps, protected pending captures and server facts, late delivery,
+  persistence gaps, restart, and known-empty versus incomplete query windows.
+  Both native SQLite stores execute these vectors.
 - `journeys/planes/release.json`: canonical TypeScript publisher-signed report-only
   and rendered leg envelopes, using the public development test key. The parent
   repository's device-leg release suite verifies the same envelopes against the

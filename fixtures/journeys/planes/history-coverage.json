@@ -1,0 +1,328 @@
+{
+  "suite": "device-leg-history-coverage-v1",
+  "version": 1,
+  "cases": [
+    {
+      "name": "count pruning fences the newest deleted millisecond",
+      "originMillis": 1000,
+      "events": [
+        {
+          "id": "a",
+          "timestampMillis": 1100,
+          "delivery": "delivered",
+          "origin": "device"
+        },
+        {
+          "id": "b",
+          "timestampMillis": 1200,
+          "delivery": "delivered",
+          "origin": "device"
+        },
+        {
+          "id": "c",
+          "timestampMillis": 1300,
+          "delivery": "delivered",
+          "origin": "device"
+        }
+      ],
+      "steps": [
+        {
+          "op": "prune",
+          "keeping": 2,
+          "olderThanMillis": 0,
+          "countDeleted": 1,
+          "ageDeleted": 0,
+          "coverageMillis": 1101,
+          "ids": [
+            "b",
+            "c"
+          ]
+        },
+        {
+          "op": "query",
+          "sinceMillis": 1100,
+          "known": false,
+          "ids": []
+        },
+        {
+          "op": "query",
+          "sinceMillis": 1101,
+          "known": true,
+          "ids": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "equal timestamp survivors cannot make a pruned interval complete",
+      "originMillis": 1000,
+      "events": [
+        {
+          "id": "a",
+          "timestampMillis": 2000,
+          "delivery": "delivered",
+          "origin": "device"
+        },
+        {
+          "id": "b",
+          "timestampMillis": 2000,
+          "delivery": "delivered",
+          "origin": "device"
+        },
+        {
+          "id": "c",
+          "timestampMillis": 3000,
+          "delivery": "delivered",
+          "origin": "device"
+        }
+      ],
+      "steps": [
+        {
+          "op": "prune",
+          "keeping": 2,
+          "olderThanMillis": 0,
+          "countDeleted": 1,
+          "ageDeleted": 0,
+          "coverageMillis": 2001,
+          "ids": [
+            "b",
+            "c"
+          ]
+        },
+        {
+          "op": "query",
+          "sinceMillis": 2000,
+          "known": false,
+          "ids": []
+        },
+        {
+          "op": "query",
+          "sinceMillis": 2001,
+          "known": true,
+          "ids": [
+            "c"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pending captures and server facts survive both pruning limits",
+      "originMillis": 0,
+      "events": [
+        {
+          "id": "pending",
+          "timestampMillis": 500,
+          "delivery": "pending",
+          "origin": "device"
+        },
+        {
+          "id": "server",
+          "timestampMillis": 1000,
+          "delivery": "delivered",
+          "origin": "server"
+        },
+        {
+          "id": "device",
+          "timestampMillis": 1500,
+          "delivery": "delivered",
+          "origin": "device"
+        }
+      ],
+      "steps": [
+        {
+          "op": "prune",
+          "keeping": 0,
+          "olderThanMillis": 2000,
+          "countDeleted": 0,
+          "ageDeleted": 1,
+          "coverageMillis": 2000,
+          "ids": [
+            "pending",
+            "server"
+          ]
+        },
+        {
+          "op": "query",
+          "sinceMillis": 0,
+          "known": false,
+          "ids": []
+        },
+        {
+          "op": "query",
+          "sinceMillis": 2000,
+          "known": true,
+          "ids": []
+        }
+      ]
+    },
+    {
+      "name": "late delivery of an old pending event cannot move coverage backwards",
+      "originMillis": 1000,
+      "events": [
+        {
+          "id": "pending",
+          "timestampMillis": 900,
+          "delivery": "pending",
+          "origin": "device"
+        },
+        {
+          "id": "a",
+          "timestampMillis": 1100,
+          "delivery": "delivered",
+          "origin": "device"
+        },
+        {
+          "id": "b",
+          "timestampMillis": 1200,
+          "delivery": "delivered",
+          "origin": "device"
+        }
+      ],
+      "steps": [
+        {
+          "op": "prune",
+          "keeping": 2,
+          "olderThanMillis": 0,
+          "countDeleted": 1,
+          "ageDeleted": 0,
+          "coverageMillis": 1101,
+          "ids": [
+            "pending",
+            "b"
+          ]
+        },
+        {
+          "op": "ack",
+          "ids": [
+            "pending"
+          ]
+        },
+        {
+          "op": "prune",
+          "keeping": 1,
+          "olderThanMillis": 0,
+          "countDeleted": 1,
+          "ageDeleted": 0,
+          "coverageMillis": 1101,
+          "ids": [
+            "b"
+          ]
+        },
+        {
+          "op": "query",
+          "sinceMillis": 1101,
+          "known": true,
+          "ids": [
+            "b"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "age pruning and persistence gaps remain fenced across restart and clock rollback",
+      "originMillis": 1000,
+      "events": [
+        {
+          "id": "a",
+          "timestampMillis": 2000,
+          "delivery": "delivered",
+          "origin": "device"
+        },
+        {
+          "id": "b",
+          "timestampMillis": 5000,
+          "delivery": "delivered",
+          "origin": "device"
+        }
+      ],
+      "steps": [
+        {
+          "op": "prune",
+          "keeping": 10,
+          "olderThanMillis": 3000,
+          "countDeleted": 0,
+          "ageDeleted": 1,
+          "coverageMillis": 3000,
+          "ids": [
+            "b"
+          ]
+        },
+        {
+          "op": "prune",
+          "keeping": 10,
+          "olderThanMillis": 2000,
+          "countDeleted": 0,
+          "ageDeleted": 0,
+          "coverageMillis": 3000,
+          "ids": [
+            "b"
+          ]
+        },
+        {
+          "op": "advance",
+          "toMillis": 4000,
+          "coverageMillis": 4000
+        },
+        {
+          "op": "advance",
+          "toMillis": 3500,
+          "coverageMillis": 4000
+        },
+        {
+          "op": "reopen",
+          "atMillis": 9000,
+          "coverageMillis": 4000
+        },
+        {
+          "op": "query",
+          "sinceMillis": 3999,
+          "known": false,
+          "ids": []
+        },
+        {
+          "op": "query",
+          "sinceMillis": 4000,
+          "known": true,
+          "ids": [
+            "b"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "no deletion preserves coverage and an empty covered interval is known zero",
+      "originMillis": 1000,
+      "events": [],
+      "steps": [
+        {
+          "op": "prune",
+          "keeping": 0,
+          "olderThanMillis": 3000,
+          "countDeleted": 0,
+          "ageDeleted": 0,
+          "coverageMillis": 1000,
+          "ids": []
+        },
+        {
+          "op": "reopen",
+          "atMillis": 9000,
+          "coverageMillis": 1000
+        },
+        {
+          "op": "query",
+          "sinceMillis": 999,
+          "known": false,
+          "ids": []
+        },
+        {
+          "op": "query",
+          "sinceMillis": 1000,
+          "known": true,
+          "ids": []
+        }
+      ]
+    }
+  ]
+}
