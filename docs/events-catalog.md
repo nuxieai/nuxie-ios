@@ -19,6 +19,8 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `$journey_started` | retired | platform | no | exempt | none | hidden: retired runtime control | Retired control input with no production emitter. |
 | `$journey_enrolled` | active | platform | yes | exempt | `/i/event` | `journeyStarted` | Device enrolls a run against a pinned Experience Version. |
+| `$journey_leg_started` | active | platform | yes | governed | batch | `journeyLegStarted` | Device starts one leg, echoing its generation; generation zero also enrolls a new journey. |
+| `$journey_leg_completed` | active | platform | yes | governed | batch | `journeyLegCompleted` | Device queues the outcome and declared buffered outputs, then forgets the run. |
 | `$journey_transition` | active | platform | yes | exempt / governed | `/i/event` or batch | hidden: state-sync protocol | A run advances between nodes, or pending-action resume records a response-snapshot conflict. |
 | `$journey_milestone` | active | platform | yes | exempt | `/i/event` | `milestoneReached` | A run reaches an authored milestone through scoped `trackForTrigger` plus local history, or the runner's `trackWithResponse` fallback. |
 | `$journey_converted` | active | platform / server | yes | exempt | `/i/event` or none | `journeyConverted` | A Goal is satisfied locally or arrives as a server down-fact. |

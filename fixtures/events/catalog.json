@@ -776,7 +776,7 @@
     "docs": true,
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:5408",
-      "Sources/Nuxie/Events/EventLog.swift:1956"
+      "Sources/Nuxie/Events/EventLog.swift:1966"
     ],
     "endpoint": [
       "/i/event response lane",
@@ -840,7 +840,7 @@
     "constant": "JourneyEvents.journeyEffectCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Events/EventLog.swift:1956"
+      "Sources/Nuxie/Events/EventLog.swift:1966"
     ],
     "endpoint": "none",
     "fixtures": [],
@@ -1091,6 +1091,121 @@
     "status": "active",
     "wire": true
   },
+  "$journey_leg_completed": {
+    "authoredBy": "platform",
+    "beforeSend": "governed",
+    "constant": "JourneyEvents.journeyLegCompleted",
+    "docs": true,
+    "emitters": [
+      "Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:41"
+    ],
+    "endpoint": "batch",
+    "fixtures": [
+      "fixtures/journeys/planes/reports.json"
+    ],
+    "forwarding": "journeyLegCompleted",
+    "lane": "captureStableSystemEvent",
+    "persists": true,
+    "properties": {
+      "completed_at": {
+        "required": true,
+        "source": "durable completion occurrence time",
+        "type": "ISO8601 string"
+      },
+      "experience_id": {
+        "required": true,
+        "source": "pinned experience id",
+        "type": "String"
+      },
+      "experience_version_id": {
+        "required": true,
+        "source": "pinned version id",
+        "type": "String"
+      },
+      "journey_id": {
+        "required": true,
+        "source": "pinned journey UUIDv7",
+        "type": "String"
+      },
+      "leg_generation": {
+        "required": true,
+        "source": "delivered chapter or zero for enrollment",
+        "type": "Int"
+      },
+      "leg_id": {
+        "required": true,
+        "source": "compiled leg digest",
+        "type": "String"
+      },
+      "outcome": {
+        "required": true,
+        "source": "leg outcome",
+        "type": "String"
+      },
+      "outputs": {
+        "required": true,
+        "source": "declared buffered JSON event and response outputs",
+        "type": "object"
+      },
+      "started_at": {
+        "required": true,
+        "source": "durable leg start occurrence time",
+        "type": "ISO8601 string"
+      }
+    },
+    "status": "active",
+    "wire": true
+  },
+  "$journey_leg_started": {
+    "authoredBy": "platform",
+    "beforeSend": "governed",
+    "constant": "JourneyEvents.journeyLegStarted",
+    "docs": true,
+    "emitters": [
+      "Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:41"
+    ],
+    "endpoint": "batch",
+    "fixtures": [
+      "fixtures/journeys/planes/reports.json"
+    ],
+    "forwarding": "journeyLegStarted",
+    "lane": "captureStableSystemEvent",
+    "persists": true,
+    "properties": {
+      "experience_id": {
+        "required": true,
+        "source": "pinned experience id",
+        "type": "String"
+      },
+      "experience_version_id": {
+        "required": true,
+        "source": "pinned version id",
+        "type": "String"
+      },
+      "journey_id": {
+        "required": true,
+        "source": "pinned journey UUIDv7",
+        "type": "String"
+      },
+      "leg_generation": {
+        "required": true,
+        "source": "delivered chapter or zero for enrollment",
+        "type": "Int"
+      },
+      "leg_id": {
+        "required": true,
+        "source": "compiled leg digest",
+        "type": "String"
+      },
+      "started_at": {
+        "required": true,
+        "source": "durable leg start occurrence time",
+        "type": "ISO8601 string"
+      }
+    },
+    "status": "active",
+    "wire": true
+  },
   "$journey_milestone": {
     "authoredBy": "platform",
     "beforeSend": [
@@ -1220,7 +1335,7 @@
     "constant": "JourneyEvents.journeySuperseded",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Events/EventLog.swift:1956"
+      "Sources/Nuxie/Events/EventLog.swift:1966"
     ],
     "endpoint": "none",
     "fixtures": [],

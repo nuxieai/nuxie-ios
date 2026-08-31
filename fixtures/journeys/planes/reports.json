@@ -1,0 +1,63 @@
+{
+  "suite": "device-leg-reports-v1",
+  "binding": {
+    "type": "continue",
+    "journeyId": "01991234-5678-7000-8000-000000000003",
+    "generation": 7
+  },
+  "startedAtMillis": 100000,
+  "completedAtMillis": 200000,
+  "outcome": "accepted",
+  "outputs": {
+    "responses": {
+      "longAnswer": "answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-answer-",
+      "nested": {
+        "child": {
+          "child": {
+            "child": {
+              "child": {
+                "child": {
+                  "child": {
+                    "child": {
+                      "child": {
+                        "child": {
+                          "child": {
+                            "child": {
+                              "child": {
+                                "leaf": "intact"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "optional": null
+    },
+    "event": {
+      "purchase_id": "purchase-1",
+      "value": 12.5
+    }
+  },
+  "captureModes": [
+    "accept",
+    "drop",
+    "accept_then_lost_receipt"
+  ],
+  "eventNames": [
+    "$journey_leg_started",
+    "$journey_leg_completed"
+  ],
+  "forwardedNames": [
+    "journey_leg_started",
+    "journey_leg_completed"
+  ],
+  "startedAt": "1970-01-01T00:01:40.000Z",
+  "completedAt": "1970-01-01T00:03:20.000Z"
+}

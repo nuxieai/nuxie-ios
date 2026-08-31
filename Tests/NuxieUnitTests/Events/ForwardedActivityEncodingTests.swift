@@ -141,6 +141,8 @@ final class ForwardedActivityEncodingTests: XCTestCase {
     "experienceDismissed": .experienceDismissed(ref, reason: .user),
     "experienceErrored": .experienceErrored(ref, message: "failed"),
     "journeyStarted": .journeyStarted(ref),
+    "journeyLegStarted": .journeyLegStarted(ref, legId: "leg-1", generation: 2),
+    "journeyLegCompleted": .journeyLegCompleted(ref, legId: "leg-1", generation: 2, outcome: "continue"),
     "milestoneReached": .milestoneReached(ref, milestoneId: "milestone-1"),
     "journeyConverted": .journeyConverted(ref, journeyId: "journey-1"),
     "journeyEnded": .journeyEnded(ref, exitReason: .completed),

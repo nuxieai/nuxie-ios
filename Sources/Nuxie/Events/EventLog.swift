@@ -173,13 +173,16 @@ protocol EventCapturing: AnyObject, Sendable {
   )
 }
 
-protocol EventTriggerTracking: AnyObject, Sendable {
+protocol StableSystemEventCapturing: AnyObject, Sendable {
   func captureSystemEvent(
     _ event: String,
     properties: sending [String: Any]?,
     eventId: String,
     distinctId: String
   ) async -> DurableTriggerCapture?
+}
+
+protocol EventTriggerTracking: StableSystemEventCapturing {
   func captureOwnedJourneySystemEvent(
     _ event: String,
     properties: sending [String: Any]?,
@@ -1436,9 +1439,16 @@ actor EventLog: EventLogProtocol {
         }
       }
 
-      var scopedProperties = await buildTriggerProperties(
-        properties
-      )
+      // Declared leg outputs are already JSON, not arbitrary analytics
+      // values. Preserve their exact values through generic sanitization;
+      // the host's beforeSend privacy hook still runs below.
+      let legOutputs = event == JourneyEvents.journeyLegCompleted
+        ? try properties?["outputs"].map { try JSONSerialization.data(withJSONObject: $0) }
+        : nil
+      var scopedProperties = await buildTriggerProperties(properties)
+      if let legOutputs {
+        scopedProperties["outputs"] = try JSONSerialization.jsonObject(with: legOutputs)
+      }
       scopedProperties["$distinct_id"] = distinctId
       let finalProperties = UncheckedSendable(scopedProperties)
       let originalEvent = NuxieEvent(
