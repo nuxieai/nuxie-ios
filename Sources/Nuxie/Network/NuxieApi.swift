@@ -326,6 +326,34 @@ actor NuxieApi: NuxieApiProtocol {
         }
     }
 
+    private func decodeProfile(from data: Data) throws -> ProfileResponse {
+        do {
+            if let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               root["schemaVersion"] as? String == "nuxie.journey-plane-profile.v1" {
+                return ProfileResponse(planeProfile: try JourneyPlaneProfile.decode(data))
+            }
+            try StrictJSONDuplicateKeyValidator.validate(data)
+            return try decoder.decode(ProfileResponse.self, from: data)
+        } catch let error as NuxieNetworkError {
+            throw error
+        } catch {
+            throw NuxieNetworkError.decodingError(error)
+        }
+    }
+
+    private func requestProfile(
+        _ request: ProfileRequest,
+        options: RequestOptions? = nil
+    ) async throws -> ProfileResponse {
+        let (data, response) = try await performRequest(
+            endpoint: .profile(request),
+            body: request,
+            options: options
+        )
+        try requireSuccess(response, data: data)
+        return try decodeProfile(from: data)
+    }
+
     private func request<T: Codable>(
         endpoint: APIEndpoint,
         body: Encodable? = nil,
@@ -367,11 +395,7 @@ extension NuxieApi {
     /// Fetch user profile with locale for server-side content resolution
     public func fetchProfile(for distinctId: String, locale: String? = nil) async throws -> ProfileResponse {
         let request = ProfileRequest(distinctId: distinctId, locale: locale)
-        return try await self.request(
-            endpoint: .profile(request),
-            body: request,
-            responseType: ProfileResponse.self
-        )
+        return try await requestProfile(request)
     }
 
     func fetchProfile(
@@ -395,7 +419,7 @@ extension NuxieApi {
         }
         try requireSuccess(response, data: data)
         return .modified(
-            try decode(ProfileResponse.self, from: data, endpoint: .profile(request)),
+            try decodeProfile(from: data),
             validator: Self.profileValidator(from: response, resourceScope: resourceScope)
         )
     }
@@ -403,10 +427,8 @@ extension NuxieApi {
     /// Fetch user profile with custom timeout (for fast cache checks)
     public func fetchProfileWithTimeout(for distinctId: String, locale: String? = nil, timeout: TimeInterval) async throws -> ProfileResponse {
         let request = ProfileRequest(distinctId: distinctId, locale: locale)
-        return try await self.request(
-            endpoint: .profile(request),
-            body: request,
-            responseType: ProfileResponse.self,
+        return try await requestProfile(
+            request,
             options: RequestOptions(timeout: timeout, compressBody: useGzipCompression)
         )
     }

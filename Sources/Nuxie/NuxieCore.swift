@@ -65,6 +65,7 @@ final class NuxieCore: @unchecked Sendable {
   let irRuntime: IRRuntime
   let segments: SegmentServiceProtocol
   let experiences: ExperienceServiceProtocol
+  let deviceLegProfiles: DeviceLegProfileCatalog
   let profile: ProfileServiceProtocol
   let featureInfo: FeatureInfo
   let featureUseCommands: FeatureUseCommandQueue
@@ -170,6 +171,11 @@ final class NuxieCore: @unchecked Sendable {
       supportedRuntime: ExperienceReleaseRuntime.current,
       admission: ExperienceReleaseAdmission(store: highWaterStore)
     )
+    let deviceLegProfiles = DeviceLegProfileCatalog(
+      authorizationKeys: authorizationKeys,
+      supportedRuntime: ExperienceReleaseRuntime.current,
+      highWaterStore: highWaterStore
+    )
     let experiences = overrides.experiences ?? ExperienceService(
       productService: productService,
       introEligibilityTokenProvider: introEligibilityTokenProvider,
@@ -190,6 +196,7 @@ final class NuxieCore: @unchecked Sendable {
       api: api,
       segments: segments,
       experiences: experiences,
+      deviceLegProfiles: deviceLegProfiles,
       eventLog: eventLog,
       dateProvider: dateProvider,
       sleepProvider: sleepProvider,
@@ -380,6 +387,7 @@ final class NuxieCore: @unchecked Sendable {
     self.irRuntime = irRuntime
     self.segments = segments
     self.experiences = experiences
+    self.deviceLegProfiles = deviceLegProfiles
     self.profile = profile
     self.featureInfo = featureInfo
     self.featureUseCommands = featureUseCommands
