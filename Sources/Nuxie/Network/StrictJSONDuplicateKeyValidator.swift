@@ -1,13 +1,14 @@
 import Foundation
 
 enum StrictJSONDuplicateKeyValidator {
-    static func validate(_ data: Data) throws {
-        var parser = Parser(bytes: Array(data))
+    static func validate(_ data: Data, ordinalKeys: Bool = false) throws {
+        var parser = Parser(bytes: Array(data), ordinalKeys: ordinalKeys)
         try parser.parseDocument()
     }
 
     private struct Parser {
         let bytes: [UInt8]
+        let ordinalKeys: Bool
         var index = 0
 
         mutating func parseDocument() throws {
@@ -34,10 +35,14 @@ enum StrictJSONDuplicateKeyValidator {
             index += 1
             skipWhitespace()
             var keys = Set<[UInt16]>()
+            var legacyKeys = Set<String>()
             if consumeIf(0x7d) { return }
             while true {
                 let key = try parseString()
-                guard keys.insert(Array(key.utf16)).inserted else { throw Failure.duplicate }
+                // Legacy JSONDecoder clients cannot retain canonical variants;
+                // allow them only for consumers using the ordinal-key codec.
+                let inserted = ordinalKeys ? keys.insert(Array(key.utf16)).inserted : legacyKeys.insert(key).inserted
+                guard inserted else { throw Failure.duplicate }
                 skipWhitespace()
                 guard consumeIf(0x3a) else { throw Failure.invalid }
                 skipWhitespace()

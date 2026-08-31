@@ -7,7 +7,7 @@ import CoreFoundation
 /// keep that identity until an ExactJSONObject takes ownership of the fields.
 enum ExactJSONCodec {
     static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
-        try StrictJSONDuplicateKeyValidator.validate(data)
+        try StrictJSONDuplicateKeyValidator.validate(data, ordinalKeys: true)
         return try JSONReader(value: JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])).decode(type)
     }
     static func encode<T: Encodable>(_ value: T) throws -> Data {
@@ -18,7 +18,7 @@ enum ExactJSONCodec {
         return data
     }
     static func canonicalize(_ data: Data) throws -> Data {
-        try StrictJSONDuplicateKeyValidator.validate(data)
+        try StrictJSONDuplicateKeyValidator.validate(data, ordinalKeys: true)
         var result = Data()
         try append(JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]), to: &result)
         return result

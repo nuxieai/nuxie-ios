@@ -179,7 +179,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         // Authentication precedes interpretation, including cursor validation.
         let descriptor: DeviceLegReleaseDescriptor
         do {
-            try StrictJSONDuplicateKeyValidator.validate(bytes)
+            try StrictJSONDuplicateKeyValidator.validate(bytes, ordinalKeys: true)
             guard let root = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
             }
