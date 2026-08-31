@@ -233,6 +233,14 @@ private actor SuspendingFacadeTrigger: TriggerServiceProtocol {
         properties: sending [String: Any]?,
         handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {
+        // Lifecycle capture invokes the trigger service for automatic events.
+        // This fixture must suspend only the explicit facade trigger under test,
+        // or an automatic event can consume the single release before that
+        // facade task reaches its continuation.
+        guard !event.hasPrefix("$") else {
+            handler(.decision(.noMatch))
+            return
+        }
         triggerStarted = true
         let waiters = startedWaiters
         startedWaiters.removeAll()
