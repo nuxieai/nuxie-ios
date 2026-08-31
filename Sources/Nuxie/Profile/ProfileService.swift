@@ -282,6 +282,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     private let api: ProfileFetching
     private let segmentService: SegmentServiceProtocol
     private let experienceService: ExperienceServiceProtocol
+    private let deviceLegProfiles: DeviceLegProfileCatalog?
     private let eventLog: ProfileEventSink
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
@@ -302,6 +303,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         api: ProfileFetching,
         segments: SegmentServiceProtocol,
         experiences: ExperienceServiceProtocol,
+        deviceLegProfiles: DeviceLegProfileCatalog? = nil,
         eventLog: ProfileEventSink,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
@@ -312,6 +314,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.api = api
         self.segmentService = segments
         self.experienceService = experiences
+        self.deviceLegProfiles = deviceLegProfiles
         self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
@@ -359,6 +362,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         api: ProfileFetching,
         segments: SegmentServiceProtocol,
         experiences: ExperienceServiceProtocol,
+        deviceLegProfiles: DeviceLegProfileCatalog? = nil,
         eventLog: ProfileEventSink,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
@@ -368,6 +372,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.api = api
         self.segmentService = segments
         self.experienceService = experiences
+        self.deviceLegProfiles = deviceLegProfiles
         self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
@@ -541,7 +546,7 @@ internal actor ProfileService: ProfileServiceProtocol {
                     return cached.response
                 }
                 cachedProfile = refreshed
-                startRefreshTimer()
+                schedulePeriodicRefresh(for: refreshed.response)
                 LogInfo("Cached profile revalidated (locale: \(locale))")
                 return refreshed.response
             }
@@ -576,6 +581,11 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard isCurrentAdmission(admission) else { return }
         cachedProfile = nil
         triggerAdmission = nil
+        _ = await deviceLegProfiles?.clear(
+            distinctId: admission.distinctId,
+            admission: cacheStoreAdmission(for: admission)
+        )
+        guard isCurrentAdmission(admission) else { return }
         let clearedReleases = try? await experienceService.prepareReleaseProfile(nil)
         guard isCurrentAdmission(admission) else { return }
         if let clearedReleases {
@@ -612,7 +622,20 @@ internal actor ProfileService: ProfileServiceProtocol {
               item.locale == admission.locale,
               isCurrentAdmission(admission) else { return false }
 
-        let prepared = try await experienceService.prepareReleaseProfile(profile.releases)
+        let preparedDeviceProfile: DeviceLegProfileCatalog.Prepared?
+        if let planeProfile = profile.planeProfile {
+            guard let deviceLegProfiles else {
+                throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+            }
+            preparedDeviceProfile = try await deviceLegProfiles.prepare(planeProfile)
+        } else {
+            preparedDeviceProfile = nil
+        }
+        guard isCurrentAdmission(admission) else { return false }
+
+        let prepared = try await experienceService.prepareReleaseProfile(
+            profile.planeProfile == nil ? profile.releases : nil
+        )
         guard isCurrentAdmission(admission) else { return false }
 
         if persistToDisk {
@@ -647,6 +670,20 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard installedMembership,
               isCurrentAdmission(admission) else { return false }
 
+        if let preparedDeviceProfile {
+            guard let committed = try await deviceLegProfiles?.commit(
+                preparedDeviceProfile,
+                distinctId: distinctId,
+                admission: cacheStoreAdmission(for: admission)
+            ), committed else { return false }
+        } else {
+            guard await deviceLegProfiles?.clear(
+                distinctId: distinctId,
+                admission: cacheStoreAdmission(for: admission)
+            ) ?? true else { return false }
+        }
+        guard isCurrentAdmission(admission) else { return false }
+
         // Advance the customer-commit tracker before the first customer-
         // scoped write so a stale reduced fallback cannot interleave with
         // this admission's own customer commits.
@@ -679,7 +716,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         cachedProfile = item
         LogDebug("Updated memory cache for \(NuxieLogger.shared.logDistinctID(distinctId))")
         LogInfo("Admitted segment membership snapshot for user \(NuxieLogger.shared.logDistinctID(distinctId))")
-        startRefreshTimer()
+        schedulePeriodicRefresh(for: profile)
 
         // Server facts and mailbox work are customer-scoped, not localized:
         // committing them from a response fetched under an older locale is
@@ -700,25 +737,29 @@ internal actor ProfileService: ProfileServiceProtocol {
         return true
     }
 
-    /// Start or restart the periodic refresh timer
-    private func startRefreshTimer() {
-        // Cancel existing timer
+    /// Legacy profiles retain their periodic refresh. Canonical plane profiles
+    /// synchronize only at launch and foreground, as required by the protocol.
+    private func schedulePeriodicRefresh(for profile: ProfileResponse) {
         refreshTimer?.cancel()
-        
-        // Start new timer
+        refreshTimer = nil
+        guard profile.planeProfile == nil else { return }
+
+        let sleepProvider = sleepProvider
+        let dateProvider = dateProvider
+        let refreshInterval = refreshInterval
+        let deadline = dateProvider.now().addingTimeInterval(refreshInterval)
         refreshTimer = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self = self else { return }
-                
-                // Sleep for the refresh interval
-                try? await self.sleepProvider.sleep(for: self.refreshInterval)
-                
-                guard !Task.isCancelled else { break }
-                
-                // Perform background refresh
-                let distinctId = self.identityService.getDistinctId()
-                await self.refreshInBackground(distinctId: distinctId)
+            do {
+                try await sleepProvider.sleep(for: refreshInterval)
+            } catch {
+                return
             }
+            guard !Task.isCancelled,
+                  dateProvider.now() >= deadline,
+                  let self else { return }
+
+            let distinctId = self.identityService.getDistinctId()
+            await self.refreshInBackground(distinctId: distinctId)
         }
     }
 
@@ -783,6 +824,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         // Clear memory
         cachedProfile = nil
         triggerAdmission = nil
+        await deviceLegProfiles?.clear(distinctId: distinctId)
         
         // Clear disk
         await diskCache.remove(forKey: distinctId)
@@ -799,6 +841,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         // Clear memory
         cachedProfile = nil
         triggerAdmission = nil
+        await deviceLegProfiles?.clearAll()
         
         // Clear disk
         await diskCache.clearAll()
@@ -834,11 +877,12 @@ internal actor ProfileService: ProfileServiceProtocol {
         return try await refreshProfile(distinctId: resolvedId)
     }
     
-    /// Handle app becoming active - refresh if stale
+    /// Handle app becoming active by revalidating the canonical profile.
     func onAppBecameActive() async {
+        await awaitInitialDiskLoad()
+
         guard let cached = cachedProfile else {
-            // No cache, load from disk or fetch
-            await loadFromDisk()
+            await refreshInBackground(distinctId: identityService.getDistinctId())
             return
         }
 
@@ -851,12 +895,11 @@ internal actor ProfileService: ProfileServiceProtocol {
             )
             return
         }
-        
-        let age = dateProvider.timeIntervalSince(cached.cachedAt)
-        if age > 15 * 60 { // 15 minutes
-            LogDebug("App became active with stale cache (age: \(Int(age/60))m), refreshing")
-            await refreshInBackground(distinctId: distinctId)
-        }
+
+        // Foreground is a canonical profile sync point. The current validator
+        // keeps unchanged profiles on the inexpensive 304 path.
+        LogDebug("App became active, revalidating the profile")
+        await refreshInBackground(distinctId: distinctId)
     }
 
     func setJourneyMailboxHandler(
@@ -897,6 +940,11 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard isCurrentAdmission(admission) else { return }
         cachedProfile = nil
         triggerAdmission = nil
+        _ = await deviceLegProfiles?.clear(
+            distinctId: oldDistinctId,
+            admission: cacheStoreAdmission(for: admission)
+        )
+        guard isCurrentAdmission(admission) else { return }
         refreshTimer?.cancel()
         refreshTimer = nil
 

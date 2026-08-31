@@ -19,6 +19,9 @@ struct BatchError: Codable, Sendable {
 // MARK: - Profile Response
 
 struct ProfileResponse: Codable, Sendable {
+    /// Canonical device-plane delivery. Network decoding validates this from
+    /// the exact response bytes before wrapping it for cache persistence.
+    let planeProfile: JourneyPlaneProfile?
     /// Signed release control plane and sole experience-delivery authority.
     let releases: ExperienceReleaseProfile?
     /// Segment identities referenced by the membership snapshot.
@@ -47,8 +50,10 @@ struct ProfileResponse: Codable, Sendable {
             memberships: []
         ),
         facts: [JourneyDownFact]? = nil,
-        mailbox: [JourneyMailboxEntry]? = nil
+        mailbox: [JourneyMailboxEntry]? = nil,
+        planeProfile: JourneyPlaneProfile? = nil
     ) {
+        self.planeProfile = planeProfile
         self.releases = releases
         self.segments = segments
         self.userProperties = userProperties
@@ -57,6 +62,14 @@ struct ProfileResponse: Codable, Sendable {
         self.segmentMemberships = segmentMemberships
         self.facts = facts
         self.mailbox = mailbox
+    }
+
+    init(planeProfile: JourneyPlaneProfile) {
+        self.init(
+            segments: [],
+            features: planeProfile.features,
+            planeProfile: planeProfile
+        )
     }
 
 }

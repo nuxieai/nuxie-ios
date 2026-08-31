@@ -146,6 +146,45 @@ final class NuxieApiTests: AsyncSpec {
                     expect(result.releases).to(beNil())
                 }
 
+                it("decodes canonical device-plane profiles on every fetch path") {
+                    let fixture = try DeviceLegPlaneProfileTestFixture.load()
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            (
+                                HTTPURLResponse(
+                                    url: request.url!,
+                                    statusCode: 200,
+                                    httpVersion: nil,
+                                    headerFields: ["Content-Type": "application/json"]
+                                )!,
+                                fixture.data
+                            )
+                        }
+                    )
+
+                    let direct = try await api.fetchProfile(for: distinctId)
+                    let timed = try await api.fetchProfileWithTimeout(
+                        for: distinctId,
+                        timeout: 1
+                    )
+                    let conditional = try await api.fetchProfile(
+                        for: distinctId,
+                        locale: nil,
+                        revalidating: nil
+                    )
+
+                    expect(direct.planeProfile?.armedLegs.count).to(equal(1))
+                    expect(timed.planeProfile?.releases.count).to(equal(1))
+                    switch conditional {
+                    case .modified(let profile, _):
+                        expect(profile.planeProfile?.facts.properties["ready"]?.present)
+                            .to(beTrue())
+                    case .notModified:
+                        fail("Expected the canonical body to decode")
+                    }
+                }
+
                 it("revalidates a cached profile without decoding a response body") {
                     let validator = ProfileCacheValidator(
                         rawValue: "\"profile-v1\"",
