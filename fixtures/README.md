@@ -91,3 +91,7 @@ These language-neutral vectors pin the cross-plane experience-execution contract
   names. These reports use the ordinary event store and batch delivery.
 
 The Swift contract tests exercise the same behaviors. Consumers in other SDKs can reuse these JSON vectors.
+- `journeys/planes/values.json`: shared server/iOS/Android value resolution and
+  three-valued conditions. Missing fields stay unknown through nested values
+  and negation; JSON null, numeric types, deep equality, and ordinal string
+  comparisons remain distinct.
