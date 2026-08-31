@@ -205,22 +205,27 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
     /// Lets tests inject an externally concurrent mutation (for example a
     /// runtime-settings locale flip) into the window between a service's
     /// property write and its next admission re-check.
-    public var onGuardedUserPropertiesWrite: (@Sendable () -> Void)?
+    public var onGuardedUserPropertiesWrite: (@Sendable () -> Void)? {
+        get { lock.withLock { _onGuardedUserPropertiesWrite } }
+        set { lock.withLock { _onGuardedUserPropertiesWrite = newValue } }
+    }
+    private var _onGuardedUserPropertiesWrite: (@Sendable () -> Void)?
 
     @discardableResult
     public func setUserProperties(
         _ properties: [String: Any],
         ifCurrentDistinctIdMatches expectedDistinctId: String
     ) -> Bool {
-        let wrote = lock.withLock { () -> Bool in
-            guard _distinctId == expectedDistinctId else { return false }
+        let hook = lock.withLock { () -> (@Sendable () -> Void)?? in
+            guard _distinctId == expectedDistinctId else { return .none }
             for (key, value) in properties {
                 _userProperties[key] = value
             }
-            return true
+            return .some(_onGuardedUserPropertiesWrite)
         }
-        if wrote { onGuardedUserPropertiesWrite?() }
-        return wrote
+        guard let hook else { return false }
+        hook?()
+        return true
     }
 
     public func performIfCurrentDistinctIdMatches<T>(
