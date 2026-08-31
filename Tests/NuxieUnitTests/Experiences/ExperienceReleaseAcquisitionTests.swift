@@ -1394,6 +1394,106 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(readmittedWakeCount, 2)
     }
 
+    func testDescriptorAllowanceChangeNotifiesWithStableProductAuthority() async throws {
+        let (base, delivery) = try releaseEntry(
+            riv: Data("RIVE descriptor allowance notification".utf8),
+            image: Data([1, 4, 9])
+        )
+        let first = try resign(entry: base) { root in
+            root["products"] = [[
+                "id": "product-projection",
+                "type": "subscription",
+                "store": [
+                    "platform": "apple_app_store",
+                    "productId": "store-product-projection",
+                    "productType": "autoRenewable",
+                ],
+                "preview": productPreview("Projection"),
+                "providerFeatureAccess": NSNull(),
+                "entitlements": [[
+                    "id": "entitlement-premium",
+                    "featureId": "feature-premium",
+                    "featureExternalId": "premium",
+                    "purchaseUsageFeatureIds": [],
+                    "allowanceType": NSNull(),
+                    "allowance": NSNull(),
+                    "interval": NSNull(),
+                ]],
+            ]]
+            root["placements"] = []
+        }
+        let second = try resign(entry: first) { root in
+            var identity = try XCTUnwrap(root["identity"] as? [String: Any])
+            identity["buildId"] = "build-descriptor-allowance-notification-v2"
+            identity["publishedAtSeq"] = first.locator.publishedAtSeq + 1
+            root["identity"] = identity
+            var products = try XCTUnwrap(root["products"] as? [[String: Any]])
+            products[0]["entitlements"] = [[
+                "id": "entitlement-credits",
+                "featureId": "feature-credits",
+                "featureExternalId": "credits",
+                "purchaseUsageFeatureIds": [],
+                "allowanceType": "fixed",
+                "allowance": 10,
+                "interval": NSNull(),
+            ]]
+            root["products"] = products
+        }
+        let loader = ExperienceLoader(
+            productService: ProductService(),
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true
+        )
+        let wakes = ProductAuthorityAdmissionWakeCounter()
+        await loader.setProductAuthorityChangeHandler {
+            await wakes.recordWake()
+        }
+
+        _ = try await loader.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [first],
+            pinned: []
+        ))
+        let firstAuthority = await loader.purchaseEvidenceAuthority(
+            storeProductId: "store-product-projection"
+        )
+        XCTAssertEqual(firstAuthority, .nativeStoreKit)
+        let wakesAfterFirst = await wakes.count()
+        XCTAssertEqual(wakesAfterFirst, 1)
+
+        _ = try await loader.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [second],
+            pinned: []
+        ))
+        let secondAuthority = await loader.purchaseEvidenceAuthority(
+            storeProductId: "store-product-projection"
+        )
+        XCTAssertEqual(
+            secondAuthority,
+            .nativeStoreKit,
+            "descriptor allowances can change without changing receipt ownership"
+        )
+        let wakesAfterAllowanceChange = await wakes.count()
+        XCTAssertEqual(
+            wakesAfterAllowanceChange,
+            2,
+            "descriptor allowance changes must wake optimistic projection recomputation"
+        )
+
+        _ = try await loader.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [second],
+            pinned: []
+        ))
+        let wakesAfterReadmission = await wakes.count()
+        XCTAssertEqual(
+            wakesAfterReadmission,
+            2,
+            "an identical descriptor readmission is not a new projection input"
+        )
+    }
+
     func testPinnedProviderHistoryDoesNotPoisonActiveNativeRestoreAuthority() async throws {
         let (base, delivery) = try releaseEntry(
             riv: Data("RIVE authority recovery".utf8),
@@ -1487,7 +1587,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             eventSink: eventSink,
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] },
@@ -2348,6 +2447,34 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(cachedByProduct?.entitlements.map(\.id), ["entitlement_pro"])
         XCTAssertEqual(cachedByProduct?.providerFeatureAccess?.provider, "revenuecat")
         XCTAssertEqual(cachedByStore?.id, "product_purchase_only")
+        let exactOptimisticAllowances = await store.optimisticEntitlementAllowances(
+            releaseDescriptorSHA256: entry.descriptorSha256,
+            productId: "product_purchase_only",
+            storeProductId: productID
+        )
+        XCTAssertEqual(
+            exactOptimisticAllowances,
+            [OptimisticEntitlementAllowance(
+                featureId: "feature_pro",
+                featureExternalId: "pro",
+                allowanceType: "unlimited",
+                allowance: nil
+            )]
+        )
+        let activeOptimisticAllowances = await store.optimisticEntitlementAllowances(
+            releaseDescriptorSHA256: nil,
+            productId: nil,
+            storeProductId: productID
+        )
+        XCTAssertEqual(
+            activeOptimisticAllowances,
+            [OptimisticEntitlementAllowance(
+                featureId: "feature_pro",
+                featureExternalId: "pro",
+                allowanceType: "unlimited",
+                allowance: nil
+            )]
+        )
         XCTAssertFalse(productService.fetchProductsCalled)
 
         let updatedEntry = try resign(entry: entry) { root in

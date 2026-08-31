@@ -2915,14 +2915,6 @@ actor JourneyRunner {
                 actionPath: actionPath,
                 resumeContext: resumeContext
             )
-        case .grantEntitlement(let effect):
-            return await handleGrantEntitlementEffect(
-                effect,
-                context: context,
-                index: index,
-                actionPath: actionPath,
-                resumeContext: resumeContext
-            )
         case .setViewModel(let setViewModel):
             return await handleSetViewModel(setViewModel, context: context)
         case .fireTrigger(let fireTrigger):
@@ -4071,38 +4063,6 @@ actor JourneyRunner {
             onFailed: action.onFailed,
             onTimeout: action.onTimeout,
             timeoutMs: action.timeoutMs ?? 120_000,
-            authoredNodeId: action.nodeId,
-            context: context,
-            index: index,
-            actionPath: actionPath,
-            resumeContext: resumeContext
-        )
-    }
-
-    private func handleGrantEntitlementEffect(
-        _ action: GrantEntitlementAction,
-        context: TriggerContext,
-        index: Int,
-        actionPath: String?,
-        resumeContext: ResumeContext?
-    ) async -> ActionResult {
-        var effect: [String: Any] = [
-            "kind": "grant_entitlement",
-            "feature_id": action.featureId,
-        ]
-        if let balance = action.balance {
-            effect["balance"] = balance
-        }
-        if let unlimited = action.unlimited {
-            effect["unlimited"] = unlimited
-        }
-        return await handleServerEffect(
-            effect: effect,
-            payload: [:],
-            onSucceeded: action.onSucceeded,
-            onFailed: action.onFailed,
-            onTimeout: action.onTimeout,
-            timeoutMs: 120_000,
             authoredNodeId: action.nodeId,
             context: context,
             index: index,

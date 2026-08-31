@@ -693,7 +693,6 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         case "dismiss", "exit": required = ["type"]; optional = ["reason"]
         case "app_action": required = ["type", "name"]; optional = ["nodeId", "payload"]
         case "connector_action": required = ["type", "accountRef", "toolKey", "payload", "timeoutMs", "onSucceeded", "onFailed", "onTimeout"]; optional = []
-        case "grant_entitlement": required = ["type", "featureId", "onSucceeded", "onFailed", "onTimeout"]; optional = ["balance", "unlimited"]
         default: try invalid("\(path).type")
         }
         _ = try object(action, required: required, optional: optional, path: path)
@@ -703,7 +702,6 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         if type == "navigate", let screenID = action["screenId"] as? String, !screenIDs.contains(screenID) {
             try invalid("\(path).screenId")
         }
-        if type == "grant_entitlement" { try identifier(action["featureId"], path: "\(path).featureId") }
         if let reason = action["reason"] { try boundedString(reason, minimum: 0, maximumUTF16: 256, path: "\(path).reason") }
         switch type {
         case "back": if let steps = action["steps"] { try integer(steps, minimum: 1, maximum: 256, path: "\(path).steps") }
@@ -776,11 +774,6 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         case "connector_action":
             try validateJourneyValueRecord(action["payload"], path: "\(path).payload")
             try integer(action["timeoutMs"], minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).timeoutMs")
-            for field in ["onSucceeded", "onFailed", "onTimeout"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs, placementIDs: placementIDs) }
-        case "grant_entitlement":
-            if let balance = action["balance"] { try finiteNumber(balance, minimum: 0, maximum: Double.greatestFiniteMagnitude, exclusiveMinimum: true, path: "\(path).balance") }
-            if let unlimited = action["unlimited"] { guard isJSONBoolean(unlimited), (unlimited as! NSNumber).boolValue else { try invalid("\(path).unlimited") } }
-            guard action["balance"] != nil || action["unlimited"] != nil else { try invalid(path) }
             for field in ["onSucceeded", "onFailed", "onTimeout"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs, placementIDs: placementIDs) }
         default: break
         }

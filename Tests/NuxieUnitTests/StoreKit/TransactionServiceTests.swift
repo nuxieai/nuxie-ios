@@ -128,10 +128,7 @@ private actor MockNuxieTestStore: NuxieTestStorePurchasing {
 }
 
 private actor RecordingFeatureService: FeatureServiceProtocol {
-    private(set) var localPurchases: [(
-        grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String
-    )] = []
+    private(set) var purchaseUpdateCount = 0
 
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess? { nil }
     func getAllCached() async -> [String: FeatureAccess] { [:] }
@@ -156,13 +153,8 @@ private actor RecordingFeatureService: FeatureServiceProtocol {
     func updateFromPurchase(
         _ features: [PurchaseFeature],
         distinctId: String
-    ) async {}
-
-    func applyLocalPurchase(
-        grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String
     ) async {
-        localPurchases.append((grants, transactionId))
+        purchaseUpdateCount += 1
     }
 }
 
@@ -647,11 +639,11 @@ final class TransactionServiceTests: AsyncSpec {
                             try await transactionService.purchase(mockProduct)
                         }.toNot(throwError())
 
-                        let localPurchases = await featureService.localPurchases
-                        expect(localPurchases).to(beEmpty())
+                        let purchaseUpdateCount = await featureService.purchaseUpdateCount
+                        expect(purchaseUpdateCount) == 0
                     }
 
-                    it("projects signed provider access through the configured delegate") {
+                    it("does not project signed provider access from a delegate outcome") {
                         mockProduct.providerFeatureAccess = "revenuecat"
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
@@ -667,11 +659,8 @@ final class TransactionServiceTests: AsyncSpec {
                             try await transactionService.purchase(mockProduct)
                         }.toNot(throwError())
 
-                        let localPurchases = await featureService.localPurchases
-                        expect(localPurchases.count) == 1
-                        expect(localPurchases.first?.grants.map(\.featureId)) == [
-                            "feature_premium"
-                        ]
+                        let purchaseUpdateCount = await featureService.purchaseUpdateCount
+                        expect(purchaseUpdateCount) == 0
                     }
 
                     it("routes one completion for a signed provider outcome without StoreKit evidence") {
@@ -738,9 +727,6 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(recovery?.localEntitlementGrants.map(\.featureId)) == [
                             "feature_premium"
                         ]
-                        let localPurchases = await featureService.localPurchases
-                        expect(localPurchases).to(beEmpty())
-
                         await expect {
                             await transactionService.checkoutRecoveryRecord(
                                 appAccountToken: token,
@@ -782,8 +768,6 @@ final class TransactionServiceTests: AsyncSpec {
 
                         _ = try await purchase.value
 
-                        let localPurchases = await featureService.localPurchases
-                        expect(localPurchases).to(beEmpty())
                         expect(eventSink.events.map(\.name)).toNot(
                             contain(SystemEventNames.purchaseCompleted)
                         )
@@ -811,8 +795,8 @@ final class TransactionServiceTests: AsyncSpec {
                             try await transactionService.purchase(mockProduct)
                         }.toNot(throwError())
 
-                        let localPurchases = await featureService.localPurchases
-                        expect(localPurchases).to(beEmpty())
+                        let purchaseUpdateCount = await featureService.purchaseUpdateCount
+                        expect(purchaseUpdateCount) == 0
                     }
 
                     it("mints a fresh eligibility token before invoking the delegate") {
@@ -994,9 +978,6 @@ final class TransactionServiceTests: AsyncSpec {
                                 productId: mockProduct.storeProductId
                             )?.map(\.featureId)
                         }.to(equal(["feature_premium"]))
-                        let purchasesBeforeApproval = await featureService.localPurchases
-                        expect(purchasesBeforeApproval).to(beEmpty())
-
                         let activeTransactionService = transactionService!
                         let observer = TransactionObserver(
                             api: mocks.nuxieApi,
@@ -1006,7 +987,6 @@ final class TransactionServiceTests: AsyncSpec {
                             eventSink: eventSink,
                             transactionServiceProvider: { activeTransactionService },
                             evidenceStore: InMemoryTransactionEvidenceStore(),
-                            localAccessStore: InMemoryLocalPurchaseAccessStore(),
                             purchaseStorageScope: purchaseStorageScope,
                             dateProvider: dateProvider,
                             activeStoreOriginalTransactionIDs: { [] }
@@ -1033,8 +1013,6 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(eventSink.events.map(\.name).filter {
                             $0 == SystemEventNames.purchaseCompleted
                         }.count) == 1
-                        let purchasesAfterApproval = await featureService.localPurchases
-                        expect(purchasesAfterApproval.count) == 1
                     }
 
                     it("persists pending grants only with signed provider cutover state") {

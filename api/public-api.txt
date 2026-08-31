@@ -113,6 +113,11 @@ s:5Nuxie11EnvironmentO11developmentyA2CmF	Var	development
 s:5Nuxie11FeatureInfoC	TypeDecl	FeatureInfo
 s:5Nuxie11FeatureInfoC10hasBalanceySbSSF	Function	hasBalance(_:)
 s:5Nuxie11FeatureInfoC3allSDySSAA0B6AccessVGvp	Var	all
+s:5Nuxie11FeatureInfoC5StateO	TypeDecl	State
+s:5Nuxie11FeatureInfoC5StateO11reconcilingyA2EmF	Var	reconciling
+s:5Nuxie11FeatureInfoC5StateO5readyyA2EmF	Var	ready
+s:5Nuxie11FeatureInfoC5StateO7unknownyA2EmF	Var	unknown
+s:5Nuxie11FeatureInfoC5stateAC5StateOvp	Var	state
 s:5Nuxie11FeatureInfoC7balanceySdSgSSF	Function	balance(_:)
 s:5Nuxie11FeatureInfoC7featureyAA0B6AccessVSgSSF	Function	feature(_:)
 s:5Nuxie11FeatureInfoC9isAllowedySbSSF	Function	isAllowed(_:)

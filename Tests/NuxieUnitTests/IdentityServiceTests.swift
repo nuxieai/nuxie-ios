@@ -174,6 +174,68 @@ final class IdentityServiceTests: AsyncSpec {
         }
       }
 
+      describe("identity fence publication") {
+        it("invalidates a fenced generation across an identity cycle and reset") {
+          identityService.setDistinctId("customer-a")
+          let original = try unwrap(
+            identityService.performWithCurrentIdentityFence("customer-a") { _ in true }
+          )
+          let originalPublished = await MainActor.run {
+            identityService.publishIfCurrentIdentityFenceToken(original.token) {}
+          }
+          expect(originalPublished).to(beTrue())
+
+          identityService.setDistinctId("customer-b")
+          identityService.setDistinctId("customer-a")
+          let replayPublished = await MainActor.run {
+            identityService.publishIfCurrentIdentityFenceToken(original.token) {}
+          }
+          expect(replayPublished).to(beFalse())
+
+          let current = try unwrap(
+            identityService.performWithCurrentIdentityFence("customer-a") { _ in true }
+          )
+          identityService.reset(keepAnonymousId: true)
+          let postResetPublished = await MainActor.run {
+            identityService.publishIfCurrentIdentityFenceToken(current.token) {}
+          }
+          expect(postResetPublished).to(beFalse())
+        }
+
+        it("publishes outside the identity queue while serializing mutation") {
+          identityService.setDistinctId("customer-a")
+          let fenced = try unwrap(
+            identityService.performWithCurrentIdentityFence("customer-a") { _ in true }
+          )
+          let mutationAttempted = DispatchSemaphore(value: 0)
+          let mutationFinished = DispatchSemaphore(value: 0)
+
+          let published = await MainActor.run {
+            identityService.publishIfCurrentIdentityFenceToken(fenced.token) {
+              DispatchQueue.global().async {
+                mutationAttempted.signal()
+                identityService.setDistinctId("background-customer")
+                mutationFinished.signal()
+              }
+              mutationAttempted.wait()
+              expect(mutationFinished.wait(timeout: .now() + 0.05))
+                .to(equal(.timedOut))
+              expect(identityService.getDistinctId()).to(equal("customer-a"))
+
+              // A synchronous publication subscriber may identify reentrantly
+              // because the publication gate is recursive and `queue` is free.
+              identityService.setDistinctId("subscriber-customer")
+            }
+          }
+
+          // The publication ran, but the reentrant identify superseded it, so
+          // the gate reports the publication as no longer current.
+          expect(published).to(beFalse())
+          expect(mutationFinished.wait(timeout: .now() + 1)).to(equal(.success))
+          expect(identityService.getDistinctId()).to(equal("background-customer"))
+        }
+      }
+
       describe("user properties") {
         describe("getUserProperties") {
           it("should return empty dictionary initially") {

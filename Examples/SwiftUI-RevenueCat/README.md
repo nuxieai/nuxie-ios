@@ -172,8 +172,8 @@ User opens app
 
 #### 4. RevenueCat Adapter
 ```swift
-// RevenueCat owns checkout and finishing. Only a signed, reviewed Connector
-// Product mapping can enable immediate local Boolean/unlimited Feature Access.
+// RevenueCat owns checkout and finishing. Delegate success advances the
+// purchase Journey; Connector-synchronized server state supplies Feature Access.
 config.purchaseHandlingMode = .observer
 config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 ```

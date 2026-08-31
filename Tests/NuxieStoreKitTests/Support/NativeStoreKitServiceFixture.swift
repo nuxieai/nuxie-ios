@@ -93,7 +93,6 @@ final class NativeStoreKitServiceFixture: @unchecked Sendable {
             eventSink: StoreKitRecordingEventSink(),
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: InMemoryLocalPurchaseAccessStore(),
             purchaseStorageScope: scope,
             dateProvider: dateProvider,
             activeStoreOriginalTransactionIDs: { [] }

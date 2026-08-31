@@ -50,5 +50,10 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `experience-release-descriptor/segment-trigger.json`: compiled segment
   predicate semantics, including disjunction and negative membership, kept
   distinct from the segment dependency inventory.
+- `features/optimistic-entitlement-projection.json`: retained-evidence ×
+  descriptor-allowance projection composed with an admitted authoritative
+  snapshot. Vectors pin overlay absence, widening joins, post-ack server
+  authority, tri-state readiness, revocation, identity scoping, and
+  external-billing absence.
 
 The Swift contract tests exercise the same behaviors. Consumers in other SDKs can reuse these JSON vectors.

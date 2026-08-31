@@ -121,8 +121,9 @@ view controller or present an experience by version ID.
 | Entry point | Semantics |
 | --- | --- |
 | `features: FeatureInfo` | Observable (SwiftUI-friendly) feature-access snapshot. |
+| `FeatureInfo.state` | Snapshot readiness: `.unknown` before a profile is admitted, `.reconciling` while verified StoreKit evidence widens visible access, and `.ready` once no optimistic purchase overlay remains. |
 | `hasFeature(_:requiredBalance:entityId:policy:)` | Check access. `FeatureCheckPolicy.cacheFirst` answers locally and never blocks on the network; `.remote` forces a round trip. |
-| `useFeature(...)` / `useFeatureAndWait(...)` | Record consumption of a metered feature. Ordinary `useFeatureAndWait` persists a stable command before sending and reuses its operation id across same-process and relaunch retry. When exactly one pending native purchase can fund the requested feature, it instead submits verification, grant, and first use as one idempotent command. A product that grants a credit system can fund a mapped metered feature; the SDK selects only from the authenticated release's signed direct and credit-schema targets, while the server independently verifies the current product and credit-system relationship. |
+| `useFeature(...)` / `useFeatureAndWait(...)` | Record consumption of a metered feature. Ordinary `useFeatureAndWait` persists a stable command before sending and reuses its operation id across same-process and relaunch retry. During an active optimistic purchase overlay it always uses that durable command journal, and any local decrement affects only the visible joined value. Without an active overlay, exactly one pending native purchase can instead submit verification, grant, and first use as one idempotent command. A product that grants a credit system can fund a mapped metered feature; the SDK selects only from the authenticated release's signed direct and credit-schema targets, while the server independently verifies the current product and credit-system relationship. |
 
 `FeatureUsageResult.success` means the usage command committed. It does not
 mean that another use remains available. For an atomic purchase-backed use,

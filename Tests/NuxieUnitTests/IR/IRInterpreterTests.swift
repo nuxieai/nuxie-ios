@@ -11,8 +11,10 @@ import Nimble
 // @unchecked Sendable: all mutable state is serialized through `lock`.
 final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchecked Sendable {
     private let lock = NSLock()
+    private let identityPublicationLock = NSRecursiveLock()
     private var _properties: [String: Any] = [:]
     private var distinctId = "test-user"
+    private var identityFenceGeneration: UInt64 = 0
     private let anonymousId = "test-anonymous"
 
     var properties: [String: Any] {
@@ -29,7 +31,16 @@ final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchec
     func getRawDistinctId() -> String? { lock.withLock { distinctId } }
     func getAnonymousId() -> String { anonymousId }
     var isIdentified: Bool { true }
-    func setDistinctId(_ distinctId: String) { lock.withLock { self.distinctId = distinctId } }
+    func setDistinctId(_ distinctId: String) {
+        identityPublicationLock.withLock {
+            lock.withLock {
+                if self.distinctId != distinctId {
+                    identityFenceGeneration &+= 1
+                }
+                self.distinctId = distinctId
+            }
+        }
+    }
     func reset(keepAnonymousId: Bool) {}
     func clearUserCache(distinctId: String?) {}
     func getUserProperties() -> [String: Any] { lock.withLock { _properties } }
@@ -56,6 +67,89 @@ final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchec
                 anonymousId: anonymousId,
                 isIdentified: true
             ))
+        }
+    }
+    func performWithCurrentIdentityFence<T>(
+        _ expectedDistinctId: String,
+        _ work: (IdentitySnapshot) throws -> T
+    ) rethrows -> IdentityFenced<T>? {
+        try lock.withLock {
+            guard distinctId == expectedDistinctId else { return nil }
+            return try IdentityFenced(
+                value: work(IdentitySnapshot(
+                    distinctId: distinctId,
+                    userId: distinctId,
+                    anonymousId: anonymousId,
+                    isIdentified: true
+                )),
+                token: IdentityFenceToken(
+                    distinctId: distinctId,
+                    generation: identityFenceGeneration
+                )
+            )
+        }
+    }
+    @MainActor
+    func mutateIdentity(
+        _ mutation: IdentityMutation,
+        publishing publication: (IdentityTransition) -> Void
+    ) -> IdentityTransition? {
+        identityPublicationLock.withLock {
+            let captured = lock.withLock { () -> (IdentityTransition, IdentityFenceToken) in
+                let previous = IdentitySnapshot(
+                    distinctId: distinctId,
+                    userId: distinctId,
+                    anonymousId: anonymousId,
+                    isIdentified: true
+                )
+                switch mutation {
+                case .identify(let newDistinctId):
+                    if distinctId != newDistinctId {
+                        identityFenceGeneration &+= 1
+                    }
+                    distinctId = newDistinctId
+                case .reset:
+                    identityFenceGeneration &+= 1
+                    distinctId = anonymousId
+                }
+                let transition = IdentityTransition(
+                    previous: previous,
+                    current: IdentitySnapshot(
+                        distinctId: distinctId,
+                        userId: distinctId,
+                        anonymousId: anonymousId,
+                        isIdentified: true
+                    )
+                )
+                return (
+                    transition,
+                    IdentityFenceToken(
+                        distinctId: transition.current.distinctId,
+                        generation: identityFenceGeneration
+                    )
+                )
+            }
+            publication(captured.0)
+            let isStillCurrent = lock.withLock {
+                distinctId == captured.1.distinctId
+                    && identityFenceGeneration == captured.1.generation
+            }
+            return isStillCurrent ? captured.0 : nil
+        }
+    }
+    @MainActor
+    func publishIfCurrentIdentityFenceToken(
+        _ token: IdentityFenceToken,
+        _ publication: () -> Void
+    ) -> Bool {
+        identityPublicationLock.withLock {
+            let isCurrent = lock.withLock {
+                token.distinctId == distinctId
+                    && token.generation == identityFenceGeneration
+            }
+            guard isCurrent else { return false }
+            publication()
+            return true
         }
     }
     func setOnceUserProperties(_ properties: [String: Any]) {

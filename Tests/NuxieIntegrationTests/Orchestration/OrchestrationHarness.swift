@@ -101,6 +101,12 @@ final class OrchestrationStack {
         overrides.api = api
         overrides.dateProvider = dateProvider
         overrides.sleepProvider = sleepProvider
+        // Install the real disk-backed identity before building the graph so
+        // profile admission and optimistic projection start in one scope. On
+        // relaunch, setting the restored ID is a no-op.
+        let identity = IdentityService(customStoragePath: storageURL)
+        identity.setDistinctId(distinctId)
+        overrides.identity = identity
         let experienceService = MockExperienceService()
         overrides.experiences = experienceService
         let presentation = MockExperiencePresentationService()
@@ -132,11 +138,6 @@ final class OrchestrationStack {
             }
         }
         presentation.eventLog = core.eventLog
-
-        // Identity is real and disk-backed: on a relaunch boot this is a
-        // same-id no-op because IdentityService restored it from
-        // <storage>/nuxie/identity.json — exactly like a real process launch.
-        core.identity.setDistinctId(distinctId)
 
         // Mirror NuxieSDK.setup's event wiring. Segment membership is a
         // server-owned profile mirror, so committed events route only

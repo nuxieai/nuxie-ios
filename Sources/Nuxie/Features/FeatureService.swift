@@ -48,21 +48,6 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
         entityId: String?
     ) async
 
-    /// Apply the immutable Product-to-feature mapping immediately after a
-    /// verified native purchase. Durable balances still reconcile from the
-    /// server; this projection is only the offline/local access view.
-    func applyLocalPurchase(
-        grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String
-    ) async
-
-    /// Remove locally projected access when StoreKit reports that the
-    /// purchase was revoked. The provider still owns its receipt lifecycle;
-    /// this only clears Nuxie's optimistic offline projection.
-    func removeLocalPurchase(
-        transactionId: String,
-        grants: [StoreProduct.LocalEntitlementGrant]
-    ) async
 }
 
 extension FeatureServiceProtocol {
@@ -73,15 +58,6 @@ extension FeatureServiceProtocol {
         entityId: String?
     ) async {}
 
-    func applyLocalPurchase(
-        grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String
-    ) async {}
-
-    func removeLocalPurchase(
-        transactionId: String,
-        grants: [StoreProduct.LocalEntitlementGrant] = []
-    ) async {}
 }
 
 /// Manages feature access checking with caching
@@ -216,18 +192,6 @@ internal actor FeatureService: FeatureServiceProtocol {
     // In-memory cache for fresh feature access overrides from real-time checks and purchase syncs.
     // These values are newer than the profile snapshot and should win until they expire.
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
-    /// Access projected from a verified purchase mapping. Unlike a real-time
-    /// feature check, this remains valid while the customer is offline; the
-    /// transaction/evidence lifecycle is responsible for rehydrating it after
-    /// relaunch and identity changes clear it explicitly.
-    private var localPurchaseCache: [FeatureCacheKey: CachedFeatureOverride] = [:]
-    /// Fail-closed access for a locally verified purchase that StoreKit later
-    /// removed or revoked. This outranks a stale cached profile until a fresh
-    /// server check or purchase response reconciles the feature.
-    private var revokedPurchaseCache: [FeatureCacheKey: CachedFeatureOverride] = [:]
-    private var localPurchaseTransactions: Set<String> = []
-    private var localPurchaseOverrides: [String: [FeatureCacheKey: CachedFeatureOverride]] = [:]
-    private var durableAccessHydratedDistinctId: String?
     /// Monotonic per-feature mutation revision. A feature check captures this
     /// before suspending so an older response cannot erase a purchase grant or
     /// a newer server reconciliation that completed while it was in flight.
@@ -253,7 +217,6 @@ internal actor FeatureService: FeatureServiceProtocol {
     private let dateProvider: DateProviderProtocol
     private let realTimeCacheTTL: TimeInterval
     private let featureInfo: FeatureInfo
-    private let localPurchaseAccessStore: LocalPurchaseAccessStoreProtocol?
 
     // MARK: - Init
 
@@ -263,8 +226,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         profile: ProfileServiceProtocol,
         dateProvider: DateProviderProtocol,
         featureInfo: FeatureInfo,
-        cacheTTL: TimeInterval,
-        localPurchaseAccessStore: LocalPurchaseAccessStoreProtocol? = nil
+        cacheTTL: TimeInterval
     ) {
         self.api = api
         self.identityService = identity
@@ -272,7 +234,6 @@ internal actor FeatureService: FeatureServiceProtocol {
         self.dateProvider = dateProvider
         self.featureInfo = featureInfo
         self.realTimeCacheTTL = cacheTTL
-        self.localPurchaseAccessStore = localPurchaseAccessStore
         self.cacheDistinctId = identity.getDistinctId()
     }
 
@@ -290,14 +251,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) async -> FeatureAccess? {
         await synchronizeCustomerScopeIfNeeded()
-        hydrateDurableRevocationsIfNeeded()
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
-        if let revoked = revokedPurchaseCache[cacheKey] {
-            return revoked.access(requiredBalance: requiredBalance)
-        }
-        if let local = localPurchaseCache[cacheKey] {
-            return local.access(requiredBalance: requiredBalance)
-        }
         if let cached = realTimeCache[cacheKey] {
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
             if age < realTimeCacheTTL {
@@ -345,12 +299,6 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) -> FeatureAccess? {
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
-        if let revoked = revokedPurchaseCache[cacheKey] {
-            return revoked.access(requiredBalance: requiredBalance)
-        }
-        if let local = localPurchaseCache[cacheKey] {
-            return local.access(requiredBalance: requiredBalance)
-        }
         if let cached = realTimeCache[cacheKey],
            dateProvider.timeIntervalSince(cached.cachedAt) < realTimeCacheTTL {
             return cached.override.access(requiredBalance: requiredBalance)
@@ -367,9 +315,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) -> FeatureAccess? {
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
-        guard revokedPurchaseCache[cacheKey] == nil,
-              localPurchaseCache[cacheKey] == nil,
-              let cached = realTimeCache[cacheKey],
+        guard let cached = realTimeCache[cacheKey],
               dateProvider.timeIntervalSince(cached.cachedAt) < realTimeCacheTTL,
               cached.override.isExactOpaqueSnapshot(
                   requiredBalance: requiredBalance
@@ -382,7 +328,6 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// Get all cached features from profile
     func getAllCached() async -> [String: FeatureAccess] {
         await synchronizeCustomerScopeIfNeeded()
-        hydrateDurableRevocationsIfNeeded()
         let distinctId = identityService.getDistinctId()
         var result: [String: FeatureAccess] = [:]
         if let profile = await profileService.getCachedProfile(distinctId: distinctId),
@@ -398,17 +343,6 @@ internal actor FeatureService: FeatureServiceProtocol {
             let age = now.timeIntervalSince(cached.cachedAt)
             guard age < realTimeCacheTTL else { continue }
             result[cacheKey.featureId] = cached.override.publishedAccess()
-        }
-        // A verified purchase is newer than any pre-paywall profile or
-        // real-time denial. A later server response explicitly reconciles and
-        // removes this projection before writing its own value.
-        for (cacheKey, local) in localPurchaseCache {
-            guard cacheKey.entityId == nil else { continue }
-            result[cacheKey.featureId] = local.access(requiredBalance: nil)
-        }
-        for (cacheKey, revoked) in revokedPurchaseCache {
-            guard cacheKey.entityId == nil else { continue }
-            result[cacheKey.featureId] = revoked.access(requiredBalance: nil)
         }
         return result
     }
@@ -441,7 +375,6 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) async throws -> (result: FeatureCheckResult, requestRevision: UInt64) {
         await synchronizeCustomerScopeIfNeeded()
-        hydrateDurableRevocationsIfNeeded()
         let customerId = identityService.getDistinctId()
         let requestGeneration = stateGeneration
         featureMutationRevisions[featureId, default: 0] &+= 1
@@ -491,21 +424,6 @@ internal actor FeatureService: FeatureServiceProtocol {
                 )
             }
         )
-        let allowedFeatureIds = Set(featureOverrides.compactMap { featureId, value in
-            value.publishedAccess().allowed ? featureId : nil
-        })
-        reconcileLocalPurchase(featureIds: affectedFeatureIds)
-        if !allowedFeatureIds.isEmpty {
-            guard retireDurableRevocations(
-                featureIds: allowedFeatureIds,
-                distinctId: customerId
-            ) else {
-                throw CancellationError()
-            }
-            revokedPurchaseCache = revokedPurchaseCache.filter {
-                !allowedFeatureIds.contains($0.key.featureId)
-            }
-        }
         let cachedAt = dateProvider.now()
         for affectedFeatureId in affectedFeatureIds {
             guard let featureOverride = featureOverrides[affectedFeatureId] else {
@@ -587,11 +505,13 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Clear all cached data
     func clearCache() async {
-        clearCustomerScopedState(
-            for: identityService.getDistinctId()
-        )
+        let distinctId = identityService.getDistinctId()
+        clearCustomerScopedState(for: distinctId)
         let info = featureInfo
-        await MainActor.run { info.clear() }
+        await MainActor.run {
+            info.setProjectionDistinctId(distinctId)
+            info.clear()
+        }
         LogInfo("Feature cache cleared")
     }
 
@@ -654,27 +574,11 @@ internal actor FeatureService: FeatureServiceProtocol {
         // Update FeatureInfo for SwiftUI reactivity
         var accessMap: [String: FeatureAccess] = [:]
         let cachedAt = dateProvider.now()
-        let allowedFeatureIds = Set(
-            features.filter(\.allowed).map(\.id)
-        )
-        let retiredAllowedRevocations = retireDurableRevocations(
-            featureIds: allowedFeatureIds,
-            distinctId: distinctId
-        )
         for purchaseFeature in features {
-            guard !purchaseFeature.allowed || retiredAllowedRevocations else {
-                continue
-            }
             featureMutationRevisions[purchaseFeature.id, default: 0] &+= 1
             let access = purchaseFeature.toFeatureAccess
             accessMap[purchaseFeature.id] = access
             let cacheKey = makeCacheKey(featureId: purchaseFeature.id, entityId: nil)
-            reconcileLocalPurchase(featureIds: [purchaseFeature.id])
-            if purchaseFeature.allowed {
-                revokedPurchaseCache = revokedPurchaseCache.filter {
-                    $0.key.featureId != purchaseFeature.id
-                }
-            }
             realTimeCache[cacheKey] = (override: CachedFeatureOverride(purchase: purchaseFeature), cachedAt: cachedAt)
             committedCacheRevisions[cacheKey] = featureMutationRevisions[purchaseFeature.id]
         }
@@ -715,19 +619,6 @@ internal actor FeatureService: FeatureServiceProtocol {
                 )
             }
         )
-        let allowedFeatureIds = Set(featureOverrides.compactMap { featureId, value in
-            value.publishedAccess().allowed ? featureId : nil
-        })
-        reconcileLocalPurchase(featureIds: affectedFeatureIds)
-        if !allowedFeatureIds.isEmpty {
-            guard retireDurableRevocations(
-                featureIds: allowedFeatureIds,
-                distinctId: distinctId
-            ) else { return }
-            revokedPurchaseCache = revokedPurchaseCache.filter {
-                !allowedFeatureIds.contains($0.key.featureId)
-            }
-        }
         let cachedAt = dateProvider.now()
         for featureId in affectedFeatureIds {
             guard let featureOverride = featureOverrides[featureId] else {
@@ -746,106 +637,6 @@ internal actor FeatureService: FeatureServiceProtocol {
         }
     }
 
-    func applyLocalPurchase(
-        grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String
-    ) async {
-        await synchronizeCustomerScopeIfNeeded()
-        guard !grants.isEmpty else { return }
-        guard !localPurchaseTransactions.contains(transactionId) else { return }
-        localPurchaseTransactions.insert(transactionId)
-
-        var accessMap: [String: FeatureAccess] = [:]
-        for grant in grants {
-            let (key, override) = purchaseOverride(for: grant)
-            let featureId = key.featureId
-            featureMutationRevisions[featureId, default: 0] &+= 1
-            realTimeCache = realTimeCache.filter { $0.key.featureId != featureId }
-            revokedPurchaseCache.removeValue(forKey: key)
-            accessMap[featureId] = override.access(requiredBalance: nil)
-            localPurchaseCache[key] = override
-            localPurchaseOverrides[transactionId, default: [:]][key] = override
-            committedCacheRevisions[key] = featureMutationRevisions[featureId]
-        }
-        guard !accessMap.isEmpty else { return }
-        let updates = accessMap
-        let info = featureInfo
-        await MainActor.run { info.update(updates) }
-    }
-
-    func removeLocalPurchase(
-        transactionId: String,
-        grants: [StoreProduct.LocalEntitlementGrant] = []
-    ) async {
-        await synchronizeCustomerScopeIfNeeded()
-        localPurchaseTransactions.remove(transactionId)
-        let removedOverrides = localPurchaseOverrides.removeValue(
-            forKey: transactionId
-        ) ?? [:]
-        var affectedOverrides = removedOverrides
-        for grant in grants {
-            let (key, override) = purchaseOverride(for: grant)
-            affectedOverrides[key] = override
-        }
-        guard !affectedOverrides.isEmpty else { return }
-
-        // Older in-process projections may also exist in the short-lived
-        // real-time cache. A server response reconciles the local transaction
-        // before writing its own entry, so a still-owned key is safe to clear
-        // as part of revocation.
-        for key in affectedOverrides.keys {
-            featureMutationRevisions[key.featureId, default: 0] &+= 1
-            realTimeCache.removeValue(forKey: key)
-        }
-
-        localPurchaseCache.removeAll()
-        for overrides in localPurchaseOverrides.values {
-            for (key, override) in overrides {
-                localPurchaseCache[key] = override
-            }
-        }
-        for (key, removed) in affectedOverrides where localPurchaseCache[key] == nil {
-            revokedPurchaseCache[key] = CachedFeatureOverride(
-                type: removed.type,
-                unlimited: false,
-                balance: removed.type == .boolean ? nil : 0,
-                allowed: false
-            )
-            committedCacheRevisions[key] = featureMutationRevisions[key.featureId]
-        }
-
-        let allFeatures = await getAllCached()
-        let info = featureInfo
-        await MainActor.run { info.update(allFeatures) }
-    }
-
-    private func purchaseOverride(
-        for grant: StoreProduct.LocalEntitlementGrant
-    ) -> (FeatureCacheKey, CachedFeatureOverride) {
-        let featureId = grant.featureExternalId ?? grant.featureId
-        let allowanceType = grant.allowanceType?.lowercased()
-        let unlimited = allowanceType == "unlimited"
-        // Boolean entitlements are represented by a null allowance type in
-        // signed Product mappings. Both forms mean simple local access.
-        let isBoolean = allowanceType == nil || allowanceType == "boolean"
-        let featureType: FeatureType = allowanceType == "credits"
-            || allowanceType == "credit_system"
-            ? .creditSystem
-            : (isBoolean ? .boolean : .metered)
-        let balance: Double? = isBoolean || unlimited
-            ? nil
-            : (grant.allowance ?? 0)
-        return (
-            makeCacheKey(featureId: featureId, entityId: nil),
-            CachedFeatureOverride(
-                type: featureType,
-                unlimited: unlimited,
-                balance: balance,
-                allowed: isBoolean || unlimited || (balance ?? 0) > 0
-            )
-        )
-    }
-
     /// Fail closed as soon as the synchronous identity store changes, rather
     /// than waiting for the serialized profile/segment/Journey transition to
     /// reach FeatureService. This makes an immediate cache-first read for the
@@ -855,107 +646,18 @@ internal actor FeatureService: FeatureServiceProtocol {
         guard cacheDistinctId != distinctId else { return }
         clearCustomerScopedState(for: distinctId)
         let info = featureInfo
-        await MainActor.run { info.clear() }
+        await MainActor.run {
+            info.setProjectionDistinctId(distinctId)
+            info.clear()
+        }
     }
 
     private func clearCustomerScopedState(for distinctId: String) {
         stateGeneration &+= 1
         realTimeCache.removeAll()
-        localPurchaseCache.removeAll()
-        revokedPurchaseCache.removeAll()
-        localPurchaseTransactions.removeAll()
-        localPurchaseOverrides.removeAll()
-        durableAccessHydratedDistinctId = nil
         featureMutationRevisions.removeAll()
         committedCacheRevisions.removeAll()
         cacheDistinctId = distinctId
     }
 
-    private func hydrateDurableRevocationsIfNeeded() {
-        guard let localPurchaseAccessStore else { return }
-        let distinctId = identityService.getDistinctId()
-        guard durableAccessHydratedDistinctId != distinctId else { return }
-
-        let storedAccesses: [String: StoredLocalPurchaseAccess]
-        switch localPurchaseAccessStore.load() {
-        case .absent:
-            // No file is legitimate emptiness for a customer who never
-            // purchased; cache the hydration so feature reads stay reads.
-            durableAccessHydratedDistinctId = distinctId
-            return
-        case .unreadable:
-            // Leave hydration unset so a later call can retry once the file
-            // becomes readable; never treat unreadable as empty (A12).
-            return
-        case .value(let value):
-            storedAccesses = value
-        }
-        let accesses = storedAccesses.values.filter {
-            $0.distinctId == distinctId
-        }
-        let activeFeatureIds = Set(
-            accesses
-                .filter { $0.state == .active }
-                .flatMap(\.grants)
-                .map { $0.featureExternalId ?? $0.featureId }
-        )
-        for access in accesses where access.state == .revoked {
-            for storedGrant in access.grants {
-                let featureId = storedGrant.featureExternalId
-                    ?? storedGrant.featureId
-                guard !activeFeatureIds.contains(featureId) else { continue }
-                let grant = StoreProduct.LocalEntitlementGrant(
-                    featureId: storedGrant.featureId,
-                    featureExternalId: storedGrant.featureExternalId,
-                    allowanceType: storedGrant.allowanceType,
-                    allowance: storedGrant.allowance
-                )
-                let (key, removed) = purchaseOverride(for: grant)
-                revokedPurchaseCache[key] = CachedFeatureOverride(
-                    type: removed.type,
-                    unlimited: false,
-                    balance: removed.type == .boolean ? nil : 0,
-                    allowed: false
-                )
-            }
-        }
-        durableAccessHydratedDistinctId = distinctId
-    }
-
-    private func retireDurableRevocations(
-        featureIds: Set<String>,
-        distinctId: String
-    ) -> Bool {
-        guard !featureIds.isEmpty, let localPurchaseAccessStore else {
-            return true
-        }
-        return localPurchaseAccessStore.removeRevokedGrants(
-            distinctId: distinctId,
-            featureIds: featureIds
-        )
-    }
-
-    /// Remove only optimistic purchase projections covered by a newer server
-    /// response. Server/profile caches remain authoritative and are not
-    /// deleted when an older local purchase is revoked or reconciled.
-    private func reconcileLocalPurchase(featureIds: Set<String>) {
-        guard !featureIds.isEmpty else { return }
-        for transactionId in Array(localPurchaseOverrides.keys) {
-            guard let overrides = localPurchaseOverrides[transactionId] else { continue }
-            let remaining = overrides.filter {
-                !featureIds.contains($0.key.featureId)
-            }
-            if remaining.isEmpty {
-                localPurchaseOverrides.removeValue(forKey: transactionId)
-                localPurchaseTransactions.remove(transactionId)
-            } else {
-                localPurchaseOverrides[transactionId] = remaining
-            }
-        }
-        localPurchaseCache = localPurchaseOverrides.values.reduce(into: [:]) { result, overrides in
-            for (key, override) in overrides {
-                result[key] = override
-            }
-        }
-    }
 }

@@ -364,7 +364,6 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                     productId: context.storeProductId,
                     distinctId: distinctId,
                     recordedAt: mocks.dateProvider.now(),
-                    localEntitlementGrants: [],
                     isRevoked: false,
                     commercialContext: context
                 )
@@ -382,7 +381,6 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                     eventSink: eventSink,
                     transactionServiceProvider: { serviceBox.get() },
                     evidenceStore: evidenceStore,
-                    localAccessStore: InMemoryLocalPurchaseAccessStore(),
                     purchaseStorageScope: scope,
                     dateProvider: mocks.dateProvider,
                     activeStoreOriginalTransactionIDs: { [] }

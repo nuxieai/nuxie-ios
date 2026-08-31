@@ -8,12 +8,15 @@ import Foundation
 /// (identify/reset scenarios), so every access is lock-guarded.
 public final class MockIdentityService: IdentityServiceProtocol, @unchecked Sendable {
     private let lock = NSLock()
+    private let identityPublicationLock = NSRecursiveLock()
     private let distinctIdReadSuspended = DispatchSemaphore(value: 0)
     private let distinctIdReadResume = DispatchSemaphore(value: 0)
     private var _distinctId = "test-user"
     private var _anonymousId = "test-anonymous-id"
     private var _userProperties: [String: Any] = [:]
     private var _isUserIdentified = true
+    private var _identityFenceGeneration: UInt64 = 0
+    private var _distinctIdAfterNextFencedWork: String?
     private var _shouldSuspendNextDistinctIdRead = false
     private var _distinctIdReadsBeforeSuspendingAfterSnapshot: Int?
 
@@ -70,6 +73,7 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
                 if lock.try() {
                     _distinctId = distinctId
                     _isUserIdentified = true
+                    _identityFenceGeneration &+= 1
                     lock.unlock()
                     distinctIdReadResume.signal()
                     continuation.resume(returning: true)
@@ -80,6 +84,7 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
                 lock.withLock {
                     _distinctId = distinctId
                     _isUserIdentified = true
+                    _identityFenceGeneration &+= 1
                 }
                 continuation.resume(returning: false)
             }
@@ -99,20 +104,83 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
     }
 
     public func setDistinctId(_ distinctId: String) {
-        lock.withLock {
-            _distinctId = distinctId
-            _isUserIdentified = true
+        identityPublicationLock.withLock {
+            lock.withLock {
+                if !_isUserIdentified || _distinctId != distinctId {
+                    _identityFenceGeneration &+= 1
+                }
+                _distinctId = distinctId
+                _isUserIdentified = true
+            }
         }
     }
 
     public func reset(keepAnonymousId: Bool) {
-        lock.withLock {
-            if !keepAnonymousId {
-                _anonymousId = UUID.v7().uuidString
+        identityPublicationLock.withLock {
+            lock.withLock {
+                let previousDistinctId = _distinctId
+                let wasIdentified = _isUserIdentified
+                if !keepAnonymousId {
+                    _anonymousId = UUID.v7().uuidString
+                }
+                _distinctId = _anonymousId
+                _userProperties.removeAll()
+                _isUserIdentified = false
+                if wasIdentified || _distinctId != previousDistinctId {
+                    _identityFenceGeneration &+= 1
+                }
             }
-            _distinctId = _anonymousId
-            _userProperties.removeAll()
-            _isUserIdentified = false
+        }
+    }
+
+    @MainActor
+    public func mutateIdentity(
+        _ mutation: IdentityMutation,
+        publishing publication: (IdentityTransition) -> Void
+    ) -> IdentityTransition? {
+        identityPublicationLock.withLock {
+            let captured = lock.withLock {
+                let previous = identitySnapshotLocked()
+                switch mutation {
+                case .identify(let distinctId):
+                    if !_isUserIdentified || _distinctId != distinctId {
+                        _identityFenceGeneration &+= 1
+                    }
+                    _distinctId = distinctId
+                    _isUserIdentified = true
+                case .reset(let keepAnonymousId):
+                    let previousDistinctId = _distinctId
+                    let wasIdentified = _isUserIdentified
+                    if !keepAnonymousId {
+                        _anonymousId = UUID.v7().uuidString
+                    }
+                    _distinctId = _anonymousId
+                    _userProperties.removeAll()
+                    _isUserIdentified = false
+                    if wasIdentified || _distinctId != previousDistinctId {
+                        _identityFenceGeneration &+= 1
+                    }
+                }
+                let transition = IdentityTransition(
+                    previous: previous,
+                    current: identitySnapshotLocked()
+                )
+                return (
+                    transition,
+                    IdentityFenceToken(
+                        distinctId: transition.current.distinctId,
+                        generation: _identityFenceGeneration
+                    )
+                )
+            }
+
+            publication(captured.0)
+
+            let isStillCurrent = lock.withLock {
+                _distinctId == captured.1.distinctId
+                    && _identityFenceGeneration == captured.1.generation
+            }
+            return isStillCurrent ? captured.0 : nil
         }
     }
 
@@ -170,6 +238,54 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
         }
     }
 
+    public func performWithCurrentIdentityFence<T>(
+        _ expectedDistinctId: String,
+        _ work: (IdentitySnapshot) throws -> T
+    ) rethrows -> IdentityFenced<T>? {
+        let captured = lock.withLock { () -> (IdentitySnapshot, IdentityFenceToken)? in
+            guard _distinctId == expectedDistinctId else { return nil }
+            let generation = _identityFenceGeneration
+            return (
+                identitySnapshotLocked(),
+                IdentityFenceToken(
+                    distinctId: expectedDistinctId,
+                    generation: generation
+                )
+            )
+        }
+        guard let captured else { return nil }
+        let value = try work(captured.0)
+        lock.withLock {
+            if let nextDistinctId = _distinctIdAfterNextFencedWork {
+                _distinctIdAfterNextFencedWork = nil
+                _distinctId = nextDistinctId
+                _isUserIdentified = true
+                _identityFenceGeneration &+= 1
+            }
+        }
+        return IdentityFenced(value: value, token: captured.1)
+    }
+
+    @MainActor
+    @discardableResult
+    public func publishIfCurrentIdentityFenceToken(
+        _ token: IdentityFenceToken,
+        _ publication: () -> Void
+    ) -> Bool {
+        identityPublicationLock.withLock {
+            let isCurrent = lock.withLock {
+                _distinctId == token.distinctId
+                    && _identityFenceGeneration == token.generation
+            }
+            guard isCurrent else { return false }
+            publication()
+            return lock.withLock {
+                _distinctId == token.distinctId
+                    && _identityFenceGeneration == token.generation
+            }
+        }
+    }
+
     public func setOnceUserProperties(_ properties: [String: Any]) {
         lock.withLock {
             for (key, value) in properties {
@@ -195,16 +311,43 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
     }
 
     public func setIsIdentified(_ identified: Bool) {
-        lock.withLock { _isUserIdentified = identified }
+        identityPublicationLock.withLock {
+            lock.withLock {
+                if _isUserIdentified != identified {
+                    _identityFenceGeneration &+= 1
+                }
+                _isUserIdentified = identified
+            }
+        }
+    }
+
+    private func identitySnapshotLocked() -> IdentitySnapshot {
+        IdentitySnapshot(
+            distinctId: _distinctId,
+            userId: _isUserIdentified ? _distinctId : nil,
+            anonymousId: _anonymousId,
+            isIdentified: _isUserIdentified
+        )
     }
 
     public func setAnonymousId(_ id: String) {
-        lock.withLock {
-            _anonymousId = id
-            // If user is not identified, update distinctId to match anonymous ID
-            if !_isUserIdentified {
-                _distinctId = id
+        identityPublicationLock.withLock {
+            lock.withLock {
+                _anonymousId = id
+                // If user is not identified, update distinctId to match anonymous ID
+                if !_isUserIdentified {
+                    if _distinctId != id {
+                        _identityFenceGeneration &+= 1
+                    }
+                    _distinctId = id
+                }
             }
+        }
+    }
+
+    func changeDistinctIdAfterNextFencedWork(to distinctId: String) {
+        lock.withLock {
+            _distinctIdAfterNextFencedWork = distinctId
         }
     }
 }

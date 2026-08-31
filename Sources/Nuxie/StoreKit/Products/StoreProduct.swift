@@ -53,7 +53,7 @@ public struct SubscriptionPeriod: Equatable, Sendable {
 /// The same value renders the paywall and is retained for checkout. The native
 /// StoreKit product is intentionally excluded from serialization.
 public struct StoreProduct: Equatable, Codable, Sendable {
-    /// The signed release mapping used for immediate local access after a
+    /// The signed release mapping used for optimistic projection after a
     /// verified purchase. This is internal because the server remains the
     /// authority for durable balances.
     struct LocalEntitlementGrant: Equatable, Sendable {

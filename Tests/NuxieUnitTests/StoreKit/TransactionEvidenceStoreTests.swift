@@ -64,6 +64,28 @@ private final class RevokedPurchaseSyncAPI: PurchaseSynchronizing, @unchecked Se
     }
 }
 
+private actor OptimisticProjectionRecorder {
+    private var snapshots: [[OptimisticPurchaseEvidence]?] = []
+
+    func record(_ evidence: [OptimisticPurchaseEvidence]?) {
+        snapshots.append(evidence)
+    }
+
+    func latest() -> [OptimisticPurchaseEvidence]? {
+        snapshots.last ?? nil
+    }
+}
+
+private actor ActiveAuthoritySwitch {
+    private var value: ActiveProductEvidenceAuthorityResolution = .readyNoMatch
+
+    func set(_ value: ActiveProductEvidenceAuthorityResolution) {
+        self.value = value
+    }
+
+    func get() -> ActiveProductEvidenceAuthorityResolution { value }
+}
+
 final class TransactionEvidenceStoreTests: QuickSpec {
     override class func spec() {
         describe("TransactionEvidenceStore") {
@@ -80,14 +102,6 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                     distinctId: "customer-1",
                     recordedAt: Date(timeIntervalSince1970: 10),
                     productFeatureIds: ["feature-1", "feature"],
-                    localEntitlementGrants: [
-                        StoredLocalEntitlementGrant(
-                            featureId: "feature-1",
-                            featureExternalId: "feature",
-                            allowanceType: "boolean",
-                            allowance: nil
-                        ),
-                    ],
                     isRevoked: false
                 )
 
@@ -97,37 +111,309 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                 expect(store.load().valueTreatingAbsentAsEmpty([:])!).to(beEmpty())
             }
 
-            it("round trips local access independently from receipt evidence") {
+            it("re-derives optimistic access after relaunch without persisting allowances") {
                 let root = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("access-\(UUID().uuidString)")
+                    .appendingPathComponent("evidence-relaunch-\(UUID().uuidString)")
                 defer { try? FileManager.default.removeItem(at: root) }
-                let store = LocalPurchaseAccessStore(customStoragePath: root)
-                let access = StoredLocalPurchaseAccess(
-                    transactionId: "transaction-1",
-                    originalTransactionId: "original-1",
-                    productId: "store-product-1",
+                let evidence = StoredTransactionEvidence(
+                    transactionJws: "signed-jws",
+                    transactionId: "transaction-relaunch",
+                    originalTransactionId: "original-relaunch",
+                    productId: "product-relaunch",
                     distinctId: "customer-1",
-                    grants: [
-                        StoredLocalEntitlementGrant(
-                            featureId: "feature-1",
-                            featureExternalId: "feature",
-                            allowanceType: "boolean",
-                            allowance: nil
+                    recordedAt: Date(timeIntervalSince1970: 10),
+                    isRevoked: false
+                )
+                TransactionEvidenceStore(customStoragePath: root).save([
+                    evidence.transactionId: evidence,
+                ])
+
+                let relaunchedEvidence = TransactionEvidenceStore(customStoragePath: root)
+                    .load()
+                    .valueTreatingAbsentAsEmpty([:])!
+                    .values
+                    .map {
+                        OptimisticPurchaseEvidence(
+                            transactionId: $0.transactionId,
+                            distinctId: $0.distinctId,
+                            backendSynced: $0.backendSyncedAt != nil,
+                            revoked: $0.isRevoked
                         )
+                    }
+                let projection = OptimisticEntitlementProjection.derive(
+                    evidence: relaunchedEvidence,
+                    descriptorAllowances: [
+                        evidence.transactionId: [OptimisticEntitlementAllowance(
+                            featureId: "premium",
+                            kind: .boolean,
+                            unlimited: false,
+                            allowance: nil
+                        )],
                     ],
-                    state: .active
+                    distinctId: "customer-1"
                 )
 
-                expect(store.save([access.transactionId: access])).to(beTrue())
-                expect(store.load().valueTreatingAbsentAsEmpty([:])![access.transactionId]) == access
-                expect(store.save([:])).to(beTrue())
-                expect(store.load().valueTreatingAbsentAsEmpty([:])!).to(beEmpty())
+                expect(projection?["premium"]?.kind) == .boolean
             }
+
         }
     }
 }
 
 final class TransactionObserverEvidenceRaceTests: XCTestCase {
+    func testExternalDelegatePurchaseDoesNotCreateOverlayThroughProjectionRefresh() async throws {
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("external-customer")
+        let projectionEpoch = UUID()
+        let featureInfo = await MainActor.run {
+            let info = FeatureInfo()
+            info.beginOptimisticProjectionPublication(
+                epoch: projectionEpoch,
+                distinctId: "external-customer"
+            )
+            info.admitProfileSnapshot([
+                "premium": FeatureAccess(
+                    allowed: false,
+                    unlimited: false,
+                    balance: nil,
+                    type: .boolean
+                ),
+            ], admittedAt: Date())
+            return info
+        }
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: identity,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: featureInfo,
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
+        )
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let eventSink = TransactionEvidenceEventSink()
+        let delegate = MockPurchaseDelegate()
+        delegate.simulatedDelay = 0
+        delegate.purchaseResult = .purchased
+        let configuration = NuxieConfiguration(apiKey: "external-projection")
+        configuration.purchaseDelegate = delegate
+        let settings = NuxieRuntimeSettings(configuration: configuration)
+        let observer = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: features,
+            identity: identity,
+            settings: settings,
+            eventSink: eventSink,
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: evidenceStore,
+            descriptorAllowanceProvider: { _ in
+                [OptimisticEntitlementAllowance(
+                    featureId: "premium",
+                    kind: .boolean,
+                    unlimited: false,
+                    allowance: nil
+                )]
+            },
+            projectionPublisher: { evidence, allowances, distinctId, generation in
+                await MainActor.run {
+                    featureInfo.replaceOptimisticProjection(
+                        evidence: evidence,
+                        descriptorAllowances: allowances,
+                        distinctId: distinctId,
+                        publicationEpoch: projectionEpoch,
+                        publicationGeneration: generation
+                    )
+                }
+            },
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+        let service = TransactionService(
+            productService: mocks.productService,
+            transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: mocks.dateProvider,
+            settings: settings,
+            eventSink: eventSink,
+            identityService: identity,
+            featureService: features
+        )
+        var product = Self.projectionProduct(
+            productId: "external-product",
+            storeProductId: "external-store-product"
+        )
+        product.providerFeatureAccess = "revenuecat"
+
+        _ = try await service.purchase(product)
+        await observer.retryStoredEvidence()
+
+        let visible = await MainActor.run {
+            (featureInfo.feature("premium"), featureInfo.state)
+        }
+        XCTAssertEqual(delegate.purchaseCallCount, 1)
+        XCTAssertEqual(visible.0?.allowed, false)
+        XCTAssertEqual(visible.1, .ready)
+        XCTAssertTrue(
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty,
+            "an external delegate outcome must not manufacture StoreKit evidence"
+        )
+    }
+
+    func testFreshObserverRelaunchRederivesOverlayFromEvidenceAndCachedDescriptor() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("observer-projection-relaunch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("relaunch-customer")
+        let product = Self.projectionProduct(
+            productId: "relaunch-product",
+            storeProductId: "relaunch-store-product"
+        )
+        let descriptorSHA256 = try XCTUnwrap(
+            product.purchaseContext?.release.descriptorSHA256
+        )
+        let descriptorProductId = product.productId
+        let cachedDescriptorProvider: @Sendable (StoredTransactionEvidence) async ->
+            [OptimisticEntitlementAllowance]? = { stored in
+                guard stored.commercialContext?.release.descriptorSHA256
+                    == descriptorSHA256,
+                      stored.commercialContext?.productId == descriptorProductId else {
+                    return nil
+                }
+                return [OptimisticEntitlementAllowance(
+                    featureId: "premium",
+                    kind: .boolean,
+                    unlimited: false,
+                    allowance: nil
+                )]
+            }
+
+        let firstEpoch = UUID()
+        let firstInfo = await MainActor.run {
+            Self.projectionFeatureInfo(
+                epoch: firstEpoch,
+                distinctId: "relaunch-customer"
+            )
+        }
+        let firstFeatures = FeatureService(
+            api: mocks.nuxieApi,
+            identity: identity,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: firstInfo,
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
+        )
+        let firstObserver = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: firstFeatures,
+            identity: identity,
+            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(
+                apiKey: "projection-relaunch"
+            )),
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: TransactionEvidenceStore(customStoragePath: root),
+            descriptorAllowanceProvider: cachedDescriptorProvider,
+            projectionPublisher: { evidence, allowances, distinctId, generation in
+                await MainActor.run {
+                    firstInfo.replaceOptimisticProjection(
+                        evidence: evidence,
+                        descriptorAllowances: allowances,
+                        distinctId: distinctId,
+                        publicationEpoch: firstEpoch,
+                        publicationGeneration: generation
+                    )
+                }
+            },
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+        let recorded = await firstObserver.recordVerifiedPurchase(
+            evidence: StoreTransactionEvidence(
+                transactionJws: "relaunch-jws",
+                transactionId: "relaunch-transaction",
+                originalTransactionId: "relaunch-original",
+                productId: product.storeProductId,
+                finish: {}
+            ),
+            product: product,
+            distinctId: "relaunch-customer",
+            finishRequired: true
+        )
+        XCTAssertTrue(recorded)
+        let beforeRelaunch = await MainActor.run {
+            (firstInfo.feature("premium"), firstInfo.state)
+        }
+
+        let relaunchedEpoch = UUID()
+        let relaunchedInfo = await MainActor.run {
+            Self.projectionFeatureInfo(
+                epoch: relaunchedEpoch,
+                distinctId: "relaunch-customer"
+            )
+        }
+        let relaunchedFeatures = FeatureService(
+            api: mocks.nuxieApi,
+            identity: identity,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: relaunchedInfo,
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
+        )
+        let relaunchedSettings = NuxieRuntimeSettings(
+            configuration: NuxieConfiguration(apiKey: "projection-relaunch")
+        )
+        let relaunchedEventSink = TransactionEvidenceEventSink()
+        let relaunchedTransactionService = TransactionService(
+            productService: mocks.productService,
+            transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: mocks.dateProvider,
+            settings: relaunchedSettings,
+            eventSink: relaunchedEventSink,
+            identityService: identity,
+            featureService: relaunchedFeatures
+        )
+        let relaunchedObserver = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: relaunchedFeatures,
+            identity: identity,
+            settings: relaunchedSettings,
+            eventSink: relaunchedEventSink,
+            transactionServiceProvider: { relaunchedTransactionService },
+            evidenceStore: TransactionEvidenceStore(customStoragePath: root),
+            descriptorAllowanceProvider: cachedDescriptorProvider,
+            projectionPublisher: { evidence, allowances, distinctId, generation in
+                await MainActor.run {
+                    relaunchedInfo.replaceOptimisticProjection(
+                        evidence: evidence,
+                        descriptorAllowances: allowances,
+                        distinctId: distinctId,
+                        publicationEpoch: relaunchedEpoch,
+                        publicationGeneration: generation
+                    )
+                }
+            },
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+
+        await relaunchedObserver.retryStoredEvidence()
+
+        let afterRelaunch = await MainActor.run {
+            (relaunchedInfo.feature("premium"), relaunchedInfo.state)
+        }
+        XCTAssertEqual(beforeRelaunch.0?.allowed, true)
+        XCTAssertEqual(beforeRelaunch.0?.type, .boolean)
+        XCTAssertEqual(beforeRelaunch.1, .reconciling)
+        XCTAssertEqual(afterRelaunch.0?.allowed, beforeRelaunch.0?.allowed)
+        XCTAssertEqual(afterRelaunch.0?.unlimited, beforeRelaunch.0?.unlimited)
+        XCTAssertEqual(afterRelaunch.0?.balance, beforeRelaunch.0?.balance)
+        XCTAssertEqual(afterRelaunch.0?.type, beforeRelaunch.0?.type)
+        XCTAssertEqual(afterRelaunch.1, beforeRelaunch.1)
+    }
+
     func testRejectsEvidenceForAnotherStoreProduct() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("customer-1")
@@ -135,7 +421,6 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             configuration: NuxieConfiguration(apiKey: "isolated")
         )
         let evidenceStore = InMemoryTransactionEvidenceStore()
-        let accessStore = InMemoryLocalPurchaseAccessStore()
         let features = FeatureService(
             api: mocks.nuxieApi,
             identity: mocks.identityService,
@@ -151,8 +436,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             settings: settings,
             eventSink: TransactionEvidenceEventSink(),
             transactionServiceProvider: { fatalError("unused in this test") },
-            evidenceStore: evidenceStore,
-            localAccessStore: accessStore
+            evidenceStore: evidenceStore
         )
         let product = StoreProduct(
             productId: "catalog-product",
@@ -179,17 +463,15 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
 
         XCTAssertFalse(recorded)
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-        XCTAssertTrue(accessStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
-    func testLocalAccessSurvivesEvidenceRetirementAndRelaunch() async {
+    func testVerifiedEvidenceProjectsImmediatelyAndRevocationRemovesIt() async {
         let mocks = MockFactory.shared
-        mocks.identityService.setDistinctId("customer-1")
-        let configuration = NuxieConfiguration(apiKey: "isolated")
-        let settings = NuxieRuntimeSettings(configuration: configuration)
-        let evidenceStore = InMemoryTransactionEvidenceStore()
-        let accessStore = InMemoryLocalPurchaseAccessStore()
-        let firstFeatures = FeatureService(
+        mocks.identityService.setDistinctId("test-user")
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(
+            apiKey: "isolated"
+        ))
+        let features = FeatureService(
             api: mocks.nuxieApi,
             identity: mocks.identityService,
             profile: mocks.profileService,
@@ -197,230 +479,97 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             featureInfo: FeatureInfo(),
             cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
-        var product = StoreProduct(
-            productId: "catalog-product",
-            storeProductId: "store-product",
-            placementId: "placement",
-            name: "Product",
-            price: "$1.00",
-            period: nil
-        )
-        product.localEntitlementGrants = [
-            StoreProduct.LocalEntitlementGrant(
-                featureId: "premium-export",
-                featureExternalId: nil,
-                allowanceType: "boolean",
-                allowance: nil
-            )
-        ]
-        let evidence = StoreTransactionEvidence(
-            transactionJws: "signed-jws",
-            transactionId: "transaction-durable-access",
-            originalTransactionId: "original-durable-access",
-            productId: product.storeProductId,
-            finish: {}
-        )
-        let firstObserver = TransactionObserver(
-            api: SuccessfulPurchaseSyncAPI(),
-            features: firstFeatures,
-            identity: mocks.identityService,
-            settings: settings,
-            eventSink: TransactionEvidenceEventSink(),
-            transactionServiceProvider: { fatalError("unused in this test") },
-            evidenceStore: evidenceStore,
-            localAccessStore: accessStore
-        )
-
-        let recorded = await firstObserver.recordVerifiedPurchase(
-            evidence: evidence,
-            product: product,
-            distinctId: "customer-1",
-            finishRequired: false
-        )
-        XCTAssertTrue(recorded)
-        let synced = await firstObserver.syncTransaction(
-            transactionJws: evidence.transactionJws,
-            transactionId: evidence.transactionId,
-            productId: evidence.productId,
-            originalTransactionId: evidence.originalTransactionId
-        )
-        XCTAssertTrue(synced)
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
-        XCTAssertNotNil(accessStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
-
-        let relaunchedFeatures = FeatureService(
-            api: mocks.nuxieApi,
-            identity: mocks.identityService,
-            profile: mocks.profileService,
+        let authority = ActiveAuthoritySwitch()
+        let pendingService = TransactionService(
+            productService: mocks.productService,
+            transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
             dateProvider: mocks.dateProvider,
-            featureInfo: FeatureInfo(),
-            cacheTTL: NuxieInternalConfiguration().featureCacheTTL,
-            localPurchaseAccessStore: accessStore
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            identityService: mocks.identityService,
+            featureService: features,
+            activeProductEvidenceAuthority: { _ in await authority.get() }
         )
-        let relaunchedObserver = TransactionObserver(
-            api: SuccessfulPurchaseSyncAPI(),
-            features: relaunchedFeatures,
+        let recorder = OptimisticProjectionRecorder()
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let observer = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: features,
             identity: mocks.identityService,
             settings: settings,
             eventSink: TransactionEvidenceEventSink(),
-            transactionServiceProvider: { fatalError("unused in this test") },
+            transactionServiceProvider: { pendingService },
             evidenceStore: evidenceStore,
-            localAccessStore: accessStore,
-            activeStoreOriginalTransactionIDs: {
-                ["original-durable-access"]
+            descriptorAllowanceProvider: { _ in
+                [OptimisticEntitlementAllowance(
+                    featureId: "premium",
+                    kind: .boolean,
+                    unlimited: false,
+                    allowance: nil
+                )]
+            },
+            projectionPublisher: { evidence, _, _, _ in
+                await recorder.record(evidence)
             }
         )
-
-        await relaunchedObserver.retryStoredEvidence()
-
-        let access = await relaunchedFeatures.getCached(
-            featureId: "premium-export",
-            entityId: nil
-        )
-        XCTAssertEqual(access?.allowed, true)
-    }
-
-    func testExpiredEvidenceCannotRecreateReconciledLocalAccess() async {
-        let mocks = MockFactory.shared
-        mocks.identityService.setDistinctId("customer-1")
-        let configuration = NuxieConfiguration(apiKey: "isolated")
-        let evidenceStore = InMemoryTransactionEvidenceStore()
-        let accessStore = InMemoryLocalPurchaseAccessStore()
-        let features = FeatureService(
-            api: mocks.nuxieApi,
-            identity: mocks.identityService,
-            profile: mocks.profileService,
-            dateProvider: mocks.dateProvider,
-            featureInfo: FeatureInfo(),
-            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
-        )
-        let grant = StoredLocalEntitlementGrant(
-            featureId: "expired-feature",
-            featureExternalId: nil,
-            allowanceType: "boolean",
-            allowance: nil
-        )
-        let evidence = StoredTransactionEvidence(
-            transactionJws: "expired-jws",
-            transactionId: "expired-transaction",
-            originalTransactionId: "expired-original",
-            productId: "expired-product",
-            distinctId: "customer-1",
-            recordedAt: Date(),
-            localEntitlementGrants: [grant],
+        let active = VerifiedStoreTransactionUpdate(
+            transactionId: "transaction-projection",
+            originalTransactionId: "original-projection",
+            productId: "product-projection",
+            appAccountToken: nil,
             isRevoked: false,
-            finishRequired: false
+            isUpgraded: false,
+            finish: {}
         )
-        XCTAssertTrue(evidenceStore.save([evidence.transactionId: evidence]))
-        XCTAssertTrue(accessStore.save([
-            evidence.transactionId: StoredLocalPurchaseAccess(
-                transactionId: evidence.transactionId,
-                originalTransactionId: evidence.originalTransactionId,
-                productId: evidence.productId,
-                distinctId: evidence.distinctId,
-                grants: [grant],
-                state: .active
-            )
-        ]))
-        let observer = TransactionObserver(
-            api: UnavailablePurchaseSyncAPI(),
-            features: features,
-            identity: mocks.identityService,
-            settings: NuxieRuntimeSettings(configuration: configuration),
-            eventSink: TransactionEvidenceEventSink(),
-            transactionServiceProvider: { fatalError("unused in this test") },
-            evidenceStore: evidenceStore,
-            localAccessStore: accessStore,
-            activeStoreOriginalTransactionIDs: { [] }
+
+        await observer.handleVerifiedTransaction(
+            active,
+            jwsRepresentation: "active-jws",
+            source: .storeUpdates
+        )
+        let activeProjection = await recorder.latest()
+        XCTAssertEqual(activeProjection?.first?.revoked, false)
+
+        await authority.set(.unavailable)
+        await observer.handleVerifiedTransaction(
+            VerifiedStoreTransactionUpdate(
+                transactionId: active.transactionId,
+                originalTransactionId: active.originalTransactionId,
+                productId: active.productId,
+                appAccountToken: nil,
+                isRevoked: true,
+                isUpgraded: false,
+                finish: {}
+            ),
+            jwsRepresentation: "revoked-jws",
+            source: .storeUpdates
+        )
+        let revokedProjection = await recorder.latest()
+        XCTAssertEqual(revokedProjection?.first?.revoked, true)
+        let retainedAfterBlockedRevocation = evidenceStore.load()
+            .valueTreatingAbsentAsEmpty([:])?[active.transactionId]
+        XCTAssertEqual(
+            retainedAfterBlockedRevocation?.isRevoked,
+            true,
+            "revocation persists before later authority checks can defer processing"
         )
 
         await observer.retryStoredEvidence()
-
+        let recomputedProjection = await recorder.latest()
         XCTAssertEqual(
-            accessStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.state,
-            .revoked
+            recomputedProjection?.first?.revoked,
+            true,
+            "later recomputation must retain verified revocation evidence"
         )
-        let access = await features.getCached(
-            featureId: grant.featureId,
-            entityId: nil
-        )
-        XCTAssertEqual(access?.allowed, false)
-
-        // A new service/observer pair represents process relaunch. The
-        // durable tombstone must still beat an older allowed profile.
-        mocks.profileService.setProfileResponse(ProfileResponse(
-            segments: [],
-            userProperties: nil,
-            experiments: nil,
-            features: [Feature(
-                id: grant.featureId,
-                type: .boolean,
-                balance: nil,
-                unlimited: true,
-                nextResetAt: nil,
-                interval: nil,
-                entities: nil
-            )]
-        ))
-        _ = try? await mocks.profileService.refetchProfile(
-            distinctId: "customer-1"
-        )
-        let relaunchedFeatures = FeatureService(
-            api: mocks.nuxieApi,
-            identity: mocks.identityService,
-            profile: mocks.profileService,
-            dateProvider: mocks.dateProvider,
-            featureInfo: FeatureInfo(),
-            cacheTTL: NuxieInternalConfiguration().featureCacheTTL,
-            localPurchaseAccessStore: accessStore
-        )
-        let accessBeforeObserverStartup = await relaunchedFeatures.getCached(
-            featureId: grant.featureId,
-            entityId: nil
-        )
-        XCTAssertEqual(accessBeforeObserverStartup?.allowed, false)
-        let relaunchedObserver = TransactionObserver(
-            api: UnavailablePurchaseSyncAPI(),
-            features: relaunchedFeatures,
-            identity: mocks.identityService,
-            settings: NuxieRuntimeSettings(configuration: configuration),
-            eventSink: TransactionEvidenceEventSink(),
-            transactionServiceProvider: { fatalError("unused in this test") },
-            evidenceStore: evidenceStore,
-            localAccessStore: accessStore,
-            activeStoreOriginalTransactionIDs: { [] }
-        )
-
-        await relaunchedObserver.retryStoredEvidence()
-
-        let relaunchedAccess = await relaunchedFeatures.getCached(
-            featureId: grant.featureId,
-            entityId: nil
-        )
-        XCTAssertEqual(relaunchedAccess?.allowed, false)
     }
 
-    func testIdentityRetryReconcilesBeforeRehydratingExpiredAccess() async {
+    func testImmediateRevocationWithoutStoredEvidenceRejectsLateActiveWrite() async {
         let mocks = MockFactory.shared
-        mocks.identityService.setDistinctId("customer-b")
-        let configuration = NuxieConfiguration(apiKey: "isolated")
-        let accessStore = InMemoryLocalPurchaseAccessStore()
-        let access = StoredLocalPurchaseAccess(
-            transactionId: "expired-identity-transaction",
-            originalTransactionId: "expired-identity-original",
-            productId: "expired-identity-product",
-            distinctId: "customer-a",
-            grants: [
-                StoredLocalEntitlementGrant(
-                    featureId: "expired-identity-feature",
-                    featureExternalId: nil,
-                    allowanceType: "boolean",
-                    allowance: nil
-                )
-            ],
-            state: .active
-        )
-        XCTAssertTrue(accessStore.save([access.transactionId: access]))
+        mocks.identityService.setDistinctId("test-user")
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(
+            apiKey: "isolated"
+        ))
         let features = FeatureService(
             api: mocks.nuxieApi,
             identity: mocks.identityService,
@@ -429,30 +578,136 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             featureInfo: FeatureInfo(),
             cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
+        let authority = ActiveAuthoritySwitch()
+        await authority.set(.unavailable)
+        let pendingService = TransactionService(
+            productService: mocks.productService,
+            transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: mocks.dateProvider,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            identityService: mocks.identityService,
+            featureService: features,
+            activeProductEvidenceAuthority: { _ in await authority.get() }
+        )
+        let evidenceStore = InMemoryTransactionEvidenceStore()
         let observer = TransactionObserver(
-            api: SuccessfulPurchaseSyncAPI(),
+            api: UnavailablePurchaseSyncAPI(),
             features: features,
             identity: mocks.identityService,
-            settings: NuxieRuntimeSettings(configuration: configuration),
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { pendingService },
+            evidenceStore: evidenceStore
+        )
+        let transactionId = "transaction-late-active"
+        let originalTransactionId = "original-late-active"
+
+        await observer.handleVerifiedTransaction(
+            VerifiedStoreTransactionUpdate(
+                transactionId: transactionId,
+                originalTransactionId: originalTransactionId,
+                productId: "product-late-active",
+                appAccountToken: nil,
+                isRevoked: true,
+                isUpgraded: false,
+                finish: {}
+            ),
+            jwsRepresentation: "revoked-jws",
+            source: .storeUpdates
+        )
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+
+        let recorded = await observer.recordVerifiedPurchase(
+            evidence: StoreTransactionEvidence(
+                transactionJws: "late-active-jws",
+                transactionId: transactionId,
+                originalTransactionId: originalTransactionId,
+                productId: "product-late-active",
+                finish: {}
+            ),
+            product: StoreProduct(
+                productId: "product-late-active",
+                placementId: "placement-late-active",
+                name: "Product",
+                price: "$1.00",
+                period: nil
+            ),
+            distinctId: "test-user",
+            finishRequired: true
+        )
+
+        XCTAssertTrue(recorded)
+        XCTAssertEqual(
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])?[transactionId]?.isRevoked,
+            true
+        )
+    }
+
+    func testExistingRevocationCannotBeDowngradedByPurchaseRecording() async {
+        let mocks = MockFactory.shared
+        mocks.identityService.setDistinctId("test-user")
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(
+            apiKey: "isolated"
+        ))
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let revoked = StoredTransactionEvidence(
+            transactionJws: "revoked-jws",
+            transactionId: "transaction-revoked-write",
+            originalTransactionId: "original-revoked-write",
+            productId: "product-revoked-write",
+            distinctId: "test-user",
+            recordedAt: Date(),
+            isRevoked: true
+        )
+        XCTAssertTrue(evidenceStore.save([revoked.transactionId: revoked]))
+        let observer = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: mocks.identityService,
+                profile: mocks.profileService,
+                dateProvider: mocks.dateProvider,
+                featureInfo: FeatureInfo(),
+                cacheTTL: NuxieInternalConfiguration().featureCacheTTL
+            ),
+            identity: mocks.identityService,
+            settings: settings,
             eventSink: TransactionEvidenceEventSink(),
             transactionServiceProvider: { fatalError("unused in this test") },
-            evidenceStore: InMemoryTransactionEvidenceStore(),
-            localAccessStore: accessStore,
-            activeStoreOriginalTransactionIDs: { [] }
+            evidenceStore: evidenceStore
         )
 
-        mocks.identityService.setDistinctId("customer-a")
-        await observer.retryStoredEvidence()
+        let recorded = await observer.recordVerifiedPurchase(
+            evidence: StoreTransactionEvidence(
+                transactionJws: "late-active-jws",
+                transactionId: revoked.transactionId,
+                originalTransactionId: revoked.originalTransactionId,
+                productId: revoked.productId,
+                finish: {}
+            ),
+            product: StoreProduct(
+                productId: revoked.productId,
+                placementId: "placement-revoked-write",
+                name: "Product",
+                price: "$1.00",
+                period: nil
+            ),
+            distinctId: "test-user",
+            finishRequired: true
+        )
 
+        XCTAssertTrue(recorded)
         XCTAssertEqual(
-            accessStore.load().valueTreatingAbsentAsEmpty([:])![access.transactionId]?.state,
-            .revoked
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])?[revoked.transactionId]?.isRevoked,
+            true
         )
-        let cached = await features.getCached(
-            featureId: "expired-identity-feature",
-            entityId: nil
+        XCTAssertEqual(
+            evidenceStore.load().valueTreatingAbsentAsEmpty([:])?[revoked.transactionId]?
+                .transactionJws,
+            "revoked-jws"
         )
-        XCTAssertEqual(cached?.allowed, false)
     }
 
     func testStoredEvidenceDoesNotEmitSyncForAnotherActiveCustomer() async {
@@ -476,7 +731,6 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             productId: "store-product",
             distinctId: "customer-a",
             recordedAt: Date(),
-            localEntitlementGrants: [],
             isRevoked: false,
             finishRequired: false
         )
@@ -489,8 +743,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             settings: settings,
             eventSink: eventSink,
             transactionServiceProvider: { fatalError("unused in this test") },
-            evidenceStore: evidenceStore,
-            localAccessStore: InMemoryLocalPurchaseAccessStore()
+            evidenceStore: evidenceStore
         )
 
         await observer.retryStoredEvidence()
@@ -530,7 +783,6 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             productId: "product-revoked",
             distinctId: "test-user",
             recordedAt: Date(),
-            localEntitlementGrants: [],
             isRevoked: true,
             finishRequired: true
         )
@@ -641,5 +893,65 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         )
         XCTAssertTrue(deduplicatedSync)
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.finishRequired == true)
+    }
+
+    @MainActor
+    private static func projectionFeatureInfo(
+        epoch: UUID,
+        distinctId: String
+    ) -> FeatureInfo {
+        let info = FeatureInfo()
+        info.beginOptimisticProjectionPublication(
+            epoch: epoch,
+            distinctId: distinctId
+        )
+        info.admitProfileSnapshot([
+            "premium": FeatureAccess(
+                allowed: false,
+                unlimited: false,
+                balance: nil,
+                type: .boolean
+            ),
+        ], admittedAt: Date())
+        return info
+    }
+
+    private static func projectionProduct(
+        productId: String,
+        storeProductId: String
+    ) -> StoreProduct {
+        var product = StoreProduct(
+            productId: productId,
+            storeProductId: storeProductId,
+            placementId: "projection-placement",
+            name: "Projection Product",
+            price: "$1.00",
+            period: nil
+        )
+        product.localEntitlementGrants = [StoreProduct.LocalEntitlementGrant(
+            featureId: "feature-premium",
+            featureExternalId: "premium",
+            allowanceType: nil,
+            allowance: nil
+        )]
+        product.purchaseContext = PurchaseCommercialContext(
+            release: AuthenticatedExperienceReleaseID(
+                identity: ExperienceReleaseIdentity(
+                    appId: "projection-app",
+                    environment: "live",
+                    experienceId: "projection-experience",
+                    experienceVersionId: "projection-version",
+                    buildId: "projection-build",
+                    versionNumber: 1,
+                    publishedAt: "2026-08-30T00:00:00Z",
+                    publishedAtSeq: 1
+                ),
+                descriptorSHA256: String(repeating: "d", count: 64)
+            ),
+            placementId: product.placementId,
+            productId: product.productId,
+            storeProductId: product.storeProductId
+        )
+        return product
     }
 }

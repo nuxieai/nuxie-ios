@@ -144,8 +144,8 @@ actor TransactionService {
         return setPendingPurchases(entries)
     }
 
-    /// Returns the local access mapping captured when a native purchase became
-    /// pending. The marker is consumed only after the verified transaction has
+    /// Returns the signed allowance mapping captured for a pending native purchase.
+    /// The marker is consumed only after the verified transaction has
     /// been durably recorded and synced.
     func pendingPurchaseGrants(productId: String) -> [StoredLocalEntitlementGrant]? {
         pendingPurchaseRecord(productId: productId)?.localEntitlementGrants
@@ -570,33 +570,6 @@ actor TransactionService {
                     await evidence.finish()
                     await transactionObserver.markTransactionFinished(
                         transactionId: evidence.transactionId
-                    )
-                }
-            } else if usesTestStore, isActiveCustomer(initiatingDistinctId) {
-                await featureService?.applyLocalPurchase(
-                    grants: optimisticLocalEntitlementGrants(
-                        checkoutProduct.localEntitlementGrants
-                    ),
-                    transactionId: testStoreTransactionId
-                        ?? "nuxie-test-\(checkoutProduct.productId)"
-                )
-            } else if isActiveCustomer(initiatingDistinctId) {
-                // A connected provider owns the receipt and durable billing
-                // state. Once its reviewed Product mapping is enabled, the
-                // signed Product gives the configured checkout delegate enough
-                // information to project Boolean Feature Access immediately.
-                // This is optimistic local UI state only; durable access,
-                // quotas, and credits still require provider synchronization.
-                let providerFeatureGrants = providerOptimisticGrants(
-                    for: checkoutProduct,
-                    delegate: checkoutDelegate
-                )
-                if !providerFeatureGrants.isEmpty {
-                    await featureService?.applyLocalPurchase(
-                        grants: providerFeatureGrants,
-                        transactionId: providerLocalAccessTransactionId(
-                            storeProductId: checkoutProduct.storeProductId
-                        )
                     )
                 }
             }
@@ -1121,7 +1094,6 @@ actor TransactionService {
             case noPurchases
         }
         let result: RestoreOutcome
-        var testStoreProducts: [StoreProduct] = []
         let usesTestStore = testStore != nil
         if let testStore {
             let response = await testStore.restorePurchases(
@@ -1132,7 +1104,6 @@ actor TransactionService {
             case .failed(let error): result = .failed(error)
             case .noPurchases: result = .noPurchases
             }
-            testStoreProducts = response.products
         } else if let delegate = purchaseDelegate {
             switch await delegate.restorePurchases() {
             case .restored: result = .restored
@@ -1150,16 +1121,6 @@ actor TransactionService {
         switch result {
         case .restored, .testStoreRestored:
             LogInfo("TransactionService: Restore completed successfully")
-            if usesTestStore, isActiveCustomer(initiatingDistinctId) {
-                for product in testStoreProducts {
-                    await featureService?.applyLocalPurchase(
-                        grants: optimisticLocalEntitlementGrants(
-                            product.localEntitlementGrants
-                        ),
-                        transactionId: "nuxie-test-restore-\(product.productId)"
-                    )
-                }
-            }
             // Restored transactions do not re-emit through Transaction.updates,
             // so sync current entitlements to the backend explicitly — otherwise
             // a restore on a new device never updates server-side entitlements.

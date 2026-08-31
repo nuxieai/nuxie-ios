@@ -17,19 +17,6 @@ final class CommerceStoreCorruptionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture.file), fixture.contents)
     }
 
-    func testLocalAccessCorruptionIsUnknownAndCannotBeDiscarded() throws {
-        let fixture = try corruptStoreFixture(fileName: "local-purchase-access.json")
-        let store = LocalPurchaseAccessStore(
-            customStoragePath: fixture.root,
-            scope: scope
-        )
-
-        assertUnreadable(store.load())
-        XCTAssertNil(store.markInactiveRevoked(activeOriginalTransactionIds: []))
-        XCTAssertFalse(store.save([:]))
-        XCTAssertEqual(try Data(contentsOf: fixture.file), fixture.contents)
-    }
-
     func testPendingPurchaseCorruptionIsUnknownAndCannotBeDiscarded() throws {
         let fixture = try corruptStoreFixture(fileName: "pending-purchases.json")
         let store = PendingPurchaseStore(

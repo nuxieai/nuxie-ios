@@ -59,6 +59,14 @@ actor ExperienceLoader {
         let versionId: String
     }
 
+    private struct OptimisticAllowanceCatalogKey: Hashable {
+        let releaseID: AuthenticatedExperienceReleaseID
+        let isActive: Bool
+        let productID: String
+        let platform: String
+        let storeProductID: String
+    }
+
     private struct StoredPreparedRelease {
         let releaseID: AuthenticatedExperienceReleaseID
         let runtime: PreparedRuntimeRelease
@@ -105,6 +113,11 @@ actor ExperienceLoader {
     /// not rescan StoreKit, while ownership changes do.
     private var productAuthorityCatalog: [
         String: ActiveProductEvidenceAuthorityResolution
+    ]?
+    /// Exact signed descriptor inputs that can change the projection even when
+    /// StoreKit receipt ownership remains unchanged.
+    private var optimisticAllowanceCatalog: [
+        OptimisticAllowanceCatalogKey: [OptimisticEntitlementAllowance]
     ]?
     private var productAuthorityChangeHandler: (@Sendable () async -> Void)?
     private var pendingProductAuthorityChangeNotification = false
@@ -198,6 +211,7 @@ actor ExperienceLoader {
 
         guard let catalog = prepared.catalog else {
             let authorityChanged = installProductAuthorityCatalog([:])
+            let allowancesChanged = installOptimisticAllowanceCatalog([:])
             cancelWarmTasks()
             finishPreloadAccounting(cancelled: true)
             cancelPendingPreparations()
@@ -210,7 +224,9 @@ actor ExperienceLoader {
             guard generation == nil || generation == latestProfileGeneration else { return nil }
             preloadMetricsByRelease.removeAll()
             reportedPreloadMetricsByRelease.removeAll()
-            if authorityChanged { await notifyProductAuthorityChanged() }
+            if authorityChanged || allowancesChanged {
+                await notifyProductAuthorityChanged()
+            }
             return makeRoutingCatalog(
                 generation: generation ?? latestProfileGeneration,
                 references: [],
@@ -241,6 +257,9 @@ actor ExperienceLoader {
         let authorityChanged = installProductAuthorityCatalog(
             makeProductAuthorityCatalog(installed.values)
         )
+        let allowancesChanged = installOptimisticAllowanceCatalog(
+            makeOptimisticAllowanceCatalog(installed.values)
+        )
 
         if hasSameReleaseAuthority(as: installed) {
             // Disk admission and a concurrent network refresh can authenticate
@@ -252,7 +271,9 @@ actor ExperienceLoader {
             productMappingsByReleaseAndStoreID.merge(productMappings.byStoreID) {
                 current, _ in current
             }
-            if authorityChanged { await notifyProductAuthorityChanged() }
+            if authorityChanged || allowancesChanged {
+                await notifyProductAuthorityChanged()
+            }
             return makeRoutingCatalog(
                 generation: generation ?? latestProfileGeneration,
                 references: catalog.references,
@@ -279,7 +300,9 @@ actor ExperienceLoader {
         preloadMetricsByRelease.removeAll()
         reportedPreloadMetricsByRelease.removeAll()
         beginWarming(installed.values)
-        if authorityChanged { await notifyProductAuthorityChanged() }
+        if authorityChanged || allowancesChanged {
+            await notifyProductAuthorityChanged()
+        }
         return makeRoutingCatalog(
             generation: generation ?? latestProfileGeneration,
             references: catalog.references,
@@ -389,11 +412,52 @@ actor ExperienceLoader {
         })
     }
 
+    private func makeOptimisticAllowanceCatalog(
+        _ definitions: Dictionary<ExperienceVersionKey,
+            AuthenticatedExperienceReleaseDefinition>.Values
+    ) -> [OptimisticAllowanceCatalogKey: [OptimisticEntitlementAllowance]] {
+        var catalog: [
+            OptimisticAllowanceCatalogKey: [OptimisticEntitlementAllowance]
+        ] = [:]
+        for definition in definitions {
+            let isActive = switch definition.mode {
+            case .active: true
+            case .pinned: false
+            }
+            for product in definition.products {
+                let key = OptimisticAllowanceCatalogKey(
+                    releaseID: definition.releaseID,
+                    isActive: isActive,
+                    productID: product.id,
+                    platform: product.store.platform,
+                    storeProductID: product.store.productId
+                )
+                catalog[key] = product.entitlements.map {
+                    OptimisticEntitlementAllowance(
+                        featureId: $0.featureId ?? $0.id,
+                        featureExternalId: $0.featureExternalId,
+                        allowanceType: $0.allowanceType,
+                        allowance: $0.allowance
+                    )
+                }
+            }
+        }
+        return catalog
+    }
+
     private func installProductAuthorityCatalog(
         _ catalog: [String: ActiveProductEvidenceAuthorityResolution]
     ) -> Bool {
         let changed = productAuthorityCatalog != catalog
         productAuthorityCatalog = catalog
+        return changed
+    }
+
+    private func installOptimisticAllowanceCatalog(
+        _ catalog: [OptimisticAllowanceCatalogKey: [OptimisticEntitlementAllowance]]
+    ) -> Bool {
+        let changed = optimisticAllowanceCatalog != catalog
+        optimisticAllowanceCatalog = catalog
         return changed
     }
 
@@ -407,8 +471,44 @@ actor ExperienceLoader {
         return productAuthorityCatalog[storeProductId] ?? .readyNoMatch
     }
 
+    func optimisticEntitlementAllowances(
+        releaseDescriptorSHA256: String?,
+        productId: String?,
+        storeProductId: String
+    ) async -> [OptimisticEntitlementAllowance]? {
+        let product: ExperienceReleaseProductDocument?
+        if let releaseDescriptorSHA256, let productId {
+            product = await cachedProductMapping(
+                releaseDescriptorSHA256: releaseDescriptorSHA256,
+                productID: productId
+            )
+        } else {
+            let matches = releasesByVersion.values
+                .filter { $0.mode == .active }
+                .flatMap(\.products)
+                .filter {
+                    $0.store.platform == "apple_app_store"
+                        && $0.store.productId == storeProductId
+                }
+            guard let first = matches.first,
+                  matches.dropFirst().allSatisfy({ $0.entitlements == first.entitlements }) else {
+                return nil
+            }
+            product = first
+        }
+        guard let product else { return nil }
+        return product.entitlements.map {
+            OptimisticEntitlementAllowance(
+                featureId: $0.featureId ?? $0.id,
+                featureExternalId: $0.featureExternalId,
+                allowanceType: $0.allowanceType,
+                allowance: $0.allowance
+            )
+        }
+    }
+
     /// Returns authenticated Product authority without requiring an Experience
-    /// or paywall to be loaded. Restore and local Feature Access use this seam.
+    /// or paywall to be loaded. Restore and optimistic projection use this seam.
     func cachedProductMapping(
         releaseDescriptorSHA256: String,
         productID: String
@@ -459,6 +559,7 @@ actor ExperienceLoader {
         preloadMetricsByRelease.removeAll()
         reportedPreloadMetricsByRelease.removeAll()
         productAuthorityCatalog = nil
+        optimisticAllowanceCatalog = nil
         pendingProductAuthorityChangeNotification = false
     }
 
@@ -779,10 +880,6 @@ actor ExperienceLoader {
                 collectPurchasePlacementIDs(in: connector.onSucceeded ?? [], into: &result)
                 collectPurchasePlacementIDs(in: connector.onFailed ?? [], into: &result)
                 collectPurchasePlacementIDs(in: connector.onTimeout ?? [], into: &result)
-            case .grantEntitlement(let grant):
-                collectPurchasePlacementIDs(in: grant.onSucceeded ?? [], into: &result)
-                collectPurchasePlacementIDs(in: grant.onFailed ?? [], into: &result)
-                collectPurchasePlacementIDs(in: grant.onTimeout ?? [], into: &result)
             default:
                 continue
             }
@@ -822,10 +919,6 @@ actor ExperienceLoader {
                 if containsDynamicPurchase(in: connector.onSucceeded ?? [])
                     || containsDynamicPurchase(in: connector.onFailed ?? [])
                     || containsDynamicPurchase(in: connector.onTimeout ?? []) { return true }
-            case .grantEntitlement(let grant):
-                if containsDynamicPurchase(in: grant.onSucceeded ?? [])
-                    || containsDynamicPurchase(in: grant.onFailed ?? [])
-                    || containsDynamicPurchase(in: grant.onTimeout ?? []) { return true }
             default:
                 continue
             }
