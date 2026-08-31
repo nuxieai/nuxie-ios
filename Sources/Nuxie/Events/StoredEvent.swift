@@ -57,9 +57,10 @@ struct StoredEvent: Codable, Sendable {
         self.timestamp = timestamp
         self.distinctId = distinctId
         
-        // Convert properties to AnyCodable and encode to Data
-        let anyCodableProps = properties.mapValues { AnyCodable($0) }
-        self.properties = try JSONEncoder().encode(anyCodableProps)
+        // Preserve nested NSDictionary keys in declared leg outputs. Bridging
+        // through AnyCodable's Swift dictionaries can merge Unicode spellings.
+        guard JSONSerialization.isValidJSONObject(properties) else { throw EventStorageError.invalidProperties }
+        self.properties = try JSONSerialization.data(withJSONObject: properties)
     }
     
     /// Convenience initializer with pre-encoded properties data
@@ -87,7 +88,10 @@ struct StoredEvent: Codable, Sendable {
     /// - Returns: Decoded properties dictionary
     /// - Throws: DecodingError if properties cannot be decoded
     func getProperties() throws -> [String: AnyCodable] {
-        return try JSONDecoder().decode([String: AnyCodable].self, from: properties)
+        guard let value = try JSONSerialization.jsonObject(with: properties) as? [String: Any] else {
+            throw EventStorageError.invalidProperties
+        }
+        return value.mapValues(AnyCodable.init)
     }
     
     /// Get properties as [String: Any] dictionary
@@ -120,13 +124,7 @@ struct StoredEvent: Codable, Sendable {
     /// Duplicate identity compares canonical JSON only; persistence and wire
     /// encoders retain their existing formatting contracts.
     private func canonicalPropertiesForComparison() -> Data {
-        guard let decoded = try? JSONDecoder().decode(
-            [String: AnyCodable].self,
-            from: properties
-        ) else { return properties }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return (try? encoder.encode(decoded)) ?? properties
+        (try? ExactJSONCodec.canonicalize(properties)) ?? properties
     }
 }
 

@@ -14,8 +14,8 @@ struct ArmedDeviceLeg {
         let generation: Int?
     }
     struct Context {
-        let event: [String: ExperienceReleaseJSONValue]
-        let responses: [String: ExperienceReleaseJSONValue]
+        let event: ExactJSONObject<ExperienceReleaseJSONValue>
+        let responses: ExactJSONObject<ExperienceReleaseJSONValue>
     }
     let reference: Reference
     let binding: Binding
@@ -107,7 +107,7 @@ struct JourneyPlaneProfile {
             _ = try exact(envelope["signature"], ["version", "algorithm", "keyId", "signatureBase64"])
             guard envelope["mediaType"] as? String == DeviceLegReleaseDescriptor.mediaType else { throw invalid }
         }
-        let profile = try JSONDecoder().decode(Self.self, from: data)
+        let profile = try ExactJSONCodec.decode(Self.self, from: data)
         guard profile.armedLegs.count <= 1024, profile.releases.count <= 1024 else { throw invalid }
         for base in [profile.delivery.renderBaseUrl, profile.delivery.assetBaseUrl] {
             guard let url = URLComponents(string: base), url.url != nil,

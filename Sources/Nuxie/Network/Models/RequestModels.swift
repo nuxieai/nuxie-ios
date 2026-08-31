@@ -28,11 +28,27 @@ struct BatchRequest: Codable {
     }
     
     func asDictionary() throws -> [String: Any]? {
+        try JSONSerialization.jsonObject(with: encodedForTransport()) as? [String: Any]
+    }
+
+    /// Keep the existing envelope encoding, then insert each event's original
+    /// JSON properties without a round trip through String-keyed Codable maps.
+    func encodedForTransport() throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(self)
-        let json = try JSONSerialization.jsonObject(with: data, options: [])
-        return json as? [String: Any]
+        guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var items = root["batch"] as? [[String: Any]], items.count == batch.count else {
+            throw EventStorageError.invalidProperties
+        }
+        for index in items.indices {
+            if let properties = batch[index].properties {
+                items[index]["properties"] = properties.mapValues(\.value)
+            }
+        }
+        root["batch"] = items
+        guard JSONSerialization.isValidJSONObject(root) else { throw EventStorageError.invalidProperties }
+        return try JSONSerialization.data(withJSONObject: root)
     }
 }
 

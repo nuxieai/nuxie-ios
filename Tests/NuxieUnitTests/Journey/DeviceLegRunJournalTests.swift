@@ -21,7 +21,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: root.appendingPathComponent("fixtures/journeys/planes/reports.json")))
+        let vector = try ExactJSONCodec.decode(Vector.self, from: Data(contentsOf: root.appendingPathComponent("fixtures/journeys/planes/reports.json")))
         for mode in vector.captureModes {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -63,8 +63,15 @@ final class DeviceLegRunJournalTests: XCTestCase {
                 XCTAssertEqual(completion["outcome"] as? String, vector.outcome)
                 XCTAssertEqual(completion["started_at"] as? String, vector.startedAt)
                 XCTAssertEqual(completion["completed_at"] as? String, vector.completedAt)
-                let expected = try JSONSerialization.jsonObject(with: JSONEncoder().encode(vector.outputs)) as? NSDictionary
+                let expected = try JSONSerialization.jsonObject(with: ExactJSONCodec.encode(vector.outputs)) as? NSDictionary
                 XCTAssertEqual(completion["outputs"] as? NSDictionary, expected)
+                let event = NuxieEvent(id: run.completedEventId, name: JourneyEvents.journeyLegCompleted,
+                                       distinctId: "customer", properties: completion, timestamp: date(200))
+                let transport = try BatchRequest(events: [.init(event: event)]).encodedForTransport()
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: transport) as? [String: Any])
+                let batch = try XCTUnwrap(body["batch"] as? [[String: Any]])
+                let properties = try XCTUnwrap(batch.first?["properties"] as? [String: Any])
+                XCTAssertEqual(properties["outputs"] as? NSDictionary, expected, "Batch bytes must retain both Unicode keys")
             }
             await log.close()
         }
@@ -149,7 +156,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             let name: String
             let binding: ArmedDeviceLeg.Binding
             let beforeDeath: String
-            let responses: [String: ExperienceReleaseJSONValue]
+            let responses: ExactJSONObject<ExperienceReleaseJSONValue>
             let wakeAtMillis: Double?
             let expectedOutcome: String?
             let expectedGeneration: Int

@@ -245,7 +245,7 @@ actor NuxieApi: NuxieApiProtocol {
         
         // Handle request body
         if let body = body {
-            var payloadData = try encoder.encode(body)
+            var payloadData = try (body as? BatchRequest)?.encodedForTransport() ?? encoder.encode(body)
             
             if var json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any] {
                 json["apiKey"] = apiKey

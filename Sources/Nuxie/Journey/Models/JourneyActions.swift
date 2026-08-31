@@ -13,7 +13,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
     case number(Double)
     case string(String)
     case array([JourneyValue])
-    case object([String: JourneyValue])
+    case object(ExactJSONObject<JourneyValue>)
     case eventField(String)
     case responseField(String)
 
@@ -34,7 +34,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case "Number": self = .number(try container.decode(Double.self, forKey: .value))
         case "String": self = .string(try container.decode(String.self, forKey: .value))
         case "Array": self = .array(try container.decode([JourneyValue].self, forKey: .items))
-        case "Object": self = .object(try container.decode([String: JourneyValue].self, forKey: .fields))
+        case "Object": self = .object(try container.decode(ExactJSONObject<JourneyValue>.self, forKey: .fields))
         case "Event.Field": self = .eventField(try container.decode(String.self, forKey: .key))
         case "Response.Field": self = .responseField(try container.decode(String.self, forKey: .key))
         default:
@@ -81,7 +81,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case .number(let value): value
         case .string(let value): value
         case .array(let values): values.map(\.foundationValue)
-        case .object(let values): values.mapValues(\.foundationValue)
+        case .object(let values): values.mapValues(\.foundationValue).dictionary
         case .eventField(let key): ["type": "Event.Field", "key": key]
         case .responseField(let key): ["type": "Response.Field", "key": key]
         }
@@ -94,7 +94,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case let value as NSNumber: return .number(value.doubleValue)
         case let value as String: return .string(value)
         case let value as [Any]: return .array(value.map(Self.fromFoundation))
-        case let value as [String: Any]: return .object(value.mapValues(Self.fromFoundation))
+        case let value as [String: Any]: return .object(ExactJSONObject(value.mapValues(Self.fromFoundation)))
         default: return .null
         }
     }

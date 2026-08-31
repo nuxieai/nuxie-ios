@@ -95,3 +95,8 @@ The Swift contract tests exercise the same behaviors. Consumers in other SDKs ca
   three-valued conditions. Missing fields stay unknown through nested values
   and negation; JSON null, numeric types, deep equality, and ordinal string
   comparisons remain distinct.
+
+The plane value vectors also distinguish canonically equivalent Unicode keys.
+iOS uses ordinal JSON objects and an exact-key Codable adapter for leg delivery
+and journal persistence. The report vector carries both spellings through the
+ordinary event store and batch serializer, including uncertain-capture retry.

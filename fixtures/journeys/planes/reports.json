@@ -38,7 +38,9 @@
           }
         }
       },
-      "optional": null
+      "optional": null,
+      "é": false,
+      "é": true
     },
     "event": {
       "purchase_id": "purchase-1",

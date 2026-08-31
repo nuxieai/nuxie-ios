@@ -187,7 +187,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             try validateJSONValue(root, field: nil)
             try validateRenderValue(root["render"], field: "render")
             try validateArtifactReferences(root)
-            descriptor = try JSONDecoder().decode(DeviceLegReleaseDescriptor.self, from: bytes)
+            descriptor = try ExactJSONCodec.decode(DeviceLegReleaseDescriptor.self, from: bytes)
             try validateIdentity(descriptor.identity)
         } catch let error as ExperienceReleaseDescriptorAuthenticationError { throw error }
         catch { throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor }

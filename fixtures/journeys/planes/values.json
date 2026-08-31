@@ -4,7 +4,15 @@
       "null": null,
       "number": 1,
       "text": "1",
-      "é": 1
+      "é": 1,
+      "unicode_pair": {
+        "é": 1,
+        "é": 2
+      },
+      "unicode_pair_reverse": {
+        "é": 2,
+        "é": 1
+      }
     },
     "responses": {
       "answer": "yes",
@@ -16,7 +24,9 @@
         ],
         "a": {}
       },
-      "empty": []
+      "empty": [],
+      "é": false,
+      "é": true
     }
   },
   "values": [
@@ -119,6 +129,45 @@
       },
       "known": false,
       "expected": null
+    },
+    {
+      "id": "composed_response_key",
+      "expression": {
+        "type": "Response.Field",
+        "key": "é"
+      },
+      "known": true,
+      "expected": false
+    },
+    {
+      "id": "decomposed_response_key",
+      "expression": {
+        "type": "Response.Field",
+        "key": "é"
+      },
+      "known": true,
+      "expected": true
+    },
+    {
+      "id": "unicode_literal_keys",
+      "expression": {
+        "type": "Object",
+        "fields": {
+          "é": {
+            "type": "Boolean",
+            "value": false
+          },
+          "é": {
+            "type": "Boolean",
+            "value": true
+          }
+        }
+      },
+      "known": true,
+      "expected": {
+        "é": false,
+        "é": true
+      }
     }
   ],
   "conditions": [
@@ -542,6 +591,42 @@
         }
       },
       "expected": false
+    },
+    {
+      "id": "unicode_object_key_order",
+      "expression": {
+        "type": "Compare",
+        "op": "==",
+        "left": {
+          "type": "Event.Field",
+          "key": "unicode_pair"
+        },
+        "right": {
+          "type": "Event.Field",
+          "key": "unicode_pair_reverse"
+        }
+      },
+      "expected": true
+    },
+    {
+      "id": "unicode_object_contains",
+      "expression": {
+        "type": "Contains",
+        "collection": {
+          "type": "Array",
+          "items": [
+            {
+              "type": "Event.Field",
+              "key": "unicode_pair"
+            }
+          ]
+        },
+        "value": {
+          "type": "Event.Field",
+          "key": "unicode_pair_reverse"
+        }
+      },
+      "expected": true
     }
   ]
 }
