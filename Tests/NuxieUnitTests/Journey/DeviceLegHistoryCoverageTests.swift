@@ -40,6 +40,32 @@ final class DeviceLegHistoryCoverageTests: XCTestCase {
         }
     }
 
+    func testFractionalQueryBoundsDoNotWidenTheAuthoredWindow() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SQLiteEventStore()
+        try await store.initialize(path: directory)
+        do {
+            for ms in [1001, 1002] {
+                _ = try await store.insert(StoredEvent(id: "row-\(ms)", name: "purchase",
+                    timestamp: date(Int64(ms)), distinctId: "person"), deliveryState: .delivered)
+            }
+            let since = Date(timeIntervalSince1970: 1.0011)
+            let count = try await store.countEvents(name: "purchase", distinctId: "person", since: since, until: nil)
+            let first = try await store.getFirstEventTime(name: "purchase", distinctId: "person", since: since, until: nil)
+            let rows = try await store.queryEventsForUser("person", name: "purchase", since: since, until: nil,
+                ascending: true, limit: 10)
+            XCTAssertEqual(count, 1)
+            XCTAssertEqual(first, date(1002))
+            XCTAssertEqual(rows.map(\.id), ["row-1002"])
+            let exact = try await store.countEvents(name: "purchase", distinctId: "person", since: date(1001), until: date(1001))
+            XCTAssertEqual(exact, 1, "Exact millisecond bounds remain inclusive")
+            let absent = try await store.hasEvent(name: "purchase", distinctId: "person", since: Date(timeIntervalSince1970: 1.0021))
+            XCTAssertFalse(absent)
+            await store.close()
+        } catch { await store.close(); throw error }
+    }
+
     private func run(_ vector: Vector) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

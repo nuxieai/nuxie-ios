@@ -1026,7 +1026,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       sqlite3_bind_blob(statement, 3, bytes.baseAddress, Int32(bytes.count), SQLITE_TRANSIENT)
     }
 
-    sqlite3_bind_int64(statement, 4, Int64(event.timestamp.timeIntervalSince1970 * 1000))  // Store as milliseconds
+    sqlite3_bind_int64(statement, 4, try Self.historyMilliseconds(for: event.timestamp, rounding: .down))  // Store as milliseconds
 
     sqlite3_bind_text(statement, 5, event.distinctId, -1, SQLITE_TRANSIENT)
 
@@ -1867,8 +1867,29 @@ actor SQLiteEventStore: EventStoreProtocol {
     )
   }
 
+  // Foundation stores Date relative to 2001. Converting an exact epoch
+  // millisecond through that origin can move it by one representable Double
+  // tick. Snap only that conversion noise before applying the authored bound.
+  private static func normalizedMilliseconds(for date: Date) -> Double {
+    let seconds = date.timeIntervalSince1970
+    let milliseconds = seconds * 1_000
+    let nearest = milliseconds.rounded()
+    let tolerance = (seconds.ulp + date.timeIntervalSinceReferenceDate.ulp) * 1_000 + milliseconds.ulp
+    return abs(milliseconds - nearest) <= tolerance ? nearest : milliseconds
+  }
+
+  private static func historyMilliseconds(for date: Date, rounding: FloatingPointRoundingRule) throws -> Int64 {
+    let raw = normalizedMilliseconds(for: date).rounded(rounding)
+    guard raw.isFinite, raw >= Double(Int64.min), raw < Double(Int64.max) else {
+      throw EventStorageError.queryFailed(NSError(domain: "SQLite", code: 49,
+        userInfo: [NSLocalizedDescriptionKey: "History timestamp is outside the supported range"]))
+    }
+    return Int64(raw)
+  }
+
   private static func coverageMilliseconds(for date: Date) -> Int64 {
-    let raw = date.timeIntervalSince1970 * 1_000
+    let raw = normalizedMilliseconds(for: date)
+    if !raw.isFinite { return Int64.max }
     if raw >= Double(Int64.max) { return Int64.max }
     if raw <= Double(Int64.min) { return Int64.min }
     return Int64(raw.rounded(.up))
@@ -1926,7 +1947,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     sqlite3_bind_text(statement, 2, name, -1, SQLITE_TRANSIENT)
 
     if let since = since {
-      let timestampMs = Int64(since.timeIntervalSince1970 * 1000)
+      let timestampMs = try Self.historyMilliseconds(for: since, rounding: .up)
       sqlite3_bind_int64(statement, 3, timestampMs)
     }
 
@@ -1981,12 +2002,12 @@ actor SQLiteEventStore: EventStoreProtocol {
     sqlite3_bind_text(statement, 2, name, -1, SQLITE_TRANSIENT)
 
     if let since = since {
-      let timestampMs = Int64(since.timeIntervalSince1970 * 1000)
+      let timestampMs = try Self.historyMilliseconds(for: since, rounding: .up)
       sqlite3_bind_int64(statement, bindIndex, timestampMs)
       bindIndex += 1
     }
     if let until = until {
-      let timestampMs = Int64(until.timeIntervalSince1970 * 1000)
+      let timestampMs = try Self.historyMilliseconds(for: until, rounding: .down)
       sqlite3_bind_int64(statement, bindIndex, timestampMs)
     }
 
@@ -2041,12 +2062,12 @@ actor SQLiteEventStore: EventStoreProtocol {
     sqlite3_bind_text(statement, 2, name, -1, SQLITE_TRANSIENT)
 
     if let since = since {
-      let timestampMs = Int64(since.timeIntervalSince1970 * 1000)
+      let timestampMs = try Self.historyMilliseconds(for: since, rounding: .up)
       sqlite3_bind_int64(statement, bindIndex, timestampMs)
       bindIndex += 1
     }
     if let until = until {
-      let timestampMs = Int64(until.timeIntervalSince1970 * 1000)
+      let timestampMs = try Self.historyMilliseconds(for: until, rounding: .down)
       sqlite3_bind_int64(statement, bindIndex, timestampMs)
     }
 
@@ -2109,10 +2130,10 @@ actor SQLiteEventStore: EventStoreProtocol {
     sqlite3_bind_text(statement, bindIndex, distinctId, -1, SQLITE_TRANSIENT); bindIndex += 1
     sqlite3_bind_text(statement, bindIndex, name, -1, SQLITE_TRANSIENT); bindIndex += 1
     if let since {
-      sqlite3_bind_int64(statement, bindIndex, Int64(since.timeIntervalSince1970 * 1000)); bindIndex += 1
+      sqlite3_bind_int64(statement, bindIndex, try Self.historyMilliseconds(for: since, rounding: .up)); bindIndex += 1
     }
     if let until {
-      sqlite3_bind_int64(statement, bindIndex, Int64(until.timeIntervalSince1970 * 1000)); bindIndex += 1
+      sqlite3_bind_int64(statement, bindIndex, try Self.historyMilliseconds(for: until, rounding: .down)); bindIndex += 1
     }
     sqlite3_bind_int64(statement, bindIndex, Int64(limit))
 
@@ -2168,10 +2189,10 @@ actor SQLiteEventStore: EventStoreProtocol {
     sqlite3_bind_text(statement, bindIndex, distinctId, -1, SQLITE_TRANSIENT); bindIndex += 1
     sqlite3_bind_text(statement, bindIndex, name, -1, SQLITE_TRANSIENT); bindIndex += 1
     if let since {
-      sqlite3_bind_int64(statement, bindIndex, Int64(since.timeIntervalSince1970 * 1000)); bindIndex += 1
+      sqlite3_bind_int64(statement, bindIndex, try Self.historyMilliseconds(for: since, rounding: .up)); bindIndex += 1
     }
     if let until {
-      sqlite3_bind_int64(statement, bindIndex, Int64(until.timeIntervalSince1970 * 1000)); bindIndex += 1
+      sqlite3_bind_int64(statement, bindIndex, try Self.historyMilliseconds(for: until, rounding: .down)); bindIndex += 1
     }
 
     let result = sqlite3_step(statement)
