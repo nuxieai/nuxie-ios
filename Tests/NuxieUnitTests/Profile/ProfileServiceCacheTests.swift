@@ -515,6 +515,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 expect(mockFactory.eventLog.committedServerFacts.flatMap { $0.facts }.map(\.id))
                     .to(equal(["french-fact"]))
                 await expect { await mailbox.journeyIds() }.to(equal(["french-journey"]))
+                await service.clearAllCache()
             }
 
             it("does not admit startup disk state from another locale") {
@@ -1570,11 +1571,14 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     let cache = InMemoryCachedProfileStore(ttl: nil)
                     let segments = SegmentService()
                     let mailbox = ProfileMailboxProbe()
-                    await mockFactory.nuxieApi.reset()
+                    // Fresh api/identity per vector: a service leaked with a
+                    // pending background refresh must never observe a later
+                    // test's shared response or identity.
+                    let api = MockNuxieApi()
+                    let identity = MockIdentityService()
                     mockFactory.experienceService.reset()
                     mockFactory.eventLog.reset()
-                    mockFactory.identityService.reset(keepAnonymousId: true)
-                    mockFactory.identityService.setDistinctId(distinctId)
+                    identity.setDistinctId(distinctId)
 
                     switch vector.flow {
                     case "network":
@@ -1583,14 +1587,14 @@ final class ProfileServiceCacheTests: AsyncSpec {
                             purchaseDelegate: nil,
                             purchaseHandlingMode: .full
                         )
-                        await mockFactory.nuxieApi.setProfileResponse(
+                        await api.setProfileResponse(
                             Self.makeAdmissionProfile(marker: "fixture")
                         )
-                        await mockFactory.nuxieApi.suspendNextProfileFetch()
+                        await api.suspendNextProfileFetch()
                         let service = ProfileService(
                             cache: cache,
-                            identity: mockFactory.identityService,
-                            api: mockFactory.nuxieApi,
+                            identity: identity,
+                            api: api,
                             segments: segments,
                             experiences: mockFactory.experienceService,
                             eventLog: mockFactory.eventLog,
@@ -1604,14 +1608,14 @@ final class ProfileServiceCacheTests: AsyncSpec {
                         let fetch = Task {
                             try await service.refetchProfile(distinctId: distinctId)
                         }
-                        await mockFactory.nuxieApi.waitForSuspendedProfileFetch()
+                        await api.waitForSuspendedProfileFetch()
                         for locale in vector.localeChangesDuringFetch ?? [] {
                             // The platform locale-change entry point: settings
                             // mutation plus admission invalidation.
                             settings.setLocaleIdentifier(locale)
                             await service.localeDidChange()
                         }
-                        await mockFactory.nuxieApi.resumeSuspendedProfileFetch()
+                        await api.resumeSuspendedProfileFetch()
                         _ = try? await fetch.value
 
                         let resident = await service.getCachedProfile(distinctId: distinctId)
@@ -1628,8 +1632,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                                 equal(!committed),
                                 description: vector.name
                             )
-                            let marker = mockFactory.identityService
-                                .getUserProperties()["admission_marker"] as? String
+                            let marker = identity.getUserProperties()["admission_marker"] as? String
                             expect(marker != nil).to(
                                 equal(committed),
                                 description: vector.name
@@ -1641,9 +1644,10 @@ final class ProfileServiceCacheTests: AsyncSpec {
                         }
                         if let nextLocale = vector.expect.nextRequestLocale {
                             _ = try? await service.refetchProfile(distinctId: distinctId)
-                            await expect { await mockFactory.nuxieApi.lastProfileLocale }
+                            await expect { await api.lastProfileLocale }
                                 .to(equal(nextLocale), description: vector.name)
                         }
+                        await service.clearAllCache()
 
                     case "disk":
                         let settings = NuxieRuntimeSettings(
@@ -1662,8 +1666,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                         )
                         let service = ProfileService(
                             cache: cache,
-                            identity: mockFactory.identityService,
-                            api: mockFactory.nuxieApi,
+                            identity: identity,
+                            api: api,
                             segments: segments,
                             experiences: mockFactory.experienceService,
                             eventLog: mockFactory.eventLog,
@@ -1688,6 +1692,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                             await expect { await segments.snapshot(for: distinctId) }
                                 .to(equal(.empty), description: vector.name)
                         }
+                        await service.clearAllCache()
 
                     default:
                         fail("Unsupported fixture flow: \(vector.flow)")
