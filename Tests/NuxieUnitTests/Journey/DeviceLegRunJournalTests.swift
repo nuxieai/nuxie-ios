@@ -212,6 +212,32 @@ final class DeviceLegRunJournalTests: XCTestCase {
         }
     }
 
+    func testExecutorTransitionsAtomicallyPersistCursorContextAndFixedTimerAnchors() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(directory: directory, distinctId: "customer")
+        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyTime, windowSeconds: nil),
+                                               entryStepId: "condition", at: date(1))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        let changedContext = ArmedDeviceLeg.Context(event: ["ready": .bool(true)], responses: run.context.responses)
+        try await journal.transition(run.id, stepId: "wait", context: changedContext,
+                                     checkpoint: .init(anchorAtMillis: 2_000, wakeAtMillis: 12_000))
+
+        let parkedRuns = try await DeviceLegRunJournal(directory: directory, distinctId: "customer").runs()
+        let parked = try XCTUnwrap(parkedRuns.first)
+        XCTAssertEqual(parked.stepId, "wait")
+        XCTAssertEqual(try ExactJSONCodec.encode(parked.context), try ExactJSONCodec.encode(changedContext))
+        XCTAssertEqual(parked.park?.anchorAt, date(2))
+        XCTAssertEqual(parked.park?.wakeAt, date(12))
+
+        try await journal.transition(run.id, stepId: "present", context: changedContext)
+        let advancedRuns = try await DeviceLegRunJournal(directory: directory, distinctId: "customer").runs()
+        let advanced = try XCTUnwrap(advancedRuns.first)
+        XCTAssertEqual(advanced.stepId, "present")
+        XCTAssertNil(advanced.park)
+    }
+
     func testInterruptedCompletionCaptureReplaysTheSameEventAndBufferedAnswersAfterRelaunch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
