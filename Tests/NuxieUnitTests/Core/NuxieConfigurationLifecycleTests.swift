@@ -233,6 +233,13 @@ private actor SuspendingFacadeTrigger: TriggerServiceProtocol {
         properties: sending [String: Any]?,
         handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {
+        // The real graph always routes automatic lifecycle events. This probe
+        // measures cancellation of the facade request below, so lifecycle
+        // traffic must not consume its start/release state.
+        guard !event.hasPrefix("$") else {
+            handler(.decision(.noMatch))
+            return
+        }
         triggerStarted = true
         let waiters = startedWaiters
         startedWaiters.removeAll()

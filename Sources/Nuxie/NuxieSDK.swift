@@ -614,19 +614,22 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     
     let identityService = core.identity
     let eventLog = core.eventLog
-    
-    let oldDistinctId = identityService.getDistinctId()
-    let wasIdentified = identityService.isIdentified
-    let hasDifferentDistinctId = distinctId != oldDistinctId
-    
-    // Set distinct ID for identified user
-    identityService.setDistinctId(distinctId)
-    
-    let currentDistinctId = identityService.getDistinctId()
-    updateProjectionIdentitySynchronously(
+
+    // Identity mutation and the customer-visible projection switch are one
+    // linearized operation; a reentrant identify/reset inside a publication
+    // callback supersedes this call, which then abandons its fan-out.
+    guard let transition = mutateIdentityWithProjectionSwitch(
+      identityService,
       core.featureInfo,
-      distinctId: currentDistinctId
-    )
+      .identify(distinctId)
+    ) else {
+      operation.finish()
+      return
+    }
+    let oldDistinctId = transition.previous.distinctId
+    let wasIdentified = transition.previous.isIdentified
+    let currentDistinctId = transition.current.distinctId
+    let hasDifferentDistinctId = currentDistinctId != oldDistinctId
     LogInfo("Identifying user: \(NuxieLogger.shared.logDistinctID(currentDistinctId))")
     
     // Serialized, uncancellable transition across all per-user state
@@ -680,17 +683,20 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     let core = run.core
     
     let identityService = core.identity
-    let previousDistinctId = identityService.getDistinctId()
 
-    // Reset identity
-    identityService.reset(keepAnonymousId: keepAnonymousId)
-
-    // Serialized, uncancellable transition (interleaves FIFO with identify).
-    let newDistinctId = identityService.getDistinctId()
-    updateProjectionIdentitySynchronously(
+    // Identity mutation and the projection switch are one linearized
+    // operation (see identify); a superseding reentrant mutation owns the
+    // downstream fan-out.
+    guard let transition = mutateIdentityWithProjectionSwitch(
+      identityService,
       core.featureInfo,
-      distinctId: newDistinctId
-    )
+      .reset(keepAnonymousId: keepAnonymousId)
+    ) else {
+      operation.finish()
+      return
+    }
+    let previousDistinctId = transition.previous.distinctId
+    let newDistinctId = transition.current.distinctId
     core.userTransitions.enqueue(
       UserTransitionCoordinator.Transition(
         kind: .reset,
@@ -1115,17 +1121,24 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   /// Identity changes are synchronous public operations, so old-customer
   /// overlays must disappear before the call returns. The broader per-user
   /// transition remains serialized asynchronously.
-  private func updateProjectionIdentitySynchronously(
+  private func mutateIdentityWithProjectionSwitch(
+    _ identityService: IdentityServiceProtocol,
     _ featureInfo: FeatureInfo,
-    distinctId: String
-  ) {
+    _ mutation: IdentityMutation
+  ) -> IdentityTransition? {
     if Thread.isMainThread {
-      MainActor.assumeIsolated {
-        featureInfo.setProjectionDistinctId(distinctId)
+      return MainActor.assumeIsolated {
+        identityService.mutateIdentity(mutation) { transition in
+          featureInfo.setProjectionDistinctId(transition.current.distinctId)
+        }
       }
     } else {
-      DispatchQueue.main.sync {
-        featureInfo.setProjectionDistinctId(distinctId)
+      return DispatchQueue.main.sync {
+        MainActor.assumeIsolated {
+          identityService.mutateIdentity(mutation) { transition in
+            featureInfo.setProjectionDistinctId(transition.current.distinctId)
+          }
+        }
       }
     }
   }

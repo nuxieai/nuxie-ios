@@ -90,6 +90,54 @@ final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchec
         }
     }
     @MainActor
+    func mutateIdentity(
+        _ mutation: IdentityMutation,
+        publishing publication: (IdentityTransition) -> Void
+    ) -> IdentityTransition? {
+        identityPublicationLock.withLock {
+            let captured = lock.withLock { () -> (IdentityTransition, IdentityFenceToken) in
+                let previous = IdentitySnapshot(
+                    distinctId: distinctId,
+                    userId: distinctId,
+                    anonymousId: anonymousId,
+                    isIdentified: true
+                )
+                switch mutation {
+                case .identify(let newDistinctId):
+                    if distinctId != newDistinctId {
+                        identityFenceGeneration &+= 1
+                    }
+                    distinctId = newDistinctId
+                case .reset:
+                    identityFenceGeneration &+= 1
+                    distinctId = anonymousId
+                }
+                let transition = IdentityTransition(
+                    previous: previous,
+                    current: IdentitySnapshot(
+                        distinctId: distinctId,
+                        userId: distinctId,
+                        anonymousId: anonymousId,
+                        isIdentified: true
+                    )
+                )
+                return (
+                    transition,
+                    IdentityFenceToken(
+                        distinctId: transition.current.distinctId,
+                        generation: identityFenceGeneration
+                    )
+                )
+            }
+            publication(captured.0)
+            let isStillCurrent = lock.withLock {
+                distinctId == captured.1.distinctId
+                    && identityFenceGeneration == captured.1.generation
+            }
+            return isStillCurrent ? captured.0 : nil
+        }
+    }
+    @MainActor
     func publishIfCurrentIdentityFenceToken(
         _ token: IdentityFenceToken,
         _ publication: () -> Void

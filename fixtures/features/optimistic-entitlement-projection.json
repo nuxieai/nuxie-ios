@@ -1,13 +1,17 @@
 {
+  "suite": "features/optimistic-entitlement-projection",
+  "version": 3,
+  "notes": [
+    "Descriptors carry RAW signed-descriptor fields (featureId, featureExternalId, allowanceType, allowance); runners must derive allowance classification themselves (nil allowanceType = boolean; 'fixed' and 'unlimited' are balance-bearing).",
+    "Each case drives ONE reactive feature-info instance through its transitions in order; transitions may replace evidence and descriptors to express acknowledgement, revocation, and descriptor changes.",
+    "externalPurchaseDeclarations is an input runners MUST consume and MUST NOT derive any overlay from: external billing produces no verified evidence and therefore no projection.",
+    "expectedOverlay omitted means the derived projection must be absent (nil), never empty."
+  ],
   "cases": [
     {
       "name": "cold start without evidence is absent and unknown",
       "distinctId": "customer-a",
       "profileAdmitted": false,
-      "authoritative": null,
-      "evidence": null,
-      "descriptors": null,
-      "expectedOverlay": null,
       "expectedVisible": {},
       "expectedState": "unknown"
     },
@@ -24,8 +28,6 @@
           "revoked": false
         }
       ],
-      "descriptors": null,
-      "expectedOverlay": null,
       "expectedVisible": {},
       "expectedState": "ready"
     },
@@ -34,8 +36,17 @@
       "distinctId": "customer-a",
       "profileAdmitted": true,
       "authoritative": {
-        "premium": { "allowed": false, "unlimited": false, "type": "boolean" },
-        "credits": { "allowed": true, "unlimited": false, "balance": 5, "type": "metered" }
+        "premium": {
+          "allowed": false,
+          "unlimited": false,
+          "type": "boolean"
+        },
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
       },
       "evidence": [
         {
@@ -47,17 +58,39 @@
       ],
       "descriptors": {
         "transaction-1": [
-          { "featureId": "premium", "kind": "boolean" },
-          { "featureId": "credits", "kind": "metered", "allowance": 10 }
+          {
+            "featureId": "premium"
+          },
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
         ]
       },
       "expectedOverlay": {
-        "premium": { "kind": "boolean", "unlimited": false },
-        "credits": { "kind": "metered", "unlimited": false, "allowance": 10 }
+        "premium": {
+          "kind": "boolean",
+          "unlimited": false
+        },
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 10
+        }
       },
       "expectedVisible": {
-        "premium": { "allowed": true, "unlimited": false, "type": "boolean" },
-        "credits": { "allowed": true, "unlimited": false, "balance": 15, "type": "metered" }
+        "premium": {
+          "allowed": true,
+          "unlimited": false,
+          "type": "boolean"
+        },
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 15,
+          "type": "metered"
+        }
       },
       "expectedState": "reconciling"
     },
@@ -66,8 +99,17 @@
       "distinctId": "customer-a",
       "profileAdmitted": true,
       "authoritative": {
-        "premium": { "allowed": false, "unlimited": false, "type": "boolean" },
-        "credits": { "allowed": true, "unlimited": false, "balance": 2, "type": "metered" }
+        "premium": {
+          "allowed": false,
+          "unlimited": false,
+          "type": "boolean"
+        },
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
       },
       "evidence": [
         {
@@ -79,83 +121,226 @@
       ],
       "descriptors": {
         "transaction-1": [
-          { "featureId": "premium", "kind": "boolean" },
-          { "featureId": "credits", "kind": "metered", "allowance": 10 }
+          {
+            "featureId": "premium"
+          },
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
         ]
       },
       "expectedOverlay": {
-        "premium": { "kind": "boolean", "unlimited": false },
-        "credits": { "kind": "metered", "unlimited": false, "allowance": 10 }
+        "premium": {
+          "kind": "boolean",
+          "unlimited": false
+        },
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 10
+        }
       },
       "expectedVisible": {
-        "premium": { "allowed": true, "unlimited": false, "type": "boolean" },
-        "credits": { "allowed": true, "unlimited": false, "balance": 12, "type": "metered" }
+        "premium": {
+          "allowed": true,
+          "unlimited": false,
+          "type": "boolean"
+        },
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 15,
+          "type": "metered"
+        }
       },
-      "expectedState": "reconciling"
+      "expectedState": "reconciling",
+      "transitions": [
+        {
+          "name": "contrary server snapshot arrives mid-reconciliation",
+          "distinctId": "customer-a",
+          "profileAdmitted": true,
+          "authoritative": {
+            "premium": {
+              "allowed": false,
+              "unlimited": false,
+              "type": "boolean"
+            },
+            "credits": {
+              "allowed": true,
+              "unlimited": false,
+              "balance": 5,
+              "type": "metered"
+            }
+          },
+          "expectedOverlay": {
+            "premium": {
+              "kind": "boolean",
+              "unlimited": false
+            },
+            "credits": {
+              "kind": "metered",
+              "unlimited": false,
+              "allowance": 10
+            }
+          },
+          "expectedVisible": {
+            "premium": {
+              "allowed": true,
+              "unlimited": false,
+              "type": "boolean"
+            },
+            "credits": {
+              "allowed": true,
+              "unlimited": false,
+              "balance": 15,
+              "type": "metered"
+            }
+          },
+          "expectedState": "reconciling"
+        }
+      ]
     },
     {
       "name": "relaunch mid reconciliation re-derives retained purchase overlay",
       "distinctId": "customer-a",
-      "profileAdmitted": true,
-      "authoritative": {
-        "premium": { "allowed": false, "unlimited": false, "type": "boolean" }
-      },
+      "profileAdmitted": false,
       "evidence": [
         {
-          "transactionId": "transaction-relaunch",
+          "transactionId": "transaction-1",
           "distinctId": "customer-a",
           "backendSynced": false,
           "revoked": false
         }
       ],
       "descriptors": {
-        "transaction-relaunch": [
-          { "featureId": "premium", "kind": "boolean" }
+        "transaction-1": [
+          {
+            "featureId": "premium"
+          },
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
         ]
       },
       "expectedOverlay": {
-        "premium": { "kind": "boolean", "unlimited": false }
+        "premium": {
+          "kind": "boolean",
+          "unlimited": false
+        },
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 10
+        }
       },
       "expectedVisible": {
-        "premium": { "allowed": true, "unlimited": false, "type": "boolean" }
+        "premium": {
+          "allowed": true,
+          "unlimited": false,
+          "type": "boolean"
+        },
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 10,
+          "type": "metered"
+        }
       },
-      "expectedState": "reconciling"
+      "expectedState": "unknown"
     },
     {
       "name": "post acknowledgement lower server value stands",
       "distinctId": "customer-a",
       "profileAdmitted": true,
       "authoritative": {
-        "premium": { "allowed": false, "unlimited": false, "type": "boolean" },
-        "credits": { "allowed": true, "unlimited": false, "balance": 2, "type": "metered" }
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
       },
       "evidence": [
         {
           "transactionId": "transaction-1",
           "distinctId": "customer-a",
-          "backendSynced": true,
+          "backendSynced": false,
           "revoked": false
         }
       ],
       "descriptors": {
         "transaction-1": [
-          { "featureId": "premium", "kind": "boolean" },
-          { "featureId": "credits", "kind": "metered", "allowance": 10 }
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
         ]
       },
-      "expectedOverlay": null,
-      "expectedVisible": {
-        "premium": { "allowed": false, "unlimited": false, "type": "boolean" },
-        "credits": { "allowed": true, "unlimited": false, "balance": 2, "type": "metered" }
+      "expectedOverlay": {
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 10
+        }
       },
-      "expectedState": "ready"
+      "expectedVisible": {
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 15,
+          "type": "metered"
+        }
+      },
+      "expectedState": "reconciling",
+      "transitions": [
+        {
+          "name": "acknowledgement clears evidence and the lower server value stands",
+          "distinctId": "customer-a",
+          "profileAdmitted": true,
+          "authoritative": {
+            "credits": {
+              "allowed": true,
+              "unlimited": false,
+              "balance": 4,
+              "type": "metered"
+            }
+          },
+          "evidence": [
+            {
+              "transactionId": "transaction-1",
+              "distinctId": "customer-a",
+              "backendSynced": true,
+              "revoked": false
+            }
+          ],
+          "expectedVisible": {
+            "credits": {
+              "allowed": true,
+              "unlimited": false,
+              "balance": 4,
+              "type": "metered"
+            }
+          },
+          "expectedState": "ready"
+        }
+      ]
     },
     {
       "name": "multiple purchases add metered allowances",
       "distinctId": "customer-a",
       "profileAdmitted": true,
       "authoritative": {
-        "credits": { "allowed": false, "unlimited": false, "balance": 0, "type": "metered" }
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
       },
       "evidence": [
         {
@@ -173,17 +358,34 @@
       ],
       "descriptors": {
         "transaction-1": [
-          { "featureId": "credits", "kind": "metered", "allowance": 10 }
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
         ],
         "transaction-2": [
-          { "featureId": "credits", "kind": "metered", "allowance": 5 }
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
         ]
       },
       "expectedOverlay": {
-        "credits": { "kind": "metered", "unlimited": false, "allowance": 15 }
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 20
+        }
       },
       "expectedVisible": {
-        "credits": { "allowed": true, "unlimited": false, "balance": 15, "type": "metered" }
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 25,
+          "type": "metered"
+        }
       },
       "expectedState": "reconciling"
     },
@@ -191,10 +393,23 @@
       "name": "unlimited is balance bearing and order independent",
       "distinctId": "customer-a",
       "profileAdmitted": true,
-      "authoritative": {},
+      "authoritative": {
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
+      },
       "evidence": [
         {
           "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        },
+        {
+          "transactionId": "transaction-2",
           "distinctId": "customer-a",
           "backendSynced": false,
           "revoked": false
@@ -202,15 +417,32 @@
       ],
       "descriptors": {
         "transaction-1": [
-          { "featureId": "credits", "kind": "metered", "allowance": 10 },
-          { "featureId": "credits", "kind": "metered", "unlimited": true }
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
+        ],
+        "transaction-2": [
+          {
+            "featureId": "credits",
+            "allowanceType": "unlimited"
+          }
         ]
       },
       "expectedOverlay": {
-        "credits": { "kind": "metered", "unlimited": true }
+        "credits": {
+          "kind": "metered",
+          "unlimited": true
+        }
       },
       "expectedVisible": {
-        "credits": { "allowed": true, "unlimited": true, "type": "metered" }
+        "credits": {
+          "allowed": true,
+          "unlimited": true,
+          "balance": 5,
+          "type": "metered"
+        }
       },
       "expectedState": "reconciling"
     },
@@ -219,136 +451,203 @@
       "distinctId": "customer-a",
       "profileAdmitted": true,
       "authoritative": {
-        "premium": { "allowed": false, "unlimited": false, "type": "boolean" }
-      },
-      "evidence": [
-        {
-          "transactionId": "transaction-1",
-          "distinctId": "customer-a",
-          "backendSynced": false,
-          "revoked": true
-        }
-      ],
-      "descriptors": {
-        "transaction-1": [
-          { "featureId": "premium", "kind": "boolean" }
-        ]
-      },
-      "expectedOverlay": null,
-      "expectedVisible": {
-        "premium": { "allowed": false, "unlimited": false, "type": "boolean" }
-      },
-      "expectedState": "ready"
-    },
-    {
-      "name": "identity change hides another customer evidence and awaits profile",
-      "distinctId": "customer-b",
-      "profileAdmitted": false,
-      "authoritative": null,
-      "evidence": [
-        {
-          "transactionId": "transaction-1",
-          "distinctId": "customer-a",
-          "backendSynced": false,
-          "revoked": false
-        }
-      ],
-      "descriptors": {
-        "transaction-1": [
-          { "featureId": "premium", "kind": "boolean" }
-        ]
-      },
-      "expectedOverlay": null,
-      "expectedVisible": {},
-      "expectedState": "unknown"
-    },
-    {
-      "name": "returning identity restores retained overlay but remains unknown before profile",
-      "distinctId": "customer-a",
-      "profileAdmitted": false,
-      "authoritative": null,
-      "evidence": [
-        {
-          "transactionId": "transaction-1",
-          "distinctId": "customer-a",
-          "backendSynced": false,
-          "revoked": false
-        }
-      ],
-      "descriptors": {
-        "transaction-1": [
-          { "featureId": "premium", "kind": "boolean" }
-        ]
-      },
-      "expectedOverlay": {
-        "premium": { "kind": "boolean", "unlimited": false }
-      },
-      "expectedVisible": {
-        "premium": { "allowed": true, "unlimited": false, "type": "boolean" }
-      },
-      "expectedState": "unknown"
-    },
-    {
-      "name": "identity transition starts with customer a authority and overlay",
-      "distinctId": "customer-a",
-      "profileAdmitted": true,
-      "authoritative": {
-        "credits": { "allowed": true, "unlimited": false, "balance": 50, "type": "metered" }
-      },
-      "evidence": [
-        {
-          "transactionId": "transaction-a",
-          "distinctId": "customer-a",
-          "backendSynced": false,
-          "revoked": false
+        "premium": {
+          "allowed": false,
+          "unlimited": false,
+          "type": "boolean"
         },
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
+      },
+      "evidence": [
         {
-          "transactionId": "transaction-b",
-          "distinctId": "customer-b",
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
           "backendSynced": false,
           "revoked": false
         }
       ],
       "descriptors": {
-        "transaction-a": [
-          { "featureId": "premium", "kind": "boolean" }
-        ],
-        "transaction-b": [
-          { "featureId": "credits", "kind": "metered", "allowance": 10 }
+        "transaction-1": [
+          {
+            "featureId": "premium"
+          },
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
         ]
       },
       "expectedOverlay": {
-        "premium": { "kind": "boolean", "unlimited": false }
+        "premium": {
+          "kind": "boolean",
+          "unlimited": false
+        },
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 10
+        }
       },
       "expectedVisible": {
-        "credits": { "allowed": true, "unlimited": false, "balance": 50, "type": "metered" },
-        "premium": { "allowed": true, "unlimited": false, "type": "boolean" }
+        "premium": {
+          "allowed": true,
+          "unlimited": false,
+          "type": "boolean"
+        },
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 15,
+          "type": "metered"
+        }
       },
       "expectedState": "reconciling",
       "transitions": [
         {
-          "name": "identity change to customer b drops customer a authority",
+          "name": "revocation arrives",
+          "distinctId": "customer-a",
+          "profileAdmitted": true,
+          "authoritative": {
+            "premium": {
+              "allowed": false,
+              "unlimited": false,
+              "type": "boolean"
+            },
+            "credits": {
+              "allowed": true,
+              "unlimited": false,
+              "balance": 5,
+              "type": "metered"
+            }
+          },
+          "evidence": [
+            {
+              "transactionId": "transaction-1",
+              "distinctId": "customer-a",
+              "backendSynced": false,
+              "revoked": true
+            }
+          ],
+          "expectedVisible": {
+            "premium": {
+              "allowed": false,
+              "unlimited": false,
+              "type": "boolean"
+            },
+            "credits": {
+              "allowed": true,
+              "unlimited": false,
+              "balance": 5,
+              "type": "metered"
+            }
+          },
+          "expectedState": "ready"
+        }
+      ]
+    },
+    {
+      "name": "identity round trip hides and restores the retained overlay",
+      "distinctId": "customer-a",
+      "profileAdmitted": true,
+      "authoritative": {
+        "premium": {
+          "allowed": false,
+          "unlimited": false,
+          "type": "boolean"
+        },
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
+      },
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        }
+      ],
+      "descriptors": {
+        "transaction-1": [
+          {
+            "featureId": "premium"
+          },
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
+        ]
+      },
+      "expectedOverlay": {
+        "premium": {
+          "kind": "boolean",
+          "unlimited": false
+        },
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 10
+        }
+      },
+      "expectedVisible": {
+        "premium": {
+          "allowed": true,
+          "unlimited": false,
+          "type": "boolean"
+        },
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 15,
+          "type": "metered"
+        }
+      },
+      "expectedState": "reconciling",
+      "transitions": [
+        {
+          "name": "switch to customer-b hides the overlay and awaits profile",
           "distinctId": "customer-b",
           "profileAdmitted": false,
-          "authoritative": null,
-          "expectedOverlay": {
-            "credits": { "kind": "metered", "unlimited": false, "allowance": 10 }
-          },
-          "expectedVisible": {
-            "credits": { "allowed": true, "unlimited": false, "balance": 10, "type": "metered" }
-          },
+          "expectedVisible": {},
           "expectedState": "unknown"
         },
         {
-          "name": "return to customer a restores overlay without stale authority",
+          "name": "return to customer-a restores the retained overlay but remains unknown before profile",
           "distinctId": "customer-a",
           "profileAdmitted": false,
-          "authoritative": null,
           "expectedOverlay": {
-            "premium": { "kind": "boolean", "unlimited": false }
+            "premium": {
+              "kind": "boolean",
+              "unlimited": false
+            },
+            "credits": {
+              "kind": "metered",
+              "unlimited": false,
+              "allowance": 10
+            }
           },
           "expectedVisible": {
-            "premium": { "allowed": true, "unlimited": false, "type": "boolean" }
+            "premium": {
+              "allowed": true,
+              "unlimited": false,
+              "type": "boolean"
+            },
+            "credits": {
+              "allowed": true,
+              "unlimited": false,
+              "balance": 10,
+              "type": "metered"
+            }
           },
           "expectedState": "unknown"
         }
@@ -359,19 +658,255 @@
       "distinctId": "customer-a",
       "profileAdmitted": true,
       "authoritative": {
-        "premium": { "allowed": false, "unlimited": false, "type": "boolean" }
+        "premium": {
+          "allowed": false,
+          "unlimited": false,
+          "type": "boolean"
+        }
       },
-      "evidence": [],
-      "descriptors": {
-        "external-purchase": [
-          { "featureId": "premium", "kind": "boolean" }
-        ]
-      },
-      "expectedOverlay": null,
+      "externalPurchaseDeclarations": [
+        {
+          "productId": "com.example.pro",
+          "source": "delegate"
+        }
+      ],
       "expectedVisible": {
-        "premium": { "allowed": false, "unlimited": false, "type": "boolean" }
+        "premium": {
+          "allowed": false,
+          "unlimited": false,
+          "type": "boolean"
+        }
       },
       "expectedState": "ready"
+    },
+    {
+      "name": "empty allowance list does not suppress another purchase",
+      "distinctId": "customer-a",
+      "profileAdmitted": false,
+      "evidence": [
+        {
+          "transactionId": "transaction-empty",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        },
+        {
+          "transactionId": "transaction-grant",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        }
+      ],
+      "descriptors": {
+        "transaction-empty": [],
+        "transaction-grant": [
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 5
+          }
+        ]
+      },
+      "expectedOverlay": {
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 5
+        }
+      },
+      "expectedVisible": {
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
+      },
+      "expectedState": "unknown"
+    },
+    {
+      "name": "credit system authority widens by fixed allowance",
+      "distinctId": "customer-a",
+      "profileAdmitted": true,
+      "authoritative": {
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 3,
+          "type": "creditSystem"
+        }
+      },
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        }
+      ],
+      "descriptors": {
+        "transaction-1": [
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 7
+          }
+        ]
+      },
+      "expectedOverlay": {
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 7
+        }
+      },
+      "expectedVisible": {
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 10,
+          "type": "creditSystem"
+        }
+      },
+      "expectedState": "reconciling"
+    },
+    {
+      "name": "descriptor change recomputes the projection",
+      "distinctId": "customer-a",
+      "profileAdmitted": true,
+      "authoritative": {
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
+      },
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        }
+      ],
+      "descriptors": {
+        "transaction-1": [
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
+        ]
+      },
+      "expectedOverlay": {
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 10
+        }
+      },
+      "expectedVisible": {
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 15,
+          "type": "metered"
+        }
+      },
+      "expectedState": "reconciling",
+      "transitions": [
+        {
+          "name": "descriptor allowance changes while evidence is retained",
+          "distinctId": "customer-a",
+          "profileAdmitted": true,
+          "authoritative": {
+            "credits": {
+              "allowed": true,
+              "unlimited": false,
+              "balance": 5,
+              "type": "metered"
+            }
+          },
+          "descriptors": {
+            "transaction-1": [
+              {
+                "featureId": "credits",
+                "allowanceType": "fixed",
+                "allowance": 25
+              }
+            ]
+          },
+          "expectedOverlay": {
+            "credits": {
+              "kind": "metered",
+              "unlimited": false,
+              "allowance": 25
+            }
+          },
+          "expectedVisible": {
+            "credits": {
+              "allowed": true,
+              "unlimited": false,
+              "balance": 30,
+              "type": "metered"
+            }
+          },
+          "expectedState": "reconciling"
+        }
+      ]
+    },
+    {
+      "name": "external declaration alongside verified evidence projects only the evidence",
+      "distinctId": "customer-a",
+      "profileAdmitted": true,
+      "authoritative": {
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 5,
+          "type": "metered"
+        }
+      },
+      "evidence": [
+        {
+          "transactionId": "transaction-1",
+          "distinctId": "customer-a",
+          "backendSynced": false,
+          "revoked": false
+        }
+      ],
+      "descriptors": {
+        "transaction-1": [
+          {
+            "featureId": "credits",
+            "allowanceType": "fixed",
+            "allowance": 10
+          }
+        ]
+      },
+      "externalPurchaseDeclarations": [
+        {
+          "productId": "com.example.megapack",
+          "source": "delegate"
+        }
+      ],
+      "expectedOverlay": {
+        "credits": {
+          "kind": "metered",
+          "unlimited": false,
+          "allowance": 10
+        }
+      },
+      "expectedVisible": {
+        "credits": {
+          "allowed": true,
+          "unlimited": false,
+          "balance": 15,
+          "type": "metered"
+        }
+      },
+      "expectedState": "reconciling"
     }
   ]
 }

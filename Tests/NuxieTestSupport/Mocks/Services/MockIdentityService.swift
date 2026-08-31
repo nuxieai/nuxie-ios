@@ -133,6 +133,57 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
         }
     }
 
+    @MainActor
+    public func mutateIdentity(
+        _ mutation: IdentityMutation,
+        publishing publication: (IdentityTransition) -> Void
+    ) -> IdentityTransition? {
+        identityPublicationLock.withLock {
+            let captured = lock.withLock {
+                let previous = identitySnapshotLocked()
+                switch mutation {
+                case .identify(let distinctId):
+                    if !_isUserIdentified || _distinctId != distinctId {
+                        _identityFenceGeneration &+= 1
+                    }
+                    _distinctId = distinctId
+                    _isUserIdentified = true
+                case .reset(let keepAnonymousId):
+                    let previousDistinctId = _distinctId
+                    let wasIdentified = _isUserIdentified
+                    if !keepAnonymousId {
+                        _anonymousId = UUID.v7().uuidString
+                    }
+                    _distinctId = _anonymousId
+                    _userProperties.removeAll()
+                    _isUserIdentified = false
+                    if wasIdentified || _distinctId != previousDistinctId {
+                        _identityFenceGeneration &+= 1
+                    }
+                }
+                let transition = IdentityTransition(
+                    previous: previous,
+                    current: identitySnapshotLocked()
+                )
+                return (
+                    transition,
+                    IdentityFenceToken(
+                        distinctId: transition.current.distinctId,
+                        generation: _identityFenceGeneration
+                    )
+                )
+            }
+
+            publication(captured.0)
+
+            let isStillCurrent = lock.withLock {
+                _distinctId == captured.1.distinctId
+                    && _identityFenceGeneration == captured.1.generation
+            }
+            return isStillCurrent ? captured.0 : nil
+        }
+    }
+
     public func clearUserCache(distinctId: String?) {
         // No-op for tests
     }
@@ -191,29 +242,28 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
         _ expectedDistinctId: String,
         _ work: (IdentitySnapshot) throws -> T
     ) rethrows -> IdentityFenced<T>? {
-        try lock.withLock {
+        let captured = lock.withLock { () -> (IdentitySnapshot, IdentityFenceToken)? in
             guard _distinctId == expectedDistinctId else { return nil }
             let generation = _identityFenceGeneration
-            let value = try work(IdentitySnapshot(
-                distinctId: _distinctId,
-                userId: _isUserIdentified ? _distinctId : nil,
-                anonymousId: _anonymousId,
-                isIdentified: _isUserIdentified
-            ))
+            return (
+                identitySnapshotLocked(),
+                IdentityFenceToken(
+                    distinctId: expectedDistinctId,
+                    generation: generation
+                )
+            )
+        }
+        guard let captured else { return nil }
+        let value = try work(captured.0)
+        lock.withLock {
             if let nextDistinctId = _distinctIdAfterNextFencedWork {
                 _distinctIdAfterNextFencedWork = nil
                 _distinctId = nextDistinctId
                 _isUserIdentified = true
                 _identityFenceGeneration &+= 1
             }
-            return IdentityFenced(
-                value: value,
-                token: IdentityFenceToken(
-                    distinctId: expectedDistinctId,
-                    generation: generation
-                )
-            )
         }
+        return IdentityFenced(value: value, token: captured.1)
     }
 
     @MainActor
@@ -229,7 +279,10 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
             }
             guard isCurrent else { return false }
             publication()
-            return true
+            return lock.withLock {
+                _distinctId == token.distinctId
+                    && _identityFenceGeneration == token.generation
+            }
         }
     }
 
@@ -266,6 +319,15 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
                 _isUserIdentified = identified
             }
         }
+    }
+
+    private func identitySnapshotLocked() -> IdentitySnapshot {
+        IdentitySnapshot(
+            distinctId: _distinctId,
+            userId: _isUserIdentified ? _distinctId : nil,
+            anonymousId: _anonymousId,
+            isIdentified: _isUserIdentified
+        )
     }
 
     public func setAnonymousId(_ id: String) {

@@ -39,6 +39,7 @@ public final class FeatureInfo: ObservableObject {
         fileprivate let featureId: String
         fileprivate let oldAccess: FeatureAccess
         fileprivate let newAccess: FeatureAccess
+        fileprivate let projectionIdentityGeneration: UInt64
     }
 
     internal struct VisibleBalanceEmission {
@@ -78,6 +79,19 @@ public final class FeatureInfo: ObservableObject {
     private var projectionPublicationGeneration: UInt64?
     private var visiblePublicationGeneration: UInt64 = 0
     private var projectionIdentityGeneration: UInt64 = 0
+
+    /// One generation token gates every synchronous user-observable step. A
+    /// nested publication invalidates the outer token; storage setters repair
+    /// after invalidation because `@Published` notifies before committing the
+    /// outer value, while callbacks only abandon their stale continuation.
+    private struct VisiblePublicationToken {
+        let generation: UInt64
+    }
+
+    private enum StalePublicationDisposition: Equatable {
+        case repairCommittedStorage
+        case abandon
+    }
 
     // MARK: - Init
 
@@ -120,7 +134,11 @@ public final class FeatureInfo: ObservableObject {
     /// Update all features (called internally when profile/features refresh)
     /// - Parameter features: Dictionary of feature ID to FeatureAccess
     internal func update(_ features: [String: FeatureAccess]) {
-        for featureId in features.keys {
+        let invalidatedFeatureIds = Set(features.keys)
+            .union(authoritative.keys)
+            .union(all.keys)
+            .union(balanceAuthorityGenerations.keys)
+        for featureId in invalidatedFeatureIds {
             advanceAuthority(for: featureId)
         }
         authoritative = features
@@ -128,8 +146,7 @@ public final class FeatureInfo: ObservableObject {
     }
 
     private func publish(_ features: [String: FeatureAccess], state: State) {
-        visiblePublicationGeneration &+= 1
-        let publicationGeneration = visiblePublicationGeneration
+        let publication = beginVisiblePublication()
         let oldFeatures = all
         let capturedOnFeatureChange = onFeatureChange
         let delegateEmissions: [(
@@ -147,23 +164,24 @@ public final class FeatureInfo: ObservableObject {
 
         // Publish readiness first so synchronous `$all` observers see the
         // state that describes the values being delivered.
-        self.state = state
-        guard visiblePublicationGeneration == publicationGeneration else {
-            publishVisibleProjection()
-            return
-        }
-        self.all = features
-        guard visiblePublicationGeneration == publicationGeneration else {
-            publishVisibleProjection()
-            return
-        }
+        guard publishObservableStep(
+            publication,
+            staleAfterEmission: .repairCommittedStorage,
+            { self.state = state }
+        ) else { return }
+        guard publishObservableStep(
+            publication,
+            staleAfterEmission: .repairCommittedStorage,
+            { self.all = features }
+        ) else { return }
 
         guard let capturedOnFeatureChange else { return }
         for (featureId, oldAccess, newAccess) in delegateEmissions {
-            capturedOnFeatureChange(featureId, oldAccess, newAccess)
-            guard visiblePublicationGeneration == publicationGeneration else {
-                return
-            }
+            guard publishObservableStep(
+                publication,
+                staleAfterEmission: .abandon,
+                { capturedOnFeatureChange(featureId, oldAccess, newAccess) }
+            ) else { return }
         }
     }
 
@@ -207,14 +225,15 @@ public final class FeatureInfo: ObservableObject {
         return CommandBalanceEmission(
             featureId: featureId,
             oldAccess: oldAccess,
-            newAccess: newAccess
+            newAccess: newAccess,
+            projectionIdentityGeneration: projectionIdentityGeneration
         )
     }
 
     internal func emitCommandBalance(_ emission: CommandBalanceEmission) {
-        // The freshness decision is already committed. Emission deliberately
-        // performs no revalidation, so an identity change after that decision
-        // cannot invalidate or rewrite the notification it describes.
+        guard emission.projectionIdentityGeneration == projectionIdentityGeneration else {
+            return
+        }
         authoritative[emission.featureId] = emission.newAccess
         publishVisibleProjection()
     }
@@ -346,7 +365,12 @@ public final class FeatureInfo: ObservableObject {
         // transition. Publishing it through `onFeatureChange` would expose an
         // intermediate value and let a reentrant identity change race the
         // command queue's decide-then-notify commit.
-        all = visible
+        let publication = beginVisiblePublication()
+        _ = publishObservableStep(
+            publication,
+            staleAfterEmission: .repairCommittedStorage,
+            { all = visible }
+        )
     }
 
     internal func decrementBalance(_ featureId: String, amount: Double) {
@@ -374,6 +398,34 @@ public final class FeatureInfo: ObservableObject {
 
     private func advanceAuthority(for featureId: String) {
         balanceAuthorityGenerations[featureId, default: 0] &+= 1
+    }
+
+    private func beginVisiblePublication() -> VisiblePublicationToken {
+        visiblePublicationGeneration &+= 1
+        return VisiblePublicationToken(generation: visiblePublicationGeneration)
+    }
+
+    /// Executes one synchronous observable step only while its publication is
+    /// current. The checks deliberately surround the step: Combine and delegate
+    /// callbacks can reenter identity/projection mutation before the step
+    /// returns to its caller.
+    @discardableResult
+    private func publishObservableStep(
+        _ publication: VisiblePublicationToken,
+        staleAfterEmission: StalePublicationDisposition,
+        _ emission: () -> Void
+    ) -> Bool {
+        guard visiblePublicationGeneration == publication.generation else {
+            return false
+        }
+        emission()
+        guard visiblePublicationGeneration == publication.generation else {
+            if staleAfterEmission == .repairCommittedStorage {
+                publishVisibleProjection()
+            }
+            return false
+        }
+        return true
     }
 
     private func publishVisibleProjection() {

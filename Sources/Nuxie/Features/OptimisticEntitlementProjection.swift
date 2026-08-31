@@ -70,12 +70,12 @@ enum OptimisticEntitlementProjection {
 
         var projection: [String: OptimisticEntitlementOverlay] = [:]
         for purchase in activeEvidence {
-            guard let allowances = descriptorAllowances[purchase.transactionId],
-                  !allowances.isEmpty else {
-                // Projection inputs are incomplete, so absence is the only
-                // truthful result. An empty overlay would claim that the
-                // descriptor authoritatively grants nothing.
-                return nil
+            // A purchase whose descriptor is missing or grants nothing (an
+            // empty entitlement list is schema-valid) contributes no overlay,
+            // but it must not suppress another purchase's derivable overlay.
+            // When nothing derives at all the projection stays absent below.
+            guard let allowances = descriptorAllowances[purchase.transactionId] else {
+                continue
             }
             for allowance in allowances where !allowance.featureId.isEmpty {
                 projection[allowance.featureId] = joining(

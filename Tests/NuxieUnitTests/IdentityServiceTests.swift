@@ -228,7 +228,9 @@ final class IdentityServiceTests: AsyncSpec {
             }
           }
 
-          expect(published).to(beTrue())
+          // The publication ran, but the reentrant identify superseded it, so
+          // the gate reports the publication as no longer current.
+          expect(published).to(beFalse())
           expect(mutationFinished.wait(timeout: .now() + 1)).to(equal(.success))
           expect(identityService.getDistinctId()).to(equal("background-customer"))
         }

@@ -14,6 +14,7 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
             let authoritative: [String: Access]?
             let evidence: [Evidence]?
             let descriptors: [String: [Allowance]]?
+            let externalPurchaseDeclarations: [ExternalDeclaration]?
             let expectedOverlay: [String: ExpectedOverlay]?
             let expectedVisible: [String: Access]
             let expectedState: String
@@ -25,6 +26,8 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
             let distinctId: String
             let profileAdmitted: Bool
             let authoritative: [String: Access]?
+            let evidence: [Evidence]?
+            let descriptors: [String: [Allowance]]?
             let expectedOverlay: [String: ExpectedOverlay]?
             let expectedVisible: [String: Access]
             let expectedState: String
@@ -37,11 +40,20 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
             let revoked: Bool
         }
 
+        /// Raw signed-descriptor fields; classification into an allowance kind
+        /// is the runner's job, so both SDKs must agree on the derivation.
         struct Allowance: Decodable {
             let featureId: String
-            let kind: OptimisticEntitlementAllowance.Kind
-            let unlimited: Bool?
+            let featureExternalId: String?
+            let allowanceType: String?
             let allowance: Double?
+        }
+
+        /// An input runners must consume and must never derive an overlay
+        /// from: external billing produces no verified evidence.
+        struct ExternalDeclaration: Decodable {
+            let productId: String
+            let source: String?
         }
 
         struct Access: Decodable {
@@ -71,24 +83,13 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
         )
 
         for vector in fixture.cases {
-            let evidence = vector.evidence?.map {
-                OptimisticPurchaseEvidence(
-                    transactionId: $0.transactionId,
-                    distinctId: $0.distinctId,
-                    backendSynced: $0.backendSynced,
-                    revoked: $0.revoked
-                )
-            }
-            let descriptors = vector.descriptors?.mapValues { allowances in
-                allowances.map {
-                    OptimisticEntitlementAllowance(
-                        featureId: $0.featureId,
-                        kind: $0.kind,
-                        unlimited: $0.unlimited ?? false,
-                        allowance: $0.allowance
-                    )
-                }
-            }
+            // The declarations input is deliberately consumed and never fed
+            // into derivation: external billing produces no overlay.
+            _ = vector.externalPurchaseDeclarations
+            var currentEvidence = Self.evidence(vector.evidence)
+            var currentDescriptors = Self.descriptors(vector.descriptors)
+            let evidence = currentEvidence
+            let descriptors = currentDescriptors
             let actual = OptimisticEntitlementProjection.derive(
                 evidence: evidence,
                 descriptorAllowances: descriptors,
@@ -131,9 +132,17 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
             }
 
             for transition in vector.transitions ?? [] {
+                // Transitions may replace the durable inputs to express
+                // acknowledgement, revocation, and descriptor changes.
+                if let replaced = transition.evidence {
+                    currentEvidence = Self.evidence(replaced)
+                }
+                if let replaced = transition.descriptors {
+                    currentDescriptors = Self.descriptors(replaced)
+                }
                 let transitionOverlay = OptimisticEntitlementProjection.derive(
-                    evidence: evidence,
-                    descriptorAllowances: descriptors,
+                    evidence: currentEvidence,
+                    descriptorAllowances: currentDescriptors,
                     distinctId: transition.distinctId
                 )
                 XCTAssertEqual(
@@ -150,12 +159,23 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
                     XCTAssertEqual(projected.unlimited, expected.unlimited, transition.name)
                     XCTAssertEqual(projected.allowance, expected.allowance, transition.name)
                 }
+                let transitionEvidence = currentEvidence
+                let transitionDescriptors = currentDescriptors
+                let inputsChanged = transition.evidence != nil
+                    || transition.descriptors != nil
                 await MainActor.run {
                     info.setProjectionDistinctId(transition.distinctId)
                     if transition.profileAdmitted {
                         info.admitProfileSnapshot(
                             transition.authoritative?.mapValues(Self.featureAccess) ?? [:],
                             admittedAt: Date()
+                        )
+                    }
+                    if inputsChanged {
+                        info.replaceOptimisticProjection(
+                            evidence: transitionEvidence,
+                            descriptorAllowances: transitionDescriptors,
+                            distinctId: transition.distinctId
                         )
                     }
                 }
@@ -234,6 +254,34 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
             )
             XCTAssertEqual(projection?["balance"]?.kind, .metered)
             XCTAssertEqual(projection?["balance"]?.unlimited, true)
+        }
+    }
+
+    private static func evidence(
+        _ raw: [Fixture.Evidence]?
+    ) -> [OptimisticPurchaseEvidence]? {
+        raw?.map {
+            OptimisticPurchaseEvidence(
+                transactionId: $0.transactionId,
+                distinctId: $0.distinctId,
+                backendSynced: $0.backendSynced,
+                revoked: $0.revoked
+            )
+        }
+    }
+
+    private static func descriptors(
+        _ raw: [String: [Fixture.Allowance]]?
+    ) -> [String: [OptimisticEntitlementAllowance]]? {
+        raw?.mapValues { allowances in
+            allowances.map {
+                OptimisticEntitlementAllowance(
+                    featureId: $0.featureId,
+                    featureExternalId: $0.featureExternalId,
+                    allowanceType: $0.allowanceType,
+                    allowance: $0.allowance
+                )
+            }
         }
     }
 
