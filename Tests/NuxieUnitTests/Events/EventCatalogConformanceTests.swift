@@ -82,6 +82,8 @@ $journey_effect_requested	processCapture	governed	batch	true	true
 $journey_enrolled	trackWithResponse	exempt	/i/event response lane	true	true
 $journey_exited	trackWithResponse|captureStableSystemEvent	exempt|governed	/i/event response lane|batch	true	true
 $journey_handoff	trackForTrigger	exempt	/i/event response lane	true	true
+$journey_leg_started	captureStableSystemEvent	governed	batch	true	true
+$journey_leg_completed	captureStableSystemEvent	governed	batch	true	true
 $journey_milestone	trackWithResponse|trackForTrigger	exempt|exempt	/i/event response lane|/i/event response lane	true|true	true|true
 $journey_parked	processCapture	governed	batch	true	true
 $journey_started	none	exempt	none	false	false
@@ -127,6 +129,8 @@ $tracking_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event resp
         ("JourneyEvents.journeyEnrolled", JourneyEvents.journeyEnrolled),
         ("JourneyEvents.journeyExited", JourneyEvents.journeyExited),
         ("JourneyEvents.journeyHandoff", JourneyEvents.journeyHandoff),
+        ("JourneyEvents.journeyLegStarted", JourneyEvents.journeyLegStarted),
+        ("JourneyEvents.journeyLegCompleted", JourneyEvents.journeyLegCompleted),
         ("JourneyEvents.journeyMilestone", JourneyEvents.journeyMilestone),
         ("JourneyEvents.journeyParked", JourneyEvents.journeyParked),
         ("JourneyEvents.journeySuperseded", JourneyEvents.journeySuperseded),
@@ -184,6 +188,8 @@ $tracking_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event resp
         "$journey_effect_completed": "hidden: journey effect protocol",
         "$journey_effect_requested": "hidden: journey effect protocol",
         "$journey_enrolled": "journeyStarted",
+        "$journey_leg_started": "journeyLegStarted",
+        "$journey_leg_completed": "journeyLegCompleted",
         "$journey_exited": "journeyEnded",
         "$journey_handoff": "hidden: journey ownership protocol",
         "$journey_milestone": "milestoneReached",

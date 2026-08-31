@@ -81,4 +81,13 @@ These language-neutral vectors pin the cross-plane experience-execution contract
   authority, tri-state readiness, revocation, identity scoping, and
   external-billing absence.
 
+- `journeys/planes/run-recovery.json`: only park points resume after process
+  death; active runs abandon with durable answers, pending completions keep
+  their occurrence time, and continuations echo the delivered generation.
+  Expired parks still require current-fact evaluation by the executor.
+- `journeys/planes/reports.json`: stable started/completed capture, exact
+  declared JSON outputs (including long and nested answers), terminal host
+  privacy drops, capture-before-retirement retries, and forwarded leg activity
+  names. These reports use the ordinary event store and batch delivery.
+
 The Swift contract tests exercise the same behaviors. Consumers in other SDKs can reuse these JSON vectors.

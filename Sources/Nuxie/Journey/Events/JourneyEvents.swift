@@ -14,6 +14,9 @@ final class JourneyEvents: Sendable {
 
     // MARK: - Journey facts
 
+    static let journeyLegStarted = "$journey_leg_started"
+    static let journeyLegCompleted = "$journey_leg_completed"
+
     static let journeyEnrolled = "$journey_enrolled"
     static let journeyTransition = "$journey_transition"
     static let journeyMilestone = "$journey_milestone"

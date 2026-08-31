@@ -1,0 +1,44 @@
+{
+  "suite": "device-leg-run-recovery-v1",
+  "startedAtMillis": 100000,
+  "reopenedAtMillis": 400000,
+  "cases": [
+    {
+      "name": "executing enrollment abandons with its durable answers",
+      "binding": { "type": "new" },
+      "beforeDeath": "executing",
+      "responses": { "answer": "yes", "optional": null },
+      "expectedOutcome": "abandoned",
+      "expectedGeneration": 0,
+      "expectedCompletedAtMillis": 400000
+    },
+    {
+      "name": "presenting continuation abandons and echoes its chapter",
+      "binding": { "type": "continue", "journeyId": "01991234-5678-7000-8000-000000000001", "generation": 7 },
+      "beforeDeath": "presenting",
+      "responses": { "score": 2 },
+      "expectedOutcome": "abandoned",
+      "expectedGeneration": 7,
+      "expectedCompletedAtMillis": 400000
+    },
+    {
+      "name": "expired park remains resumable for current-fact evaluation",
+      "binding": { "type": "continue", "journeyId": "01991234-5678-7000-8000-000000000002", "generation": 3 },
+      "beforeDeath": "parked",
+      "responses": { "choices": ["one", "two"] },
+      "wakeAtMillis": 300000,
+      "expectedOutcome": null,
+      "expectedGeneration": 3,
+      "expectedCompletedAtMillis": null
+    },
+    {
+      "name": "completed retry keeps original outcome and occurrence time",
+      "binding": { "type": "new" },
+      "beforeDeath": "completed",
+      "responses": { "consent": false },
+      "expectedOutcome": "done",
+      "expectedGeneration": 0,
+      "expectedCompletedAtMillis": 200000
+    }
+  ]
+}

@@ -6,6 +6,8 @@
     { "case": "experienceDismissed", "wireName": "experience_dismissed", "propertyKeys": ["experience_id", "experience_version", "journey_id", "reason"] },
     { "case": "experienceErrored", "wireName": "experience_errored", "propertyKeys": ["experience_id", "experience_version", "journey_id", "message"] },
     { "case": "journeyStarted", "wireName": "journey_started", "propertyKeys": ["experience_id", "experience_version", "journey_id"] },
+    { "case": "journeyLegStarted", "wireName": "journey_leg_started", "propertyKeys": ["experience_id", "experience_version", "journey_id", "leg_generation", "leg_id"] },
+    { "case": "journeyLegCompleted", "wireName": "journey_leg_completed", "propertyKeys": ["experience_id", "experience_version", "journey_id", "leg_generation", "leg_id", "outcome"] },
     { "case": "milestoneReached", "wireName": "milestone_reached", "propertyKeys": ["experience_id", "experience_version", "journey_id", "milestone_id"] },
     { "case": "journeyConverted", "wireName": "journey_converted", "propertyKeys": ["experience_id", "experience_version", "journey_id"] },
     { "case": "journeyEnded", "wireName": "journey_ended", "propertyKeys": ["exit_reason", "experience_id", "experience_version", "journey_id"] },

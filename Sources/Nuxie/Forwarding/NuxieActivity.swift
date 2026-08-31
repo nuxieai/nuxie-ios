@@ -49,6 +49,10 @@ public enum NuxieActivity: Sendable {
 
   /// A journey enrolled and began.
   case journeyStarted(ExperienceRef)
+  /// This device started one leg of a pinned journey.
+  case journeyLegStarted(ExperienceRef, legId: String, generation: Int)
+  /// This device queued a leg completion; the server may continue the chain.
+  case journeyLegCompleted(ExperienceRef, legId: String, generation: Int, outcome: String)
   /// A journey milestone was reached.
   case milestoneReached(ExperienceRef, milestoneId: String)
   /// The server attributed a conversion to a journey.
@@ -188,6 +192,8 @@ extension NuxieActivity {
     case .experienceDismissed: "experience_dismissed"
     case .experienceErrored: "experience_errored"
     case .journeyStarted: "journey_started"
+    case .journeyLegStarted: "journey_leg_started"
+    case .journeyLegCompleted: "journey_leg_completed"
     case .milestoneReached: "milestone_reached"
     case .journeyConverted: "journey_converted"
     case .journeyEnded: "journey_ended"
@@ -219,6 +225,15 @@ extension NuxieActivity {
     switch self {
     case .experienceShown(let ref), .journeyStarted(let ref):
       properties.add(ref)
+    case .journeyLegStarted(let ref, let legId, let generation):
+      properties.add(ref)
+      properties["leg_id"] = .string(legId)
+      properties["leg_generation"] = .int(generation)
+    case .journeyLegCompleted(let ref, let legId, let generation, let outcome):
+      properties.add(ref)
+      properties["leg_id"] = .string(legId)
+      properties["leg_generation"] = .int(generation)
+      properties["outcome"] = .string(outcome)
     case .experienceDismissed(let ref, let reason):
       properties.add(ref)
       properties["reason"] = .string(reason.rawValue)

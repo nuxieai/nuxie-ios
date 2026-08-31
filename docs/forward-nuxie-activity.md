@@ -65,6 +65,13 @@ Arrays in the typed activity, such as unavailable product identifiers, appear
 as comma-joined strings in the flat property view.
 
 Use `info.id` as an idempotency key if your destination supports one.
+Device leg execution adds `journey_leg_started` and `journey_leg_completed`.
+Both include the experience/version, journey, leg ID, and leg generation;
+completion also includes its outcome. A completed leg does not imply that the
+whole journey ended. Buffered answers remain in the regular event report and
+are not copied into the flat activity view. Host `beforeSend` privacy policy
+applies before either event becomes visible to forwarding.
+
 `info.timestamp` records when the activity happened. `info.receivedAt` records
 when this device learned of it, which can be later for server conversion facts.
 For exhaustive Swift handling, switch over `info.activity` and include an

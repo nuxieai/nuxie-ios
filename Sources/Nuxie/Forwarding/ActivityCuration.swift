@@ -15,6 +15,8 @@ enum ActivityCuration {
     SystemEventNames.featureUsed,
     JourneyEvents.journeyConverted,
     JourneyEvents.journeyEnrolled,
+    JourneyEvents.journeyLegStarted,
+    JourneyEvents.journeyLegCompleted,
     JourneyEvents.journeyExited,
     JourneyEvents.journeyMilestone,
     JourneyEvents.journeySuperseded,
@@ -74,6 +76,19 @@ enum ActivityCuration {
       return .experienceErrored(ref, message: string(properties, "error_message") ?? "")
     case JourneyEvents.journeyEnrolled:
       return experienceRef(properties).map(NuxieActivity.journeyStarted)
+    case JourneyEvents.journeyLegStarted, JourneyEvents.journeyLegCompleted:
+      guard let ref = experienceRef(properties, requireVersion: true), ref.journeyId != nil,
+            let legId = nonemptyString(properties, "leg_id"),
+            let number = properties["leg_generation"] as? NSNumber,
+            CFGetTypeID(number) != CFBooleanGetTypeID(),
+            number.doubleValue >= 0, number.doubleValue <= 9_007_199_254_740_991,
+            number.doubleValue.rounded() == number.doubleValue
+      else { return missing(internalName) }
+      if internalName == JourneyEvents.journeyLegStarted {
+        return .journeyLegStarted(ref, legId: legId, generation: number.intValue)
+      }
+      guard let outcome = nonemptyString(properties, "outcome") else { return missing(internalName) }
+      return .journeyLegCompleted(ref, legId: legId, generation: number.intValue, outcome: outcome)
     case JourneyEvents.journeyMilestone:
       guard let ref = experienceRef(properties),
             let milestoneId = string(properties, "milestone_id")
