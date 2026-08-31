@@ -2,6 +2,17 @@
 
 These language-neutral vectors pin the cross-plane experience-execution contract:
 
+- `journeys/planes/release.json`: canonical TypeScript publisher-signed report-only
+  and rendered leg envelopes, using the public development test key. The parent
+  repository's device-leg release suite verifies the same envelopes against the
+  canonical schemas and Ed25519 verifier; the iOS and macOS admission suites consume
+  these bytes without reconstructing a whole journey.
+- `journeys/planes/entry-evaluation.json`: flat-fact device-leg entry evaluation,
+  including the foreground latch, event edges, opaque positive/negative membership
+  gates, current property snapshots, and fail-closed unknown facts under negation.
+  These vectors belong to the Experience Plane Partitioning runtime; the legacy
+  handoff and claim suites below remain until the coordinated state discard.
+
 - `journeys/transitions`: a timeline maps to ordered `$journey_transition` facts with exact properties.
 - `journeys/effects`: deterministic request ids, server completion facts, result binding, timeout, late-arrival, and offline-delivery semantics.
 - `segments/seed-mirror`: admitted profile snapshots replace the read-only membership value;

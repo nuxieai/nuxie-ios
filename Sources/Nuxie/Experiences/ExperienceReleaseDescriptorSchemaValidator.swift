@@ -16,6 +16,26 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             optional: ["responseSchema"],
             path: "$"
         )
+        try validateMetadata(root)
+        try validateEnrollment(root["enrollment"])
+        try validateLifecycle(root["lifecycle"])
+        try validatePresentation(root["presentation"])
+        let placements = try validateCommerce(root)
+        let journeyScreenIDs = try validateJourney(
+            root["journey"],
+            placementIDs: Set(placements)
+        )
+        try validateResponseContract(
+            schema: root["responseSchema"],
+            captures: root["responseCaptures"],
+            behaviors: root["screenBehaviors"],
+            screenIDs: journeyScreenIDs
+        )
+        try validateRenderRequirements(root)
+        try validateProvenance(root)
+    }
+
+    static func validateMetadata(_ root: [String: Any]) throws {
         _ = try object(
             root["identity"],
             required: [
@@ -35,9 +55,9 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         try identifier(metadata["appDefaultTimezone"], path: "metadata.appDefaultTimezone")
         if let value = metadata["experienceType"] { try boundedString(value, minimum: 1, maximumUTF16: 64, path: "metadata.experienceType") }
         if let value = metadata["description"] { try boundedString(value, minimum: 0, maximumUTF16: 2_048, path: "metadata.description") }
-        try validateEnrollment(root["enrollment"])
-        try validateLifecycle(root["lifecycle"])
-        try validatePresentation(root["presentation"])
+    }
+
+    static func validateCommerce(_ root: [String: Any]) throws -> Set<String> {
         let products = try array(root["products"], path: "products").enumerated().map { index, value in
             let path = "products[\(index)]"
             let product = try object(
@@ -285,16 +305,10 @@ enum ExperienceReleaseDescriptorSchemaValidator {
               zip(placements, placements.dropFirst()).allSatisfy({
                   javascriptStringPrecedes($0, $1)
               }) else { try invalid("placements") }
-        let journeyScreenIDs = try validateJourney(
-            root["journey"],
-            placementIDs: Set(placements)
-        )
-        try validateResponseContract(
-            schema: root["responseSchema"],
-            captures: root["responseCaptures"],
-            behaviors: root["screenBehaviors"],
-            screenIDs: journeyScreenIDs
-        )
+        return Set(placements)
+    }
+
+    static func validateRenderRequirements(_ root: [String: Any]) throws {
         try validateRender(root["render"])
         let requirements = try object(
             root["requirements"],
@@ -360,6 +374,9 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         }
         try identifier(timezone["revision"], path: "requirements.timezoneData.revision")
         try lowercaseSHA256(timezone["sha256"], path: "requirements.timezoneData.sha256")
+    }
+
+    static func validateProvenance(_ root: [String: Any]) throws {
         _ = try object(
             root["provenance"],
             required: ["compilerCommit", "compilerVersion"],
@@ -473,7 +490,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         }
     }
 
-    private static func validatePresentation(_ value: Any?) throws {
+    static func validatePresentation(_ value: Any?) throws {
         let raw = try dictionary(value, path: "presentation")
         guard let style = raw["style"] as? String else { try invalid("presentation.style") }
         let presentation: [String: Any]
@@ -661,7 +678,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         }
     }
 
-    private static func validateCanonicalJourneyAction(
+    static func validateCanonicalJourneyAction(
         _ value: Any?,
         path: String,
         screenIDs: Set<String>,
@@ -794,7 +811,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         )
     }
 
-    private static func validateJourneyTimezone(_ value: Any?, path: String) throws {
+    static func validateJourneyTimezone(_ value: Any?, path: String) throws {
         let timezone = try dictionary(value, path: path)
         guard let kind = timezone["kind"] as? String else { try invalid("\(path).kind") }
         switch kind {
@@ -814,7 +831,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         }
     }
 
-    private static func validateJourneyWaitTrigger(_ value: Any?, path: String) throws {
+    static func validateJourneyWaitTrigger(_ value: Any?, path: String) throws {
         let trigger = try dictionary(value, path: path)
         guard let kind = trigger["kind"] as? String else { try invalid("\(path).kind") }
         switch kind {
@@ -826,7 +843,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         }
     }
 
-    private static func validateJourneyCondition(_ value: Any?, path: String) throws {
+    static func validateJourneyCondition(_ value: Any?, path: String) throws {
         let condition = try dictionary(value, path: path)
         guard let type = condition["type"] as? String else { try invalid("\(path).type") }
         switch type {
@@ -846,7 +863,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
     private static func validateJourneyStringValue(_ value: Any?, path: String) throws { try validateJourneyValue(value, path: path, allowedTypes: ["String", "Event.Field", "Response.Field"]) }
     private static func validateJourneyNumberValue(_ value: Any?, path: String) throws { try validateJourneyValue(value, path: path, allowedTypes: ["Number", "Event.Field", "Response.Field"]) }
 
-    private static func validateJourneyPurchasePlacementId(
+    static func validateJourneyPurchasePlacementId(
         _ value: Any?,
         path: String,
         placementIDs: Set<String>? = nil
@@ -910,7 +927,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         }
     }
 
-    private static func validateResponseContract(
+    static func validateResponseContract(
         schema: Any?,
         captures: Any?,
         behaviors: Any?,

@@ -1,0 +1,534 @@
+{
+  "suite": "device-leg-entry-v1",
+  "version": 1,
+  "cases": [
+    {
+      "name": "arming after app-open capture starts in the same foreground",
+      "condition": {
+        "type": "app_foregrounded"
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "a foreground latch stays true after unrelated events",
+      "condition": {
+        "type": "app_foregrounded"
+      },
+      "expected": true,
+      "foreground": true,
+      "event": {
+        "name": "cart_changed",
+        "properties": {}
+      },
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "background clears the latch",
+      "condition": {
+        "type": "app_foregrounded"
+      },
+      "expected": false,
+      "foreground": false,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "ordinary events do not latch",
+      "condition": {
+        "type": "event",
+        "eventName": "checkout"
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "ordinary event matches its current edge",
+      "condition": {
+        "type": "event",
+        "eventName": "checkout"
+      },
+      "expected": true,
+      "foreground": true,
+      "event": {
+        "name": "checkout",
+        "properties": {}
+      },
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "another edge is not a match",
+      "condition": {
+        "type": "event",
+        "eventName": "checkout"
+      },
+      "expected": false,
+      "foreground": true,
+      "event": {
+        "name": "cart_changed",
+        "properties": {}
+      },
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "member",
+      "condition": {
+        "type": "segment",
+        "segmentId": "opaque",
+        "member": true
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {
+          "opaque": true
+        },
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [
+          "opaque"
+        ],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "negative member",
+      "condition": {
+        "type": "segment",
+        "segmentId": "opaque",
+        "member": false
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {
+          "opaque": false
+        },
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [
+          "opaque"
+        ],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "missing is unknown",
+      "condition": {
+        "type": "segment",
+        "segmentId": "opaque",
+        "member": false
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [
+          "opaque"
+        ],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "changed at start",
+      "condition": {
+        "type": "segment",
+        "segmentId": "opaque",
+        "member": true
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {
+          "opaque": false
+        },
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [
+          "opaque"
+        ],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "omitted property slot is unknown even under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "User",
+              "op": "is_set",
+              "key": "plan"
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [
+          "plan"
+        ],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "explicit absent property satisfies not-exists",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "User",
+              "op": "is_set",
+              "key": "plan"
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {
+          "plan": {
+            "present": false
+          }
+        },
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [
+          "plan"
+        ],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "fresh property suppresses the entry condition",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "User",
+              "op": "is_set",
+              "key": "plan"
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {
+          "plan": {
+            "present": true,
+            "value": "paid"
+          }
+        },
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [
+          "plan"
+        ],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "unknown operators cannot become true under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Future.Operator"
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "segment transition queries are never device state gates",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Segment",
+              "op": "entered_within",
+              "id": "opaque",
+              "within": {
+                "type": "Duration",
+                "value": 60
+              }
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "unknown property operator stays unknown under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "User",
+              "op": "future_op",
+              "key": "plan"
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {
+          "plan": {
+            "present": true,
+            "value": "paid"
+          }
+        },
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [
+          "plan"
+        ],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "Pred without event context stays unknown under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Pred",
+              "op": "is_set",
+              "key": "premium"
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "PredAnd without event context stays unknown under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "PredAnd",
+              "args": [
+                {
+                  "type": "Pred",
+                  "op": "is_set",
+                  "key": "premium"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    },
+    {
+      "name": "PredOr without event context stays unknown under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "PredOr",
+              "args": [
+                {
+                  "type": "Pred",
+                  "op": "is_set",
+                  "key": "premium"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      }
+    }
+  ]
+}

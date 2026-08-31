@@ -73,7 +73,68 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         supportedRuntime: ExperienceReleaseSupportedRuntime,
         replayPolicy: ExperienceReleaseReplayPolicy
     ) throws -> AuthenticatedExperienceReleaseDescriptor {
-        let envelope = try decodeEnvelope(envelopeBytes)
+        let (envelope, descriptorBytes) = try authenticateEnvelope(
+            envelopeBytes, authorizationKeys: authorizationKeys,
+            mediaType: ExperienceReleaseDescriptorLimits.mediaType,
+            signatureDomain: ExperienceReleaseDescriptorLimits.signatureDomain
+        )
+
+        // No descriptor byte is interpreted until the exact, domain-separated
+        // signature has authenticated it.
+        let descriptor = try decodeAndValidateDescriptor(descriptorBytes)
+        guard descriptor.identity == expectedIdentity.identity else {
+            throw ExperienceReleaseDescriptorAuthenticationError.identityMismatch
+        }
+        try validateRuntimeRequirements(
+            descriptor.requirements,
+            supported: supportedRuntime
+        )
+        try validateRuntimeBindings(descriptor.screenBehaviors)
+        let publishedAtSeqToPromote = try validateReplayPolicy(
+            replayPolicy,
+            identity: descriptor.identity,
+            descriptorSHA256: envelope.descriptorSha256
+        )
+        return AuthenticatedExperienceReleaseDescriptor(
+            authenticatedKeyID: envelope.signature.keyId,
+            exactDescriptorBytes: descriptorBytes,
+            descriptorSHA256: envelope.descriptorSha256,
+            descriptor: descriptor,
+            publishedAtSeqToPromote: publishedAtSeqToPromote
+        )
+    }
+
+    func validateIdentity(_ identity: ExperienceReleaseIdentity) throws {
+        guard identity.versionNumber > 0,
+                  identity.versionNumber <= 9_007_199_254_740_991,
+                  identity.publishedAtSeq >= 0,
+                  identity.publishedAtSeq <= 9_007_199_254_740_991,
+                  isZodOffsetDateTime(identity.publishedAt),
+                  ["test", "live"].contains(identity.environment),
+                  [
+                    identity.appId,
+                    identity.experienceId,
+                    identity.experienceVersionId,
+                    identity.buildId,
+                  ].allSatisfy({
+                    !$0.isEmpty && !$0.contains("\u{0}") && $0.utf16.count <= 128
+                  }) else {
+            throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+        }
+    }
+
+    func validateDeviceLegEnvelope(_ bytes: Data) throws {
+        let envelope = try decodeEnvelope(bytes, mediaType: DeviceLegReleaseDescriptor.mediaType)
+        _ = try decodeDescriptorBytes(envelope)
+        guard let signature = canonicalBase64(envelope.signature.signatureBase64, maximumDecodedBytes: 64),
+              signature.count == 64 else { throw ExperienceReleaseDescriptorAuthenticationError.invalidEnvelope }
+    }
+
+    private func authenticateEnvelope(
+        _ envelopeBytes: Data, authorizationKeys: [ExperiencePackageAuthorizationKey],
+        mediaType: String, signatureDomain: String
+    ) throws -> (ExperienceReleaseDescriptorEnvelope, Data) {
+        let envelope = try decodeEnvelope(envelopeBytes, mediaType: mediaType)
         let descriptorBytes = try decodeDescriptorBytes(envelope)
         let keys = try validateKeys(authorizationKeys)
         guard let keyBytes = keys[envelope.signature.keyId] else {
@@ -93,52 +154,73 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         ), signatureBytes.count == 64 else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidEnvelope
         }
-        let signedBytes = Data(ExperienceReleaseDescriptorLimits.signatureDomain.utf8)
+        let signedBytes = Data(signatureDomain.utf8)
             + descriptorBytes
         guard publicKey.isValidSignature(signatureBytes, for: signedBytes) else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidSignature
         }
 
-        // No descriptor byte is interpreted until the exact, domain-separated
-        // signature has authenticated it.
-        let descriptor = try decodeAndValidateDescriptor(descriptorBytes)
-        guard descriptor.identity == expectedIdentity.identity else {
+        return (envelope, descriptorBytes)
+    }
+
+    func authenticateDeviceLeg(
+        envelopeBytes: Data,
+        authorizationKeys: [ExperiencePackageAuthorizationKey],
+        expectedIdentity: ExperienceReleaseIdentity,
+        expectedLegId: String,
+        supportedRuntime: ExperienceReleaseSupportedRuntime,
+        replayPolicy: ExperienceReleaseReplayPolicy
+    ) throws -> AuthenticatedDeviceLegRelease {
+        let (envelope, bytes) = try authenticateEnvelope(
+            envelopeBytes, authorizationKeys: authorizationKeys,
+            mediaType: DeviceLegReleaseDescriptor.mediaType,
+            signatureDomain: DeviceLegReleaseDescriptor.signatureDomain
+        )
+        // Authentication precedes interpretation, including cursor validation.
+        let descriptor: DeviceLegReleaseDescriptor
+        do {
+            try StrictJSONDuplicateKeyValidator.validate(bytes)
+            guard let root = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
+                throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+            }
+            try DeviceLegSchemaValidator.validate(root)
+            try validateJSONValue(root, field: nil)
+            try validateRenderValue(root["render"], field: "render")
+            try validateArtifactReferences(root)
+            descriptor = try JSONDecoder().decode(DeviceLegReleaseDescriptor.self, from: bytes)
+            try validateIdentity(descriptor.identity)
+        } catch let error as ExperienceReleaseDescriptorAuthenticationError { throw error }
+        catch { throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor }
+        guard descriptor.identity == expectedIdentity, descriptor.leg.id == expectedLegId else {
             throw ExperienceReleaseDescriptorAuthenticationError.identityMismatch
         }
-        try validateRuntimeRequirements(
-            descriptor.requirements,
-            supported: supportedRuntime
-        )
-        try validateRuntimeBindings(descriptor)
-        let publishedAtSeqToPromote = try validateReplayPolicy(
-            replayPolicy,
-            descriptor: descriptor,
-            descriptorSHA256: envelope.descriptorSha256
-        )
-        return AuthenticatedExperienceReleaseDescriptor(
-            authenticatedKeyID: envelope.signature.keyId,
-            exactDescriptorBytes: descriptorBytes,
-            descriptorSHA256: envelope.descriptorSha256,
-            descriptor: descriptor,
-            publishedAtSeqToPromote: publishedAtSeqToPromote
+        if let requirements = descriptor.requirements {
+            try validateRuntimeRequirements(requirements, supported: supportedRuntime)
+        }
+        try validateRuntimeBindings(descriptor.screenBehaviors)
+        return AuthenticatedDeviceLegRelease(
+            authenticatedKeyID: envelope.signature.keyId, exactDescriptorBytes: bytes,
+            descriptorSHA256: envelope.descriptorSha256, descriptor: descriptor,
+            publishedAtSeqToPromote: try validateReplayPolicy(replayPolicy, identity: descriptor.identity,
+                descriptorSHA256: envelope.descriptorSha256)
         )
     }
 
     private func validateReplayPolicy(
         _ policy: ExperienceReleaseReplayPolicy,
-        descriptor: ExperienceReleaseDescriptor,
+        identity: ExperienceReleaseIdentity,
         descriptorSHA256: String
     ) throws -> Int? {
         switch policy {
         case .active(let minimumPublishedAtSeq):
             guard minimumPublishedAtSeq >= 0,
-                  descriptor.identity.publishedAtSeq >= minimumPublishedAtSeq else {
+                  identity.publishedAtSeq >= minimumPublishedAtSeq else {
                 throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
             }
-            return descriptor.identity.publishedAtSeq
+            return identity.publishedAtSeq
         case .pinned(let experienceVersionId, let buildId, let expectedDigest):
-            guard descriptor.identity.experienceVersionId == experienceVersionId,
-                  descriptor.identity.buildId == buildId,
+            guard identity.experienceVersionId == experienceVersionId,
+                  identity.buildId == buildId,
                   descriptorSHA256 == expectedDigest else {
                 throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
             }
@@ -146,7 +228,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         }
     }
 
-    private func decodeEnvelope(_ bytes: Data) throws
+    private func decodeEnvelope(_ bytes: Data, mediaType: String) throws
         -> ExperienceReleaseDescriptorEnvelope
     {
         guard bytes.count <= ExperienceReleaseDescriptorLimits.envelopeBytes else {
@@ -169,7 +251,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
                 ExperienceReleaseDescriptorEnvelope.self,
                 from: bytes
             )
-            guard envelope.mediaType == ExperienceReleaseDescriptorLimits.mediaType,
+            guard envelope.mediaType == mediaType,
                   envelope.encoding == "base64",
                   envelope.signature.version == 1,
                   envelope.signature.algorithm == "ed25519",
@@ -222,23 +304,10 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
                 ExperienceReleaseDescriptor.self,
                 from: bytes
             )
-            guard descriptor.schemaVersion == ExperienceReleaseDescriptorLimits.schemaVersion,
-                  descriptor.identity.versionNumber > 0,
-                  descriptor.identity.versionNumber <= 9_007_199_254_740_991,
-                  descriptor.identity.publishedAtSeq >= 0,
-                  descriptor.identity.publishedAtSeq <= 9_007_199_254_740_991,
-                  isZodOffsetDateTime(descriptor.identity.publishedAt),
-                  ["test", "live"].contains(descriptor.identity.environment),
-                  [
-                    descriptor.identity.appId,
-                    descriptor.identity.experienceId,
-                    descriptor.identity.experienceVersionId,
-                    descriptor.identity.buildId,
-                  ].allSatisfy({
-                    !$0.isEmpty && !$0.contains("\u{0}") && $0.utf16.count <= 128
-                  }) else {
+            guard descriptor.schemaVersion == ExperienceReleaseDescriptorLimits.schemaVersion else {
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
             }
+            try validateIdentity(descriptor.identity)
             return descriptor
         } catch let error as ExperienceReleaseDescriptorAuthenticationError {
             throw error
@@ -435,9 +504,9 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func validateRuntimeBindings(
-        _ descriptor: ExperienceReleaseDescriptor
+        _ screenBehaviors: [[String: ExperienceReleaseJSONValue]]
     ) throws {
-        for screen in descriptor.screenBehaviors {
+        for screen in screenBehaviors {
             guard case .array(let controls) = screen["controls"] else { continue }
             for value in controls {
                 guard case .object(let control) = value,
