@@ -31,8 +31,8 @@
             {
               "id": "yes",
               "condition": {
-                "type": "Boolean",
-                "value": true
+                "type": "Truthy",
+                "value": { "type": "Boolean", "value": true }
               }
             }
           ]
@@ -192,7 +192,10 @@
         "action": {
           "type": "wait_until",
           "trigger": { "kind": "event", "eventName": "qualified" },
-          "condition": { "type": "Boolean", "value": true },
+          "condition": {
+            "type": "Truthy",
+            "value": { "type": "Boolean", "value": true }
+          },
           "maxTimeMs": 10000
         },
         "outlets": { "satisfied": "success", "timeout": "expired" }
@@ -260,7 +263,10 @@
         "action": {
           "type": "wait_until",
           "trigger": { "kind": "event", "eventName": "qualified" },
-          "condition": { "type": "Boolean", "value": true },
+          "condition": {
+            "type": "Truthy",
+            "value": { "type": "Boolean", "value": true }
+          },
           "maxTimeMs": 10000
         },
         "outlets": { "satisfied": "success", "timeout": "expired" }
