@@ -60,7 +60,7 @@ struct JourneyPlaneProfile {
 
     static func decode(_ data: Data) throws -> Self {
         guard data.count <= ExperienceReleaseDescriptorLimits.profileBytes else { throw invalid }
-        try StrictJSONDuplicateKeyValidator.validate(data)
+        try StrictJSONDuplicateKeyValidator.validate(data, ordinalKeys: true)
         let root = try exact(JSONSerialization.jsonObject(with: data), ["schemaVersion", "status", "delivery", "features", "facts", "armedLegs", "releases"])
         guard root["schemaVersion"] as? String == "nuxie.journey-plane-profile.v1", root["status"] as? String == "ok" else { throw invalid }
         let facts = try exact(root["facts"], ["properties", "memberships", "assignments"])

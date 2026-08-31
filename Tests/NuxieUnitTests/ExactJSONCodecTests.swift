@@ -32,6 +32,7 @@ final class ExactJSONCodecTests: XCTestCase {
         let left = Data(#"{"é":false,"e\u0301":true,"array":[{"é":1,"e\u0301":2}],"null":null}"#.utf8)
         let right = Data(#"{"null":null,"array":[{"e\u0301":2,"é":1}],"e\u0301":true,"é":false}"#.utf8)
         let object = try ExactJSONCodec.decode(ExactJSONObject<ExperienceReleaseJSONValue>.self, from: left)
+        XCTAssertThrowsError(try StrictJSONDuplicateKeyValidator.validate(left), "Legacy decoders still fail closed on keys they cannot retain")
         XCTAssertEqual(object.count, 4)
         guard case .bool(false) = object["é"], case .bool(true) = object["e\u{0301}"] else {
             return XCTFail("Each ordinal key must retain its own value")
