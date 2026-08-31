@@ -3,6 +3,31 @@ import XCTest
 @testable import Nuxie
 
 final class ExactJSONCodecTests: XCTestCase {
+    func testWideIntegersAndFailedArrayProbesPreserveTheirValues() throws {
+        for value in [Int64.min, 9_007_199_254_740_993, Int64.max] {
+            XCTAssertEqual(try ExactJSONCodec.decode(Int64.self, from: ExactJSONCodec.encode(value)), value)
+        }
+        XCTAssertEqual(try ExactJSONCodec.decode(UInt64.self, from: ExactJSONCodec.encode(UInt64.max)), UInt64.max)
+        XCTAssertThrowsError(try ExactJSONCodec.decode(Int8.self, from: Data("128".utf8)))
+        struct Probe: Decodable {
+            let first: String
+            let second: String
+            init(from decoder: Decoder) throws {
+                var values = try decoder.unkeyedContainer()
+                XCTAssertThrowsError(try values.decode(Int.self))
+                XCTAssertEqual(values.currentIndex, 0)
+                XCTAssertThrowsError(try values.nestedUnkeyedContainer())
+                XCTAssertEqual(values.currentIndex, 0)
+                first = try values.decode(String.self)
+                second = try values.decode(String.self)
+                XCTAssertTrue(values.isAtEnd)
+            }
+        }
+        let result = try ExactJSONCodec.decode(Probe.self, from: Data(#"["first","second"]"#.utf8))
+        XCTAssertEqual(result.first, "first")
+        XCTAssertEqual(result.second, "second")
+    }
+
     func testExactNamesSurviveNestedValuesAndCanonicalOrder() throws {
         let left = Data(#"{"é":false,"e\u0301":true,"array":[{"é":1,"e\u0301":2}],"null":null}"#.utf8)
         let right = Data(#"{"null":null,"array":[{"e\u0301":2,"é":1}],"e\u0301":true,"é":false}"#.utf8)

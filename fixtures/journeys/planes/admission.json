@@ -608,6 +608,43 @@
         }
       },
       "descriptor": {}
+    },
+    {
+      "name": "ordinal boundary field names are distinct",
+      "valid": true,
+      "entry": "entry",
+      "leg": {
+        "outputs": [
+          {
+            "key": "é",
+            "type": "boolean",
+            "required": false
+          },
+          {
+            "key": "é",
+            "type": "boolean",
+            "required": false
+          }
+        ],
+        "completionOutputs": {
+          "continue": {
+            "eventFields": [],
+            "responseFields": [
+              {
+                "key": "é",
+                "type": "boolean",
+                "required": false
+              },
+              {
+                "key": "é",
+                "type": "boolean",
+                "required": false
+              }
+            ]
+          }
+        }
+      },
+      "descriptor": {}
     }
   ]
 }

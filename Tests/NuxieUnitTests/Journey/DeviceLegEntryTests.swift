@@ -57,7 +57,7 @@ final class DeviceLegEntryTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/journeys/planes/\(fixture).json"))
-        for vector in try JSONDecoder().decode(Suite.self, from: bytes).cases {
+        for vector in try ExactJSONCodec.decode(Suite.self, from: bytes).cases {
             let now = Date(timeIntervalSince1970: Double(vector.nowMillis ?? 1_800_000_000_000) / 1000)
             var queries: IREventQueriesAdapter?
             if let history = vector.history {

@@ -219,7 +219,7 @@ enum DeviceLegSchemaValidator {
     }
 
     private static func fields(_ value: Any?, response: Bool) throws {
-        var keys = Set<String>()
+        var keys = Set<[UInt16]>()
         for item in try array(value) {
             let field = try dictionary(item)
             let type = try identifier(field["type"])
@@ -235,7 +235,7 @@ enum DeviceLegSchemaValidator {
             }
             _ = try object(field, required: ["key", "type", "required"], optional: optional)
             let key = try identifier(field["key"])
-            guard key.utf8.count <= (response ? 128 : 256), keys.insert(key).inserted else { throw invalid }
+            guard key.utf8.count <= (response ? 128 : 256), keys.insert(Array(key.utf16)).inserted else { throw invalid }
             try boolean(field["required"])
             if type == "number" {
                 for key in ["min", "max"] where field[key] != nil { _ = try number(field[key]) }
