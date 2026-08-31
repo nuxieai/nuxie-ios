@@ -5,6 +5,8 @@ import XCTest
 
 final class OptimisticEntitlementProjectionTests: XCTestCase {
     private struct Fixture: Decodable {
+        let suite: String
+        let version: Int
         let cases: [Case]
 
         struct Case: Decodable {
@@ -81,6 +83,11 @@ final class OptimisticEntitlementProjectionTests: XCTestCase {
             Fixture.self,
             from: Data(contentsOf: fixtureURL)
         )
+        XCTAssertEqual(
+            fixture.suite,
+            "features/optimistic-entitlement-projection"
+        )
+        XCTAssertEqual(fixture.version, 3)
 
         for vector in fixture.cases {
             // The declarations input is deliberately consumed and never fed

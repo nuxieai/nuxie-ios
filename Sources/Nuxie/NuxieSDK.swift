@@ -615,50 +615,69 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     let identityService = core.identity
     let eventLog = core.eventLog
 
-    // Identity mutation and the customer-visible projection switch are one
-    // linearized operation; a reentrant identify/reset inside a publication
-    // callback supersedes this call, which then abandons its fan-out.
-    guard let transition = mutateIdentityWithProjectionSwitch(
-      identityService,
-      core.featureInfo,
-      .identify(distinctId)
-    ) else {
-      operation.finish()
-      return
-    }
-    let oldDistinctId = transition.previous.distinctId
-    let wasIdentified = transition.previous.isIdentified
-    let currentDistinctId = transition.current.distinctId
-    let hasDifferentDistinctId = currentDistinctId != oldDistinctId
-    LogInfo("Identifying user: \(NuxieLogger.shared.logDistinctID(currentDistinctId))")
-    
-    // Serialized, uncancellable transition across all per-user state
-    // (anonymous-event migration included). A rapid second identify() or
-    // reset() queues behind this one instead of cancelling it mid-fan-out.
-    if hasDifferentDistinctId {
-      core.userTransitions.enqueue(
-        UserTransitionCoordinator.Transition(
-          kind: .identify,
-          from: oldDistinctId,
-          to: currentDistinctId,
-          migrateEvents: !wasIdentified
-        ))
-    }
-    
-    // Track $identify only when the user changed or there are user properties
-    // to apply; a bare same-id re-identify is a no-op.
     let hasUserProperties = userProperties != nil || userPropertiesSetOnce != nil
-    if hasDifferentDistinctId || hasUserProperties {
-      var props: [String: Any] = ["distinct_id": currentDistinctId]
-      if !wasIdentified, hasDifferentDistinctId {
-        props["$anon_distinct_id"] = oldDistinctId
+    let userPropertiesBox = UncheckedSendable(userProperties)
+    let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
+    let admission = IdentityPublicationAdmission()
+
+    // Enqueue and capture are synchronous, callback-free admission steps. They
+    // must precede the projection publication (the only reentrant step), so a
+    // nested identify/reset cannot supersede either transition's durable work.
+    let publication = UncheckedSendable<@MainActor (IdentityTransition) -> Void>(
+      { transition in
+        let oldDistinctId = transition.previous.distinctId
+        let wasIdentified = transition.previous.isIdentified
+        let currentDistinctId = transition.current.distinctId
+        let hasDifferentDistinctId = currentDistinctId != oldDistinctId
+
+        // Serialized, uncancellable transition across all per-user state
+        // (anonymous-event migration included). A rapid second identify() or
+        // reset() queues behind this one instead of cancelling it mid-fan-out.
+        if hasDifferentDistinctId {
+          core.userTransitions.enqueue(
+            UserTransitionCoordinator.Transition(
+              kind: .identify,
+              from: oldDistinctId,
+              to: currentDistinctId,
+              migrateEvents: !wasIdentified
+            ))
+          admission.shouldLaunchTransitionDrain = true
+        }
+
+        // Track $identify only when the user changed or there are user properties
+        // to apply; a bare same-id re-identify is a no-op.
+        if hasDifferentDistinctId || hasUserProperties {
+          var props: [String: Any] = ["distinct_id": currentDistinctId]
+          if !wasIdentified, hasDifferentDistinctId {
+            props["$anon_distinct_id"] = oldDistinctId
+          }
+          eventLog.track(
+            SystemEventNames.identify,
+            properties: props,
+            userProperties: userPropertiesBox.value,
+            userPropertiesSetOnce: userPropertiesSetOnceBox.value
+          )
+          admission.shouldLaunchTransitionDrain = true
+        }
+
+        // Publication is deliberately last: synchronous observers may identify
+        // or reset reentrantly and supersede only this transition's currency.
+        core.featureInfo.setProjectionDistinctId(currentDistinctId)
       }
-      eventLog.track(
-        SystemEventNames.identify,
-        properties: props,
-        userProperties: userProperties,
-        userPropertiesSetOnce: userPropertiesSetOnce
+    )
+    let transition = mutateIdentityPublishing(
+      identityService,
+      .identify(distinctId),
+      publication: publication
+    )
+
+    if let transition {
+      LogInfo(
+        "Identifying user: \(NuxieLogger.shared.logDistinctID(transition.current.distinctId))"
       )
+    }
+
+    if admission.shouldLaunchTransitionDrain {
       let launched = run.launchFacadeTask { [operation] in
         defer { operation.finish() }
         await run.core.userTransitions.drain()
@@ -684,26 +703,28 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     
     let identityService = core.identity
 
-    // Identity mutation and the projection switch are one linearized
-    // operation (see identify); a superseding reentrant mutation owns the
-    // downstream fan-out.
-    guard let transition = mutateIdentityWithProjectionSwitch(
+    // Reset has no event capture, but its transition admission is equally
+    // durable and therefore precedes the reentrant projection publication.
+    let publication = UncheckedSendable<@MainActor (IdentityTransition) -> Void>(
+      { transition in
+        core.userTransitions.enqueue(
+          UserTransitionCoordinator.Transition(
+            kind: .reset,
+            from: transition.previous.distinctId,
+            to: transition.current.distinctId,
+            migrateEvents: false
+          ))
+
+        // Publication is deliberately last; supersession does not retract the
+        // transition that was already admitted above.
+        core.featureInfo.setProjectionDistinctId(transition.current.distinctId)
+      }
+    )
+    _ = mutateIdentityPublishing(
       identityService,
-      core.featureInfo,
-      .reset(keepAnonymousId: keepAnonymousId)
-    ) else {
-      operation.finish()
-      return
-    }
-    let previousDistinctId = transition.previous.distinctId
-    let newDistinctId = transition.current.distinctId
-    core.userTransitions.enqueue(
-      UserTransitionCoordinator.Transition(
-        kind: .reset,
-        from: previousDistinctId,
-        to: newDistinctId,
-        migrateEvents: false
-      ))
+      .reset(keepAnonymousId: keepAnonymousId),
+      publication: publication
+    )
 
     let launched = run.launchFacadeTask { [operation] in
       defer { operation.finish() }
@@ -1118,26 +1139,28 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     )
   }
 
-  /// Identity changes are synchronous public operations, so old-customer
-  /// overlays must disappear before the call returns. The broader per-user
-  /// transition remains serialized asynchronously.
-  private func mutateIdentityWithProjectionSwitch(
+  /// Runs the identity mutation and its synchronous publication on MainActor.
+  /// The caller owns publication ordering; projection switching must be its
+  /// final step because it can synchronously reenter identify/reset.
+  private final class IdentityPublicationAdmission: @unchecked Sendable {
+    // Written by the synchronous MainActor publication and read only after the
+    // same-thread call or DispatchQueue.main.sync returns.
+    var shouldLaunchTransitionDrain = false
+  }
+
+  private func mutateIdentityPublishing(
     _ identityService: IdentityServiceProtocol,
-    _ featureInfo: FeatureInfo,
-    _ mutation: IdentityMutation
+    _ mutation: IdentityMutation,
+    publication: UncheckedSendable<@MainActor (IdentityTransition) -> Void>
   ) -> IdentityTransition? {
     if Thread.isMainThread {
       return MainActor.assumeIsolated {
-        identityService.mutateIdentity(mutation) { transition in
-          featureInfo.setProjectionDistinctId(transition.current.distinctId)
-        }
+        identityService.mutateIdentity(mutation, publishing: publication.value)
       }
     } else {
       return DispatchQueue.main.sync {
         MainActor.assumeIsolated {
-          identityService.mutateIdentity(mutation) { transition in
-            featureInfo.setProjectionDistinctId(transition.current.distinctId)
-          }
+          identityService.mutateIdentity(mutation, publishing: publication.value)
         }
       }
     }

@@ -207,14 +207,20 @@ public final class FeatureInfo: ObservableObject {
         responseAuthority: FeatureBalanceAuthority
     ) -> CommandBalanceEmission? {
         let currentGeneration = balanceAuthorityGenerations[featureId] ?? 0
+        let oldAccess: FeatureAccess
         if responseAuthority.epoch == balanceAuthorityEpoch {
             guard currentGeneration <= responseAuthority.generation else { return nil }
+            guard let visibleAccess = all[featureId] else { return nil }
+            oldAccess = visibleAccess
         } else {
             // A response from an earlier process may apply only when this
-            // process has not admitted any authoritative state for the key.
-            guard currentGeneration == 0 else { return nil }
+            // process has not admitted newer authoritative state for the key.
+            // An overlay is never enough: a complete profile that omitted the
+            // key must keep a recovered response from resurrecting it.
+            guard currentGeneration == 0,
+                  let authoritativeAccess = authoritative[featureId] else { return nil }
+            oldAccess = authoritativeAccess
         }
-        guard let oldAccess = all[featureId] else { return nil }
         let authoritativeAccess = authoritative[featureId]
 
         let newAccess = FeatureAccess.withBalance(
@@ -421,7 +427,7 @@ public final class FeatureInfo: ObservableObject {
         emission()
         guard visiblePublicationGeneration == publication.generation else {
             if staleAfterEmission == .repairCommittedStorage {
-                publishVisibleProjection()
+                repairVisibleProjectionStorage()
             }
             return false
         }
@@ -429,6 +435,32 @@ public final class FeatureInfo: ObservableObject {
     }
 
     private func publishVisibleProjection() {
+        let projection = visibleProjection()
+        publish(projection.features, state: projection.state)
+    }
+
+    /// A nested publication already emitted the coherent delegate transition.
+    /// This path only repairs values that an outer `@Published` setter commits
+    /// after returning from that nested publication.
+    private func repairVisibleProjectionStorage() {
+        let projection = visibleProjection()
+        let publication = beginVisiblePublication()
+        guard publishObservableStep(
+            publication,
+            staleAfterEmission: .repairCommittedStorage,
+            { state = projection.state }
+        ) else { return }
+        _ = publishObservableStep(
+            publication,
+            staleAfterEmission: .repairCommittedStorage,
+            { all = projection.features }
+        )
+    }
+
+    private func visibleProjection() -> (
+        features: [String: FeatureAccess],
+        state: State
+    ) {
         let overlay = OptimisticEntitlementProjection.derive(
             evidence: projectionEvidence,
             descriptorAllowances: projectionDescriptorAllowances,
@@ -449,7 +481,7 @@ public final class FeatureInfo: ObservableObject {
         } else {
             readiness = .reconciling
         }
-        publish(visible, state: readiness)
+        return (visible, readiness)
     }
 
     private func wideningJoin(

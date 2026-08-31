@@ -50,9 +50,10 @@ protocol IdentityServiceProtocol: Sendable {
   /// Clear distinct ID and optionally anonymous ID (reset)
   func reset(keepAnonymousId: Bool)
 
-  /// Linearizes identity mutation with its synchronous customer-visible
-  /// projection switch. Returns nil when a reentrant publication supersedes
-  /// this transition, telling the caller to abandon the stale continuation.
+  /// Linearizes identity mutation with its synchronous publication. The
+  /// publication must admit every durable transition effect before invoking
+  /// a reentrant callback. A nil result means only that a nested mutation
+  /// superseded this transition as current; its admitted work still stands.
   @MainActor
   func mutateIdentity(
     _ mutation: IdentityMutation,

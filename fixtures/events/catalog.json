@@ -655,7 +655,7 @@
     "emitters": [
       "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:550",
       "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:705",
-      "Sources/Nuxie/NuxieSDK.swift:1170"
+      "Sources/Nuxie/NuxieSDK.swift:1193"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [
@@ -699,7 +699,7 @@
     "constant": "SystemEventNames.identify",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/NuxieSDK.swift:657"
+      "Sources/Nuxie/NuxieSDK.swift:655"
     ],
     "endpoint": "batch",
     "fixtures": [
