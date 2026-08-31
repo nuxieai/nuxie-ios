@@ -645,6 +645,79 @@
         }
       },
       "descriptor": {}
+    },
+    {
+      "name": "ordinal fact reference names are distinct",
+      "valid": true,
+      "entry": "entry",
+      "leg": {
+        "entryCondition": {
+          "type": "app_foregrounded",
+          "condition": {
+            "ir_version": 1,
+            "expr": {
+              "type": "And",
+              "args": [
+                {
+                  "type": "User",
+                  "op": "is_set",
+                  "key": "é"
+                },
+                {
+                  "type": "User",
+                  "op": "is_set",
+                  "key": "é"
+                }
+              ]
+            }
+          }
+        },
+        "facts": {
+          "propertyKeys": [
+            "é",
+            "é"
+          ],
+          "segmentIds": [],
+          "experimentIds": []
+        }
+      },
+      "descriptor": {}
+    },
+    {
+      "name": "canonical spelling cannot substitute a missing fact reference",
+      "valid": false,
+      "entry": "entry",
+      "leg": {
+        "entryCondition": {
+          "type": "app_foregrounded",
+          "condition": {
+            "ir_version": 1,
+            "expr": {
+              "type": "And",
+              "args": [
+                {
+                  "type": "User",
+                  "op": "is_set",
+                  "key": "é"
+                },
+                {
+                  "type": "User",
+                  "op": "is_set",
+                  "key": "é"
+                }
+              ]
+            }
+          }
+        },
+        "facts": {
+          "propertyKeys": [
+            "é"
+          ],
+          "segmentIds": [],
+          "experimentIds": []
+        }
+      },
+      "descriptor": {}
     }
   ]
 }
