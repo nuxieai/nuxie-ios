@@ -1,0 +1,290 @@
+{
+  "suite": "device-leg-control-executor-v1",
+  "context": {
+    "event": {},
+    "responses": {
+      "consent": true
+    }
+  },
+  "assignments": {
+    "experiment_assigned": {
+      "variantId": "variant_b",
+      "isHoldout": false
+    }
+  },
+  "cases": [
+    {
+      "id": "condition-selects-first-true-branch",
+      "step": {
+        "kind": "action",
+        "id": "condition",
+        "action": {
+          "type": "condition",
+          "branches": [
+            {
+              "id": "unknown",
+              "condition": {
+                "type": "Truthy",
+                "value": { "type": "Event.Field", "key": "missing" }
+              }
+            },
+            {
+              "id": "yes",
+              "condition": {
+                "type": "Boolean",
+                "value": true
+              }
+            }
+          ]
+        },
+        "outlets": { "unknown": "never", "yes": "selected", "default": "fallback" }
+      },
+      "nowMillis": 1000,
+      "expected": { "kind": "advance", "stepId": "selected" }
+    },
+    {
+      "id": "condition-unknown-falls-through-to-default",
+      "step": {
+        "kind": "action",
+        "id": "condition",
+        "action": {
+          "type": "condition",
+          "branches": [
+            {
+              "id": "unknown",
+              "condition": {
+                "type": "Truthy",
+                "value": { "type": "Event.Field", "key": "missing" }
+              }
+            }
+          ]
+        },
+        "outlets": { "unknown": "never", "default": "fallback" }
+      },
+      "nowMillis": 1000,
+      "expected": { "kind": "advance", "stepId": "fallback" }
+    },
+    {
+      "id": "experiment-uses-durable-assignment",
+      "step": {
+        "kind": "action",
+        "id": "experiment",
+        "action": {
+          "type": "experiment",
+          "experimentId": "experiment_assigned",
+          "variants": [
+            { "id": "variant_a", "isHoldout": false },
+            { "id": "variant_b", "isHoldout": false }
+          ]
+        },
+        "outlets": { "variant_a": "a", "variant_b": "b" }
+      },
+      "nowMillis": 1000,
+      "expected": { "kind": "advance", "stepId": "b" }
+    },
+    {
+      "id": "unassigned-experiment-uses-first-variant",
+      "step": {
+        "kind": "action",
+        "id": "experiment",
+        "action": {
+          "type": "experiment",
+          "experimentId": "experiment_new",
+          "variants": [
+            { "id": "default", "isHoldout": true },
+            { "id": "other", "isHoldout": false }
+          ]
+        },
+        "outlets": { "default": "a", "other": "b" }
+      },
+      "nowMillis": 1000,
+      "expected": { "kind": "advance", "stepId": "a" }
+    },
+    {
+      "id": "time-window-parks-at-next-opening",
+      "step": {
+        "kind": "action",
+        "id": "window",
+        "action": {
+          "type": "time_window",
+          "startTime": "09:00",
+          "endTime": "17:00",
+          "timezone": { "kind": "iana", "identifier": "Etc/UTC" },
+          "daysOfWeek": []
+        },
+        "outlets": { "inside": "present" }
+      },
+      "nowMillis": 1784138400000,
+      "expected": {
+        "kind": "park",
+        "stepId": "window",
+        "anchorAtMillis": 1784138400000,
+        "wakeAtMillis": 1784192400000
+      }
+    },
+    {
+      "id": "time-window-resume-rechecks-current-time",
+      "step": {
+        "kind": "action",
+        "id": "window",
+        "action": {
+          "type": "time_window",
+          "startTime": "09:00",
+          "endTime": "17:00",
+          "timezone": { "kind": "iana", "identifier": "Etc/UTC" },
+          "daysOfWeek": []
+        },
+        "outlets": { "inside": "present" }
+      },
+      "nowMillis": 1784192400000,
+      "checkpoint": { "anchorAtMillis": 1784138400000, "wakeAtMillis": 1784192400000 },
+      "expected": { "kind": "advance", "stepId": "present" }
+    },
+    {
+      "id": "delay-deadline-is-anchored-on-first-entry",
+      "step": {
+        "kind": "action",
+        "id": "delay",
+        "action": { "type": "delay", "durationMs": 5000 },
+        "outlets": { "next": "after-delay" }
+      },
+      "nowMillis": 1000,
+      "expected": { "kind": "park", "stepId": "delay", "anchorAtMillis": 1000, "wakeAtMillis": 6000 }
+    },
+    {
+      "id": "delay-resume-does-not-move-its-deadline",
+      "step": {
+        "kind": "action",
+        "id": "delay",
+        "action": { "type": "delay", "durationMs": 5000 },
+        "outlets": { "next": "after-delay" }
+      },
+      "nowMillis": 7000,
+      "checkpoint": { "anchorAtMillis": 1000, "wakeAtMillis": 6000 },
+      "expected": { "kind": "advance", "stepId": "after-delay" }
+    },
+    {
+      "id": "wait-deadline-is-anchored-on-first-entry",
+      "step": {
+        "kind": "action",
+        "id": "wait",
+        "action": {
+          "type": "wait_until",
+          "trigger": { "kind": "event", "eventName": "qualified" },
+          "condition": {
+            "type": "Compare",
+            "op": "==",
+            "left": { "type": "Event.Field", "key": "ready" },
+            "right": { "type": "Boolean", "value": true }
+          },
+          "maxTimeMs": 10000
+        },
+        "outlets": { "satisfied": "success", "timeout": "expired" }
+      },
+      "nowMillis": 1000,
+      "expected": { "kind": "park", "stepId": "wait", "anchorAtMillis": 1000, "wakeAtMillis": 11000 }
+    },
+    {
+      "id": "wrong-event-keeps-original-wait-deadline",
+      "step": {
+        "kind": "action",
+        "id": "wait",
+        "action": {
+          "type": "wait_until",
+          "trigger": { "kind": "event", "eventName": "qualified" },
+          "condition": { "type": "Boolean", "value": true },
+          "maxTimeMs": 10000
+        },
+        "outlets": { "satisfied": "success", "timeout": "expired" }
+      },
+      "nowMillis": 5000,
+      "checkpoint": { "anchorAtMillis": 1000, "wakeAtMillis": 11000 },
+      "signal": {
+        "event": { "name": "other", "occurredAtMillis": 4000, "properties": { "ready": true } },
+        "responsesChanged": false
+      },
+      "expected": { "kind": "park", "stepId": "wait", "anchorAtMillis": 1000, "wakeAtMillis": 11000 }
+    },
+    {
+      "id": "matching-event-binds-context-and-satisfies-wait",
+      "step": {
+        "kind": "action",
+        "id": "wait",
+        "action": {
+          "type": "wait_until",
+          "trigger": { "kind": "event", "eventName": "qualified" },
+          "condition": {
+            "type": "Compare",
+            "op": "==",
+            "left": { "type": "Event.Field", "key": "ready" },
+            "right": { "type": "Boolean", "value": true }
+          },
+          "maxTimeMs": 10000
+        },
+        "outlets": { "satisfied": "success", "timeout": "expired" }
+      },
+      "nowMillis": 5000,
+      "checkpoint": { "anchorAtMillis": 1000, "wakeAtMillis": 11000 },
+      "signal": {
+        "event": { "name": "qualified", "occurredAtMillis": 4000, "properties": { "ready": true } },
+        "responsesChanged": false
+      },
+      "expected": { "kind": "advance", "stepId": "success", "event": { "ready": true } }
+    },
+    {
+      "id": "response-change-satisfies-response-wait",
+      "step": {
+        "kind": "action",
+        "id": "wait",
+        "action": {
+          "type": "wait_until",
+          "trigger": { "kind": "response_change" },
+          "condition": {
+            "type": "Truthy",
+            "value": { "type": "Response.Field", "key": "consent" }
+          },
+          "maxTimeMs": 10000
+        },
+        "outlets": { "satisfied": "success", "timeout": "expired" }
+      },
+      "nowMillis": 5000,
+      "checkpoint": { "anchorAtMillis": 1000, "wakeAtMillis": 11000 },
+      "signal": { "responsesChanged": true },
+      "expected": { "kind": "advance", "stepId": "success" }
+    },
+    {
+      "id": "wait-timeout-uses-fixed-deadline",
+      "step": {
+        "kind": "action",
+        "id": "wait",
+        "action": {
+          "type": "wait_until",
+          "trigger": { "kind": "event", "eventName": "qualified" },
+          "condition": { "type": "Boolean", "value": true },
+          "maxTimeMs": 10000
+        },
+        "outlets": { "satisfied": "success", "timeout": "expired" }
+      },
+      "nowMillis": 12000,
+      "checkpoint": { "anchorAtMillis": 1000, "wakeAtMillis": 11000 },
+      "expected": { "kind": "advance", "stepId": "expired" }
+    },
+    {
+      "id": "complete-step-freezes-outcome",
+      "step": { "kind": "complete", "id": "done", "outcome": "continued" },
+      "nowMillis": 1000,
+      "expected": { "kind": "complete", "outcome": "continued" }
+    },
+    {
+      "id": "external-action-is-dispatched-without-advancing",
+      "step": {
+        "kind": "action",
+        "id": "purchase",
+        "action": { "type": "purchase", "placementId": "offer" },
+        "outlets": { "completed": "success", "failed": "error", "cancelled": "closed" }
+      },
+      "nowMillis": 1000,
+      "expected": { "kind": "dispatch", "stepId": "purchase", "actionType": "purchase" }
+    }
+  ]
+}
