@@ -101,8 +101,19 @@ enum DeviceLegEntryEvaluator {
         ]
 
         private func containsPredicate(_ expression: IRExpr?) -> Bool {
+            guard let expression else { return true }
+            switch expression {
+            case .pred(let op, _, _) where op == "has":
+                // PredicateEval has no `has` alias. Treat it as unavailable,
+                // rather than letting a negative occurrence query authorize.
+                return false
+            case .predAnd(let children), .predOr(let children):
+                return children.allSatisfy { containsPredicate($0) }
+            case .pred: break
+            default: return false
+            }
             // A history query supplies its own event for each predicate call.
-            FactsAvailability(facts: facts, hasEvent: true, hasEvents: hasEvents, hasFeatures: hasFeatures)
+            return FactsAvailability(facts: facts, hasEvent: true, hasEvents: hasEvents, hasFeatures: hasFeatures)
                 .contains(expression)
         }
 

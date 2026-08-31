@@ -1871,6 +1871,346 @@
           }
         ]
       }
+    },
+    {
+      "name": "unsupported has in history predicates remains unknown under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Events.Exists",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              },
+              "where": {
+                "type": "Pred",
+                "op": "has",
+                "key": "premium"
+              }
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "fractional lower bound excludes the preceding millisecond",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Events.Count",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1.0011
+              }
+            },
+            "right": {
+              "type": "Number",
+              "value": 1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1001,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "date predicates parse fractional seconds .5",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "User",
+            "op": "is_date_after",
+            "key": "joined",
+            "value": {
+              "type": "Timestamp",
+              "value": 1.1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {
+          "joined": {
+            "present": true,
+            "value": "1970-01-01T00:00:01.5Z"
+          }
+        },
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [
+          "joined"
+        ],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "date predicates parse fractional seconds .50",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "User",
+            "op": "is_date_after",
+            "key": "joined",
+            "value": {
+              "type": "Timestamp",
+              "value": 1.1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {
+          "joined": {
+            "present": true,
+            "value": "1970-01-01T00:00:01.50Z"
+          }
+        },
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [
+          "joined"
+        ],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "date predicates parse fractional seconds .5001",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "User",
+            "op": "is_date_after",
+            "key": "joined",
+            "value": {
+              "type": "Timestamp",
+              "value": 1.1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {
+          "joined": {
+            "present": true,
+            "value": "1970-01-01T00:00:01.5001Z"
+          }
+        },
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [
+          "joined"
+        ],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
     }
   ]
 }
