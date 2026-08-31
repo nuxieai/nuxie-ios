@@ -4,6 +4,12 @@ import Foundation
 struct DeviceLegRun {
     struct Park {
         let wakeAt: Date?
+        let anchorAt: Date?
+
+        init(wakeAt: Date?, anchorAt: Date? = nil) {
+            self.wakeAt = wakeAt
+            self.anchorAt = anchorAt
+        }
     }
     struct Completion {
         let outcome: String
@@ -126,6 +132,22 @@ struct DeviceLegRunJournal {
         }
     }
 
+    /// Persist one executor transition before another step or effect runs.
+    func transition(_ id: String, stepId: String, context: ArmedDeviceLeg.Context,
+                    checkpoint: DeviceLegControlExecutor.Checkpoint? = nil) async throws {
+        try await update { state in
+            guard var run = state.runs[id], run.startedQueued, run.completion == nil else {
+                throw DeviceLegJournalError.invalidState
+            }
+            run.stepId = stepId
+            run.context = context
+            run.park = checkpoint.map {
+                .init(wakeAt: Self.date($0.wakeAtMillis), anchorAt: Self.date($0.anchorAtMillis))
+            }
+            state.runs[id] = run
+        }
+    }
+
     func park(_ id: String, stepId: String, until: Date?) async throws {
         try await update { state in
             guard var run = state.runs[id], run.startedQueued, run.completion == nil else {
@@ -226,6 +248,10 @@ struct DeviceLegRunJournal {
         let state = try ExactJSONCodec.decode(Snapshot.self, from: bytes)
         guard state.schemaVersion == "nuxie.device-leg-journal.v1" else { throw DeviceLegJournalError.unsupportedVersion }
         return state
+    }
+
+    private static func date(_ milliseconds: Int64) -> Date {
+        Date(timeIntervalSince1970: Double(milliseconds) / 1_000)
     }
 }
 
