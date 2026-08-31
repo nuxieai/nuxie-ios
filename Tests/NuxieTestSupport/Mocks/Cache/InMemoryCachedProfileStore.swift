@@ -26,7 +26,7 @@ public actor InMemoryCachedProfileStore: CachedProfileStore {
     public func store(
         _ item: CachedProfile,
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) async throws -> Bool {
         guard admission() else { return false }
         storage[key] = Entry(value: item, mtime: Date())
@@ -51,7 +51,7 @@ public actor InMemoryCachedProfileStore: CachedProfileStore {
 
     public func remove(
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) async -> Bool {
         guard admission() else { return false }
         storage.removeValue(forKey: key)
@@ -93,7 +93,7 @@ public actor NullCachedProfileStore: CachedProfileStore {
     public func store(
         _ item: CachedProfile,
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) async throws -> Bool {
         admission()
     }
@@ -101,7 +101,7 @@ public actor NullCachedProfileStore: CachedProfileStore {
     public func remove(forKey key: String) async {}
     public func remove(
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) async -> Bool {
         admission()
     }

@@ -1,8 +1,9 @@
 import Foundation
 
-/// A synchronous admission predicate evaluated by the cache actor immediately
-/// before it mutates durable state.
-struct CachedProfileStoreAdmission: Sendable {
+/// A synchronous admission predicate a collaborator evaluates immediately
+/// before mutating profile-derived state (cache writes, release commits,
+/// segment snapshots).
+struct ProfileSideEffectAdmission: Sendable {
     private let isCurrent: @Sendable () -> Bool
 
     init(isCurrent: @escaping @Sendable () -> Bool) {
@@ -22,14 +23,14 @@ protocol CachedProfileStore: Sendable {
     func store(
         _ item: CachedProfile,
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) async throws -> Bool
     func retrieve(forKey key: String, allowStale: Bool) async -> CachedProfile?
     func remove(forKey key: String) async
     @discardableResult
     func remove(
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) async -> Bool
     func clearAll() async
     @discardableResult

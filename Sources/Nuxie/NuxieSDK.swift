@@ -863,6 +863,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     defer { operation.finish() }
     let core = operation.graph.core
     core.runtimeSettings.setLocaleIdentifier(localeIdentifier)
+    // Invalidate before the replacing fetch so an in-flight fetch under the
+    // old locale cannot commit in the settings-to-claim window.
+    await core.profile.localeDidChange()
     _ = try await core.profile.refetchProfile()
     await core.features.syncFeatureInfo()
   }

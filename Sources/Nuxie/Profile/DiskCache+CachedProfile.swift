@@ -6,7 +6,7 @@ extension DiskCache: CachedProfileStore where T == CachedProfile {
     func store(
         _ item: CachedProfile,
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) throws -> Bool {
         guard admission() else { return false }
         try store(item, forKey: key)
@@ -16,7 +16,7 @@ extension DiskCache: CachedProfileStore where T == CachedProfile {
     @discardableResult
     func remove(
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) -> Bool {
         guard admission() else { return false }
         remove(forKey: key)

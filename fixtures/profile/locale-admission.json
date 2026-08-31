@@ -1,0 +1,66 @@
+{
+  "suite": "profile/locale-admission",
+  "version": 1,
+  "notes": [
+    "Locale participates in profile admission by invalidating the admission generation at the platform's locale-change entry point (iOS: runtime settings mutation + ProfileService.localeDidChange; Android: the service/facade setLocaleIdentifier), with a best-effort effective-locale comparison at each admission check.",
+    "Locale-scoped state: release authority, segment snapshot, cached/disk profile, the visible in-memory profile. Customer-scoped state is locale-INDEPENDENT and still commits from a response whose locale-scoped state was discarded: server facts, user properties, mailbox/journey work.",
+    "localeRoundTripDuringFetch pins the generation rule: even when the effective locale returns to the fetch's locale before the response lands, the old fetch stays invalidated.",
+    "A locale round trip (back to the fetch's locale before the response lands) discards the response wholesale: with the effective locale equal again, invalidation is indistinguishable from supersession by a newer fetch, and superseded responses contribute nothing. Customer-scoped payloads are durable server-side and redeliver on the replacement fetch."
+  ],
+  "cases": [
+    {
+      "name": "a response fetched under an old locale does not admit locale-scoped state",
+      "flow": "network",
+      "fetchLocale": "en_US",
+      "localeChangesDuringFetch": [
+        "fr_FR"
+      ],
+      "expect": {
+        "localeScopedAdmitted": false,
+        "customerScopedCommitted": true,
+        "nextRequestLocale": "fr_FR"
+      }
+    },
+    {
+      "name": "a same-locale response admits everything",
+      "flow": "network",
+      "fetchLocale": "en_US",
+      "localeChangesDuringFetch": [],
+      "expect": {
+        "localeScopedAdmitted": true,
+        "customerScopedCommitted": true
+      }
+    },
+    {
+      "name": "a locale round trip still rejects the old fetch",
+      "flow": "network",
+      "fetchLocale": "en_US",
+      "localeChangesDuringFetch": [
+        "fr_FR",
+        "en_US"
+      ],
+      "expect": {
+        "localeScopedAdmitted": false,
+        "customerScopedCommitted": false
+      }
+    },
+    {
+      "name": "a disk profile from a different locale is rejected",
+      "flow": "disk",
+      "diskLocale": "en_US",
+      "effectiveLocale": "fr_FR",
+      "expect": {
+        "localeScopedAdmitted": false
+      }
+    },
+    {
+      "name": "a disk profile matching the effective locale hydrates",
+      "flow": "disk",
+      "diskLocale": "en_US",
+      "effectiveLocale": "en_US",
+      "expect": {
+        "localeScopedAdmitted": true
+      }
+    }
+  ]
+}

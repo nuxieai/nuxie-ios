@@ -17,6 +17,18 @@ protocol SegmentServiceProtocol: AnyObject, Sendable {
         for distinctId: String,
         profileGeneration: UInt64
     ) async -> Bool
+    /// Installs a profile-owned snapshot, additionally evaluating the
+    /// supplied admission at the mutation point so an invalidated admission
+    /// (identity or locale change) is rejected even before any newer commit
+    /// has raised the generation floor.
+    @discardableResult
+    func replaceSnapshot(
+        _ snapshot: SegmentMembershipSeed,
+        definitions: [Segment],
+        for distinctId: String,
+        profileGeneration: UInt64,
+        admission: ProfileSideEffectAdmission?
+    ) async -> Bool
     /// Returns the admitted snapshot only when it belongs to the requested identity.
     func snapshot(for distinctId: String) async -> SegmentMembershipSeed
     /// Clears the admitted snapshot when it belongs to this identity.
@@ -38,6 +50,23 @@ extension SegmentServiceProtocol {
         _ = profileGeneration
         await replaceSnapshot(snapshot, definitions: definitions, for: distinctId)
         return true
+    }
+
+    @discardableResult
+    func replaceSnapshot(
+        _ snapshot: SegmentMembershipSeed,
+        definitions: [Segment],
+        for distinctId: String,
+        profileGeneration: UInt64,
+        admission: ProfileSideEffectAdmission?
+    ) async -> Bool {
+        if let admission, !admission() { return false }
+        return await replaceSnapshot(
+            snapshot,
+            definitions: definitions,
+            for: distinctId,
+            profileGeneration: profileGeneration
+        )
     }
 }
 
@@ -63,13 +92,32 @@ actor SegmentService: SegmentServiceProtocol {
         _ snapshot: SegmentMembershipSeed,
         definitions: [Segment],
         for distinctId: String,
-        profileGeneration: UInt64
+        profileGeneration: UInt64,
+        admission: ProfileSideEffectAdmission?
     ) async -> Bool {
         guard profileGeneration >= latestProfileGeneration else { return false }
+        // Mutation-point admission: rejects an invalidated (identity or
+        // locale) admission before any newer commit raises the floor.
+        if let admission, !admission() { return false }
         latestProfileGeneration = profileGeneration
         activeDistinctId = distinctId
         admittedSnapshot = snapshot.filtered(to: definitions)
         return true
+    }
+
+    func replaceSnapshot(
+        _ snapshot: SegmentMembershipSeed,
+        definitions: [Segment],
+        for distinctId: String,
+        profileGeneration: UInt64
+    ) async -> Bool {
+        await replaceSnapshot(
+            snapshot,
+            definitions: definitions,
+            for: distinctId,
+            profileGeneration: profileGeneration,
+            admission: nil
+        )
     }
 
     func snapshot(for distinctId: String) async -> SegmentMembershipSeed {

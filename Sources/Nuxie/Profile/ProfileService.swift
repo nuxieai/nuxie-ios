@@ -13,6 +13,10 @@ protocol ProfileServiceProtocol: AnyObject, Sendable {
     /// Get cached profile if available and valid
     func getCachedProfile(distinctId: String) async -> ProfileResponse?
 
+    /// Invalidates in-flight profile admissions after the effective locale
+    /// mutates, before the replacing fetch begins.
+    func localeDidChange() async
+
     /// Authenticated identities available for routing. Behavior is loaded
     /// through ExperienceService and never projected through legacy delivery.
     func getEffectiveExperienceReferences(
@@ -135,7 +139,7 @@ private actor FallbackCachedProfileStore: CachedProfileStore {
     func store(
         _ item: CachedProfile,
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) async throws -> Bool {
         guard admission() else { return false }
         let encoded = try JSONEncoder().encode(item)
@@ -154,7 +158,7 @@ private actor FallbackCachedProfileStore: CachedProfileStore {
     @discardableResult
     func remove(
         forKey key: String,
-        admission: CachedProfileStoreAdmission
+        admission: ProfileSideEffectAdmission
     ) async -> Bool {
         guard admission() else { return false }
         storage.removeValue(forKey: key)
@@ -464,6 +468,12 @@ internal actor ProfileService: ProfileServiceProtocol {
             case .modified(let fresh, let nextValidator):
                 guard isCurrentAdmission(admission) else {
                     LogDebug("Discarding stale profile generation \(admission.generation)")
+                    // Customer-scoped payloads are locale-independent: the
+                    // same facts, properties, and mailbox work arrive under
+                    // any locale and their dedupe is correct, so an identity-
+                    // current response still commits them even though its
+                    // locale-scoped state is discarded.
+                    await commitIdentityScopedPortions(of: fresh, admission: admission)
                     return fresh
                 }
 
@@ -562,7 +572,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         if let clearedReleases {
             _ = try? await experienceService.commitReleaseProfile(
                 clearedReleases,
-                generation: admission.generation
+                generation: admission.generation,
+                admission: cacheStoreAdmission(for: admission)
             )
         }
         guard isCurrentAdmission(admission) else { return }
@@ -570,7 +581,8 @@ internal actor ProfileService: ProfileServiceProtocol {
             .empty,
             definitions: [],
             for: admission.distinctId,
-            profileGeneration: admission.generation
+            profileGeneration: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
         )
         guard isCurrentAdmission(admission) else { return }
         await refreshInBackground(distinctId: admission.distinctId)
@@ -611,7 +623,8 @@ internal actor ProfileService: ProfileServiceProtocol {
 
         guard let routingCatalog = try await experienceService.commitReleaseProfile(
             prepared,
-            generation: admission.generation
+            generation: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
         ) else { return false }
         guard isCurrentAdmission(admission) else { return false }
 
@@ -619,7 +632,8 @@ internal actor ProfileService: ProfileServiceProtocol {
             profile.segmentMemberships,
             definitions: profile.segments,
             for: distinctId,
-            profileGeneration: admission.generation
+            profileGeneration: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
         )
         guard installedMembership,
               isCurrentAdmission(admission) else { return false }
@@ -651,15 +665,19 @@ internal actor ProfileService: ProfileServiceProtocol {
         LogInfo("Admitted segment membership snapshot for user \(NuxieLogger.shared.logDistinctID(distinctId))")
         startRefreshTimer()
 
+        // Server facts and mailbox work are customer-scoped, not localized:
+        // committing them from a response fetched under an older locale is
+        // harmless (the same facts arrive under any locale, and their dedupe
+        // is correct), so they gate on identity only.
         if let facts = profile.facts, !facts.isEmpty {
-            guard isCurrentAdmission(admission) else { return true }
+            guard isCurrentIdentity(admission) else { return true }
             await eventLog.commitServerFacts(facts, distinctId: distinctId)
-            guard isCurrentAdmission(admission) else { return true }
+            guard isCurrentIdentity(admission) else { return true }
         }
         if let mailbox = profile.mailbox, !mailbox.isEmpty {
-            guard isCurrentAdmission(admission) else { return true }
+            guard isCurrentIdentity(admission) else { return true }
             await journeyMailboxHandler?(mailbox, distinctId)
-            guard isCurrentAdmission(admission) else { return true }
+            guard isCurrentIdentity(admission) else { return true }
         }
         return true
     }
@@ -886,7 +904,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         if let clearedReleases {
             _ = try? await experienceService.commitReleaseProfile(
                 clearedReleases,
-                generation: admission.generation
+                generation: admission.generation,
+                admission: cacheStoreAdmission(for: admission)
             )
         }
         guard isCurrentAdmission(admission) else { return }
@@ -964,6 +983,47 @@ internal actor ProfileService: ProfileServiceProtocol {
         profileAdmissionGeneration.invalidate()
     }
 
+    /// Called synchronously after the effective locale mutates, before the
+    /// replacing fetch begins: an in-flight fetch under the old locale is
+    /// invalidated even though no new request has claimed a generation yet.
+    func localeDidChange() {
+        invalidateProfileRequests()
+    }
+
+    /// Commits the customer-scoped, locale-independent portions of a profile
+    /// response whose locale-scoped state was discarded as stale.
+    private func commitIdentityScopedPortions(
+        of profile: ProfileResponse,
+        admission: ProfileAdmission
+    ) async {
+        // Only the locale-flip discard qualifies: a generation-superseded
+        // fetch is plain old data and must not overwrite the newer
+        // admission's customer state.
+        guard admission.locale != effectiveLocale,
+              isCurrentIdentity(admission) else { return }
+        if let userProps = profile.userProperties {
+            let properties = Dictionary(
+                uniqueKeysWithValues: userProps.map { ($0.key, $0.value.value) }
+            )
+            _ = identityService.setUserProperties(
+                properties,
+                ifCurrentDistinctIdMatches: admission.distinctId
+            )
+        }
+        if let facts = profile.facts, !facts.isEmpty {
+            guard isCurrentIdentity(admission) else { return }
+            await eventLog.commitServerFacts(facts, distinctId: admission.distinctId)
+        }
+        if let mailbox = profile.mailbox, !mailbox.isEmpty {
+            guard isCurrentIdentity(admission) else { return }
+            await journeyMailboxHandler?(mailbox, admission.distinctId)
+        }
+    }
+
+    private func isCurrentIdentity(_ admission: ProfileAdmission) -> Bool {
+        identityService.getDistinctId() == admission.distinctId
+    }
+
     private func isCurrentAdmission(_ admission: ProfileAdmission) -> Bool {
         profileAdmissionGeneration.matches(admission.generation)
             && identityService.getDistinctId() == admission.distinctId
@@ -972,11 +1032,11 @@ internal actor ProfileService: ProfileServiceProtocol {
 
     private func cacheStoreAdmission(
         for admission: ProfileAdmission
-    ) -> CachedProfileStoreAdmission {
+    ) -> ProfileSideEffectAdmission {
         let generation = profileAdmissionGeneration
         let identity = identityService
         let locale = localeProvider
-        return CachedProfileStoreAdmission {
+        return ProfileSideEffectAdmission {
             generation.matches(admission.generation)
                 && identity.getDistinctId() == admission.distinctId
                 && locale.localeIdentifier() == admission.locale
