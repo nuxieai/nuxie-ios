@@ -1454,7 +1454,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     private func capturePurchaseCompletion(
-        properties: [String: Any],
+        properties: sending [String: Any],
         eventId: String,
         distinctId: String,
         routeToJourneys: Bool,

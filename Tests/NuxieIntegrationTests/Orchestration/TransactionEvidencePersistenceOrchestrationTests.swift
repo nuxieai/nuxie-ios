@@ -154,6 +154,10 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                         ),
                     ],
                 ]
+                // The committer schedules its receipt submission at commit
+                // time; hold the backend unavailable so the unacknowledged
+                // evidence window (and its overlay) is observable.
+                await api.setSyncTransactionShouldSucceed(false)
                 let recorded = await stack.core.transactionObserver.commit(
                     .verified(
                         VerifiedPurchaseEvidence(
@@ -210,6 +214,7 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                 expect(joined.0).to(beTrue())
                 expect(joined.1) == 11
 
+                await api.setSyncTransactionShouldSucceed(true)
                 await stack.core.transactionObserver.retryStoredEvidence()
                 let reconciled = await MainActor.run {
                     (

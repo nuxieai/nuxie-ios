@@ -439,10 +439,27 @@ public actor MockNuxieApi: NuxieApiProtocol {
         )
     }
 
+    /// Lets tests hold receipt submissions unacknowledged (the committer
+    /// schedules sync at commit time, so an always-accepting mock would
+    /// acknowledge evidence before the unsynced window can be observed).
+    public var syncTransactionShouldSucceed = true
+
+    public func setSyncTransactionShouldSucceed(_ succeeds: Bool) {
+        syncTransactionShouldSucceed = succeeds
+    }
+
     public func syncTransaction(
         transactionJwt: String,
         distinctId: String
     ) async throws -> PurchaseResponse {
+        guard syncTransactionShouldSucceed else {
+            return PurchaseResponse(
+                success: false,
+                customerId: distinctId,
+                features: nil,
+                error: "mock sync unavailable"
+            )
+        }
         return PurchaseResponse(
             success: true,
             customerId: distinctId,
