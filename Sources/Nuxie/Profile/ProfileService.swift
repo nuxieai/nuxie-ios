@@ -243,6 +243,10 @@ internal actor ProfileService: ProfileServiceProtocol {
     private var journeyMailboxHandler:
         (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     private var mailboxRefreshInFlight = false
+    /// Highest admission generation whose customer-scoped portions committed.
+    /// A stale request's reduced commit must not land after a NEWER admission
+    /// (a replacement fetch under the new locale) already committed.
+    private var latestCustomerScopedCommitGeneration: UInt64 = 0
 
     /// The startup disk-cache load. `getCachedProfile` awaits it on a memory
     /// miss so init-time readers (JourneyService.initialize resuming an
@@ -674,6 +678,10 @@ internal actor ProfileService: ProfileServiceProtocol {
         // committing them from a response fetched under an older locale is
         // harmless (the same facts arrive under any locale, and their dedupe
         // is correct), so they gate on identity only.
+        latestCustomerScopedCommitGeneration = max(
+            latestCustomerScopedCommitGeneration,
+            admission.generation
+        )
         if let facts = profile.facts, !facts.isEmpty {
             guard isCurrentIdentity(admission) else { return true }
             await eventLog.commitServerFacts(facts, distinctId: distinctId)
@@ -1003,9 +1011,13 @@ internal actor ProfileService: ProfileServiceProtocol {
     ) async {
         // Only the locale-flip discard qualifies: a generation-superseded
         // fetch is plain old data and must not overwrite the newer
-        // admission's customer state.
+        // admission's customer state. That includes the combined case where
+        // a replacement fetch under the new locale has ALREADY committed:
+        // its generation is newer, so the stale request skips entirely.
         guard admission.locale != effectiveLocale,
+              admission.generation > latestCustomerScopedCommitGeneration,
               isCurrentIdentity(admission) else { return }
+        latestCustomerScopedCommitGeneration = admission.generation
         if let userProps = profile.userProperties {
             let properties = Dictionary(
                 uniqueKeysWithValues: userProps.map { ($0.key, $0.value.value) }

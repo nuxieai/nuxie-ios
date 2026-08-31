@@ -456,6 +456,67 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 await expect { await mailbox.journeyIds() }.to(equal(["english-auth-journey"]))
             }
 
+            it("keeps the replacement's customer state when a stale locale-flip request resumes") {
+                let distinctId = "flip-then-replace-user"
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let segments = SegmentService()
+                let mailbox = ProfileMailboxProbe()
+                let settings = NuxieRuntimeSettings(
+                    localeIdentifier: "en_US",
+                    purchaseDelegate: nil,
+                    purchaseHandlingMode: .full
+                )
+                mockFactory.identityService.reset(keepAnonymousId: true)
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.eventLog.reset()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "english")
+                )
+                await mockFactory.nuxieApi.suspendNextProfileFetch()
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: segments,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: settings
+                )
+                await profileService.setJourneyMailboxHandler { entries, deliveredDistinctId in
+                    await mailbox.record(entries, distinctId: deliveredDistinctId)
+                }
+
+                let service = profileService!
+                let staleFetch = Task {
+                    try await service.refetchProfile(distinctId: distinctId)
+                }
+                await mockFactory.nuxieApi.waitForSuspendedProfileFetch()
+
+                // The locale-change entry point, then a replacement fetch that
+                // fully admits under the new locale.
+                settings.setLocaleIdentifier("fr_FR")
+                await service.localeDidChange()
+                await mockFactory.nuxieApi.setProfileResponse(
+                    Self.makeAdmissionProfile(marker: "french")
+                )
+                _ = try await service.refetchProfile(distinctId: distinctId)
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("french"))
+
+                // The stale request resumes: its locale differs, but the
+                // replacement's newer customer commit fences it out entirely.
+                await mockFactory.nuxieApi.resumeSuspendedProfileFetch()
+                _ = try? await staleFetch.value
+
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("french"))
+                expect(mockFactory.eventLog.committedServerFacts.flatMap { $0.facts }.map(\.id))
+                    .to(equal(["french-fact"]))
+                await expect { await mailbox.journeyIds() }.to(equal(["french-journey"]))
+            }
+
             it("does not admit startup disk state from another locale") {
                 let distinctId = "startup-locale-user"
                 let cache = InMemoryCachedProfileStore(ttl: nil)
