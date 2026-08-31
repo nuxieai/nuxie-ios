@@ -491,6 +491,11 @@ internal actor ProfileService: ProfileServiceProtocol {
                 )
                 guard admitted else {
                     LogDebug("Discarding stale profile generation \(admission.generation) after authentication")
+                    // A locale flip during authentication or a locale-scoped
+                    // commit lands here with facts/mailbox not yet reached
+                    // inside admitProfile (they run last), so the customer-
+                    // scoped portions still commit once, idempotently.
+                    await commitIdentityScopedPortions(of: fresh, admission: admission)
                     return fresh
                 }
                 return fresh

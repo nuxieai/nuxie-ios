@@ -445,11 +445,15 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 expect(stored).to(beNil())
                 expect(resident).to(beNil())
                 expect(triggerAdmission).to(beNil())
-                expect(mockFactory.identityService.getUserProperties()["admission_marker"])
-                    .to(beNil())
+                // Customer-scoped payloads still commit from a mid-admission
+                // locale-flip discard (D2): facts and mailbox had not yet run
+                // inside admitProfile, and the reduced commit is idempotent.
+                expect(mockFactory.identityService.getUserProperties()["admission_marker"] as? String)
+                    .to(equal("english-auth"))
                 await expect { await segments.snapshot(for: distinctId) }.to(equal(.empty))
-                expect(mockFactory.eventLog.committedServerFacts).to(beEmpty())
-                await expect { await mailbox.journeyIds() }.to(beEmpty())
+                expect(mockFactory.eventLog.committedServerFacts.flatMap { $0.facts }.map(\.id))
+                    .to(equal(["english-auth-fact"]))
+                await expect { await mailbox.journeyIds() }.to(equal(["english-auth-journey"]))
             }
 
             it("does not admit startup disk state from another locale") {
@@ -1471,6 +1475,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     let localeScopedAdmitted: Bool
                     let customerScopedCommitted: Bool?
                     let nextRequestLocale: String?
+                    let diskEvicted: Bool?
+                    let segmentsCleared: Bool?
                 }
                 struct Case: Decodable {
                     let name: String
@@ -1506,6 +1512,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     await mockFactory.nuxieApi.reset()
                     mockFactory.experienceService.reset()
                     mockFactory.eventLog.reset()
+                    mockFactory.identityService.reset(keepAnonymousId: true)
                     mockFactory.identityService.setDistinctId(distinctId)
 
                     switch vector.flow {
@@ -1560,6 +1567,16 @@ final class ProfileServiceCacheTests: AsyncSpec {
                                 equal(!committed),
                                 description: vector.name
                             )
+                            let marker = mockFactory.identityService
+                                .getUserProperties()["admission_marker"] as? String
+                            expect(marker != nil).to(
+                                equal(committed),
+                                description: vector.name
+                            )
+                            await expect { await mailbox.journeyIds().isEmpty }.to(
+                                equal(!committed),
+                                description: vector.name
+                            )
                         }
                         if let nextLocale = vector.expect.nextRequestLocale {
                             _ = try? await service.refetchProfile(distinctId: distinctId)
@@ -1598,6 +1615,17 @@ final class ProfileServiceCacheTests: AsyncSpec {
                             expect(resident).toNot(beNil(), description: vector.name)
                         } else {
                             expect(resident).to(beNil(), description: vector.name)
+                        }
+                        if vector.expect.diskEvicted == true {
+                            let stored = await cache.retrieve(
+                                forKey: distinctId,
+                                allowStale: true
+                            )
+                            expect(stored).to(beNil(), description: vector.name)
+                        }
+                        if vector.expect.segmentsCleared == true {
+                            await expect { await segments.snapshot(for: distinctId) }
+                                .to(equal(.empty), description: vector.name)
                         }
 
                     default:

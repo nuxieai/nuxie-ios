@@ -378,6 +378,20 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         try await experienceLoader.commitReleaseProfile(prepared, generation: generation)
     }
 
+    func commitReleaseProfile(
+        _ prepared: PreparedExperienceReleaseProfile,
+        generation: UInt64,
+        admission: ProfileSideEffectAdmission?
+    ) async throws -> ExperienceRoutingCatalog? {
+        // Forward the admission to the loader so its mutation-point checks
+        // run in production; the protocol default would swallow it.
+        try await experienceLoader.commitReleaseProfile(
+            prepared,
+            generation: generation,
+            admission: admission
+        )
+    }
+
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {

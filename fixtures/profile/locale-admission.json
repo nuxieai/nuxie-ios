@@ -50,7 +50,9 @@
       "diskLocale": "en_US",
       "effectiveLocale": "fr_FR",
       "expect": {
-        "localeScopedAdmitted": false
+        "localeScopedAdmitted": false,
+        "diskEvicted": true,
+        "segmentsCleared": true
       }
     },
     {
