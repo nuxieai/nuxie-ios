@@ -59,6 +59,23 @@ enum ActivityCuration {
 
   static var classifiedNames: Set<String> { curatedNames.union(hiddenNames) }
 
+  /// A report can be captured on a later launch. Keep occurrence and durable
+  /// receipt separate in the public activity envelope, as for server facts.
+  static func timestamp(_ event: NuxieEvent) -> Date {
+    let field: String
+    switch event.forwardingName {
+    case JourneyEvents.journeyLegStarted: field = "started_at"
+    case JourneyEvents.journeyLegCompleted: field = "completed_at"
+    default: return event.timestamp
+    }
+    guard let value = event.properties[field] as? String else { return event.timestamp }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = formatter.date(from: value) { return date }
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: value) ?? event.timestamp
+  }
+
   static func activity(
     internalName: String,
     properties: [String: Any]
