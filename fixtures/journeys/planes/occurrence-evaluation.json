@@ -1,0 +1,1727 @@
+{
+  "suite": "device-leg-occurrence-v1",
+  "version": 1,
+  "cases": [
+    {
+      "name": "n-times reads only matching event names",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": ">=",
+            "right": {
+              "type": "Number",
+              "value": 2
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "n-times does not count unrelated events",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": ">=",
+            "right": {
+              "type": "Number",
+              "value": 3
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "authored time bounds are inclusive",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              },
+              "until": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "relative windows use the evaluation time",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              },
+              "within": {
+                "type": "Duration",
+                "value": 2
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "Time.Ago anchors against now",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "purchase",
+              "since": {
+                "type": "Time.Ago",
+                "duration": {
+                  "type": "Duration",
+                  "value": 2
+                }
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "known empty window satisfies zero",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "missing",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "incomplete window does not satisfy zero",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "missing",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1001,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "incomplete exists cannot become true under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Events.Exists",
+              "name": "missing",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1001,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "lifetime counts stay unknown",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Compare",
+              "left": {
+                "type": "Events.Count",
+                "name": "missing"
+              },
+              "op": ">",
+              "right": {
+                "type": "Number",
+                "value": 0
+              }
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "history predicates supply their own event",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.Exists",
+            "name": "purchase",
+            "since": {
+              "type": "Timestamp",
+              "value": 1
+            },
+            "where": {
+              "type": "Pred",
+              "op": "eq",
+              "key": "premium",
+              "value": {
+                "type": "Bool",
+                "value": true
+              }
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "history predicate values support numeric strings",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              },
+              "where": {
+                "type": "Pred",
+                "op": "gte",
+                "key": "price",
+                "value": {
+                  "type": "Number",
+                  "value": 3
+                }
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "history predicate groups filter each event",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Count",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              },
+              "where": {
+                "type": "PredAnd",
+                "args": [
+                  {
+                    "type": "Pred",
+                    "op": "gte",
+                    "key": "price",
+                    "value": {
+                      "type": "Number",
+                      "value": 2
+                    }
+                  },
+                  {
+                    "type": "Pred",
+                    "op": "eq",
+                    "key": "premium",
+                    "value": {
+                      "type": "Bool",
+                      "value": false
+                    }
+                  }
+                ]
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "unsupported history predicate fails closed under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Events.Exists",
+              "name": "purchase",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              },
+              "where": {
+                "type": "Pred",
+                "op": "future_op",
+                "key": "price",
+                "value": {
+                  "type": "Number",
+                  "value": 3
+                }
+              }
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "numeric aggregate sum",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Aggregate",
+              "agg": "sum",
+              "name": "purchase",
+              "prop": "price",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 5
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "numeric aggregate avg",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Aggregate",
+              "agg": "avg",
+              "name": "purchase",
+              "prop": "price",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 2.5
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "numeric aggregate min",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Aggregate",
+              "agg": "min",
+              "name": "purchase",
+              "prop": "price",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 2
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "numeric aggregate max",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Aggregate",
+              "agg": "max",
+              "name": "purchase",
+              "prop": "price",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 3
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "numeric aggregate unique",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Aggregate",
+              "agg": "unique",
+              "name": "purchase",
+              "prop": "price",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 2
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "aggregate empty window is zero",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "Events.Aggregate",
+              "agg": "sum",
+              "name": "missing",
+              "prop": "price",
+              "since": {
+                "type": "Timestamp",
+                "value": 1
+              }
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "root counts use numeric truthiness",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.Count",
+            "name": "purchase",
+            "since": {
+              "type": "Timestamp",
+              "value": 1
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "root numeric literals use truthiness",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Number",
+            "value": 2
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "number comparison coerces numeric strings",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "String",
+              "value": "3"
+            },
+            "op": "==",
+            "right": {
+              "type": "Number",
+              "value": 3
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "uncomparable known values return false",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Compare",
+              "left": {
+                "type": "List",
+                "value": []
+              },
+              "op": "==",
+              "right": {
+                "type": "List",
+                "value": []
+              }
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "lifetime first-time query remains unknown under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Events.FirstTime",
+              "name": "purchase"
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "lifetime last-age query remains unknown in a list",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Compare",
+            "left": {
+              "type": "List",
+              "value": [
+                {
+                  "type": "Events.LastAge",
+                  "name": "purchase"
+                }
+              ]
+            },
+            "op": "!=",
+            "right": {
+              "type": "List",
+              "value": []
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 4000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "a",
+            "name": "purchase",
+            "timestampMillis": 1000,
+            "properties": {
+              "price": 2,
+              "premium": true
+            }
+          },
+          {
+            "id": "b",
+            "name": "purchase",
+            "timestampMillis": 3000,
+            "properties": {
+              "price": "3",
+              "premium": false
+            }
+          },
+          {
+            "id": "c",
+            "name": "other",
+            "timestampMillis": 3000,
+            "properties": {}
+          }
+        ]
+      }
+    }
+  ]
+}
