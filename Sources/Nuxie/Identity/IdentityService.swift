@@ -93,6 +93,15 @@ protocol IdentityServiceProtocol: Sendable {
     _ work: (IdentitySnapshot) throws -> T
   ) rethrows -> IdentityFenced<T>?
 
+  /// Performs one synchronous publication while the captured identity fence
+  /// remains current. Unlike the UI publication convenience below, this seam
+  /// is actor-agnostic so durable stores can linearize a commit with identity
+  /// mutation.
+  func performIfCurrentIdentityFenceToken<T>(
+    _ token: IdentityFenceToken,
+    _ publication: () throws -> T
+  ) rethrows -> T?
+
   @MainActor
   @discardableResult
   func publishIfCurrentIdentityFenceToken(
@@ -308,24 +317,32 @@ final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
     )
   }
 
+  public func performIfCurrentIdentityFenceToken<T>(
+    _ token: IdentityFenceToken,
+    _ publication: () throws -> T
+  ) rethrows -> T? {
+    try identityPublicationLock.withLock {
+      let isCurrent = queue.sync {
+        getDistinctIdLocked() == token.distinctId
+          && identityFenceGeneration == token.generation
+      }
+      guard isCurrent else { return nil }
+      let value = try publication()
+      let isStillCurrent = queue.sync {
+        getDistinctIdLocked() == token.distinctId
+          && identityFenceGeneration == token.generation
+      }
+      return isStillCurrent ? value : nil
+    }
+  }
+
   @MainActor
   @discardableResult
   public func publishIfCurrentIdentityFenceToken(
     _ token: IdentityFenceToken,
     _ publication: () -> Void
   ) -> Bool {
-    identityPublicationLock.withLock {
-      let isCurrent = queue.sync {
-        getDistinctIdLocked() == token.distinctId
-          && identityFenceGeneration == token.generation
-      }
-      guard isCurrent else { return false }
-      publication()
-      return queue.sync {
-        getDistinctIdLocked() == token.distinctId
-          && identityFenceGeneration == token.generation
-      }
-    }
+    performIfCurrentIdentityFenceToken(token, publication) != nil
   }
 
   public func setUserProperties(_ properties: [String: Any], for id: String?) {

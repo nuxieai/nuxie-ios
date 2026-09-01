@@ -90,6 +90,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _suspendedStableCaptureAfterCommitContinuations:
         [String: CheckedContinuation<Void, Never>] = [:]
     private var _waitingStableCaptureAfterCommitIds: Set<String> = []
+    private var _suspendedStableCaptureBeforeCommitIds: Set<String> = []
+    private var _suspendedStableCaptureBeforeCommitContinuations:
+        [String: CheckedContinuation<Void, Never>] = [:]
+    private var _waitingStableCaptureBeforeCommitIds: Set<String> = []
     private var _stableCaptureDelayNanoseconds: UInt64 = 0
     private var _stableCaptureCommitCallCount = 0
 
@@ -155,6 +159,26 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     /// lets ordering tests interleave a later commit deterministically.
     public func suspendStableCaptureAfterCommit(id: String) {
         _ = lock.withLock { _suspendedStableCaptureAfterCommitIds.insert(id) }
+    }
+
+    /// Holds a stable capture after all async preparation but before its
+    /// terminal admission and store mutation.
+    public func suspendStableCaptureBeforeCommit(id: String) {
+        _ = lock.withLock { _suspendedStableCaptureBeforeCommitIds.insert(id) }
+    }
+
+    public func resumeStableCaptureBeforeCommit(id: String) {
+        let continuation = lock.withLock {
+            _suspendedStableCaptureBeforeCommitIds.remove(id)
+            _waitingStableCaptureBeforeCommitIds.remove(id)
+            return _suspendedStableCaptureBeforeCommitContinuations
+                .removeValue(forKey: id)
+        }
+        continuation?.resume()
+    }
+
+    public func isStableCaptureBeforeCommitWaiting(id: String) -> Bool {
+        lock.withLock { _waitingStableCaptureBeforeCommitIds.contains(id) }
     }
 
     public func resumeStableCaptureAfterCommit(id: String) {
@@ -333,7 +357,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         event: StoredEvent?,
         recordedAt: Date,
         ownership: JourneyEventOwnership?,
-        assigningCommitSequence: Bool
+        assigningCommitSequence: Bool,
+        admission: (any StableEventCaptureCommitAdmission)?
     ) async throws -> StableEventCaptureCommit {
         let delayNanoseconds = lock.withLock {
             _stableCaptureCommitCallCount += 1
@@ -342,7 +367,26 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         if delayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
-        let commit = try lock.withLock { () -> StableEventCaptureCommit in
+        let shouldSuspendBeforeCommit = lock.withLock {
+            _suspendedStableCaptureBeforeCommitIds.contains(eventId)
+        }
+        if shouldSuspendBeforeCommit {
+            await withCheckedContinuation { continuation in
+                let resumeImmediately = lock.withLock { () -> Bool in
+                    guard _suspendedStableCaptureBeforeCommitIds
+                        .contains(eventId) else {
+                        return true
+                    }
+                    _suspendedStableCaptureBeforeCommitContinuations[eventId] =
+                        continuation
+                    _waitingStableCaptureBeforeCommitIds.insert(eventId)
+                    return false
+                }
+                if resumeImmediately { continuation.resume() }
+            }
+        }
+        let operation = { [self] () throws -> StableEventCaptureCommit in
+          try lock.withLock { () -> StableEventCaptureCommit in
             _storeEventCallCount += 1
             if _shouldFailStore { throw mockError(2, "Mock store error") }
             if let existing = _storedEvents.first(where: { $0.id == eventId }) {
@@ -391,6 +435,16 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 outcome: .captured(event, isNew: true),
                 commitSequence: takeCommitSequence(if: assigningCommitSequence)
             )
+          }
+        }
+        let commit: StableEventCaptureCommit
+        if let admission {
+            guard let admitted = try admission.commitIfCurrent(operation) else {
+                throw StableEventCaptureCommitAdmissionError.rejected
+            }
+            commit = admitted
+        } else {
+            commit = try operation()
         }
         let shouldSuspend = lock.withLock {
             _suspendedStableCaptureAfterCommitIds.contains(eventId)

@@ -84,6 +84,8 @@ func raceRequestAgainstDeadline<Value: Sendable>(
 actor NuxieApi: NuxieApiProtocol {
 
     private static let maximumProfileResponseBytes = 24 * 1_024 * 1_024
+    static let profileAppIdHeader = "Nuxie-App-Id"
+    static let profileAppEnvironmentHeader = "Nuxie-App-Environment"
 
     // MARK: - Configuration
     
@@ -351,7 +353,12 @@ actor NuxieApi: NuxieApiProtocol {
             options: options
         )
         try requireSuccess(response, data: data)
-        return try decodeProfile(from: data)
+        let profile = try decodeProfile(from: data)
+        _ = try Self.requireProfileAuthority(
+            for: profile,
+            response: response
+        )
+        return profile
     }
 
     private func request<T: Codable>(
@@ -371,7 +378,8 @@ actor NuxieApi: NuxieApiProtocol {
 
     private static func profileValidator(
         from response: HTTPURLResponse,
-        resourceScope: String
+        resourceScope: String,
+        authority: ProfileDeliveryAuthority?
     ) -> ProfileCacheValidator? {
         guard let raw = response.value(forHTTPHeaderField: "ETag")?.trimmingCharacters(in: .whitespaces),
               !raw.isEmpty,
@@ -381,7 +389,42 @@ actor NuxieApi: NuxieApiProtocol {
         }
         let opaque = raw.hasPrefix("W/") ? String(raw.dropFirst(2)) : raw
         guard opaque.count >= 2, opaque.first == "\"", opaque.last == "\"" else { return nil }
-        return ProfileCacheValidator(rawValue: raw, resourceScope: resourceScope)
+        return ProfileCacheValidator(
+            rawValue: raw,
+            resourceScope: resourceScope,
+            authority: authority
+        )
+    }
+
+    private static func requireProfileAuthority(
+        for profile: ProfileResponse,
+        response: HTTPURLResponse
+    ) throws -> ProfileDeliveryAuthority? {
+        let authority = try profileAuthority(from: response)
+        guard profile.planeProfile == nil || authority != nil else {
+            throw NuxieNetworkError.invalidResponse
+        }
+        return authority
+    }
+
+    private static func profileAuthority(
+        from response: HTTPURLResponse
+    ) throws -> ProfileDeliveryAuthority? {
+        let appId = response.value(forHTTPHeaderField: profileAppIdHeader)
+        let environment = response.value(
+            forHTTPHeaderField: profileAppEnvironmentHeader
+        )
+        guard appId != nil || environment != nil else { return nil }
+        guard let appId,
+              let environment else {
+            throw NuxieNetworkError.invalidResponse
+        }
+        let authority = ProfileDeliveryAuthority(
+            appId: appId,
+            environment: environment
+        )
+        guard authority.isValid else { throw NuxieNetworkError.invalidResponse }
+        return authority
     }
 
 }
@@ -414,13 +457,40 @@ extension NuxieApi {
             additionalHeaders: scopedValidator.map { ["If-None-Match": $0.rawValue] } ?? [:]
         )
         if response.statusCode == 304 {
-            guard scopedValidator != nil else { throw NuxieNetworkError.invalidResponse }
+            guard let scopedValidator else {
+                throw NuxieNetworkError.invalidResponse
+            }
+            if let expectedAuthority = scopedValidator.authority {
+                let returnedAuthority = try Self.profileAuthority(from: response)
+                let returnedValidator = Self.profileValidator(
+                    from: response,
+                    resourceScope: resourceScope,
+                    authority: returnedAuthority
+                )
+                guard returnedAuthority == expectedAuthority,
+                      returnedValidator?.rawValue == scopedValidator.rawValue else {
+                    throw NuxieNetworkError.invalidResponse
+                }
+            }
             return .notModified
         }
         try requireSuccess(response, data: data)
+        let profile = try decodeProfile(from: data)
+        let authority = try Self.requireProfileAuthority(
+            for: profile,
+            response: response
+        )
+        let nextValidator = Self.profileValidator(
+            from: response,
+            resourceScope: resourceScope,
+            authority: authority
+        )
+        guard profile.planeProfile == nil || nextValidator != nil else {
+            throw NuxieNetworkError.invalidResponse
+        }
         return .modified(
-            try decodeProfile(from: data),
-            validator: Self.profileValidator(from: response, resourceScope: resourceScope)
+            profile,
+            validator: nextValidator
         )
     }
 

@@ -1,14 +1,22 @@
+import CryptoKit
 import Foundation
 import XCTest
 @_spi(Testing) @testable import Nuxie
 
 final class DeviceLegProfileCatalogTests: XCTestCase {
+    private let signingKey = try! Curve25519.Signing.PrivateKey(
+        rawRepresentation: Data(repeating: 0x42, count: 32)
+    )
+
     func testPublishesOnlyAfterCompleteAuthenticationAndReplayCommit() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
         let store = InMemoryExperienceReleaseHighWaterStore()
         let catalog = try makeCatalog(fixture, store: store)
 
-        let prepared = try await catalog.prepare(fixture.profile)
+        let prepared = try await catalog.prepare(
+            fixture.profile,
+            authority: fixture.deliveryAuthority
+        )
         let beforeCommit = await catalog.snapshot(distinctId: "customer")
         XCTAssertNil(beforeCommit)
         let committed = try await catalog.commit(prepared, distinctId: "customer")
@@ -28,7 +36,10 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
         let store = InMemoryExperienceReleaseHighWaterStore()
         let catalog = try makeCatalog(fixture, store: store)
-        let prepared = try await catalog.prepare(fixture.profile)
+        let prepared = try await catalog.prepare(
+            fixture.profile,
+            authority: fixture.deliveryAuthority
+        )
         let committed = try await catalog.commit(prepared, distinctId: "customer")
         XCTAssertTrue(committed)
         let currentSnapshot = await catalog.snapshot(distinctId: "customer")
@@ -43,7 +54,10 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         let mark = try XCTUnwrap(storedMark)
 
         do {
-            _ = try await catalog.prepare(fixture.invalidSignatureProfile())
+            _ = try await catalog.prepare(
+                fixture.invalidSignatureProfile(),
+                authority: fixture.deliveryAuthority
+            )
             XCTFail("Expected invalid signature rejection")
         } catch {
             XCTAssertEqual(
@@ -62,7 +76,10 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
         let store = InMemoryExperienceReleaseHighWaterStore()
         let catalog = try makeCatalog(fixture, store: store)
-        let prepared = try await catalog.prepare(fixture.profile)
+        let prepared = try await catalog.prepare(
+            fixture.profile,
+            authority: fixture.deliveryAuthority
+        )
         let identity = fixture.profile.releases[0].locator.identity
         let key = ExperienceReleaseHighWaterKey(
             appId: identity.appId,
@@ -111,7 +128,10 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         )
         try await store.admitActiveBatch([key: newerMark])
 
-        let prepared = try await catalog.prepare(fixture.continuationProfile())
+        let prepared = try await catalog.prepare(
+            fixture.continuationProfile(),
+            authority: fixture.deliveryAuthority
+        )
         let committed = try await catalog.commit(prepared, distinctId: "customer")
 
         XCTAssertTrue(committed)
@@ -119,6 +139,62 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         XCTAssertEqual(snapshot?.profile.armedLegs.first?.binding.type, .continuation)
         let retainedMark = await store.highWater(for: key)
         XCTAssertEqual(retainedMark, newerMark)
+    }
+
+    func testCurrentEnrollmentReentryPolicyWinsOverPinnedContinuation() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let originalArm = try XCTUnwrap(fixture.profile.armedLegs.first)
+        let current = try updatedRelease(
+            fixture: fixture,
+            reentry: ["type": "every_time"]
+        )
+        let continuation = ArmedDeviceLeg(
+            reference: originalArm.reference,
+            binding: .init(
+                type: .continuation,
+                journeyId: "00000000-0000-7000-8000-000000000001",
+                generation: 4
+            ),
+            entryCondition: originalArm.entryCondition,
+            context: originalArm.context
+        )
+        let enrollment = ArmedDeviceLeg(
+            reference: current.reference,
+            binding: .init(type: .new, journeyId: nil, generation: nil),
+            entryCondition: originalArm.entryCondition,
+            context: originalArm.context
+        )
+
+        for arms in [[continuation, enrollment], [enrollment, continuation]] {
+            let catalog = try makeCatalog(
+                fixture,
+                store: InMemoryExperienceReleaseHighWaterStore()
+            )
+            let profile = JourneyPlaneProfile(
+                schemaVersion: fixture.profile.schemaVersion,
+                status: fixture.profile.status,
+                delivery: fixture.profile.delivery,
+                features: fixture.profile.features,
+                facts: fixture.profile.facts,
+                armedLegs: arms,
+                releases: [current.entry, fixture.profile.releases[0]]
+            )
+            let prepared = try await catalog.prepare(
+                profile,
+                authority: fixture.deliveryAuthority
+            )
+            _ = try await catalog.commit(prepared, distinctId: "customer")
+            let committed = await catalog.snapshot(distinctId: "customer")
+            let snapshot = try XCTUnwrap(committed)
+            let policy = try XCTUnwrap(
+                snapshot.liveReentryPolicies[
+                    fixture.profile.releases[0].locator.experienceId
+                ]
+            )
+
+            XCTAssertEqual(policy.type, .everyTime)
+            XCTAssertNil(policy.windowSeconds)
+        }
     }
 
     func testReauthenticatesADurableReleaseUnderItsExactPinnedIdentity() async throws {
@@ -143,6 +219,11 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
             publishedAt: entry.locator.publishedAt,
             descriptorSHA256: String(repeating: "b", count: 64)
         )
+        let prepared = try await catalog.prepare(
+            fixture.profile,
+            authority: fixture.deliveryAuthority
+        )
+        _ = try await catalog.commit(prepared, distinctId: "customer")
         try await store.admitActiveBatch([key: newerMark])
 
         let release = try await catalog.authenticatePinnedRelease(
@@ -176,6 +257,79 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         }
     }
 
+    func testTransportAuthorityRejectsAnotherAppsSignedProfileAndRetainedRelease() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let catalog = try makeCatalog(
+            fixture,
+            store: InMemoryExperienceReleaseHighWaterStore()
+        )
+        let prepared = try await catalog.prepare(
+            fixture.profile,
+            authority: fixture.deliveryAuthority
+        )
+        _ = try await catalog.commit(prepared, distinctId: "customer")
+        let other = try retainedRelease(
+            fixture: fixture,
+            appId: "app_other"
+        )
+        let unboundCatalog = try makeCatalog(
+            fixture,
+            store: InMemoryExperienceReleaseHighWaterStore()
+        )
+        let originalArm = try XCTUnwrap(fixture.profile.armedLegs.first)
+        let otherProfile = JourneyPlaneProfile(
+            schemaVersion: fixture.profile.schemaVersion,
+            status: fixture.profile.status,
+            delivery: fixture.profile.delivery,
+            features: fixture.profile.features,
+            facts: fixture.profile.facts,
+            armedLegs: [ArmedDeviceLeg(
+                reference: other.reference,
+                binding: originalArm.binding,
+                entryCondition: originalArm.entryCondition,
+                context: originalArm.context
+            )],
+            releases: [other.entry]
+        )
+
+        do {
+            _ = try await unboundCatalog.prepare(
+                otherProfile,
+                authority: fixture.deliveryAuthority
+            )
+            XCTFail("Expected transport app authority rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .invalidDescriptor
+            )
+        }
+        do {
+            _ = try await unboundCatalog.authenticatePinnedRelease(
+                other.entry,
+                reference: other.reference
+            )
+            XCTFail("Expected unbound retained authority rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .invalidDescriptor
+            )
+        }
+        do {
+            _ = try await catalog.authenticatePinnedRelease(
+                other.entry,
+                reference: other.reference
+            )
+            XCTFail("Expected configured app authority rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .invalidDescriptor
+            )
+        }
+    }
+
     func testPrepareStrictlyRevalidatesCachedTypedProfile() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
         var malformedRoot = fixture.root
@@ -191,7 +345,10 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         )
 
         do {
-            _ = try await catalog.prepare(cachedTypedProfile)
+            _ = try await catalog.prepare(
+                cachedTypedProfile,
+                authority: fixture.deliveryAuthority
+            )
             XCTFail("Expected duplicate cached arm rejection")
         } catch {
             XCTAssertEqual(
@@ -221,7 +378,10 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         )
 
         do {
-            _ = try await catalog.prepare(profile)
+            _ = try await catalog.prepare(
+                profile,
+                authority: fixture.deliveryAuthority
+            )
             XCTFail("Expected signed entry-condition mismatch rejection")
         } catch {
             XCTAssertEqual(
@@ -237,6 +397,10 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
             response: ProfileResponse(planeProfile: fixture.profile),
             distinctId: "customer",
             cachedAt: Date(timeIntervalSince1970: 1_000),
+            validator: ProfileCacheValidator(
+                rawValue: "\"profile\"",
+                authority: fixture.deliveryAuthority
+            ),
             locale: "en_US"
         )
         let decoded = try JSONDecoder().decode(
@@ -246,6 +410,59 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         XCTAssertEqual(decoded.response.planeProfile?.armedLegs.count, 1)
         XCTAssertEqual(decoded.response.planeProfile?.facts.properties["ready"]?.present, true)
         XCTAssertNil(decoded.response.releases)
+        XCTAssertEqual(decoded.validator?.authority, fixture.deliveryAuthority)
+    }
+
+    func testEmptyCanonicalProfileRejectsMalformedCachedAuthority() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let empty = JourneyPlaneProfile(
+            schemaVersion: fixture.profile.schemaVersion,
+            status: fixture.profile.status,
+            delivery: fixture.profile.delivery,
+            features: fixture.profile.features,
+            facts: fixture.profile.facts,
+            armedLegs: [],
+            releases: []
+        )
+        let catalog = try makeCatalog(
+            fixture,
+            store: InMemoryExperienceReleaseHighWaterStore()
+        )
+
+        do {
+            _ = try await catalog.prepare(
+                empty,
+                authority: ProfileDeliveryAuthority(
+                    appId: "app\u{0001}poison",
+                    environment: "live"
+                )
+            )
+            XCTFail("Expected malformed transport authority rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .invalidDescriptor
+            )
+        }
+    }
+
+    func testProfileCacheNamespaceIsCredentialAndEnvironmentScoped() {
+        let first = ProfileStorageScope(
+            apiKey: "pk_live_first_secret",
+            environment: .production
+        )
+        let second = ProfileStorageScope(
+            apiKey: "pk_live_second_secret",
+            environment: .production
+        )
+        let development = ProfileStorageScope(
+            apiKey: "pk_live_first_secret",
+            environment: .development
+        )
+
+        XCTAssertNotEqual(first, second)
+        XCTAssertNotEqual(first, development)
+        XCTAssertFalse(first.cacheSubdirectory.contains("first_secret"))
     }
 
     private func makeCatalog(
@@ -259,6 +476,143 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
             )],
             supportedRuntime: ExperienceReleaseRuntime.current,
             highWaterStore: store
+        )
+    }
+
+    private func retainedRelease(
+        fixture: DeviceLegPlaneProfileTestFixture,
+        appId: String
+    ) throws -> (
+        entry: DeviceLegReleaseProfileEntry,
+        reference: ArmedDeviceLeg.Reference
+    ) {
+        let original = try XCTUnwrap(fixture.profile.releases.first)
+        let descriptorBytes = try XCTUnwrap(
+            Data(base64Encoded: original.envelope.descriptorBytesBase64)
+        )
+        var descriptor = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: descriptorBytes)
+                as? [String: Any]
+        )
+        var identity = try XCTUnwrap(
+            descriptor["identity"] as? [String: Any]
+        )
+        identity["appId"] = appId
+        descriptor["identity"] = identity
+        let resignedBytes = try JSONSerialization.data(
+            withJSONObject: descriptor
+        )
+        let descriptorSHA256 = SHA256Provider.hexDigest(resignedBytes)
+        let signature = try signingKey.signature(
+            for: Data(DeviceLegReleaseDescriptor.signatureDomain.utf8)
+                + resignedBytes
+        )
+        let entry = DeviceLegReleaseProfileEntry(
+            locator: .init(
+                appId: appId,
+                environment: original.locator.environment,
+                experienceId: original.locator.experienceId,
+                experienceVersionId: original.locator.experienceVersionId,
+                versionNumber: original.locator.versionNumber,
+                buildId: original.locator.buildId,
+                publishedAt: original.locator.publishedAt,
+                publishedAtSeq: original.locator.publishedAtSeq,
+                legId: original.locator.legId
+            ),
+            envelope: .init(
+                mediaType: DeviceLegReleaseDescriptor.mediaType,
+                encoding: "base64",
+                descriptorSha256: descriptorSHA256,
+                descriptorSizeBytes: resignedBytes.count,
+                descriptorBytesBase64: resignedBytes.base64EncodedString(),
+                signature: .init(
+                    version: 1,
+                    algorithm: "ed25519",
+                    keyId: "TEST_ONLY_DEV_KEYPAIR",
+                    signatureBase64: signature.base64EncodedString()
+                )
+            )
+        )
+        return (
+            entry,
+            .init(
+                experienceId: original.locator.experienceId,
+                versionId: original.locator.experienceVersionId,
+                legId: original.locator.legId,
+                descriptorSha256: descriptorSHA256
+            )
+        )
+    }
+
+    private func updatedRelease(
+        fixture: DeviceLegPlaneProfileTestFixture,
+        reentry: [String: Any]
+    ) throws -> (
+        entry: DeviceLegReleaseProfileEntry,
+        reference: ArmedDeviceLeg.Reference
+    ) {
+        let original = try XCTUnwrap(fixture.profile.releases.first)
+        let descriptorBytes = try XCTUnwrap(
+            Data(base64Encoded: original.envelope.descriptorBytesBase64)
+        )
+        var descriptor = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: descriptorBytes)
+                as? [String: Any]
+        )
+        var identity = try XCTUnwrap(
+            descriptor["identity"] as? [String: Any]
+        )
+        identity["experienceVersionId"] = "version_current"
+        identity["versionNumber"] = original.locator.versionNumber + 1
+        identity["buildId"] = "build_current"
+        identity["publishedAt"] = "2026-08-30T12:00:00.000Z"
+        identity["publishedAtSeq"] = original.locator.publishedAtSeq + 1
+        descriptor["identity"] = identity
+        var leg = try XCTUnwrap(descriptor["leg"] as? [String: Any])
+        leg["reentry"] = reentry
+        descriptor["leg"] = leg
+        let resignedBytes = try JSONSerialization.data(
+            withJSONObject: descriptor
+        )
+        let descriptorSHA256 = SHA256Provider.hexDigest(resignedBytes)
+        let signature = try signingKey.signature(
+            for: Data(DeviceLegReleaseDescriptor.signatureDomain.utf8)
+                + resignedBytes
+        )
+        let entry = DeviceLegReleaseProfileEntry(
+            locator: .init(
+                appId: original.locator.appId,
+                environment: original.locator.environment,
+                experienceId: original.locator.experienceId,
+                experienceVersionId: "version_current",
+                versionNumber: original.locator.versionNumber + 1,
+                buildId: "build_current",
+                publishedAt: "2026-08-30T12:00:00.000Z",
+                publishedAtSeq: original.locator.publishedAtSeq + 1,
+                legId: original.locator.legId
+            ),
+            envelope: .init(
+                mediaType: DeviceLegReleaseDescriptor.mediaType,
+                encoding: "base64",
+                descriptorSha256: descriptorSHA256,
+                descriptorSizeBytes: resignedBytes.count,
+                descriptorBytesBase64: resignedBytes.base64EncodedString(),
+                signature: .init(
+                    version: 1,
+                    algorithm: "ed25519",
+                    keyId: "TEST_ONLY_DEV_KEYPAIR",
+                    signatureBase64: signature.base64EncodedString()
+                )
+            )
+        )
+        return (
+            entry,
+            .init(
+                experienceId: entry.locator.experienceId,
+                versionId: entry.locator.experienceVersionId,
+                legId: entry.locator.legId,
+                descriptorSha256: descriptorSHA256
+            )
         )
     }
 }

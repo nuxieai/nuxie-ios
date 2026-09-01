@@ -39,6 +39,19 @@ struct StableEventCaptureCommit: Sendable {
   let commitSequence: UInt64?
 }
 
+enum StableEventCaptureCommitAdmissionError: Error {
+  case rejected
+}
+
+/// A synchronous fence wrapped around the event store's terminal mutation.
+/// The store invokes this only after every suspending enrichment step, so a
+/// revoked caller cannot publish while identity or execution authority moves.
+protocol StableEventCaptureCommitAdmission: Sendable {
+  func commitIfCurrent(
+    _ commit: () throws -> StableEventCaptureCommit
+  ) rethrows -> StableEventCaptureCommit?
+}
+
 /// Persistence surface the event log writes through. One implementation
 /// (SQLite) in production; mocks in tests.
 protocol EventStoreProtocol: Sendable {
@@ -64,7 +77,8 @@ protocol EventStoreProtocol: Sendable {
     event: StoredEvent?,
     recordedAt: Date,
     ownership: JourneyEventOwnership?,
-    assigningCommitSequence: Bool
+    assigningCommitSequence: Bool,
+    admission: (any StableEventCaptureCommitAdmission)?
   ) async throws -> StableEventCaptureCommit
   /// Persist authoritative server evidence that this device no longer owns
   /// `journeyId` at `authoritativeEpoch` or any earlier epoch.
@@ -159,7 +173,8 @@ extension EventStoreProtocol {
       event: event,
       recordedAt: recordedAt,
       ownership: nil,
-      assigningCommitSequence: false
+      assigningCommitSequence: false,
+      admission: nil
     ).outcome
   }
 
@@ -174,7 +189,8 @@ extension EventStoreProtocol {
       event: event,
       recordedAt: recordedAt,
       ownership: ownership,
-      assigningCommitSequence: false
+      assigningCommitSequence: false,
+      admission: nil
     ).outcome
   }
 }
@@ -1110,6 +1126,37 @@ actor SQLiteEventStore: EventStoreProtocol {
   }
 
   public func commitStableCapture(
+    eventId: String,
+    event: StoredEvent?,
+    recordedAt: Date,
+    ownership: JourneyEventOwnership?,
+    assigningCommitSequence: Bool,
+    admission: (any StableEventCaptureCommitAdmission)?
+  ) throws -> StableEventCaptureCommit {
+    if let admission {
+      guard let committed = try admission.commitIfCurrent({
+        try commitStableCaptureUnfenced(
+          eventId: eventId,
+          event: event,
+          recordedAt: recordedAt,
+          ownership: ownership,
+          assigningCommitSequence: assigningCommitSequence
+        )
+      }) else {
+        throw StableEventCaptureCommitAdmissionError.rejected
+      }
+      return committed
+    }
+    return try commitStableCaptureUnfenced(
+      eventId: eventId,
+      event: event,
+      recordedAt: recordedAt,
+      ownership: ownership,
+      assigningCommitSequence: assigningCommitSequence
+    )
+  }
+
+  private func commitStableCaptureUnfenced(
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,

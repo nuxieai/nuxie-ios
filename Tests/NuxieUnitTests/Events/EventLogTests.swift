@@ -135,6 +135,69 @@ final class EventLogTests: AsyncSpec {
                     await expect { await received.names }.to(equal(["early_event"]))
                 }
 
+                it("delivers the subscriber admission captured at the track boundary") {
+                    let generation = AdmissionGeneration(1)
+                    let received = ReceivedAdmissions()
+                    await log.subscribeCommitted(
+                        admission: { generation.value }
+                    ) { event, admission in
+                        await received.append(
+                            event: event.name,
+                            admission: admission
+                        )
+                    }
+
+                    log.track(
+                        "captured_before_replacement",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    generation.set(2)
+                    try await log.configure(configuration: testConfig)
+                    await log.drain()
+
+                    await expect { await received.values }.to(equal([
+                        .init(
+                            event: "captured_before_replacement",
+                            admission: 1
+                        ),
+                    ]))
+                }
+
+                it("preserves admission reserved before a late pre-configure subscription") {
+                    let generation = AdmissionGeneration(7)
+                    let received = ReceivedAdmissions()
+                    let reservation = log.reserveCommittedAdmission {
+                        generation.value
+                    }
+
+                    log.track(
+                        "captured_before_subscription",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    generation.set(8)
+                    await log.subscribeCommitted(
+                        reservation: reservation
+                    ) { event, admission in
+                        await received.append(
+                            event: event.name,
+                            admission: admission
+                        )
+                    }
+                    try await log.configure(configuration: testConfig)
+                    await log.drain()
+
+                    await expect { await received.values }.to(equal([
+                        .init(
+                            event: "captured_before_subscription",
+                            admission: 7
+                        ),
+                    ]))
+                }
+
                 it("preserves commit order when a routed stable capture resumes after a later capture") {
                     let received = ReceivedEvents()
                     await log.subscribeCommitted { event in
@@ -1499,6 +1562,34 @@ private actor ReceivedEvents {
     private(set) var names: [String] = []
     func append(_ name: String) {
         names.append(name)
+    }
+}
+
+private final class AdmissionGeneration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: UInt64
+
+    init(_ value: UInt64) {
+        stored = value
+    }
+
+    var value: UInt64 { lock.withLock { stored } }
+
+    func set(_ value: UInt64) {
+        lock.withLock { stored = value }
+    }
+}
+
+private actor ReceivedAdmissions {
+    struct Value: Equatable {
+        let event: String
+        let admission: UInt64?
+    }
+
+    private(set) var values: [Value] = []
+
+    func append(event: String, admission: UInt64?) {
+        values.append(.init(event: event, admission: admission))
     }
 }
 
