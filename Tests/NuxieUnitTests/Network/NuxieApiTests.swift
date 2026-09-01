@@ -212,7 +212,14 @@ final class NuxieApiTests: AsyncSpec {
                                     url: request.url!,
                                     statusCode: 200,
                                     httpVersion: nil,
-                                    headerFields: ["Content-Type": "application/json"]
+                                    headerFields: [
+                                        "Content-Type": "application/json",
+                                        "ETag": "\"canonical-profile\"",
+                                        NuxieApi.profileAppIdHeader:
+                                            fixture.deliveryAuthority.appId,
+                                        NuxieApi.profileAppEnvironmentHeader:
+                                            fixture.deliveryAuthority.environment,
+                                    ]
                                 )!,
                                 fixture.data
                             )
@@ -233,12 +240,43 @@ final class NuxieApiTests: AsyncSpec {
                     expect(direct.planeProfile?.armedLegs.count).to(equal(1))
                     expect(timed.planeProfile?.releases.count).to(equal(1))
                     switch conditional {
-                    case .modified(let profile, _):
+                    case .modified(let profile, let validator):
                         expect(profile.planeProfile?.facts.properties["ready"]?.present)
                             .to(beTrue())
+                        expect(validator?.authority)
+                            .to(equal(fixture.deliveryAuthority))
                     case .notModified:
                         fail("Expected the canonical body to decode")
                     }
+                }
+
+                it("rejects a canonical profile without transport authority") {
+                    let fixture = try DeviceLegPlaneProfileTestFixture.load()
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            (
+                                HTTPURLResponse(
+                                    url: request.url!,
+                                    statusCode: 200,
+                                    httpVersion: nil,
+                                    headerFields: [
+                                        "Content-Type": "application/json",
+                                        "ETag": "\"canonical-profile\"",
+                                    ]
+                                )!,
+                                fixture.data
+                            )
+                        }
+                    )
+
+                    await expect {
+                        try await api.fetchProfile(
+                            for: distinctId,
+                            locale: nil,
+                            revalidating: nil
+                        )
+                    }.to(throwError(NuxieNetworkError.invalidResponse))
                 }
 
                 it("revalidates a cached profile without decoding a response body") {
@@ -276,6 +314,92 @@ final class NuxieApiTests: AsyncSpec {
                         break
                     case .modified:
                         fail("Expected the cached profile to remain authoritative")
+                    }
+                }
+
+                it("rejects a 304 issued under different profile authority") {
+                    let validator = ProfileCacheValidator(
+                        rawValue: "\"profile-v1\"",
+                        resourceScope: "https://test.nuxie.ai/profile",
+                        authority: ProfileDeliveryAuthority(
+                            appId: "app_a",
+                            environment: "live"
+                        )
+                    )
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            (
+                                HTTPURLResponse(
+                                    url: request.url!,
+                                    statusCode: 304,
+                                    httpVersion: nil,
+                                    headerFields: [
+                                        "ETag": validator.rawValue,
+                                        NuxieApi.profileAppIdHeader: "app_b",
+                                        NuxieApi.profileAppEnvironmentHeader: "live",
+                                    ]
+                                )!,
+                                Data()
+                            )
+                        }
+                    )
+
+                    await expect {
+                        try await api.fetchProfile(
+                            for: distinctId,
+                            locale: nil,
+                            revalidating: validator
+                        )
+                    }.to(throwError(NuxieNetworkError.invalidResponse))
+                }
+
+                it("requires an exact ETag on an authority-bearing 304") {
+                    let validator = ProfileCacheValidator(
+                        rawValue: "\"profile-v1\"",
+                        resourceScope: "https://test.nuxie.ai/profile",
+                        authority: ProfileDeliveryAuthority(
+                            appId: "app_a",
+                            environment: "live"
+                        )
+                    )
+                    let returnedETags: [String?] = [
+                        nil,
+                        "malformed",
+                        "\"profile-v2\"",
+                    ]
+
+                    for returnedETag in returnedETags {
+                        StubURLProtocol.reset()
+                        StubURLProtocol.register(
+                            matcher: RequestMatchers.post("/profile"),
+                            handler: { request in
+                                var headers = [
+                                    NuxieApi.profileAppIdHeader: "app_a",
+                                    NuxieApi.profileAppEnvironmentHeader: "live",
+                                ]
+                                if let returnedETag {
+                                    headers["ETag"] = returnedETag
+                                }
+                                return (
+                                    HTTPURLResponse(
+                                        url: request.url!,
+                                        statusCode: 304,
+                                        httpVersion: nil,
+                                        headerFields: headers
+                                    )!,
+                                    Data()
+                                )
+                            }
+                        )
+
+                        await expect {
+                            try await api.fetchProfile(
+                                for: distinctId,
+                                locale: nil,
+                                revalidating: validator
+                            )
+                        }.to(throwError(NuxieNetworkError.invalidResponse))
                     }
                 }
 

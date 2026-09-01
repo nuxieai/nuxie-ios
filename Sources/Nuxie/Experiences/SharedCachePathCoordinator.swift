@@ -43,6 +43,30 @@ actor SharedCachePathCoordinator {
         }
     }
 
+    /// Serializes a mutation whose invariant spans every target beneath one
+    /// cache root. The filesystem root lock coordinates other processes while
+    /// the keyed owner keeps same-process root transactions FIFO.
+    func withExclusiveRootAccess<Value: Sendable>(
+        to rootURL: URL,
+        lockScope: CacheFilesystemLockScope,
+        operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let key = "root\u{0}" + rootURL.standardizedFileURL.path
+        try await acquire(key)
+        do {
+            try Task.checkCancellation()
+            let value = try await CacheFilesystemLock.withExclusiveRootTransaction(
+                scope: lockScope,
+                operation: operation
+            )
+            release(key)
+            return value
+        } catch {
+            release(key)
+            throw error
+        }
+    }
+
     private func acquire(_ key: String) async throws {
         try Task.checkCancellation()
         if states[key]?.isOwned != true {

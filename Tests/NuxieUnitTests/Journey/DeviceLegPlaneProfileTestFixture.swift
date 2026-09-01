@@ -8,6 +8,14 @@ struct DeviceLegPlaneProfileTestFixture {
     let publicKey: Data
     let root: [String: Any]
 
+    var deliveryAuthority: ProfileDeliveryAuthority {
+        let identity = profile.releases[0].locator.identity
+        return ProfileDeliveryAuthority(
+            appId: identity.appId,
+            environment: identity.environment
+        )
+    }
+
     static func load() throws -> Self {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

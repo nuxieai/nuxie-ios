@@ -9,7 +9,7 @@
     "docs": false,
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3836",
-      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:237"
+      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:284"
     ],
     "endpoint": [
       "batch",
@@ -238,7 +238,7 @@
     "docs": false,
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3530",
-      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:170"
+      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:216"
     ],
     "endpoint": [
       "batch",
@@ -717,7 +717,7 @@
     "emitters": [
       "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:550",
       "Sources/Nuxie/Features/FeatureUseCommandQueue.swift:705",
-      "Sources/Nuxie/NuxieSDK.swift:1206"
+      "Sources/Nuxie/NuxieSDK.swift:1215"
     ],
     "endpoint": "/i/event response lane",
     "fixtures": [
@@ -761,7 +761,7 @@
     "constant": "SystemEventNames.identify",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/NuxieSDK.swift:665"
+      "Sources/Nuxie/NuxieSDK.swift:674"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -838,7 +838,7 @@
     "docs": true,
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:5408",
-      "Sources/Nuxie/Events/EventLog.swift:1984"
+      "Sources/Nuxie/Events/EventLog.swift:2134"
     ],
     "endpoint": [
       "/i/event response lane",
@@ -902,7 +902,7 @@
     "constant": "JourneyEvents.journeyEffectCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Events/EventLog.swift:1984"
+      "Sources/Nuxie/Events/EventLog.swift:2134"
     ],
     "endpoint": "none",
     "fixtures": [],
@@ -1280,7 +1280,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3492",
       "Sources/Nuxie/Journey/JourneyService.swift:3147",
-      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:184"
+      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:230"
     ],
     "endpoint": [
       "/i/event response lane",
@@ -1419,7 +1419,7 @@
     "constant": "JourneyEvents.journeySuperseded",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Events/EventLog.swift:1984"
+      "Sources/Nuxie/Events/EventLog.swift:2134"
     ],
     "endpoint": "none",
     "fixtures": [],

@@ -4,6 +4,12 @@ import Foundation
 /// Mock implementation of EventLog for testing
 // @unchecked Sendable: all mutable state is serialized through `lock`.
 public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
+    private struct CommittedSubscriber {
+        let identifier: UInt64
+        let filter: (@Sendable (NuxieEvent) -> Bool)?
+        let handler: AdmittedCommittedEventHandler
+    }
+
     private let lock = NSLock()
 
     /// Optional collaborators used to enrich mock events. When nil, static
@@ -149,6 +155,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             return (_eventHandlers, _capturedEventObserver)
         }
         observer?(nuxieEvent)
+        let admissions = captureCommittedAdmissions()
 
         Task {
             handlers.forEach { pattern, handler in
@@ -159,7 +166,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             let subscribers = lock.withLock { _committedSubscribers }
             for subscriber in subscribers {
                 if let filter = subscriber.filter, !filter(nuxieEvent) { continue }
-                await subscriber.handler(nuxieEvent)
+                await subscriber.handler(
+                    nuxieEvent,
+                    admissions[subscriber.identifier]
+                )
             }
         }
     }
@@ -190,6 +200,17 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     
     @discardableResult
     public func route(_ event: NuxieEvent) async -> NuxieEvent? {
+        await route(
+            event,
+            subscriberAdmissions: captureCommittedAdmissions()
+        )
+    }
+
+    @discardableResult
+    private func route(
+        _ event: NuxieEvent,
+        subscriberAdmissions: [UInt64: UInt64]
+    ) async -> NuxieEvent? {
         let handlers: [(String, (NuxieEvent) -> Void)] = lock.withLock {
             _routedEvents.append(event)
             return _eventHandlers
@@ -205,7 +226,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         let subscribers = lock.withLock { _committedSubscribers }
         for subscriber in subscribers {
             if let filter = subscriber.filter, !filter(event) { continue }
-            await subscriber.handler(event)
+            await subscriber.handler(
+                event,
+                subscriberAdmissions[subscriber.identifier]
+            )
         }
 
         return event
@@ -217,6 +241,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         eventId: String,
         distinctId: String
     ) async -> DurableTriggerCapture? {
+        let subscriberAdmissions = captureCommittedAdmissions()
         guard let capture = await captureSystemEvent(
             event,
             properties: properties,
@@ -226,7 +251,35 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         guard capture.routesLocally, capture.isNewlyCommitted else {
             return capture
         }
-        _ = await route(capture.event)
+        _ = await route(
+            capture.event,
+            subscriberAdmissions: subscriberAdmissions
+        )
+        return capture
+    }
+
+    public func captureAndRouteSystemEvent(
+        _ event: String,
+        properties: sending [String: Any]?,
+        eventId: String,
+        distinctId: String,
+        admission: any StableEventCaptureCommitAdmission
+    ) async -> DurableTriggerCapture? {
+        let subscriberAdmissions = captureCommittedAdmissions()
+        guard let capture = await captureSystemEvent(
+            event,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId,
+            admission: admission
+        ) else { return nil }
+        guard capture.routesLocally, capture.isNewlyCommitted else {
+            return capture
+        }
+        _ = await route(
+            capture.event,
+            subscriberAdmissions: subscriberAdmissions
+        )
         return capture
     }
     
@@ -244,8 +297,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         // Mock implementation - no-op
     }
 
-    private var _committedSubscribers:
-        [(filter: (@Sendable (NuxieEvent) -> Bool)?, handler: CommittedEventHandler)] = []
+    private var _committedSubscribers: [CommittedSubscriber] = []
+    private var _nextCommittedSubscriberIdentifier: UInt64 = 0
+    private var _committedAdmissionProviders:
+        [UInt64: CommittedEventAdmissionProvider] = [:]
     private var _forwardingSubscribers:
         [(isEnabled: @Sendable () -> Bool, handler: ForwardingEventHandler)] = []
 
@@ -254,8 +309,63 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         handler: @escaping CommittedEventHandler
     ) async {
         lock.withLock {
-            _committedSubscribers.append((filter: filter, handler: handler))
+            let identifier = _nextCommittedSubscriberIdentifier
+            _nextCommittedSubscriberIdentifier &+= 1
+            _committedSubscribers.append(.init(
+                identifier: identifier,
+                filter: filter,
+                handler: { event, _ in await handler(event) }
+            ))
         }
+    }
+
+    public func reserveCommittedAdmission(
+        admission: @escaping CommittedEventAdmissionProvider
+    ) -> CommittedEventAdmissionReservation {
+        lock.withLock {
+            let identifier = _nextCommittedSubscriberIdentifier
+            _nextCommittedSubscriberIdentifier &+= 1
+            _committedAdmissionProviders[identifier] = admission
+            return .init(subscriberIdentifier: identifier)
+        }
+    }
+
+    public func subscribeCommitted(
+        where filter: (@Sendable (NuxieEvent) -> Bool)?,
+        reservation: CommittedEventAdmissionReservation,
+        handler: @escaping AdmittedCommittedEventHandler
+    ) async {
+        lock.withLock {
+            _committedSubscribers.append(.init(
+                identifier: reservation.subscriberIdentifier,
+                filter: filter,
+                handler: handler
+            ))
+        }
+    }
+
+    public func subscribeCommitted(
+        where filter: (@Sendable (NuxieEvent) -> Bool)?,
+        admission: @escaping CommittedEventAdmissionProvider,
+        handler: @escaping AdmittedCommittedEventHandler
+    ) async {
+        let reservation = reserveCommittedAdmission(admission: admission)
+        await subscribeCommitted(
+            where: filter,
+            reservation: reservation,
+            handler: handler
+        )
+    }
+
+    private func captureCommittedAdmissions() -> [UInt64: UInt64] {
+        let providers = lock.withLock { _committedAdmissionProviders }
+        var admissions: [UInt64: UInt64] = [:]
+        for (identifier, provider) in providers {
+            if let admission = provider() {
+                admissions[identifier] = admission
+            }
+        }
+        return admissions
     }
 
     public func subscribeForwarding(
@@ -710,6 +820,22 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         eventId: String,
         distinctId: String
     ) async -> DurableTriggerCapture? {
+        await captureSystemEvent(
+            event,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId,
+            admission: nil
+        )
+    }
+
+    private func captureSystemEvent(
+        _ event: String,
+        properties: sending [String: Any]?,
+        eventId: String,
+        distinctId: String,
+        admission: (any StableEventCaptureCommitAdmission)?
+    ) async -> DurableTriggerCapture? {
         let propertiesBox = UncheckedSendable(properties)
         if let existing = lock.withLock({ _stableCaptures[eventId] }) {
             return DurableTriggerCapture(
@@ -745,17 +871,30 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         let capture = transformed.map {
             DurableTriggerCapture(event: $0)
         } ?? DurableTriggerCapture(event: original, routesLocally: false)
-        return lock.withLock {
-            if let existing = _stableCaptures[eventId] {
-                return DurableTriggerCapture(
-                    event: existing.event,
-                    routesLocally: existing.routesLocally,
-                    isNewlyCommitted: false
-                )
+        let commit = { [self] in
+            lock.withLock {
+                if let existing = _stableCaptures[eventId] {
+                    return DurableTriggerCapture(
+                        event: existing.event,
+                        routesLocally: existing.routesLocally,
+                        isNewlyCommitted: false
+                    )
+                }
+                _stableCaptures[eventId] = capture
+                return capture
             }
-            _stableCaptures[eventId] = capture
-            return capture
         }
+        guard let admission else { return commit() }
+        var committedCapture: DurableTriggerCapture?
+        let admitted = admission.commitIfCurrent {
+            committedCapture = commit()
+            return StableEventCaptureCommit(
+                outcome: .dropped,
+                commitSequence: nil
+            )
+        }
+        guard admitted != nil else { return nil }
+        return committedCapture
     }
 
     public func captureOwnedJourneySystemEvent(

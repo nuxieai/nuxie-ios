@@ -178,6 +178,14 @@ final class NuxieCore: @unchecked Sendable {
       supportedRuntime: ExperienceReleaseRuntime.current,
       highWaterStore: highWaterStore
     )
+    let deviceLegStorageScope = DeviceLegStorageScope(
+      apiKey: configuration.apiKey,
+      environment: configuration.environment
+    )
+    let profileStorageScope = ProfileStorageScope(
+      apiKey: configuration.apiKey,
+      environment: configuration.environment
+    )
     let deviceLegs: (any DeviceLegServiceProtocol)?
     if let timezones = SignedTimezoneBundle.installed {
       deviceLegs = DeviceLegService(
@@ -186,6 +194,7 @@ final class NuxieCore: @unchecked Sendable {
         dateProvider: dateProvider,
         sleepProvider: sleepProvider,
         journalDirectory: releasePaths.admission,
+        storageScope: deviceLegStorageScope,
         featureAccess: { featureId in
           await builtFeatureService.get().getCached(
             featureId: featureId,
@@ -235,6 +244,7 @@ final class NuxieCore: @unchecked Sendable {
       dateProvider: dateProvider,
       sleepProvider: sleepProvider,
       localeProvider: localeProvider,
+      storageScope: profileStorageScope,
       customStoragePath: internalConfiguration.customStoragePath
     )
     let featureInfo = overrides.featureInfo ?? FeatureInfo()
