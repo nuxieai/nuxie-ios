@@ -146,6 +146,36 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         }
     }
 
+    func testProfileCannotRewriteTheSignedLegEntryCondition() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        var changedRoot = fixture.root
+        var arms = try XCTUnwrap(
+            changedRoot["armedLegs"] as? [[String: Any]]
+        )
+        arms[0]["entryCondition"] = [
+            "type": "event",
+            "eventName": "rewritten_trigger",
+        ]
+        changedRoot["armedLegs"] = arms
+        let profile = try JourneyPlaneProfile.decode(
+            JSONSerialization.data(withJSONObject: changedRoot)
+        )
+        let catalog = try makeCatalog(
+            fixture,
+            store: InMemoryExperienceReleaseHighWaterStore()
+        )
+
+        do {
+            _ = try await catalog.prepare(profile)
+            XCTFail("Expected signed entry-condition mismatch rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .invalidDescriptor
+            )
+        }
+    }
+
     func testCachedProfileRoundTripsCanonicalPlaneValues() throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
         let cached = CachedProfile(

@@ -283,6 +283,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     private let segmentService: SegmentServiceProtocol
     private let experienceService: ExperienceServiceProtocol
     private let deviceLegProfiles: DeviceLegProfileCatalog?
+    private let deviceLegRuntime: (any DeviceLegProfileConsuming)?
     private let eventLog: ProfileEventSink
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
@@ -304,6 +305,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         segments: SegmentServiceProtocol,
         experiences: ExperienceServiceProtocol,
         deviceLegProfiles: DeviceLegProfileCatalog? = nil,
+        deviceLegRuntime: (any DeviceLegProfileConsuming)? = nil,
         eventLog: ProfileEventSink,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
@@ -315,6 +317,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.segmentService = segments
         self.experienceService = experiences
         self.deviceLegProfiles = deviceLegProfiles
+        self.deviceLegRuntime = deviceLegRuntime
         self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
@@ -363,6 +366,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         segments: SegmentServiceProtocol,
         experiences: ExperienceServiceProtocol,
         deviceLegProfiles: DeviceLegProfileCatalog? = nil,
+        deviceLegRuntime: (any DeviceLegProfileConsuming)? = nil,
         eventLog: ProfileEventSink,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
@@ -373,6 +377,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.segmentService = segments
         self.experienceService = experiences
         self.deviceLegProfiles = deviceLegProfiles
+        self.deviceLegRuntime = deviceLegRuntime
         self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
@@ -581,10 +586,15 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard isCurrentAdmission(admission) else { return }
         cachedProfile = nil
         triggerAdmission = nil
-        _ = await deviceLegProfiles?.clear(
+        let clearedDeviceProfile = await deviceLegProfiles?.clear(
             distinctId: admission.distinctId,
             admission: cacheStoreAdmission(for: admission)
-        )
+        ) ?? true
+        if clearedDeviceProfile {
+            await deviceLegRuntime?.profileDidClear(
+                distinctId: admission.distinctId
+            )
+        }
         guard isCurrentAdmission(admission) else { return }
         let clearedReleases = try? await experienceService.prepareReleaseProfile(nil)
         guard isCurrentAdmission(admission) else { return }
@@ -670,17 +680,23 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard installedMembership,
               isCurrentAdmission(admission) else { return false }
 
+        let committedDeviceSnapshot: DeviceLegProfileCatalog.Snapshot?
         if let preparedDeviceProfile {
             guard let committed = try await deviceLegProfiles?.commit(
                 preparedDeviceProfile,
                 distinctId: distinctId,
                 admission: cacheStoreAdmission(for: admission)
             ), committed else { return false }
+            committedDeviceSnapshot = await deviceLegProfiles?.snapshot(
+                distinctId: distinctId
+            )
+            guard committedDeviceSnapshot != nil else { return false }
         } else {
             guard await deviceLegProfiles?.clear(
                 distinctId: distinctId,
                 admission: cacheStoreAdmission(for: admission)
             ) ?? true else { return false }
+            committedDeviceSnapshot = nil
         }
         guard isCurrentAdmission(admission) else { return false }
 
@@ -717,6 +733,19 @@ internal actor ProfileService: ProfileServiceProtocol {
         LogDebug("Updated memory cache for \(NuxieLogger.shared.logDistinctID(distinctId))")
         LogInfo("Admitted segment membership snapshot for user \(NuxieLogger.shared.logDistinctID(distinctId))")
         schedulePeriodicRefresh(for: profile)
+
+        // Runtime visibility follows the in-memory profile publication. A
+        // startup disk admission may happen before runtime initialization;
+        // the consumer stores this authenticated snapshot and evaluates it
+        // only after its durable journal has recovered.
+        if let committedDeviceSnapshot {
+            await deviceLegRuntime?.profileDidCommit(
+                committedDeviceSnapshot,
+                distinctId: distinctId
+            )
+        } else {
+            await deviceLegRuntime?.profileDidClear(distinctId: distinctId)
+        }
 
         // Server facts and mailbox work are customer-scoped, not localized:
         // committing them from a response fetched under an older locale is
@@ -825,6 +854,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         cachedProfile = nil
         triggerAdmission = nil
         await deviceLegProfiles?.clear(distinctId: distinctId)
+        await deviceLegRuntime?.profileDidClear(distinctId: distinctId)
         
         // Clear disk
         await diskCache.remove(forKey: distinctId)
@@ -842,6 +872,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         cachedProfile = nil
         triggerAdmission = nil
         await deviceLegProfiles?.clearAll()
+        await deviceLegRuntime?.profileDidClearAll()
         
         // Clear disk
         await diskCache.clearAll()
@@ -940,10 +971,13 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard isCurrentAdmission(admission) else { return }
         cachedProfile = nil
         triggerAdmission = nil
-        _ = await deviceLegProfiles?.clear(
+        let clearedDeviceProfile = await deviceLegProfiles?.clear(
             distinctId: oldDistinctId,
             admission: cacheStoreAdmission(for: admission)
-        )
+        ) ?? true
+        if clearedDeviceProfile {
+            await deviceLegRuntime?.profileDidClear(distinctId: oldDistinctId)
+        }
         guard isCurrentAdmission(admission) else { return }
         refreshTimer?.cancel()
         refreshTimer = nil

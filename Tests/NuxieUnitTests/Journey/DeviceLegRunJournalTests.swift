@@ -212,6 +212,36 @@ final class DeviceLegRunJournalTests: XCTestCase {
         }
     }
 
+    func testAuthorityTeardownAbandonsParkedRunsToo() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .oneTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.park(
+            run.id,
+            stepId: "wait",
+            until: date(300)
+        )
+
+        try await journal.abandonAll(at: date(200))
+
+        let remaining = try await journal.runs()
+        let abandoned = try XCTUnwrap(remaining.first)
+        XCTAssertEqual(abandoned.completion?.outcome, "abandoned")
+        XCTAssertEqual(abandoned.completion?.at, date(200))
+    }
+
     func testExecutorTransitionsAtomicallyPersistCursorContextAndFixedTimerAnchors() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

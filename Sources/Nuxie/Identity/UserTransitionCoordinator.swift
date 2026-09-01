@@ -34,6 +34,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     private let eventLog: EventIdentityMigrating
     private let featureService: FeatureServiceProtocol
     private let experienceService: ExperienceServiceProtocol
+    private let deviceLegService: (any DeviceLegServiceProtocol)?
     /// Provider: JourneyService is registered after the coordinator in some
     /// test graphs; call-time resolution keeps that order working.
     private let journeysProvider: @Sendable () -> JourneyServiceProtocol
@@ -43,12 +44,14 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         eventLog: EventIdentityMigrating,
         features: FeatureServiceProtocol,
         experiences: ExperienceServiceProtocol,
+        deviceLegs: (any DeviceLegServiceProtocol)? = nil,
         journeysProvider: @escaping @Sendable () -> JourneyServiceProtocol
     ) {
         self.profileService = profile
         self.eventLog = eventLog
         self.featureService = features
         self.experienceService = experiences
+        self.deviceLegService = deviceLegs
         self.journeysProvider = journeysProvider
     }
 
@@ -95,6 +98,12 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         }
 
         // 2. Per-user state transitions, in dependency order, uncancellable.
+        // Retire the old flat-leg journal while its distinct id is still
+        // explicit, before profile admission can publish replacement arms.
+        await deviceLegService?.handleUserChange(
+            from: transition.from,
+            to: transition.to
+        )
         if transition.kind == .reset {
             await profileService.clearCache(distinctId: transition.from)
         }

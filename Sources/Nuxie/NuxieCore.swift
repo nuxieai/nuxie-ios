@@ -66,6 +66,7 @@ final class NuxieCore: @unchecked Sendable {
   let segments: SegmentServiceProtocol
   let experiences: ExperienceServiceProtocol
   let deviceLegProfiles: DeviceLegProfileCatalog
+  let deviceLegs: (any DeviceLegServiceProtocol)?
   let profile: ProfileServiceProtocol
   let featureInfo: FeatureInfo
   let featureUseCommands: FeatureUseCommandQueue
@@ -119,6 +120,7 @@ final class NuxieCore: @unchecked Sendable {
     // and only read after init completes.
     let builtTransactionService = LateBound<TransactionService>()
     let builtTriggerService = LateBound<TriggerServiceProtocol>()
+    let builtFeatureService = LateBound<FeatureServiceProtocol>()
     let systemEvents = overrides.systemEvents ?? TriggerSystemEventSink(
       triggerProvider: { builtTriggerService.get() }
     )
@@ -176,6 +178,26 @@ final class NuxieCore: @unchecked Sendable {
       supportedRuntime: ExperienceReleaseRuntime.current,
       highWaterStore: highWaterStore
     )
+    let deviceLegs: (any DeviceLegServiceProtocol)?
+    if let timezones = SignedTimezoneBundle.installed {
+      deviceLegs = DeviceLegService(
+        identity: identity,
+        events: eventLog,
+        dateProvider: dateProvider,
+        sleepProvider: sleepProvider,
+        journalDirectory: releasePaths.admission,
+        featureAccess: { featureId in
+          await builtFeatureService.get().getCached(
+            featureId: featureId,
+            entityId: nil
+          )
+        },
+        timezones: timezones
+      )
+    } else {
+      LogError("Device-leg runtime unavailable: signed timezone bundle missing")
+      deviceLegs = nil
+    }
     let experiences = overrides.experiences ?? ExperienceService(
       productService: productService,
       introEligibilityTokenProvider: introEligibilityTokenProvider,
@@ -197,6 +219,7 @@ final class NuxieCore: @unchecked Sendable {
       segments: segments,
       experiences: experiences,
       deviceLegProfiles: deviceLegProfiles,
+      deviceLegRuntime: deviceLegs,
       eventLog: eventLog,
       dateProvider: dateProvider,
       sleepProvider: sleepProvider,
@@ -246,6 +269,7 @@ final class NuxieCore: @unchecked Sendable {
       featureInfo: featureInfo,
       cacheTTL: internalConfiguration.featureCacheTTL
     )
+    builtFeatureService.set(features)
 
     // Set-once wiring for the segments → irRuntime → features cycle.
     irRuntime.wire(
@@ -376,6 +400,7 @@ final class NuxieCore: @unchecked Sendable {
       eventLog: eventLog,
       features: features,
       experiences: experiences,
+      deviceLegs: deviceLegs,
       journeysProvider: { journeys }
     )
 
@@ -388,6 +413,7 @@ final class NuxieCore: @unchecked Sendable {
     self.segments = segments
     self.experiences = experiences
     self.deviceLegProfiles = deviceLegProfiles
+    self.deviceLegs = deviceLegs
     self.profile = profile
     self.featureInfo = featureInfo
     self.featureUseCommands = featureUseCommands

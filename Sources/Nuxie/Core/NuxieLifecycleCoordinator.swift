@@ -25,6 +25,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private var worker: Task<Void, Never>?
 
   private let journeyService: JourneyServiceProtocol
+  private let deviceLegService: (any DeviceLegServiceProtocol)?
   private let eventLog: EventQueueLifecycle
   private let profileService: ProfileServiceProtocol
   private let experiencePresentationService: ExperiencePresentationServiceProtocol
@@ -34,6 +35,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   init(
     lifecycleTracker: AppLifecycleTracker,
     journeys: JourneyServiceProtocol,
+    deviceLegs: (any DeviceLegServiceProtocol)? = nil,
     eventLog: EventQueueLifecycle,
     profile: ProfileServiceProtocol,
     experiences: ExperienceServiceProtocol,
@@ -43,6 +45,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     (self.transitions, self.transitionContinuation) = AsyncStream.makeStream()
     self.lifecycleTracker = lifecycleTracker
     self.journeyService = journeys
+    self.deviceLegService = deviceLegs
     self.eventLog = eventLog
     self.profileService = profile
     self.experienceService = experiences
@@ -103,6 +106,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     switch transition {
     case .didEnterBackground:
       await experienceService.onAppDidEnterBackground()
+      await deviceLegService?.onAppDidEnterBackground()
       await journeyService.onAppDidEnterBackground()
       await eventLog.onAppDidEnterBackground()
       // Emit $app_backgrounded after services have processed
@@ -111,6 +115,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     case .willEnterForeground:
       // Re-arm timers BEFORE UI is active so we can catch up time-based work,
       // but do not present experiences until after didBecomeActive + debounce.
+      await deviceLegService?.onAppWillEnterForeground()
       await journeyService.onAppWillEnterForeground()
       // Emit $app_opened after journey service has processed
       lifecycleTracker.trackAppForegrounded()
@@ -123,6 +128,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       await experienceService.onAppBecameActive()
       // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
       await featureService.syncFeatureInfo()
+      await deviceLegService?.onAppBecameActive()
       await journeyService.onAppBecameActive()
     }
   }

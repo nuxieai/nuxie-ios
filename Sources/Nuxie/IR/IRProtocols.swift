@@ -9,7 +9,7 @@ protocol IRUserProps {
 }
 
 /// Adapter protocol for event queries
-protocol IREventQueries {
+protocol IREventQueries: Sendable {
     /// The earliest lower bound this source can answer exactly. Production
     /// device history is retention-bounded; fixtures may be complete.
     func historyCoverage() async throws -> EventHistoryCoverage
@@ -74,7 +74,7 @@ protocol IRSegmentQueries {
 }
 
 /// Adapter protocol for feature access queries (entitlements)
-protocol IRFeatureQueries {
+protocol IRFeatureQueries: Sendable {
     /// Check if user has access to feature (boolean or has remaining balance)
     func has(_ featureId: String) async -> Bool
 
