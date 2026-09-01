@@ -3,6 +3,7 @@ import Foundation
 protocol DeviceLegProfileConsuming: AnyObject, Sendable {
     func profileDidCommit(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        authority: ProfileDeliveryAuthority,
         distinctId: String
     ) async
     func profileDidClear(distinctId: String) async
@@ -81,7 +82,11 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
     private let journalDirectory: URL?
-    private let storageScope: DeviceLegStorageScope
+    /// Production starts without a journal namespace and installs one only
+    /// after profile transport authenticates the configured Nuxie app. Tests
+    /// may inject a fixed scope for direct journal inspection.
+    private var storageScope: DeviceLegStorageScope?
+    private let acceptsProfileAuthorityScope: Bool
     private let featureAccess: FeatureAccessLookup
     private let dispatcher: any DeviceLegDispatching
     private let pinnedReleaseAuthenticator: PinnedReleaseAuthenticator
@@ -121,7 +126,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
         journalDirectory: URL?,
-        storageScope: DeviceLegStorageScope = .testFixture,
+        storageScope: DeviceLegStorageScope? = .testFixture,
         featureAccess: @escaping FeatureAccessLookup,
         dispatcher: any DeviceLegDispatching,
         pinnedReleaseAuthenticator: @escaping PinnedReleaseAuthenticator,
@@ -134,6 +139,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         self.sleepProvider = sleepProvider
         self.journalDirectory = journalDirectory
         self.storageScope = storageScope
+        acceptsProfileAuthorityScope = storageScope == nil
         self.featureAccess = featureAccess
         self.dispatcher = dispatcher
         self.pinnedReleaseAuthenticator = pinnedReleaseAuthenticator
@@ -148,7 +154,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     func initialize() async {
         guard !initialized else { return }
         initialized = true
-        await openJournal(for: identity.getDistinctId())
+        if storageScope != nil {
+            await openJournal(for: identity.getDistinctId())
+        }
         await resetForegroundStateArmReceiptsIfNeeded()
         guard let state = currentProfileState() else { return }
         await resumeParkedRuns(state: state, event: nil)
@@ -156,6 +164,32 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     }
 
     func profileDidCommit(
+        _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        authority: ProfileDeliveryAuthority,
+        distinctId: String
+    ) async {
+        guard identity.getDistinctId() == distinctId else { return }
+        if acceptsProfileAuthorityScope {
+            let authenticatedScope = DeviceLegStorageScope(authority: authority)
+            guard storageScope == nil || storageScope == authenticatedScope else {
+                LogError("DeviceLegService: authenticated app authority changed")
+                return
+            }
+            storageScope = authenticatedScope
+        }
+        await commitProfile(snapshot, distinctId: distinctId)
+    }
+
+    /// Direct runtime tests use an injected fixed namespace and do not model
+    /// the profile transport boundary.
+    func profileDidCommit(
+        _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        distinctId: String
+    ) async {
+        await commitProfile(snapshot, distinctId: distinctId)
+    }
+
+    private func commitProfile(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         distinctId: String
     ) async {
@@ -278,8 +312,8 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         cancelWake()
         if let departing = journal,
            departing.distinctId == oldDistinctId {
-            await abandon(departing)
-            if journal?.distinctId == oldDistinctId {
+            let retired = await abandon(departing)
+            if retired, journal?.distinctId == oldDistinctId {
                 journal = nil
             }
         }
@@ -342,6 +376,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     }
 
     private func openJournal(for distinctId: String) async {
+        guard let storageScope else {
+            journal = nil
+            return
+        }
         guard let journalDirectory else {
             LogError("DeviceLegService: durable journal directory unavailable")
             journal = nil
@@ -367,6 +405,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     }
 
     private func ensureJournal(for distinctId: String) async {
+        guard storageScope != nil else { return }
         // A new-user profile can outrun the queued identity transition. Retire
         // every journal displaced during that race before installing another.
         while let displaced = journal,

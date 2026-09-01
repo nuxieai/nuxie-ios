@@ -1175,6 +1175,102 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
+    func testIdentitySwitchRetriesFailedJournalRevocationBeforeReopeningCustomer() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entryStepId: "wait",
+            steps: [
+                .init(
+                    kind: .action,
+                    id: "wait",
+                    action: [
+                        "type": .string("delay"),
+                        "durationMs": .number(60_000),
+                    ],
+                    outlets: ["next": "report"],
+                    outcome: nil
+                ),
+                .init(
+                    kind: .complete,
+                    id: "report",
+                    action: nil,
+                    outlets: nil,
+                    outcome: "continue"
+                ),
+            ]
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            dateProvider: MockDateProvider(
+                initialDate: Date(timeIntervalSince1970: 1_000)
+            )
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer-a")
+        let oldJournal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-a"
+        )
+        let initialRuns = try await oldJournal.runs()
+        XCTAssertEqual(initialRuns.count, 1)
+
+        let root = directory.appendingPathComponent(
+            "device-leg-journal-v1",
+            isDirectory: true
+        )
+        let customerDigest = DeviceLegStorageScope.testFixture.customerDigest(
+            distinctId: "customer-a"
+        )
+        let blockedRevocationFile = root.appendingPathComponent(
+            "\(customerDigest).revoked",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: blockedRevocationFile,
+            withIntermediateDirectories: true
+        )
+
+        identity.setDistinctId("customer-b")
+        await service.handleUserChange(
+            from: "customer-a",
+            to: "customer-b"
+        )
+        let runsAfterFailedRevocation = try await oldJournal.runs()
+        XCTAssertEqual(
+            runsAfterFailedRevocation.count,
+            1,
+            "A failed tombstone write must leave the old journal blocked in memory"
+        )
+
+        try FileManager.default.removeItem(at: blockedRevocationFile)
+        identity.setDistinctId("customer-a")
+        await service.handleUserChange(
+            from: "customer-b",
+            to: "customer-a"
+        )
+
+        let runsAfterRetriedRevocation = try await oldJournal.runs()
+        XCTAssertTrue(runsAfterRetriedRevocation.isEmpty)
+        let abandoned = try XCTUnwrap(events.routedEvents.last {
+            $0.distinctId == "customer-a"
+                && $0.name == JourneyEvents.journeyLegCompleted
+        })
+        XCTAssertEqual(
+            abandoned.properties["outcome"] as? String,
+            "abandoned"
+        )
+    }
+
     func testRecoveryResumesOnlyThePersistedDueParkPoint() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

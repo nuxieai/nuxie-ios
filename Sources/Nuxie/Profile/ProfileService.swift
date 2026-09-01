@@ -299,8 +299,9 @@ internal actor ProfileService: ProfileServiceProtocol {
     private let localeProvider: LocaleIdentifierProviding
 
     // Cache policy
-    /// Disk/memory cache validity window; also the background-refresh
-    /// threshold on user change.
+    /// Legacy profile validity window and background-refresh threshold on user
+    /// change. Authenticated canonical plane profiles have no offline age
+    /// cutoff and revalidate opportunistically after this interval.
     private let cacheTTL: TimeInterval = 24 * 60 * 60 // 24h
     private let backgroundRefreshAge: TimeInterval = 5 * 60 // 5 min
     private let refreshInterval: TimeInterval = 30 * 60    // 30 min - periodic refresh
@@ -815,9 +816,10 @@ internal actor ProfileService: ProfileServiceProtocol {
         // startup disk admission may happen before runtime initialization;
         // the consumer stores this authenticated snapshot and evaluates it
         // only after its durable journal has recovered.
-        if let committedDeviceSnapshot {
+        if let committedDeviceSnapshot, let preparedDeviceProfile {
             await deviceLegRuntime?.profileDidCommit(
                 committedDeviceSnapshot,
+                authority: preparedDeviceProfile.authority,
                 distinctId: distinctId
             )
         } else {
