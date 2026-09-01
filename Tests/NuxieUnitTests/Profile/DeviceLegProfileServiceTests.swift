@@ -37,6 +37,28 @@ private actor DeviceLegProfileSequenceAPI: ProfileFetching {
     }
 }
 
+private actor RecordingDeviceLegProfileConsumer: DeviceLegProfileConsuming {
+    private(set) var commits: [DeviceLegProfileCatalog.Snapshot] = []
+    private(set) var clearedDistinctIds: [String] = []
+    private(set) var clearAllCount = 0
+
+    func profileDidCommit(
+        _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        distinctId: String
+    ) {
+        _ = distinctId
+        commits.append(snapshot)
+    }
+
+    func profileDidClear(distinctId: String) {
+        clearedDistinctIds.append(distinctId)
+    }
+
+    func profileDidClearAll() {
+        clearAllCount += 1
+    }
+}
+
 final class DeviceLegProfileServiceTests: XCTestCase {
     func testForegroundAlwaysRevalidatesFreshCanonicalProfile() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
@@ -117,12 +139,14 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         identity.setDistinctId("customer")
         let cache = InMemoryCachedProfileStore(ttl: nil)
         let experiences = MockExperienceService()
+        let runtime = RecordingDeviceLegProfileConsumer()
         let service = makeService(
             cache: cache,
             identity: identity,
             api: api,
             experiences: experiences,
-            catalog: catalog
+            catalog: catalog,
+            runtime: runtime
         )
 
         _ = try await service.refetchProfile(distinctId: "customer")
@@ -130,6 +154,9 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         let current = try XCTUnwrap(currentSnapshot)
         XCTAssertEqual(current.releasesByDigest.count, 1)
         XCTAssertNil(experiences.committedReleaseProfiles.last ?? nil)
+        let initialRuntimeCommits = await runtime.commits
+        XCTAssertEqual(initialRuntimeCommits.count, 1)
+        XCTAssertEqual(initialRuntimeCommits.first?.releasesByDigest.count, 1)
 
         do {
             _ = try await service.refetchProfile(distinctId: "customer")
@@ -145,10 +172,14 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         XCTAssertEqual(retained.releasesByDigest.keys, current.releasesByDigest.keys)
         let retainedProfile = await service.getCachedProfile(distinctId: "customer")
         XCTAssertNotNil(retainedProfile?.planeProfile)
+        let retainedRuntimeCommits = await runtime.commits
+        XCTAssertEqual(retainedRuntimeCommits.count, 1)
 
         _ = try await service.refetchProfile(distinctId: "customer")
         let cleared = await catalog.snapshot(distinctId: "customer")
         XCTAssertNil(cleared)
+        let runtimeClears = await runtime.clearedDistinctIds
+        XCTAssertEqual(runtimeClears, ["customer"])
     }
 
     func testDiskReloadReauthenticatesCanonicalAuthorityWhileOffline() async throws {
@@ -190,6 +221,7 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         api: ProfileFetching,
         experiences: MockExperienceService,
         catalog: DeviceLegProfileCatalog,
+        runtime: (any DeviceLegProfileConsuming)? = nil,
         sleepProvider: MockSleepProvider = MockSleepProvider()
     ) -> ProfileService {
         ProfileService(
@@ -199,6 +231,7 @@ final class DeviceLegProfileServiceTests: XCTestCase {
             segments: MockSegmentService(),
             experiences: experiences,
             deviceLegProfiles: catalog,
+            deviceLegRuntime: runtime,
             eventLog: MockEventLog(),
             dateProvider: MockDateProvider(),
             sleepProvider: sleepProvider,

@@ -129,6 +129,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       let lifecycleCoordinator = NuxieLifecycleCoordinator(
         lifecycleTracker: lifecycleTracker,
         journeys: core.journeys,
+        deviceLegs: core.deviceLegs,
         eventLog: core.eventLog,
         profile: core.profile,
         experiences: core.experiences,
@@ -143,9 +144,13 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       LogDebug("Setting up event system...")
       let eventLog = core.eventLog
       let journeyService = core.journeys
+      let deviceLegService = core.deviceLegs
 
       let eventSystemSetupTask = Task {
         guard !Task.isCancelled else { return }
+        await eventLog.subscribeCommitted { [weak deviceLegService] event in
+          await deviceLegService?.handleEvent(event)
+        }
         await eventLog.subscribeCommitted { [weak journeyService] event in
           await journeyService?.handleEvent(event)
         }
@@ -157,6 +162,11 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
             journeyService: journeyService
           )
         }
+        // Recovery can durably emit leg lifecycle events. Install both local
+        // routing and customer forwarding subscribers before it opens the
+        // journal so those events follow the same observable lane as live
+        // execution.
+        await deviceLegService?.initialize()
         do {
           try await eventLog.configure(configuration: setupConfiguration)
           LogDebug("Event system setup complete")

@@ -172,6 +172,18 @@ struct DeviceLegRunJournal {
         }
     }
 
+    /// Identity teardown and total cutover have stronger semantics than a
+    /// process restart: parked runs belong to the departing authority too and
+    /// must report abandonment instead of remaining resumable forever.
+    func abandonAll(at: Date) async throws {
+        try await update { state in
+            for (id, var run) in state.runs where run.completion == nil {
+                run.completion = .init(outcome: "abandoned", at: at)
+                state.runs[id] = run
+            }
+        }
+    }
+
     /// Consume the only resumable checkpoint before running its continuation.
     /// The caller must first establish that this wait should wake now.
     func resumeParked(_ id: String) async throws -> DeviceLegRun {

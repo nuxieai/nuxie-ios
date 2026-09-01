@@ -103,6 +103,20 @@ actor DeviceLegProfileCatalog {
             promotions[key] = mark
         }
 
+        // The profile may arm or bind an authenticated leg, but it cannot
+        // rewrite that signed program's authored trigger. Otherwise delivery
+        // could turn arrival itself into different execution authority.
+        for arm in validatedProfile.armedLegs {
+            guard let release = authenticated[
+                arm.reference.descriptorSha256
+            ], try ExactJSONCodec.encode(arm.entryCondition)
+                == ExactJSONCodec.encode(
+                    release.descriptor.leg.entryCondition
+                ) else {
+                throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+            }
+        }
+
         return Prepared(
             snapshot: Snapshot(
                 profile: validatedProfile,
