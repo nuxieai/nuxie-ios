@@ -211,11 +211,23 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         return event
     }
 
-    public func routeCapturedSystemEvent(
-        _ capture: DurableTriggerCapture
-    ) async {
-        guard capture.routesLocally, capture.isNewlyCommitted else { return }
+    public func captureAndRouteSystemEvent(
+        _ event: String,
+        properties: sending [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> DurableTriggerCapture? {
+        guard let capture = await captureSystemEvent(
+            event,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId
+        ) else { return nil }
+        guard capture.routesLocally, capture.isNewlyCommitted else {
+            return capture
+        }
         _ = await route(capture.event)
+        return capture
     }
     
     public func routeBatch(_ events: [NuxieEvent]) async -> [NuxieEvent] {

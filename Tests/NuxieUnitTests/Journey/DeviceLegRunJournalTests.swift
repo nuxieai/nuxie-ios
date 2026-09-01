@@ -423,14 +423,13 @@ final class DeviceLegRunJournalTests: XCTestCase {
 
         // Simulate termination after the stable event reached subscribers but
         // before the journal acknowledged that capture.
-        let startedAttempt = await log.captureSystemEvent(
+        let startedAttempt = await log.captureAndRouteSystemEvent(
             JourneyEvents.journeyLegStarted,
             properties: ["journey_id": run.journeyId],
             eventId: run.startedEventId,
             distinctId: "customer"
         )
-        let startedCapture = try XCTUnwrap(startedAttempt)
-        await log.routeCapturedSystemEvent(startedCapture)
+        _ = try XCTUnwrap(startedAttempt)
         await log.drain()
 
         try await DeviceLegReporter(journal: journal, events: log).flushPending()
@@ -439,14 +438,13 @@ final class DeviceLegRunJournalTests: XCTestCase {
         XCTAssertEqual(startedRoutes, [JourneyEvents.journeyLegStarted])
 
         try await journal.complete(run.id, outcome: "done", at: date(200))
-        let completedAttempt = await log.captureSystemEvent(
+        let completedAttempt = await log.captureAndRouteSystemEvent(
             JourneyEvents.journeyLegCompleted,
             properties: ["journey_id": run.journeyId],
             eventId: run.completedEventId,
             distinctId: "customer"
         )
-        let completedCapture = try XCTUnwrap(completedAttempt)
-        await log.routeCapturedSystemEvent(completedCapture)
+        _ = try XCTUnwrap(completedAttempt)
         await log.drain()
 
         try await DeviceLegReporter(journal: journal, events: log).flushPending()
@@ -532,8 +530,19 @@ private actor LostCompletionAcknowledgement: RoutedStableSystemEventCapturing {
         return event == JourneyEvents.journeyLegCompleted ? nil : captured
     }
 
-    func routeCapturedSystemEvent(_ capture: DurableTriggerCapture) async {
-        await events.routeCapturedSystemEvent(capture)
+    func captureAndRouteSystemEvent(
+        _ event: String,
+        properties: sending [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> DurableTriggerCapture? {
+        let captured = await events.captureAndRouteSystemEvent(
+            event,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId
+        )
+        return event == JourneyEvents.journeyLegCompleted ? nil : captured
     }
 }
 

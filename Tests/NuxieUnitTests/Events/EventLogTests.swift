@@ -134,6 +134,45 @@ final class EventLogTests: AsyncSpec {
 
                     await expect { await received.names }.to(equal(["early_event"]))
                 }
+
+                it("preserves commit order when a routed stable capture resumes after a later capture") {
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    try await log.configure(configuration: testConfig)
+                    let stableId = "stable-before-later"
+                    mockStore.suspendStableCaptureAfterCommit(id: stableId)
+                    defer { mockStore.resumeStableCaptureAfterCommit(id: stableId) }
+                    let stableTask = Task {
+                        await log.captureAndRouteSystemEvent(
+                            JourneyEvents.journeyLegStarted,
+                            properties: nil,
+                            eventId: stableId,
+                            distinctId: "customer-a"
+                        )
+                    }
+                    await expect {
+                        mockStore.isStableCaptureAfterCommitWaiting(id: stableId)
+                    }.toEventually(beTrue(), timeout: .seconds(1))
+
+                    log.track("later", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                    await expect {
+                        mockStore.storedEvents.contains { $0.name == "later" }
+                    }.toEventually(beTrue(), timeout: .seconds(1))
+                    await expect { await received.names }.to(equal([]))
+
+                    mockStore.resumeStableCaptureAfterCommit(id: stableId)
+                    guard await stableTask.value != nil else {
+                        return fail("Expected stable capture")
+                    }
+                    await log.drain()
+
+                    await expect { await received.names }.to(equal([
+                        JourneyEvents.journeyLegStarted,
+                        "later",
+                    ]))
+                }
             }
 
             // MARK: - Enrichment

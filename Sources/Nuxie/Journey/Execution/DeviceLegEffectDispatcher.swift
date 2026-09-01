@@ -127,7 +127,7 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         properties["experience_version_id"] = request.reference.versionId
         properties["leg_id"] = request.reference.legId
         properties["leg_generation"] = request.generation
-        guard let capture = await events.captureSystemEvent(
+        guard let _ = await events.captureAndRouteSystemEvent(
                 action.eventName,
                 properties: properties,
                 eventId: request.effectId,
@@ -136,7 +136,6 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
               await requestIsCurrent(request) else {
             return .failed
         }
-        await events.routeCapturedSystemEvent(capture)
         return await requestIsCurrent(request) ? .outlet("next") : .failed
     }
 
@@ -181,7 +180,7 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         guard let action = decode(Milestone.self, request.action) else { return .failed }
         var properties = legAttribution(request)
         properties["milestone_id"] = action.milestoneId
-        guard let capture = await events.captureSystemEvent(
+        guard let _ = await events.captureAndRouteSystemEvent(
                 JourneyEvents.journeyMilestone,
                 properties: properties,
                 eventId: request.effectId,
@@ -190,7 +189,6 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
               await requestIsCurrent(request) else {
             return .failed
         }
-        await events.routeCapturedSystemEvent(capture)
         return await requestIsCurrent(request) ? .outlet("next") : .failed
     }
 
@@ -248,13 +246,12 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         properties: sending [String: Any],
         request: DeviceLegDispatchRequest
     ) async -> Bool {
-        guard let capture = await events.captureSystemEvent(
+        guard let _ = await events.captureAndRouteSystemEvent(
             event,
             properties: properties,
             eventId: request.effectId,
             distinctId: request.distinctId
         ), await requestIsCurrent(request) else { return false }
-        await events.routeCapturedSystemEvent(capture)
         return await requestIsCurrent(request)
     }
 
