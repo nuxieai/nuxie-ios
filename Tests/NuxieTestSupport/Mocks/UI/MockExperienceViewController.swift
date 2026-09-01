@@ -47,7 +47,7 @@ class MockExperienceViewController: ExperienceViewController {
             versionId: mockExperienceVersionId,
             name: "Test Experience",
             reentry: .everyTime,
-            publishedAt: "2024-01-01T00:00:00Z",
+            releaseCreatedAt: "2024-01-01T00:00:00Z",
             trigger: nil,
             goal: nil,
             exitPolicy: nil,

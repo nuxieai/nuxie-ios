@@ -5,6 +5,6 @@
   "experienceVersionId": "version_golden",
   "versionNumber": 7,
   "buildId": "build_golden",
-  "publishedAt": "2026-08-12T12:00:00.000Z",
-  "publishedAtSeq": 42
+  "releaseCreatedAt": "2026-08-12T12:00:00.000Z",
+  "releaseSequence": 42
 }

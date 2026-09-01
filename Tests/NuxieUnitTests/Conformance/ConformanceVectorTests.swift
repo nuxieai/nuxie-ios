@@ -107,7 +107,7 @@ final class ConformanceVectorTests: XCTestCase {
         struct ProfileSuite: Decodable {
             struct Expectation: Decodable {
                 let activeExperienceVersionId: String
-                let activePublishedAtSeq: Int
+                let activeReleaseSequence: Int
                 let pinnedExperienceVersionId: String
                 let pinnedBuildId: String
             }
@@ -131,8 +131,8 @@ final class ConformanceVectorTests: XCTestCase {
             suite.expect.activeExperienceVersionId
         )
         XCTAssertEqual(
-            suite.wire.active.first?.locator.publishedAtSeq,
-            suite.expect.activePublishedAtSeq
+            suite.wire.active.first?.locator.releaseSequence,
+            suite.expect.activeReleaseSequence
         )
         XCTAssertEqual(
             suite.wire.pinned.first?.locator.experienceVersionId,
@@ -945,7 +945,7 @@ final class ConformanceVectorTests: XCTestCase {
             versionId: "flow-version-1",
             name: "Fixture",
             reentry: .everyTime,
-            publishedAt: "2026-07-28T00:00:00Z",
+            releaseCreatedAt: "2026-07-28T00:00:00Z",
             trigger: nil,
             goal: nil,
             exitPolicy: nil,

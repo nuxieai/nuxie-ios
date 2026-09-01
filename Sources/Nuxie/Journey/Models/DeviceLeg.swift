@@ -91,7 +91,7 @@ struct AuthenticatedDeviceLegRelease {
     let exactDescriptorBytes: Data
     let descriptorSHA256: String
     let descriptor: DeviceLegReleaseDescriptor
-    let publishedAtSeqToPromote: Int?
+    let releaseSequenceToPromote: Int?
 }
 
 extension DeviceLeg: Codable, Sendable {}

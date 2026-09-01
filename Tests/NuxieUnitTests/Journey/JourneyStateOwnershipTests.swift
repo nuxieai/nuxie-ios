@@ -154,7 +154,7 @@ final class JourneyStateOwnershipTests: XCTestCase {
                 versionId: "owned-version",
                 name: "Owned state",
                 reentry: .everyTime,
-                publishedAt: "2026-08-12T00:00:00Z",
+                releaseCreatedAt: "2026-08-12T00:00:00Z",
                 trigger: nil,
                 goal: nil,
                 exitPolicy: nil,

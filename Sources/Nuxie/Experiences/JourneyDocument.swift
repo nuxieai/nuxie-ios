@@ -83,7 +83,7 @@ struct ExperienceBehaviorDefinition: Sendable {
     let artifactContentHash: String
     let name: String
     let reentry: ExperienceReentry
-    let publishedAt: String
+    let releaseCreatedAt: String
     let trigger: ExperienceTrigger?
     let goal: GoalConfig?
     let exitPolicy: ExitPolicy?
@@ -103,7 +103,7 @@ struct ExperienceBehaviorDefinition: Sendable {
         artifactContentHash: String,
         name: String,
         reentry: ExperienceReentry,
-        publishedAt: String,
+        releaseCreatedAt: String,
         trigger: ExperienceTrigger?,
         goal: GoalConfig?,
         exitPolicy: ExitPolicy?,
@@ -118,7 +118,7 @@ struct ExperienceBehaviorDefinition: Sendable {
         self.artifactContentHash = artifactContentHash
         self.name = name
         self.reentry = reentry
-        self.publishedAt = publishedAt
+        self.releaseCreatedAt = releaseCreatedAt
         self.trigger = trigger
         self.goal = goal
         self.exitPolicy = exitPolicy
@@ -135,7 +135,7 @@ struct ExperienceBehaviorDefinition: Sendable {
         artifactContentHash: String,
         name: String,
         reentry: ExperienceReentry,
-        publishedAt: String,
+        releaseCreatedAt: String,
         trigger: ExperienceTrigger?,
         goal: GoalConfig?,
         exitPolicy: ExitPolicy?,
@@ -151,7 +151,7 @@ struct ExperienceBehaviorDefinition: Sendable {
             artifactContentHash: artifactContentHash,
             name: name,
             reentry: reentry,
-            publishedAt: publishedAt,
+            releaseCreatedAt: releaseCreatedAt,
             trigger: trigger,
             goal: goal,
             exitPolicy: exitPolicy,

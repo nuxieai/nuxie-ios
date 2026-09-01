@@ -532,7 +532,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
             versionId: "flow-version-1",
             name: "Experience",
             reentry: .everyTime,
-            publishedAt: "2026-01-01T00:00:00Z",
+            releaseCreatedAt: "2026-01-01T00:00:00Z",
             trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
             goal: nil,
             exitPolicy: nil,

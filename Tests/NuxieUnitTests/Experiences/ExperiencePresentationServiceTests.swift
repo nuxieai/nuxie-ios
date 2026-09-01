@@ -133,13 +133,13 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
         }
 
         func makeExperience(id: String) -> Experience {
-            let publishedAt = ISO8601DateFormatter().string(from: Date())
+            let releaseCreatedAt = ISO8601DateFormatter().string(from: Date())
             return Experience(
                 id: id,
                 versionId: "flow-test",
                 name: "Test Experience",
                 reentry: .oneTime,
-                publishedAt: publishedAt,
+                releaseCreatedAt: releaseCreatedAt,
                 trigger: .event(EventTriggerConfig(eventName: "test_event", condition: nil)),
                 goal: nil,
                 exitPolicy: nil,
@@ -168,7 +168,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     artifactContentHash: String(repeating: "a", count: 64),
                     name: "Signed shell",
                     reentry: .everyTime,
-                    publishedAt: "2026-08-15T00:00:00Z",
+                    releaseCreatedAt: "2026-08-15T00:00:00Z",
                     trigger: nil,
                     goal: nil,
                     exitPolicy: nil,
@@ -190,8 +190,8 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         experienceVersionId: versionId,
                         buildId: "build-\(versionId)",
                         versionNumber: 1,
-                        publishedAt: "2026-08-15T00:00:00Z",
-                        publishedAtSeq: 1
+                        releaseCreatedAt: "2026-08-15T00:00:00Z",
+                        releaseSequence: 1
                     ),
                     descriptorSHA256: String(repeating: "a", count: 64)
                 )

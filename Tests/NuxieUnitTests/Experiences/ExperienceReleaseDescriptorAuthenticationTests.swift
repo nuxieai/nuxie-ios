@@ -18,13 +18,13 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             authorizationKeys: [authorizationKey],
             expectedIdentity: expectation,
             supportedRuntime: supportedRuntime,
-            replayPolicy: .active(minimumPublishedAtSeq: 42)
+            replayPolicy: .active(minimumReleaseSequence: 42)
         )
 
         XCTAssertEqual(authenticated.exactDescriptorBytes, descriptor)
         XCTAssertEqual(authenticated.descriptor.identity, expectation.identity)
         XCTAssertEqual(authenticated.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")
-        XCTAssertEqual(authenticated.publishedAtSeqToPromote, 42)
+        XCTAssertEqual(authenticated.releaseSequenceToPromote, 42)
     }
 
     func testAuthenticatesSharedPublisherGoldenEnvelope() throws {
@@ -64,13 +64,13 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                     experienceVersionId: expectedIdentity.experienceVersionId,
                     buildId: expectedIdentity.buildId,
                     versionNumber: expectedIdentity.versionNumber,
-                    publishedAt: expectedIdentity.publishedAt,
-                    publishedAtSeq: expectedIdentity.publishedAtSeq
+                    releaseCreatedAt: expectedIdentity.releaseCreatedAt,
+                    releaseSequence: expectedIdentity.releaseSequence
                 ),
             supportedRuntime: supportedRuntime(
                 capabilities: Set(capabilities)
             ),
-            replayPolicy: .active(minimumPublishedAtSeq: 42)
+            replayPolicy: .active(minimumReleaseSequence: 42)
             )
         } catch {
             XCTFail("golden envelope failed: \(error)")
@@ -128,7 +128,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 authorizationKeys: [authorizationKey],
                 expectedIdentity: expectedIdentity,
                 supportedRuntime: supportedRuntime(capabilities: []),
-                replayPolicy: .active(minimumPublishedAtSeq: 0)
+                replayPolicy: .active(minimumReleaseSequence: 0)
             )
         ) {
             XCTAssertEqual(
@@ -192,14 +192,42 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             experienceVersionId: expectedIdentity.experienceVersionId,
             buildId: expectedIdentity.buildId,
             versionNumber: expectedIdentity.versionNumber + 1,
-            publishedAt: expectedIdentity.publishedAt,
-            publishedAtSeq: expectedIdentity.publishedAtSeq
+            releaseCreatedAt: expectedIdentity.releaseCreatedAt,
+            releaseSequence: expectedIdentity.releaseSequence
         )
 
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: validDescriptorBytes()),
             expectedIdentity: mismatched,
             is: "experience_release.identity.mismatch"
+        )
+    }
+
+    func testRejectsLegacyPublicationIdentityKeysWithoutFallback() throws {
+        let descriptor = try mutatedValidDescriptor { root in
+            var identity = try XCTUnwrap(root["identity"] as? [String: Any])
+            identity["publishedAt"] = identity.removeValue(forKey: "releaseCreatedAt")
+            identity["publishedAtSeq"] = identity.removeValue(forKey: "releaseSequence")
+            root["identity"] = identity
+        }
+
+        assertAuthenticationError(
+            try signedEnvelope(descriptorBytes: descriptor),
+            is: "experience_release.descriptor.invalid"
+        )
+    }
+
+    func testRejectsMixedCurrentAndLegacyPublicationIdentityKeys() throws {
+        let descriptor = try mutatedValidDescriptor { root in
+            var identity = try XCTUnwrap(root["identity"] as? [String: Any])
+            identity["publishedAt"] = identity["releaseCreatedAt"]
+            identity["publishedAtSeq"] = identity["releaseSequence"]
+            root["identity"] = identity
+        }
+
+        assertAuthenticationError(
+            try signedEnvelope(descriptorBytes: descriptor),
+            is: "experience_release.descriptor.invalid"
         )
     }
 
@@ -544,7 +572,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     }
 
     func testRejectsIdentityIntegersAboveJavaScriptSafeMaximum() throws {
-        for field in ["versionNumber", "publishedAtSeq"] {
+        for field in ["versionNumber", "releaseSequence"] {
             let descriptor = try mutatedValidDescriptor { root in
                 var identity = try XCTUnwrap(root["identity"] as? [String: Any])
                 identity[field] = Int64(9_007_199_254_740_992)
@@ -557,8 +585,8 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         }
     }
 
-    func testPublishedAtMatchesZodOffsetDatetimeGrammar() throws {
-        for publishedAt in [
+    func testReleaseCreatedAtMatchesZodOffsetDatetimeGrammar() throws {
+        for releaseCreatedAt in [
             "2026-08-12 12:00:00Z",
             "2026-08-12T12:00:00z",
             "2026-08-12T12:00:00",
@@ -568,7 +596,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         ] {
             let descriptor = try mutatedValidDescriptor { root in
                 var identity = try XCTUnwrap(root["identity"] as? [String: Any])
-                identity["publishedAt"] = publishedAt
+                identity["releaseCreatedAt"] = releaseCreatedAt
                 root["identity"] = identity
             }
             assertAuthenticationError(
@@ -621,7 +649,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testActiveReplayPolicyRejectsReleaseBelowHighWaterMark() throws {
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: validDescriptorBytes()),
-            replayPolicy: .active(minimumPublishedAtSeq: 43),
+            replayPolicy: .active(minimumReleaseSequence: 43),
             is: "experience_release.replay.rejected"
         )
     }
@@ -640,7 +668,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             )
         )
 
-        XCTAssertNil(authenticated.publishedAtSeqToPromote)
+        XCTAssertNil(authenticated.releaseSequenceToPromote)
     }
 
     func testPinnedReplayPolicyRejectsNonExactDigest() throws {
@@ -1014,7 +1042,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testRejectsNULDelimitedIdentityCollision() throws {
         let descriptor = try descriptorWithIdentity(
             experienceId: "experience\u{0}live\u{0}other",
-            publishedAtSeq: 42
+            releaseSequence: 42
         )
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: descriptor),
@@ -1036,7 +1064,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         let admission = ExperienceReleaseAdmission(store: store)
         try await admit(
             admission,
-            descriptor: try descriptorWithIdentity(publishedAtSeq: 43)
+            descriptor: try descriptorWithIdentity(releaseSequence: 43)
         )
 
         do {
@@ -1054,7 +1082,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
         let isolated = try descriptorWithIdentity(
             experienceId: "experience_isolated",
-            publishedAtSeq: 1
+            releaseSequence: 1
         )
         _ = try await admit(admission, descriptor: isolated)
     }
@@ -1064,7 +1092,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         let admission = ExperienceReleaseAdmission(store: store)
         try await admit(
             admission,
-            descriptor: try descriptorWithIdentity(publishedAtSeq: 43)
+            descriptor: try descriptorWithIdentity(releaseSequence: 43)
         )
         let results = await withTaskGroup(of: Result<Int, Error>.self) { group in
             for _ in 0..<20 {
@@ -1074,7 +1102,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                             admission,
                             descriptor: self.validDescriptorBytes()
                         )
-                        return .success(admitted.descriptor.identity.publishedAtSeq)
+                        return .success(admitted.descriptor.identity.releaseSequence)
                     } catch {
                         return .failure(error)
                     }
@@ -1090,7 +1118,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             experienceId: expectedIdentity.experienceId
         )
         let highWater = await store.highWater(for: key)
-        XCTAssertEqual(highWater?.publishedAtSeq, 43)
+        XCTAssertEqual(highWater?.releaseSequence, 43)
         XCTAssertTrue(results.allSatisfy { result in
             guard case .failure(let error) = result else { return false }
             return (error as? ExperienceReleaseDescriptorAuthenticationError)
@@ -1107,7 +1135,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         )
         try await admit(
             first,
-            descriptor: try descriptorWithIdentity(publishedAtSeq: 43)
+            descriptor: try descriptorWithIdentity(releaseSequence: 43)
         )
 
         let afterRestart = ExperienceReleaseAdmission(
@@ -1131,7 +1159,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let firstDescriptor = try descriptorWithIdentity(publishedAtSeq: 43)
+        let firstDescriptor = try descriptorWithIdentity(releaseSequence: 43)
         let first = ExperienceReleaseAdmission(
             store: try PersistentExperienceReleaseHighWaterStore(directory: directory)
         )
@@ -1141,7 +1169,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
             identity["experienceVersionId"] = "version_equal_seq_conflict"
             identity["buildId"] = "build_equal_seq_conflict"
-            identity["publishedAtSeq"] = 43
+            identity["releaseSequence"] = 43
             root["identity"] = identity
         }
         let afterRestart = ExperienceReleaseAdmission(
@@ -1163,7 +1191,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let descriptor = try descriptorWithIdentity(publishedAtSeq: 43)
+        let descriptor = try descriptorWithIdentity(releaseSequence: 43)
         let first = ExperienceReleaseAdmission(
             store: try PersistentExperienceReleaseHighWaterStore(directory: directory)
         )
@@ -1237,12 +1265,46 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         }
     }
 
+    func testPersistentAdmissionRejectsLegacyReplayLedgerWithoutFallback() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try PersistentExperienceReleaseHighWaterStore(directory: directory)
+        let admission = ExperienceReleaseAdmission(store: store)
+        try await admit(admission, descriptor: validDescriptorBytes())
+        let stateFile = directory.appendingPathComponent("high-water-v1.json")
+        var ledger = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateFile))
+                as? [String: Any]
+        )
+        let key = try XCTUnwrap(ledger.keys.first)
+        var mark = try XCTUnwrap(ledger[key] as? [String: Any])
+        mark["publishedAt"] = mark.removeValue(forKey: "releaseCreatedAt")
+        mark["publishedAtSeq"] = mark.removeValue(forKey: "releaseSequence")
+        ledger[key] = mark
+        try JSONSerialization.data(withJSONObject: ledger)
+            .write(to: stateFile, options: .atomic)
+
+        let afterRestart = ExperienceReleaseAdmission(
+            store: try PersistentExperienceReleaseHighWaterStore(directory: directory)
+        )
+        do {
+            _ = try await admit(afterRestart, descriptor: validDescriptorBytes())
+            XCTFail("expected legacy replay state to fail closed")
+        } catch {
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .replayRejected
+            )
+        }
+    }
+
     func testAdmissionPinnedRollbackDoesNotPromoteHighWater() async throws {
         let store = InMemoryExperienceReleaseHighWaterStore()
         let admission = ExperienceReleaseAdmission(store: store)
         try await admit(
             admission,
-            descriptor: try descriptorWithIdentity(publishedAtSeq: 43)
+            descriptor: try descriptorWithIdentity(releaseSequence: 43)
         )
         let pinnedEnvelope = try signedEnvelopeValue(descriptorBytes: validDescriptorBytes())
         let pinned = try await admission.authenticateAndAdmit(
@@ -1256,14 +1318,14 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 descriptorSHA256: pinnedEnvelope.descriptorSha256
             )
         )
-        XCTAssertNil(pinned.publishedAtSeqToPromote)
+        XCTAssertNil(pinned.releaseSequenceToPromote)
         let key = ExperienceReleaseHighWaterKey(
             appId: expectedIdentity.appId,
             environment: expectedIdentity.environment,
             experienceId: expectedIdentity.experienceId
         )
         let highWater = await store.highWater(for: key)
-        XCTAssertEqual(highWater?.publishedAtSeq, 43)
+        XCTAssertEqual(highWater?.releaseSequence, 43)
     }
 
     func testRejectsMoreThan256Screens() throws {
@@ -1361,8 +1423,8 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             experienceVersionId: "version_golden",
             buildId: "build_golden",
             versionNumber: 7,
-            publishedAt: "2026-08-12T12:00:00.000Z",
-            publishedAtSeq: 42
+            releaseCreatedAt: "2026-08-12T12:00:00.000Z",
+            releaseSequence: 42
         )
     }
 
@@ -1417,7 +1479,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             authorizationKeys: [authorizationKey],
             expectedIdentity: expectedIdentity ?? self.expectedIdentity,
             supportedRuntime: supportedRuntime ?? self.supportedRuntime,
-            replayPolicy: .active(minimumPublishedAtSeq: 0)
+            replayPolicy: .active(minimumReleaseSequence: 0)
         )
     }
 
@@ -1425,7 +1487,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         _ envelope: @autoclosure () throws -> Data,
         expectedIdentity: ExperienceReleaseIdentityExpectation? = nil,
         supportedRuntime: ExperienceReleaseSupportedRuntime? = nil,
-        replayPolicy: ExperienceReleaseReplayPolicy = .active(minimumPublishedAtSeq: 0),
+        replayPolicy: ExperienceReleaseReplayPolicy = .active(minimumReleaseSequence: 0),
         is expectedCode: String,
         file: StaticString = #filePath,
         line: UInt = #line
@@ -1481,12 +1543,12 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     private func descriptorWithIdentity(
         experienceId: String? = nil,
-        publishedAtSeq: Int
+        releaseSequence: Int
     ) throws -> Data {
         try mutatedValidDescriptor { root in
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
             if let experienceId { identity["experienceId"] = experienceId }
-            identity["publishedAtSeq"] = publishedAtSeq
+            identity["releaseSequence"] = releaseSequence
             root["identity"] = identity
         }
     }
@@ -1525,8 +1587,8 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 experienceVersionId: identity.experienceVersionId,
                 buildId: identity.buildId,
                 versionNumber: identity.versionNumber,
-                publishedAt: identity.publishedAt,
-                publishedAtSeq: identity.publishedAtSeq
+                releaseCreatedAt: identity.releaseCreatedAt,
+                releaseSequence: identity.releaseSequence
             ),
             supportedRuntime: supportedRuntime,
             mode: .active

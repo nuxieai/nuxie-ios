@@ -246,8 +246,8 @@ final class OrchestrationStack {
                         experienceVersionId: reference.versionId,
                         buildId: "build-\(index)",
                         versionNumber: index + 1,
-                        publishedAt: "2026-08-13T00:00:00Z",
-                        publishedAtSeq: index + 1
+                        releaseCreatedAt: "2026-08-13T00:00:00Z",
+                        releaseSequence: index + 1
                     ),
                     descriptorSha256: digest,
                     envelopeBytes: envelope
@@ -429,7 +429,7 @@ enum OrchestrationFixtures {
             versionId: flowId,
             name: "Orchestration \(id)",
             reentry: reentry,
-            publishedAt: "2026-01-01T00:00:00Z",
+            releaseCreatedAt: "2026-01-01T00:00:00Z",
             trigger: .event(EventTriggerConfig(eventName: eventName, condition: nil)),
             goal: nil,
             exitPolicy: nil,

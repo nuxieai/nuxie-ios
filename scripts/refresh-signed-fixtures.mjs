@@ -26,6 +26,9 @@ const profilePaths = [
 const envelopePaths = [
   "fixtures/experience-release-descriptor/envelope.json",
 ];
+const journeyPlanePaths = [
+  "fixtures/journeys/planes/release.json",
+];
 const privateKey = createPrivateKey({
   key: Buffer.concat([
     Buffer.from("302e020100300506032b657004220420", "hex"),
@@ -34,8 +37,12 @@ const privateKey = createPrivateKey({
   format: "der",
   type: "pkcs8",
 });
-const signatureDomain = Buffer.from(
+const experienceSignatureDomain = Buffer.from(
   "nuxie.experience-release-descriptor.v1\0",
+  "utf8",
+);
+const deviceLegSignatureDomain = Buffer.from(
+  "nuxie.device-leg-release.v1\0",
   "utf8",
 );
 
@@ -54,14 +61,34 @@ const canonicalJson = (value) => {
 
 const canonicalEnvelopeJson = canonicalJson;
 
+const currentReleaseIdentity = (descriptor) => {
+  const identity = descriptor.identity;
+  if (
+    !identity ||
+    !("releaseCreatedAt" in identity) ||
+    !("releaseSequence" in identity) ||
+    "publishedAt" in identity ||
+    "publishedAtSeq" in identity
+  ) {
+    throw new Error(
+      "signed fixture must already use the current release identity",
+    );
+  }
+  return identity;
+};
+
 const refreshEnvelope = (envelope) => {
   const descriptor = JSON.parse(
     Buffer.from(envelope.descriptorBytesBase64, "base64").toString("utf8"),
   );
-  descriptor.schemaVersion = "nuxie.experience-release.v1";
+  currentReleaseIdentity(descriptor);
+  const isDeviceLeg =
+    descriptor.schemaVersion === "nuxie.device-leg-release.v1";
+  if (!isDeviceLeg) {
+    descriptor.schemaVersion = "nuxie.experience-release.v1";
+  }
   descriptor.products = (descriptor.products ?? []).map((product) => ({
     ...product,
-    providerFeatureAccess: product.providerFeatureAccess ?? null,
     preview: product.preview ?? {
       name: product.id,
       description: "",
@@ -75,6 +102,9 @@ const refreshEnvelope = (envelope) => {
       renewalLabel: "",
     },
   }));
+  for (const product of descriptor.products) {
+    delete product.providerFeatureAccess;
+  }
   descriptor.placements ??= [];
   if (descriptor.requirements?.timezoneData) {
     descriptor.requirements.timezoneData.sha256 =
@@ -90,12 +120,17 @@ const refreshEnvelope = (envelope) => {
     .digest("hex");
   const signature = signBytes(
     null,
-    Buffer.concat([signatureDomain, descriptorBytes]),
+    Buffer.concat([
+      isDeviceLeg ? deviceLegSignatureDomain : experienceSignatureDomain,
+      descriptorBytes,
+    ]),
     privateKey,
   );
   return {
     ...envelope,
-    mediaType: "application/vnd.nuxie.experience-release+json;version=1",
+    mediaType: isDeviceLeg
+      ? "application/vnd.nuxie.device-leg+json"
+      : "application/vnd.nuxie.experience-release+json;version=1",
     descriptorSha256,
     descriptorSizeBytes: descriptorBytes.length,
     descriptorBytesBase64: descriptorBytes.toString("base64"),
@@ -111,11 +146,30 @@ const upgradeEntry = (entry) => {
     Buffer.from(entry.envelopeBytesBase64, "base64").toString("utf8"),
   );
   const refreshedEnvelope = refreshEnvelope(envelope);
+  const descriptor = JSON.parse(
+    Buffer.from(refreshedEnvelope.descriptorBytesBase64, "base64").toString(
+      "utf8",
+    ),
+  );
+  entry.locator = currentReleaseIdentity(descriptor);
   entry.descriptorSha256 = refreshedEnvelope.descriptorSha256;
   entry.envelopeBytesBase64 = Buffer.from(
     canonicalEnvelopeJson(refreshedEnvelope),
     "utf8",
   ).toString("base64");
+};
+
+const upgradeJourneyPlaneEntry = (entry) => {
+  entry.envelope = refreshEnvelope(entry.envelope);
+  const descriptor = JSON.parse(
+    Buffer.from(entry.envelope.descriptorBytesBase64, "base64").toString(
+      "utf8",
+    ),
+  );
+  entry.locator = {
+    ...currentReleaseIdentity(descriptor),
+    legId: descriptor.leg.id,
+  };
 };
 
 for (const relativePath of profilePaths) {
@@ -131,4 +185,13 @@ for (const relativePath of envelopePaths) {
   const path = resolve(relativePath);
   const envelope = JSON.parse(await readFile(path, "utf8"));
   await writeFile(path, canonicalEnvelopeJson(refreshEnvelope(envelope)));
+}
+
+for (const relativePath of journeyPlanePaths) {
+  const path = resolve(relativePath);
+  const profile = JSON.parse(await readFile(path, "utf8"));
+  for (const entry of [profile.entry, profile.renderedEntry]) {
+    if (entry) upgradeJourneyPlaneEntry(entry);
+  }
+  await writeFile(path, `${JSON.stringify(profile, null, 2)}\n`);
 }

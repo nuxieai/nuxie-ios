@@ -63,8 +63,8 @@ actor DeviceLegProfileCatalog {
             let replayPolicy: ExperienceReleaseReplayPolicy
             if isActive {
                 replayPolicy = .active(
-                    minimumPublishedAtSeq:
-                        try await highWaterStore.highWater(for: key)?.publishedAtSeq ?? 0
+                    minimumReleaseSequence:
+                        try await highWaterStore.highWater(for: key)?.releaseSequence ?? 0
                 )
             } else {
                 replayPolicy = .pinned(
@@ -90,11 +90,11 @@ actor DeviceLegProfileCatalog {
 
             guard isActive else { continue }
             let mark = ExperienceReleaseHighWaterMark(
-                publishedAtSeq: identity.publishedAtSeq,
+                releaseSequence: identity.releaseSequence,
                 experienceVersionId: identity.experienceVersionId,
                 buildId: identity.buildId,
                 versionNumber: identity.versionNumber,
-                publishedAt: identity.publishedAt,
+                releaseCreatedAt: identity.releaseCreatedAt,
                 descriptorSHA256: Self.publicationDigest(identity)
             )
             if let previous = promotions[key], previous != mark {
@@ -169,8 +169,8 @@ actor DeviceLegProfileCatalog {
             identity.experienceVersionId,
             identity.buildId,
             String(identity.versionNumber),
-            identity.publishedAt,
-            String(identity.publishedAtSeq),
+            identity.releaseCreatedAt,
+            String(identity.releaseSequence),
         ].joined(separator: "\u{0}")
         return SHA256.hash(data: Data(value.utf8))
             .map { String(format: "%02x", $0) }

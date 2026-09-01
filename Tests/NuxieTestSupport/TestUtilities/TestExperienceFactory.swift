@@ -13,7 +13,7 @@ extension Experience {
             versionId: versionId,
             name: "Test Experience",
             reentry: .everyTime,
-            publishedAt: "2026-07-29T00:00:00Z",
+            releaseCreatedAt: "2026-07-29T00:00:00Z",
             trigger: nil,
             goal: nil,
             exitPolicy: nil,

@@ -1130,7 +1130,7 @@ final class DeviceLegServiceTests: XCTestCase {
             exactDescriptorBytes: originalRelease.exactDescriptorBytes,
             descriptorSHA256: originalRelease.descriptorSHA256,
             descriptor: descriptor,
-            publishedAtSeqToPromote: originalRelease.publishedAtSeqToPromote
+            releaseSequenceToPromote: originalRelease.releaseSequenceToPromote
         )
         var releases = snapshot.releasesByDigest
         releases[originalRelease.descriptorSHA256] = release

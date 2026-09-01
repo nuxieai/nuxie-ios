@@ -27,13 +27,13 @@ class TestJourneyBuilder {
     }
 
     private static func makeExperience(id: String) -> Experience {
-        let publishedAt = ISO8601DateFormatter().string(from: Date())
+        let releaseCreatedAt = ISO8601DateFormatter().string(from: Date())
         return Experience(
             id: id,
             versionId: "flow-test",
             name: "Test Experience",
             reentry: .everyTime,
-            publishedAt: publishedAt,
+            releaseCreatedAt: releaseCreatedAt,
             trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
             goal: nil,
             exitPolicy: nil,
