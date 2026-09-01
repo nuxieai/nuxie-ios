@@ -86,6 +86,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _pendingInsertDelayNanoseconds: UInt64 = 0
     private var _suspendedInsertIds: Set<String> = []
     private var _suspendedInsertContinuations: [String: CheckedContinuation<Void, Never>] = [:]
+    private var _suspendedStableCaptureAfterCommitIds: Set<String> = []
+    private var _suspendedStableCaptureAfterCommitContinuations:
+        [String: CheckedContinuation<Void, Never>] = [:]
+    private var _waitingStableCaptureAfterCommitIds: Set<String> = []
     private var _stableCaptureDelayNanoseconds: UInt64 = 0
     private var _stableCaptureCommitCallCount = 0
 
@@ -144,6 +148,26 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             return _suspendedInsertContinuations.removeValue(forKey: id)
         }
         continuation?.resume()
+    }
+
+    /// Holds a stable capture after its row and commit sequence have been
+    /// assigned, but before the EventLog receives the commit result. This
+    /// lets ordering tests interleave a later commit deterministically.
+    public func suspendStableCaptureAfterCommit(id: String) {
+        _ = lock.withLock { _suspendedStableCaptureAfterCommitIds.insert(id) }
+    }
+
+    public func resumeStableCaptureAfterCommit(id: String) {
+        let continuation = lock.withLock {
+            _suspendedStableCaptureAfterCommitIds.remove(id)
+            _waitingStableCaptureAfterCommitIds.remove(id)
+            return _suspendedStableCaptureAfterCommitContinuations.removeValue(forKey: id)
+        }
+        continuation?.resume()
+    }
+
+    public func isStableCaptureAfterCommitWaiting(id: String) -> Bool {
+        lock.withLock { _waitingStableCaptureAfterCommitIds.contains(id) }
     }
     public var stableCaptureDelayNanoseconds: UInt64 {
         get { lock.withLock { _stableCaptureDelayNanoseconds } }
@@ -218,6 +242,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public func reset() async {
         let suspended = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             let suspended = Array(_suspendedInsertContinuations.values)
+                + Array(_suspendedStableCaptureAfterCommitContinuations.values)
             _storedEvents.removeAll()
             _originsByEventId.removeAll()
             _pendingIds.removeAll()
@@ -230,6 +255,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _pendingInsertDelayNanoseconds = 0
             _suspendedInsertIds.removeAll()
             _suspendedInsertContinuations.removeAll()
+            _suspendedStableCaptureAfterCommitIds.removeAll()
+            _suspendedStableCaptureAfterCommitContinuations.removeAll()
+            _waitingStableCaptureAfterCommitIds.removeAll()
             _nextCommitSequence = 0
             _shouldFailOwnershipFenceRecord = false
             return suspended
@@ -314,7 +342,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         if delayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
-        return try lock.withLock {
+        let commit = try lock.withLock { () -> StableEventCaptureCommit in
             _storeEventCallCount += 1
             if _shouldFailStore { throw mockError(2, "Mock store error") }
             if let existing = _storedEvents.first(where: { $0.id == eventId }) {
@@ -364,6 +392,23 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 commitSequence: takeCommitSequence(if: assigningCommitSequence)
             )
         }
+        let shouldSuspend = lock.withLock {
+            _suspendedStableCaptureAfterCommitIds.contains(eventId)
+        }
+        if shouldSuspend {
+            await withCheckedContinuation { continuation in
+                let resumeImmediately = lock.withLock { () -> Bool in
+                    guard _suspendedStableCaptureAfterCommitIds.contains(eventId) else {
+                        return true
+                    }
+                    _suspendedStableCaptureAfterCommitContinuations[eventId] = continuation
+                    _waitingStableCaptureAfterCommitIds.insert(eventId)
+                    return false
+                }
+                if resumeImmediately { continuation.resume() }
+            }
+        }
+        return commit
     }
 
     private func takeCommitSequence(if requested: Bool) -> UInt64? {
@@ -716,6 +761,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public func resetMock() {
         let suspended = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             let suspended = Array(_suspendedInsertContinuations.values)
+                + Array(_suspendedStableCaptureAfterCommitContinuations.values)
             _storedEvents.removeAll()
             _originsByEventId.removeAll()
             _pendingIds.removeAll()
@@ -729,6 +775,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _pendingInsertDelayNanoseconds = 0
             _suspendedInsertIds.removeAll()
             _suspendedInsertContinuations.removeAll()
+            _suspendedStableCaptureAfterCommitIds.removeAll()
+            _suspendedStableCaptureAfterCommitContinuations.removeAll()
+            _waitingStableCaptureAfterCommitIds.removeAll()
             _nextCommitSequence = 0
             _initializeFailure = .none
             _shouldFailStore = false

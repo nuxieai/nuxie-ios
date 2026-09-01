@@ -38,13 +38,12 @@ struct DeviceLegReporter {
         }
         // Terminal beforeSend drops are also durable acknowledgements. Host
         // privacy policy must not create an immortal retry record.
-        guard let capture = await events.captureSystemEvent(
+        guard let _ = await events.captureAndRouteSystemEvent(
             completion ? JourneyEvents.journeyLegCompleted : JourneyEvents.journeyLegStarted,
             properties: properties,
             eventId: completion ? run.completedEventId : run.startedEventId,
             distinctId: journal.distinctId
         ) else { return false }
-        await events.routeCapturedSystemEvent(capture)
         return true
     }
 

@@ -67,8 +67,15 @@ private enum CaptureCommand: Sendable {
   case shutdown
 }
 
-private enum RouteCommand: Sendable {
+private enum RouteResolution: Sendable {
   case event(NuxieEvent)
+  case skipped
+}
+
+private enum RouteCommand: Sendable {
+  case resolved(sequence: UInt64, RouteResolution)
+  /// Storage failures have no durable commit sequence to order against.
+  case undurable(NuxieEvent)
   case barrier(CheckedContinuation<Void, Never>)
   case shutdown
 }
@@ -609,6 +616,8 @@ actor EventLog: EventLogProtocol {
   private var captureWorker: Task<Void, Never>?
   private nonisolated let routeContinuation: AsyncStream<RouteCommand>.Continuation
   private var routeWorker: Task<Void, Never>?
+  private var nextRouteSequenceToDeliver: UInt64 = 0
+  private var pendingRouteResolutions: [UInt64: RouteResolution] = [:]
   private nonisolated let forwardingContinuation:
     AsyncStream<ForwardingCommand>.Continuation
   private var forwardingWorker: Task<Void, Never>?
@@ -1327,7 +1336,8 @@ actor EventLog: EventLogProtocol {
       properties: properties,
       eventId: eventId,
       distinctId: distinctId,
-      ownership: nil
+      ownership: nil,
+      routeToSubscribers: false
     ) {
     case .captured(let capture):
       return capture
@@ -1348,7 +1358,8 @@ actor EventLog: EventLogProtocol {
       properties: properties,
       eventId: eventId,
       distinctId: distinctId,
-      ownership: ownership
+      ownership: ownership,
+      routeToSubscribers: false
     )
   }
 
@@ -1389,7 +1400,8 @@ actor EventLog: EventLogProtocol {
     properties: sending [String: Any]?,
     eventId: String,
     distinctId: String,
-    ownership: JourneyEventOwnership?
+    ownership: JourneyEventOwnership?,
+    routeToSubscribers: Bool
   ) async -> DurableOwnedTriggerCaptureResult {
     guard !event.isEmpty else { return .failed }
     guard !closeFlag.isClosed else { return .failed }
@@ -1500,6 +1512,7 @@ actor EventLog: EventLogProtocol {
       }
       if case .ownershipLost = outcome {
         resolveForwarding(commitSequence, admission: forwardingAdmission, event: nil)
+        resolveRoute(commitSequence, event: nil)
         return .ownershipLost
       }
       if transformedEvent == nil {
@@ -1529,9 +1542,14 @@ actor EventLog: EventLogProtocol {
         eventId: eventId,
         distinctId: distinctId
       ) else { return .ownershipLost }
-      if case .captured(_, isNew: true) = outcome {
-        await enqueueForDelivery(capture.event, isPersisted: true)
+      if newlyDurableEvent != nil {
+        stagePersistedForDelivery(capture.event)
       }
+      resolveRoute(
+        commitSequence,
+        event: routeToSubscribers && newlyDurableEvent != nil
+          && capture.routesLocally ? capture.event : nil
+      )
       do {
         try await performCleanupIfNeeded()
       } catch {
@@ -1974,11 +1992,11 @@ actor EventLog: EventLogProtocol {
           event,
           deliveryState: .delivered,
           receivedAt: receivedAt,
-          origin: .server
+          origin: .server,
+          routeToSubscribers: true
         )
         if inserted {
           try await performCleanupIfNeeded()
-          routeContinuation.yield(.event(event))
         }
       } catch {
         LogWarning("Failed to commit server fact \(fact.id): \(error)")
@@ -2336,17 +2354,31 @@ actor EventLog: EventLogProtocol {
 
   private func processRoute(_ cmd: RouteCommand) async {
     switch cmd {
-    case .event(let event):
-      for subscriber in subscribers {
-        if let filter = subscriber.filter, !filter(event) { continue }
-        await subscriber.handler(event)
+    case .resolved(let sequence, let resolution):
+      pendingRouteResolutions[sequence] = resolution
+      while let next = pendingRouteResolutions.removeValue(
+        forKey: nextRouteSequenceToDeliver
+      ) {
+        nextRouteSequenceToDeliver &+= 1
+        guard case .event(let event) = next else { continue }
+        await routeToCommittedSubscribers(event)
       }
+
+    case .undurable(let event):
+      await routeToCommittedSubscribers(event)
 
     case .barrier(let cont):
       cont.resume()
 
     case .shutdown:
       LogDebug("[EventLog.route] shutdown received")
+    }
+  }
+
+  private func routeToCommittedSubscribers(_ event: NuxieEvent) async {
+    for subscriber in subscribers {
+      if let filter = subscriber.filter, !filter(event) { continue }
+      await subscriber.handler(event)
     }
   }
 
@@ -2377,7 +2409,9 @@ actor EventLog: EventLogProtocol {
     _ event: NuxieEvent,
     deliveryState: EventDeliveryState,
     receivedAt: Date,
-    origin: StoredEventOrigin = .device
+    origin: StoredEventOrigin = .device,
+    stageForDelivery: Bool = false,
+    routeToSubscribers: Bool = false
   ) async throws -> Bool {
     let admission = forwardingAdmission(receivedAt: receivedAt)
     let commit = try await store.insert(
@@ -2397,6 +2431,13 @@ actor EventLog: EventLogProtocol {
       commitSequence,
       admission: admission,
       event: commit.newlyDurable ? event : nil
+    )
+    if commit.newlyDurable, stageForDelivery {
+      stagePersistedForDelivery(event)
+    }
+    resolveRoute(
+      commitSequence,
+      event: commit.newlyDurable && routeToSubscribers ? event : nil
     )
     return commit.newlyDurable
   }
@@ -2427,6 +2468,13 @@ actor EventLog: EventLogProtocol {
     ))
   }
 
+  private func resolveRoute(_ commitSequence: UInt64, event: NuxieEvent?) {
+    routeContinuation.yield(.resolved(
+      sequence: commitSequence,
+      event.map(RouteResolution.event) ?? .skipped
+    ))
+  }
+
   /// Persist the canonical captured record (stored row == wire payload,
   /// marked pending), stage it for network delivery, then announce it to
   /// committed-event subscribers in order.
@@ -2437,7 +2485,9 @@ actor EventLog: EventLogProtocol {
       _ = try await persist(
         event,
         deliveryState: .pending,
-        receivedAt: event.timestamp
+        receivedAt: event.timestamp,
+        stageForDelivery: true,
+        routeToSubscribers: routeToSubscribers
       )
       wasPersisted = true
       try await performCleanupIfNeeded()
@@ -2451,8 +2501,8 @@ actor EventLog: EventLogProtocol {
     // can flush this hit.
     await enqueueForDelivery(event, isPersisted: wasPersisted)
 
-    if routeToSubscribers {
-      routeContinuation.yield(.event(event))
+    if routeToSubscribers, !wasPersisted {
+      routeContinuation.yield(.undurable(event))
     }
   }
 
@@ -2793,48 +2843,58 @@ actor EventLog: EventLogProtocol {
   /// drops durable delivery state. `isPersisted` is explicit because tests
   /// can also exercise the storage-failure path with memory-only fixtures.
   func enqueueForDelivery(_ event: NuxieEvent, isPersisted: Bool = true) async {
+    if isPersisted {
+      stagePersistedForDelivery(event)
+      return
+    }
     guard !deliveryQueue.contains(where: { $0.id == event.id }) else { return }
 
-    if isPersisted && isRefillingDeliveryWindow {
+    let capacity = max(1, deliveryConfig.maxQueueSize)
+    guard deliveryQueue.count < capacity else {
+      // Persistence failed, so there is no durable row to refill later.
+      // Make one best-effort attempt to free capacity before admitting loss.
+      let drained = await deliveryFlushAll()
+      guard drained, deliveryQueue.count < capacity else {
+        LogError(
+          "Unable to stage non-durable event \(event.id): persistence failed and the delivery window could not be drained"
+        )
+        return
+      }
+      deliveryQueue.append(event)
+      nonDurableDeliveryIds.insert(event.id)
+      LogWarning(
+        "Staged non-durable event \(event.id) after persistence failure; delivery must complete in this process"
+      )
+      Task { await self.flushIfOverThreshold() }
+      return
+    }
+
+    deliveryQueue.append(event)
+    nonDurableDeliveryIds.insert(event.id)
+    LogDebug("Staged event: \(event.name) (delivery window: \(deliveryQueue.count))")
+
+    Task { await self.flushIfOverThreshold() }
+  }
+
+  private func stagePersistedForDelivery(_ event: NuxieEvent) {
+    guard !deliveryQueue.contains(where: { $0.id == event.id }) else { return }
+    if isRefillingDeliveryWindow {
       // The in-flight refill owns the exposed capacity. Ask it to query again
       // rather than letting this newer event overtake older durable rows.
       deliveryWindowRefillRequested = true
       Task { await self.flushIfOverThreshold() }
       return
     }
-
     let capacity = max(1, deliveryConfig.maxQueueSize)
     guard deliveryQueue.count < capacity else {
-      if isPersisted {
-        LogDebug(
-          "Delivery window full; event \(event.id) remains pending in durable storage"
-        )
-      } else {
-        // Persistence failed, so there is no durable row to refill later.
-        // Make one best-effort attempt to free capacity before admitting loss.
-        let drained = await deliveryFlushAll()
-        guard drained, deliveryQueue.count < capacity else {
-          LogError(
-            "Unable to stage non-durable event \(event.id): persistence failed and the delivery window could not be drained"
-          )
-          return
-        }
-        deliveryQueue.append(event)
-        nonDurableDeliveryIds.insert(event.id)
-        LogWarning(
-          "Staged non-durable event \(event.id) after persistence failure; delivery must complete in this process"
-        )
-      }
+      LogDebug(
+        "Delivery window full; event \(event.id) remains pending in durable storage"
+      )
       Task { await self.flushIfOverThreshold() }
       return
     }
-
     deliveryQueue.append(event)
-    if !isPersisted {
-      nonDurableDeliveryIds.insert(event.id)
-    }
     LogDebug("Staged event: \(event.name) (delivery window: \(deliveryQueue.count))")
-
     Task { await self.flushIfOverThreshold() }
   }
 
@@ -3801,16 +3861,37 @@ actor EventLog: EventLogProtocol {
   }
 }
 
-/// Stable captures are committed before they enter the ordinary subscriber
-/// lane. Callers choose whether a stable event should feed local trigger
-/// processing, which keeps recovery-only captures from replaying actions.
+/// Stable captures that feed local trigger processing commit and enqueue their
+/// ordered route resolution before returning to the caller. Recovery-only
+/// captures continue to use `captureSystemEvent` and never enter this lane.
 protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
-  func routeCapturedSystemEvent(_ capture: DurableTriggerCapture) async
+  func captureAndRouteSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> DurableTriggerCapture?
 }
 
 extension EventLog {
-  func routeCapturedSystemEvent(_ capture: DurableTriggerCapture) async {
-    guard capture.routesLocally, capture.isNewlyCommitted else { return }
-    routeContinuation.yield(.event(capture.event))
+  func captureAndRouteSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> DurableTriggerCapture? {
+    switch await captureStableSystemEvent(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId,
+      ownership: nil,
+      routeToSubscribers: true
+    ) {
+    case .captured(let capture):
+      return capture
+    case .ownershipLost, .failed:
+      return nil
+    }
   }
 }

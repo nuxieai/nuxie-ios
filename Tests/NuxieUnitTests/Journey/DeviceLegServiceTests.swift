@@ -1209,9 +1209,20 @@ private actor CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {
         ))
     }
 
-    func routeCapturedSystemEvent(_ capture: DurableTriggerCapture) {
-        guard capture.routesLocally else { return }
+    func captureAndRouteSystemEvent(
+        _ event: String,
+        properties: sending [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> DurableTriggerCapture? {
+        let capture = DurableTriggerCapture(event: NuxieEvent(
+            id: eventId,
+            name: event,
+            distinctId: distinctId,
+            properties: properties ?? [:]
+        ))
         routed.append(capture.event)
+        return capture
     }
 
     func routedNames() -> [String] {
