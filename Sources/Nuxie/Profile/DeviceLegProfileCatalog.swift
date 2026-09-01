@@ -144,6 +144,36 @@ actor DeviceLegProfileCatalog {
         return current?.snapshot
     }
 
+    /// Re-authenticate a release retained by a durable run after delivery no
+    /// longer includes it. The run's exact content identity is the replay
+    /// authority; this path never promotes or consults the active high-water
+    /// stream.
+    func authenticatePinnedRelease(
+        _ entry: DeviceLegReleaseProfileEntry,
+        reference: ArmedDeviceLeg.Reference
+    ) throws -> AuthenticatedDeviceLegRelease {
+        guard entry.envelope.descriptorSha256
+                == reference.descriptorSha256,
+              entry.locator.experienceId == reference.experienceId,
+              entry.locator.experienceVersionId == reference.versionId,
+              entry.locator.legId == reference.legId else {
+            throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+        }
+        let identity = entry.locator.identity
+        return try verifier.authenticateDeviceLeg(
+            envelopeBytes: JSONEncoder().encode(entry.envelope),
+            authorizationKeys: authorizationKeys,
+            expectedIdentity: identity,
+            expectedLegId: entry.locator.legId,
+            supportedRuntime: supportedRuntime,
+            replayPolicy: .pinned(
+                experienceVersionId: identity.experienceVersionId,
+                buildId: identity.buildId,
+                descriptorSHA256: entry.envelope.descriptorSha256
+            )
+        )
+    }
+
     @discardableResult
     func clear(
         distinctId: String,
