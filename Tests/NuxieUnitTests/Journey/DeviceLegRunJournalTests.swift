@@ -471,7 +471,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
     private func date(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
 }
 
-private actor LostCompletionAcknowledgement: StableSystemEventCapturing {
+private actor LostCompletionAcknowledgement: RoutedStableSystemEventCapturing {
     let events: EventLog
     init(events: EventLog) { self.events = events }
 
@@ -479,6 +479,10 @@ private actor LostCompletionAcknowledgement: StableSystemEventCapturing {
                             distinctId: String) async -> DurableTriggerCapture? {
         let captured = await events.captureSystemEvent(event, properties: properties, eventId: eventId, distinctId: distinctId)
         return event == JourneyEvents.journeyLegCompleted ? nil : captured
+    }
+
+    func routeCapturedSystemEvent(_ capture: DurableTriggerCapture) async {
+        await events.routeCapturedSystemEvent(capture)
     }
 }
 

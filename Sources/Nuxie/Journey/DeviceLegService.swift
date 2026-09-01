@@ -64,7 +64,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     /// Lifecycle notifications close and reopen this latch thereafter.
     private var foreground = true
     private var profileState: ProfileState?
-    private var profileGeneration: UInt64 = 0
+    private let profileFence = DeviceLegProfileFence()
     private var journal: DeviceLegRunJournal?
     private var stateArmReceipts: Set<StateArmKey> = []
     private var inFlightAttempts: Set<AttemptKey> = []
@@ -111,11 +111,11 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         distinctId: String
     ) async {
         guard identity.getDistinctId() == distinctId else { return }
-        profileGeneration &+= 1
+        let generation = profileFence.advance()
         profileState = ProfileState(
             distinctId: distinctId,
             snapshot: snapshot,
-            generation: profileGeneration
+            generation: generation
         )
         retainReceipts(for: snapshot)
         guard initialized else { return }
@@ -130,7 +130,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 || journal?.distinctId == distinctId else { return }
         cancelWake()
         let journalToAbandon = journal?.distinctId == distinctId ? journal : nil
-        profileGeneration &+= 1
+        _ = profileFence.advance()
         profileState = nil
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
@@ -142,7 +142,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     func profileDidClearAll() async {
         cancelWake()
         let journalToAbandon = journal
-        profileGeneration &+= 1
+        _ = profileFence.advance()
         profileState = nil
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
@@ -195,7 +195,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             await abandon(journal)
         }
         self.journal = nil
-        profileGeneration &+= 1
+        _ = profileFence.advance()
         profileState = nil
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
@@ -488,7 +488,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         var checkpoint = initialCheckpoint
 
         for _ in 0..<10_000 {
-            guard isCurrentIdentity(journal: journal) else {
+            guard isCurrent(state), isCurrentIdentity(journal: journal) else {
                 await finish(
                     run,
                     outcome: "abandoned",
@@ -555,7 +555,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 return
 
             case .dispatch(let stepId, let action):
-                guard let identityFence = identity.performWithCurrentIdentityFence(
+                guard let profileFenceToken = profileFence.token(
+                    ifCurrent: state.generation
+                ), let identityFence = identity.performWithCurrentIdentityFence(
                     journal.distinctId,
                     { _ in () }
                 ) else {
@@ -577,7 +579,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     LogWarning("DeviceLegService: failed to claim effect cursor: \(error)")
                     return
                 }
-                guard await isCurrentIdentity(
+                guard isCurrent(state),
+                      profileFence.isCurrent(profileFenceToken),
+                      await isCurrentIdentity(
                     identityFence.token,
                     journal: journal
                 ) else {
@@ -600,9 +604,13 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     context: run.context,
                     effectId: effectId,
                     distinctId: journal.distinctId,
-                    identityFence: identityFence.token
+                    identityFence: identityFence.token,
+                    profileFence: profileFence,
+                    profileFenceToken: profileFenceToken
                 ))
-                guard await isCurrentIdentity(
+                guard isCurrent(state),
+                      profileFence.isCurrent(profileFenceToken),
+                      await isCurrentIdentity(
                     identityFence.token,
                     journal: journal
                 ) else {

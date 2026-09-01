@@ -4,6 +4,54 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class DeviceLegServiceTests: XCTestCase {
+    func testSendEventRoutesTheDurableCaptureToCommittedSubscribers() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let snapshot = try await authenticatedSnapshot(fixture)
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[
+            arm.reference.descriptorSha256
+        ])
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(identity.performWithCurrentIdentityFence(
+            "customer",
+            { _ in () }
+        ))
+        let profileFence = DeviceLegProfileFence()
+        let profileGeneration = profileFence.advance()
+        let profileFenceToken = try XCTUnwrap(profileFence.token(
+            ifCurrent: profileGeneration
+        ))
+        let events = CaptureOnlyDeviceLegEvents()
+        let dispatcher = DeviceLegEffectDispatcher(
+            identity: identity,
+            events: events
+        )
+
+        let result = await dispatcher.dispatch(.init(
+            runId: "journey:0",
+            journeyId: "journey",
+            generation: 0,
+            reference: arm.reference,
+            release: release,
+            stepId: "send",
+            action: [
+                "type": .string("send_event"),
+                "eventName": .string("inventory_checked"),
+            ],
+            context: .init(event: [:], responses: [:]),
+            effectId: "00000000-0000-7000-8000-000000000203",
+            distinctId: "customer",
+            identityFence: identityFence.token,
+            profileFence: profileFence,
+            profileFenceToken: profileFenceToken
+        ))
+
+        XCTAssertEqual(result, .outlet("next"))
+        let routedNames = await events.routedNames()
+        XCTAssertEqual(routedNames, ["inventory_checked"])
+    }
+
     func testLocalEffectIsClaimedBeforeDispatchAndAdvancesItsSelectedOutlet() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -396,6 +444,71 @@ final class DeviceLegServiceTests: XCTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
+
+        let delivered = await MainActor.run { appActions.onlyAction() }
+        XCTAssertNil(delivered)
+        XCTAssertFalse(events.routedEvents.contains {
+            $0.name == JourneyEvents.appActionRequested
+        })
+        XCTAssertEqual(
+            events.routedEvents.last?.properties["outcome"] as? String,
+            "abandoned"
+        )
+    }
+
+    func testAppActionDoesNotPublishAfterTheProfileIsReplaced() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let action = DeviceLeg.Step(
+            kind: .action,
+            id: "app-action",
+            action: [
+                "type": .string("app_action"),
+                "name": .string("open_inventory"),
+            ],
+            outlets: ["next": "report"],
+            outcome: nil
+        )
+        let report = DeviceLeg.Step(
+            kind: .complete,
+            id: "report",
+            action: nil,
+            outlets: nil,
+            outcome: "continue"
+        )
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entryStepId: "app-action",
+            steps: [action, report]
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let appActions = await MainActor.run { DeviceLegAppActionRecorder() }
+        let suspended = SuspendedDeviceLegDispatcher(
+            underlying: DeviceLegEffectDispatcher(
+                identity: identity,
+                events: events,
+                appActionHandler: { value in appActions.record(value) }
+            )
+        )
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            dispatcher: suspended
+        )
+
+        await service.initialize()
+        let firstCommit = Task {
+            await service.profileDidCommit(snapshot, distinctId: "customer")
+        }
+        await suspended.waitUntilEntered()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        await suspended.resume()
+        await firstCommit.value
 
         let delivered = await MainActor.run { appActions.onlyAction() }
         XCTAssertNil(delivered)
@@ -1032,6 +1145,68 @@ private actor InspectingDeviceLegDispatcher: DeviceLegDispatching {
     }
 
     func observedDurableClaim() -> Bool { durableClaim }
+}
+
+private actor CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {
+    private var routed: [NuxieEvent] = []
+
+    func captureSystemEvent(
+        _ event: String,
+        properties: sending [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> DurableTriggerCapture? {
+        DurableTriggerCapture(event: NuxieEvent(
+            id: eventId,
+            name: event,
+            distinctId: distinctId,
+            properties: properties ?? [:]
+        ))
+    }
+
+    func routeCapturedSystemEvent(_ capture: DurableTriggerCapture) {
+        guard capture.routesLocally else { return }
+        routed.append(capture.event)
+    }
+
+    func routedNames() -> [String] {
+        routed.map(\.name)
+    }
+}
+
+private actor SuspendedDeviceLegDispatcher: DeviceLegDispatching {
+    private let underlying: any DeviceLegDispatching
+    private var entered = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    init(underlying: any DeviceLegDispatching) {
+        self.underlying = underlying
+    }
+
+    func dispatch(
+        _ request: DeviceLegDispatchRequest
+    ) async -> DeviceLegDispatchResult {
+        entered = true
+        entryWaiters.forEach { $0.resume() }
+        entryWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            resumeContinuation = continuation
+        }
+        return await underlying.dispatch(request)
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { continuation in
+            entryWaiters.append(continuation)
+        }
+    }
+
+    func resume() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
+    }
 }
 
 @MainActor

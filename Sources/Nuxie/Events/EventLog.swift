@@ -345,7 +345,7 @@ protocol EventLogProtocol:
   EventIdentityMigrating,
   ProfileEventSink,
   JourneyEventAccess,
-  JourneyRunnerEventAccess
+  JourneyRunnerEventAccess, RoutedStableSystemEventCapturing
 {
   /// Configure the log from the immutable setup snapshot. Builds enrichment
   /// and delivery settings and opens storage.
@@ -3798,5 +3798,19 @@ actor EventLog: EventLogProtocol {
     #else
     return "unknown"
     #endif
+  }
+}
+
+/// Stable captures are committed before they enter the ordinary subscriber
+/// lane. Callers choose whether a stable event should feed local trigger
+/// processing, which keeps recovery-only captures from replaying actions.
+protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
+  func routeCapturedSystemEvent(_ capture: DurableTriggerCapture) async
+}
+
+extension EventLog {
+  func routeCapturedSystemEvent(_ capture: DurableTriggerCapture) async {
+    guard capture.routesLocally else { return }
+    routeContinuation.yield(.event(capture.event))
   }
 }
