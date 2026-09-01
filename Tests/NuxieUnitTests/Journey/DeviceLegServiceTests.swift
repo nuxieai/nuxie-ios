@@ -319,6 +319,83 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(completion.properties["outcome"] as? String, "abandoned")
     }
 
+    func testNewUserProfileRetiresTheOldJournalBeforeQueuedTransitionWork() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let delay = DeviceLeg.Step(
+            kind: .action,
+            id: "wait",
+            action: [
+                "type": .string("delay"),
+                "durationMs": .number(60_000),
+            ],
+            outlets: ["next": "report"],
+            outcome: nil
+        )
+        let complete = DeviceLeg.Step(
+            kind: .complete,
+            id: "report",
+            action: nil,
+            outlets: nil,
+            outcome: "continue"
+        )
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entryStepId: "wait",
+            steps: [delay, complete]
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            dateProvider: MockDateProvider(
+                initialDate: Date(timeIntervalSince1970: 1_000)
+            )
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer-a")
+        await service.onAppDidEnterBackground()
+        let oldJournal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-a"
+        )
+        let parkedOldRuns = try await oldJournal.runs()
+        XCTAssertEqual(parkedOldRuns.count, 1)
+
+        identity.setDistinctId("customer-b")
+        await service.profileDidCommit(snapshot, distinctId: "customer-b")
+
+        let oldRuns = try await oldJournal.runs()
+        XCTAssertTrue(oldRuns.isEmpty)
+        let oldCompletion = try XCTUnwrap(events.routedEvents.first {
+            $0.distinctId == "customer-a"
+                && $0.name == JourneyEvents.journeyLegCompleted
+        })
+        XCTAssertEqual(
+            oldCompletion.properties["outcome"] as? String,
+            "abandoned"
+        )
+        let newJournal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-b"
+        )
+        let newRuns = try await newJournal.runs()
+        XCTAssertTrue(newRuns.isEmpty)
+
+        await service.handleUserChange(
+            from: "customer-a",
+            to: "customer-b"
+        )
+        let oldRunsAfterTransition = try await oldJournal.runs()
+        XCTAssertTrue(oldRunsAfterTransition.isEmpty)
+    }
+
     func testRecoveryResumesOnlyThePersistedDueParkPoint() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

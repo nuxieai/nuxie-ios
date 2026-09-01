@@ -242,7 +242,18 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     }
 
     private func ensureJournal(for distinctId: String) async {
-        guard journal?.distinctId != distinctId else { return }
+        // A new-user profile can outrun the queued identity transition. Retire
+        // every journal displaced during that race before installing another.
+        while let displaced = journal,
+              displaced.distinctId != distinctId {
+            await abandon(displaced)
+            guard identity.getDistinctId() == distinctId else { return }
+            if journal?.distinctId == displaced.distinctId {
+                journal = nil
+            }
+        }
+        guard identity.getDistinctId() == distinctId,
+              journal?.distinctId != distinctId else { return }
         await openJournal(for: distinctId)
     }
 
