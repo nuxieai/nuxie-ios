@@ -214,7 +214,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     public func routeCapturedSystemEvent(
         _ capture: DurableTriggerCapture
     ) async {
-        guard capture.routesLocally else { return }
+        guard capture.routesLocally, capture.isNewlyCommitted else { return }
         _ = await route(capture.event)
     }
     
@@ -700,7 +700,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     ) async -> DurableTriggerCapture? {
         let propertiesBox = UncheckedSendable(properties)
         if let existing = lock.withLock({ _stableCaptures[eventId] }) {
-            return existing
+            return DurableTriggerCapture(
+                event: existing.event,
+                routesLocally: existing.routesLocally,
+                isNewlyCommitted: false
+            )
         }
         lock.withLock {
             _trackForTriggerCalls.append((
@@ -730,7 +734,13 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             DurableTriggerCapture(event: $0)
         } ?? DurableTriggerCapture(event: original, routesLocally: false)
         return lock.withLock {
-            if let existing = _stableCaptures[eventId] { return existing }
+            if let existing = _stableCaptures[eventId] {
+                return DurableTriggerCapture(
+                    event: existing.event,
+                    routesLocally: existing.routesLocally,
+                    isNewlyCommitted: false
+                )
+            }
             _stableCaptures[eventId] = capture
             return capture
         }
@@ -779,7 +789,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 return (nil, false)
             }
             if let existing = _stableOwnedCaptures[eventId] {
-                return (existing, false)
+                return (DurableTriggerCapture(
+                    event: existing.event,
+                    routesLocally: existing.routesLocally,
+                    isNewlyCommitted: false
+                ), false)
             }
             let capture = transformed.map { DurableTriggerCapture(event: $0) } ?? fallback
             _stableOwnedCaptures[eventId] = capture

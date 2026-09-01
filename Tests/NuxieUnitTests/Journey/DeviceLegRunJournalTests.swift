@@ -410,6 +410,57 @@ final class DeviceLegRunJournalTests: XCTestCase {
         await secondLog.close()
     }
 
+    func testLifecycleCaptureReplayDoesNotRedeliverCommittedSubscribersAfterCrashWindow() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = try await eventLog(directory: directory, store: SQLiteEventStore(), api: MockNuxieApiForQueue())
+        let routes = LegRouteRecorder()
+        await log.subscribeCommitted { event in await routes.record(event) }
+        let journal = try DeviceLegRunJournal(directory: directory, distinctId: "customer")
+        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyTime, windowSeconds: nil),
+                                               entryStepId: "screen", at: date(100))
+        let run = try XCTUnwrap(admitted)
+
+        // Simulate termination after the stable event reached subscribers but
+        // before the journal acknowledged that capture.
+        let startedAttempt = await log.captureSystemEvent(
+            JourneyEvents.journeyLegStarted,
+            properties: ["journey_id": run.journeyId],
+            eventId: run.startedEventId,
+            distinctId: "customer"
+        )
+        let startedCapture = try XCTUnwrap(startedAttempt)
+        await log.routeCapturedSystemEvent(startedCapture)
+        await log.drain()
+
+        try await DeviceLegReporter(journal: journal, events: log).flushPending()
+        await log.drain()
+        let startedRoutes = await routes.names()
+        XCTAssertEqual(startedRoutes, [JourneyEvents.journeyLegStarted])
+
+        try await journal.complete(run.id, outcome: "done", at: date(200))
+        let completedAttempt = await log.captureSystemEvent(
+            JourneyEvents.journeyLegCompleted,
+            properties: ["journey_id": run.journeyId],
+            eventId: run.completedEventId,
+            distinctId: "customer"
+        )
+        let completedCapture = try XCTUnwrap(completedAttempt)
+        await log.routeCapturedSystemEvent(completedCapture)
+        await log.drain()
+
+        try await DeviceLegReporter(journal: journal, events: log).flushPending()
+        await log.drain()
+        let completedRoutes = await routes.names()
+        XCTAssertEqual(completedRoutes, [
+            JourneyEvents.journeyLegStarted,
+            JourneyEvents.journeyLegCompleted,
+        ])
+        let remaining = try await journal.runs()
+        XCTAssertTrue(remaining.isEmpty)
+        await log.close()
+    }
+
     func testCompletionQueuesStableEventsAndForgetsRunBeforeNetworkAcknowledgement() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -497,4 +548,10 @@ private actor LegForwardingRecorder {
     }
     func names() -> [String] { values }
     func timestamps() -> [Date] { times }
+}
+
+private actor LegRouteRecorder {
+    private var values: [String] = []
+    func record(_ event: NuxieEvent) { values.append(event.name) }
+    func names() -> [String] { values }
 }

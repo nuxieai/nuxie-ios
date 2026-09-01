@@ -122,13 +122,13 @@ struct PreparedTriggerCommit: Sendable {
 
 struct DurableTriggerCapture: Sendable {
   let event: NuxieEvent
-  /// Terminal beforeSend drops acknowledge recovery without entering Journey
-  /// routing or network delivery.
+  /// Routing policy and whether this call established the canonical event row.
   let routesLocally: Bool
-
-  init(event: NuxieEvent, routesLocally: Bool = true) {
+  let isNewlyCommitted: Bool
+  init(event: NuxieEvent, routesLocally: Bool = true, isNewlyCommitted: Bool = true) {
     self.event = event
     self.routesLocally = routesLocally
+    self.isNewlyCommitted = isNewlyCommitted
   }
 }
 
@@ -1554,14 +1554,14 @@ actor EventLog: EventLogProtocol {
     distinctId: String
   ) -> DurableTriggerCapture? {
     switch outcome {
-    case .captured(let storedEvent, _):
+    case .captured(let storedEvent, let isNew):
       return DurableTriggerCapture(event: NuxieEvent(
         id: storedEvent.id,
         name: storedEvent.name,
         distinctId: storedEvent.distinctId,
         properties: storedEvent.getPropertiesDict(),
         timestamp: storedEvent.timestamp
-      ))
+      ), isNewlyCommitted: isNew)
     case .dropped:
       return DurableTriggerCapture(
         event: NuxieEvent(
@@ -3810,7 +3810,7 @@ protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
 
 extension EventLog {
   func routeCapturedSystemEvent(_ capture: DurableTriggerCapture) async {
-    guard capture.routesLocally else { return }
+    guard capture.routesLocally, capture.isNewlyCommitted else { return }
     routeContinuation.yield(.event(capture.event))
   }
 }

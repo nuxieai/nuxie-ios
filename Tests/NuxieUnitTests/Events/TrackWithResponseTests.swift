@@ -863,8 +863,10 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     expect(captured?.event.id)
                         == "purchase-completed:transaction-1"
+                    expect(captured?.isNewlyCommitted) == true
                     expect(replay?.event.id)
                         == "purchase-completed:transaction-1"
+                    expect(replay?.isNewlyCommitted) == false
                     expect(replay?.event.name) == captured?.event.name
                     expect(replay?.event.distinctId) == captured?.event.distinctId
                     expect(replay?.event.timestamp) == captured?.event.timestamp
