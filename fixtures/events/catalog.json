@@ -9,7 +9,7 @@
     "docs": false,
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3836",
-      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:177"
+      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:239"
     ],
     "endpoint": [
       "batch",
@@ -238,7 +238,7 @@
     "docs": false,
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3530",
-      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:118"
+      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:171"
     ],
     "endpoint": [
       "batch",
@@ -1280,7 +1280,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3492",
       "Sources/Nuxie/Journey/JourneyService.swift:3147",
-      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:132"
+      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:185"
     ],
     "endpoint": [
       "/i/event response lane",

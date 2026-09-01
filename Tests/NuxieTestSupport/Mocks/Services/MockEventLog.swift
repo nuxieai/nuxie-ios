@@ -36,6 +36,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _capturedEventObserver: (@Sendable (NuxieEvent) -> Void)?
     private var _journeyOwnershipFences: [String: Int] = [:]
     private var _shouldFailJourneyOwnershipCheck = false
+    private var _stableCaptures: [String: DurableTriggerCapture] = [:]
     private var _stableOwnedCaptures: [String: DurableTriggerCapture] = [:]
     private var _resetGeneration: UInt64 = 0
 
@@ -208,6 +209,13 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
 
         return event
+    }
+
+    public func routeCapturedSystemEvent(
+        _ capture: DurableTriggerCapture
+    ) async {
+        guard capture.routesLocally else { return }
+        _ = await route(capture.event)
     }
     
     public func routeBatch(_ events: [NuxieEvent]) async -> [NuxieEvent] {
@@ -525,6 +533,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _capturedEventObserver = nil
             _journeyOwnershipFences.removeAll()
             _shouldFailJourneyOwnershipCheck = false
+            _stableCaptures.removeAll()
             _stableOwnedCaptures.removeAll()
             lastEventTimes.removeAll()
             _trackWithResponseCalls.removeAll()
@@ -681,6 +690,50 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
 
         await applyEventResponseSignals(response)
         return (nuxieEvent, response)
+    }
+
+    public func captureSystemEvent(
+        _ event: String,
+        properties: sending [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> DurableTriggerCapture? {
+        let propertiesBox = UncheckedSendable(properties)
+        if let existing = lock.withLock({ _stableCaptures[eventId] }) {
+            return existing
+        }
+        lock.withLock {
+            _trackForTriggerCalls.append((
+                event: event,
+                properties: propertiesBox.value,
+                persistToHistory: true,
+                distinctIdOverride: distinctId
+            ))
+        }
+        let enriched = await prepareTriggerProperties(propertiesBox.value)
+        let original = NuxieEvent(
+            id: eventId,
+            name: event,
+            distinctId: distinctId,
+            properties: enriched
+        )
+        let transformed = await applyBeforeSend(to: original).map {
+            NuxieEvent(
+                id: eventId,
+                name: $0.name,
+                distinctId: distinctId,
+                properties: $0.properties,
+                timestamp: original.timestamp
+            )
+        }
+        let capture = transformed.map {
+            DurableTriggerCapture(event: $0)
+        } ?? DurableTriggerCapture(event: original, routesLocally: false)
+        return lock.withLock {
+            if let existing = _stableCaptures[eventId] { return existing }
+            _stableCaptures[eventId] = capture
+            return capture
+        }
     }
 
     public func captureOwnedJourneySystemEvent(

@@ -5,7 +5,7 @@ import Foundation
 /// acknowledgement replay that same ID through EventLog's existing dedupe.
 struct DeviceLegReporter {
     let journal: DeviceLegRunJournal
-    let events: any StableSystemEventCapturing
+    let events: any RoutedStableSystemEventCapturing
 
     func flushPending() async throws {
         for run in try await journal.runs() {
@@ -38,12 +38,14 @@ struct DeviceLegReporter {
         }
         // Terminal beforeSend drops are also durable acknowledgements. Host
         // privacy policy must not create an immortal retry record.
-        return await events.captureSystemEvent(
+        guard let capture = await events.captureSystemEvent(
             completion ? JourneyEvents.journeyLegCompleted : JourneyEvents.journeyLegStarted,
             properties: properties,
             eventId: completion ? run.completedEventId : run.startedEventId,
             distinctId: journal.distinctId
-        ) != nil
+        ) else { return false }
+        await events.routeCapturedSystemEvent(capture)
+        return true
     }
 
     private static func timestamp(_ date: Date) -> String {
