@@ -50,6 +50,27 @@ protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
     @MainActor func onAppDidEnterBackground()
 }
 
+@MainActor
+private final class PresentationScreenGone {
+    private var isFinished = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isFinished else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func finish() {
+        guard !isFinished else { return }
+        isFinished = true
+        let waiters = waiters
+        self.waiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 /// Service for presenting experiences in dedicated windows over the entire app
 @MainActor
 final class ExperiencePresentationService: ExperiencePresentationServiceProtocol {
@@ -58,23 +79,6 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         var presentationID: UUID?
     }
 
-    private enum HostDismissalOwnership {
-        case inProgress(presentationID: UUID)
-        case retryRequired(presentationID: UUID)
-
-        var presentationID: UUID {
-            switch self {
-            case .inProgress(let presentationID), .retryRequired(let presentationID):
-                return presentationID
-            }
-        }
-
-        var attemptIsInProgress: Bool {
-            if case .inProgress = self { return true }
-            return false
-        }
-    }
-    
     // MARK: - Dependencies
     
     private let experienceService: ExperienceServiceProtocol
@@ -92,12 +96,11 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     private var currentRuntimeDelegate: ExperienceRuntimeDelegate?
     private var currentRuntimeDelegateTraceToken: ExperiencePresentationTraceToken?
     private var currentPresentationID: UUID?
+    private var currentExperienceShownTracked = false
+    private var inFlightHostDismissalCompletion: PresentationScreenGone?
     private var presentationAttemptGeneration: UInt64 = 0
     private var presentationShutdownGeneration: UInt64 = 0
     private var presentationCleanupTask: Task<Void, Never>?
-    private var hostDismissalOwnership: HostDismissalOwnership?
-    private var hostDismissalOwnershipWaiters: [CheckedContinuation<Void, Never>] = []
-    private var hostDismissalAttemptWaiters: [CheckedContinuation<Void, Never>] = []
     private var activePresentationOperations: [UUID: PresentationOperationState] = [:]
     private var presentationOperationWaiters:
         [UUID: [CheckedContinuation<Void, Never>]] = [:]
@@ -216,7 +219,6 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         let presentationOperationID = beginPresentationOperation()
         defer { finishPresentationOperation(presentationOperationID) }
         let shutdownGeneration = presentationShutdownGeneration
-        await waitForHostDismissalOwnershipIfNeeded()
         try Task.checkCancellation()
         guard presentationShutdownGeneration == shutdownGeneration else {
             throw CancellationError()
@@ -325,6 +327,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate
         )?.activePresentationTraceToken
         self.currentPresentationID = presentationID
+        self.currentExperienceShownTracked = false
         associatePresentationOperation(
             presentationOperationID,
             with: presentationID
@@ -428,6 +431,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 attemptGeneration: attemptGeneration,
                 fallbackWindow: window
             )
+            currentExperienceShownTracked = true
             eventLog.track(
                 JourneyEvents.experienceShown,
                 properties: JourneyEvents.experienceShownProperties(
@@ -473,7 +477,6 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             with: presentationID
         )
         defer { finishPresentationOperation(presentationOperationID) }
-        await waitForHostDismissalOwnershipIfNeeded()
         guard currentPresentationID == presentationID else { return }
         presentationAttemptGeneration &+= 1
         
@@ -497,7 +500,6 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             with: presentationID
         )
         defer { finishPresentationOperation(presentationOperationID) }
-        await waitForHostDismissalOwnershipIfNeeded()
         guard currentPresentationID == presentationID else { return }
         presentationAttemptGeneration &+= 1
 
@@ -511,13 +513,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     }
 
     func shutdownCurrentExperience() async {
-        await waitForHostDismissalAttemptIfNeeded()
         presentationShutdownGeneration &+= 1
         presentationAttemptGeneration &+= 1
-        if let ownedPresentationID = hostDismissalOwnership?.presentationID {
-            currentExperienceViewController?.cancelHostDismissal()
-            finishHostDismissalOwnership(presentationID: ownedPresentationID)
-        }
         if let presentationID = currentPresentationID {
             await finishPresentation(
                 id: presentationID,
@@ -532,8 +529,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     }
 
     func dismissCurrentExperienceFromHost() async {
-        if hostDismissalOwnership?.attemptIsInProgress == true {
-            await waitForHostDismissalAttemptIfNeeded()
+        if let inFlightHostDismissalCompletion {
+            await inFlightHostDismissalCompletion.wait()
             return
         }
         guard let presentationID = currentPresentationID,
@@ -542,68 +539,47 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             return
         }
 
-        let runtimeDelegate = currentRuntimeDelegate
-        if let ownedPresentationID = hostDismissalOwnership?.presentationID,
-           ownedPresentationID != presentationID {
-            finishHostDismissalOwnership(presentationID: ownedPresentationID)
-        }
-        hostDismissalOwnership = .inProgress(presentationID: presentationID)
-        experienceViewController.beginHostDismissal()
-        var retryRequired = false
+        let dismissalCompletion = PresentationScreenGone()
+        inFlightHostDismissalCompletion = dismissalCompletion
         defer {
-            if retryRequired, currentPresentationID == presentationID {
-                hostDismissalOwnership = .retryRequired(
-                    presentationID: presentationID
-                )
-            } else {
-                finishHostDismissalOwnership(presentationID: presentationID)
+            dismissalCompletion.finish()
+            if inFlightHostDismissalCompletion === dismissalCompletion {
+                inFlightHostDismissalCompletion = nil
             }
-            finishHostDismissalAttempt()
         }
+
+        let runtimeDelegate = currentRuntimeDelegate
+        let experienceVersionId = currentExperienceId ?? "unknown"
+        let journey = currentJourney
+        let experienceShownWasTracked = currentExperienceShownTracked
+        experienceViewController.beginHostDismissal()
         presentationAttemptGeneration &+= 1
 
-        await runtimeDelegate?.experienceViewControllerWillRequestHostDismiss(
-            experienceViewController
-        )
-        guard currentPresentationID == presentationID else { return }
-
-        await waitForPresentationOperationsToFinish(
-            presentationID: presentationID
-        )
-        guard currentPresentationID == presentationID else { return }
-
-        await experienceViewController.waitForInFlightCommerceBeforeHostDismissal()
-        guard currentPresentationID == presentationID else { return }
-
-        let terminalized = await runtimeDelegate?.experienceViewControllerDidRequestHostDismiss(
-            experienceViewController
-        ) ?? true
-        guard currentPresentationID == presentationID else { return }
-        guard terminalized else {
-            // A false result normally means that the journey's terminal write
-            // should be retried. An identity change can instead have already
-            // cancelled and removed the journey while its host presentation is
-            // still visible. There is then nothing left to terminalize, so do
-            // not retain host-dismissal ownership and wedge later presents.
-            if let journey = currentJourney,
-               !(await journey.snapshot()).status.isLive {
-                await finishPresentation(
-                    id: presentationID,
-                    reason: .hostDismissed,
-                    dismissWindow: true
-                )
-                return
-            }
-            experienceViewController.cancelHostDismissal()
-            retryRequired = true
-            return
-        }
-
-        await finishPresentation(
+        // Revoke presentation identity and begin teardown before asking the run
+        // to select its terminal outcome. The screen is never retained for a
+        // failed write or a competing outcome, and commerce continues through
+        // its transaction observers independently of this presentation.
+        guard let screenGone = beginPresentationTeardown(
             id: presentationID,
             reason: .hostDismissed,
-            dismissWindow: true
-        )
+            dismissWindow: true,
+            trackDismissalFact: false,
+            joinPresentationOperationsBeforeClose: true
+        ) else { return }
+
+        let selected = await runtimeDelegate?.experienceViewControllerDidRequestHostDismiss(
+            experienceViewController
+        ) ?? true
+        if selected, experienceShownWasTracked {
+            Task { @MainActor [weak self] in
+                await self?.trackDismissal(
+                    .hostDismissed,
+                    experienceVersionId: experienceVersionId,
+                    journey: journey
+                )
+            }
+        }
+        await screenGone.wait()
     }
     
     func onAppBecameActive() {
@@ -624,10 +600,6 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         reason: CloseReason,
         presentationID: UUID
     ) async {
-        if hostDismissalOwnership?.presentationID == presentationID {
-            await waitForHostDismissalOwnershipIfNeeded()
-            return
-        }
         let presentationOperationID = beginPresentationOperation()
         associatePresentationOperation(
             presentationOperationID,
@@ -646,12 +618,27 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         reason: CloseReason?,
         dismissWindow: Bool
     ) async {
-        if shouldYieldPresentationToHost(presentationID, reason: reason) {
-            return
-        }
+        guard let screenGone = beginPresentationTeardown(
+            id: presentationID,
+            reason: reason,
+            dismissWindow: dismissWindow,
+            trackDismissalFact: true,
+            joinPresentationOperationsBeforeClose: false
+        ) else { return }
+        await screenGone.wait()
+        await presentationCleanupTask?.value
+    }
+
+    private func beginPresentationTeardown(
+        id presentationID: UUID,
+        reason: CloseReason?,
+        dismissWindow: Bool,
+        trackDismissalFact: Bool,
+        joinPresentationOperationsBeforeClose: Bool
+    ) -> PresentationScreenGone? {
         guard currentPresentationID == presentationID else {
             LogDebug("ExperiencePresentationService: Ignoring stale experience dismissal callback")
-            return
+            return nil
         }
         LogDebug("ExperiencePresentationService: Cleaning up presentation")
 
@@ -661,17 +648,10 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         let journey = currentJourney
         let runtimeDelegate = currentRuntimeDelegate
         let runtimeDelegateTraceToken = currentRuntimeDelegateTraceToken
+        let experienceShownWasTracked = currentExperienceShownTracked
 
-        // The active screen reaches hidden and delivers its lifecycle analytics
-        // before presentation ownership is revoked or its runtime is torn down.
-        await experienceViewController?.prepareForDismissal(reason: reason)
-        if shouldYieldPresentationToHost(presentationID, reason: reason) {
-            return
-        }
-        guard currentPresentationID == presentationID else { return }
-
-        // Revoke ownership before suspension so callbacks from this
-        // presentation become stale immediately.
+        // Revoke ownership synchronously so callbacks from this presentation
+        // become stale and a subsequent presentation cannot inherit its result.
         currentPresentationID = nil
         currentWindow = nil
         currentExperienceId = nil
@@ -679,38 +659,53 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         currentExperienceViewController = nil
         currentRuntimeDelegate = nil
         currentRuntimeDelegateTraceToken = nil
+        currentExperienceShownTracked = false
         experienceViewController?.onClose = nil
 
-        if let reason {
-            LogInfo("ExperiencePresentationService: Experience \(experienceVersionId) dismissed with reason: \(reason)")
-            await trackDismissal(reason, experienceVersionId: experienceVersionId, journey: journey)
-        }
-
-        // Sessions and their Apple surfaces must be detached before the host
-        // window is destroyed.
+        let screenGone = PresentationScreenGone()
         let previousCleanupTask = presentationCleanupTask
         let cleanupTask = Task<Void, Never> { @MainActor in
             await previousCleanupTask?.value
+            // The active screen reaches hidden and delivers its lifecycle
+            // analytics before its runtime is torn down.
+            await experienceViewController?.prepareForDismissal(reason: reason)
+            if joinPresentationOperationsBeforeClose {
+                await self.waitForPresentationOperationsToFinish(
+                    presentationID: presentationID
+                )
+            }
+            if trackDismissalFact, experienceShownWasTracked, let reason {
+                LogInfo("ExperiencePresentationService: Experience \(experienceVersionId) dismissed with reason: \(reason)")
+                await self.trackDismissal(
+                    reason,
+                    experienceVersionId: experienceVersionId,
+                    journey: journey
+                )
+            }
             if dismissWindow {
                 await window?.dismiss()
             }
+            screenGone.finish()
+            // Sessions and their Apple surfaces must be detached before the
+            // host window is destroyed. This native cleanup is write-behind
+            // from the dismiss caller's screen-gone return boundary.
             await experienceViewController?.shutdownRuntime()
             window?.destroy()
-        }
-        presentationCleanupTask = cleanupTask
-        await cleanupTask.value
-        if let experienceViewController {
-            if let scopedTraceDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
-                scopedTraceDelegate.experienceViewControllerDidFinishPresentation(
-                    experienceViewController,
-                    traceToken: runtimeDelegateTraceToken
-                )
-            } else {
-                runtimeDelegate?.experienceViewControllerDidFinishPresentation(
-                    experienceViewController
-                )
+            if let experienceViewController {
+                if let scopedTraceDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
+                    scopedTraceDelegate.experienceViewControllerDidFinishPresentation(
+                        experienceViewController,
+                        traceToken: runtimeDelegateTraceToken
+                    )
+                } else {
+                    runtimeDelegate?.experienceViewControllerDidFinishPresentation(
+                        experienceViewController
+                    )
+                }
             }
         }
+        presentationCleanupTask = cleanupTask
+        return screenGone
     }
 
     private func requireCurrentPresentationAttempt(_ generation: UInt64) throws {
@@ -718,42 +713,6 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         guard presentationAttemptGeneration == generation else {
             throw CancellationError()
         }
-    }
-
-    private func waitForHostDismissalOwnershipIfNeeded() async {
-        guard hostDismissalOwnership != nil else { return }
-        await withCheckedContinuation { continuation in
-            hostDismissalOwnershipWaiters.append(continuation)
-        }
-    }
-
-    private func waitForHostDismissalAttemptIfNeeded() async {
-        guard hostDismissalOwnership?.attemptIsInProgress == true else { return }
-        await withCheckedContinuation { continuation in
-            hostDismissalAttemptWaiters.append(continuation)
-        }
-    }
-
-    private func finishHostDismissalOwnership(presentationID: UUID) {
-        guard hostDismissalOwnership?.presentationID == presentationID else { return }
-        hostDismissalOwnership = nil
-        let waiters = hostDismissalOwnershipWaiters
-        hostDismissalOwnershipWaiters.removeAll()
-        waiters.forEach { $0.resume() }
-    }
-
-    private func finishHostDismissalAttempt() {
-        let waiters = hostDismissalAttemptWaiters
-        hostDismissalAttemptWaiters.removeAll()
-        waiters.forEach { $0.resume() }
-    }
-
-    private func shouldYieldPresentationToHost(
-        _ presentationID: UUID,
-        reason: CloseReason?
-    ) -> Bool {
-        guard hostDismissalOwnership?.presentationID == presentationID else { return false }
-        return reason != .hostDismissed
     }
 
     private func beginPresentationOperation() -> UUID {
@@ -831,9 +790,6 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         attemptGeneration: UInt64,
         fallbackWindow: PresentationWindowProtocol
     ) async throws {
-        if hostDismissalOwnership?.presentationID == presentationID {
-            throw CancellationError()
-        }
         guard !Task.isCancelled,
               presentationAttemptGeneration == attemptGeneration,
               currentPresentationID == presentationID else {

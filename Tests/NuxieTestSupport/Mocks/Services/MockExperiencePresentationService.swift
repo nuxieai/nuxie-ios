@@ -287,22 +287,20 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
         let (controller, delegate) = lock.withLock {
             (_currentExperienceViewController, _currentRuntimeDelegate)
         }
-        var terminalized = true
         if let controller {
             controller.beginHostDismissal()
-            await delegate?.experienceViewControllerWillRequestHostDismiss(controller)
-            await controller.waitForInFlightCommerceBeforeHostDismissal()
-            terminalized = await delegate?.experienceViewControllerDidRequestHostDismiss(
+            let selected = await delegate?.experienceViewControllerDidRequestHostDismiss(
                 controller
             ) ?? true
-            if terminalized {
-                await controller.prepareForDismissal(reason: .hostDismissed)
+            await controller.prepareForDismissal(reason: .hostDismissed)
+            if selected {
+                await dismissCurrentExperience(reason: .hostDismissed)
             } else {
-                controller.cancelHostDismissal()
+                await dismissCurrentExperience()
             }
+            return
         }
-        guard terminalized else { return }
-        await dismissCurrentExperience(reason: .hostDismissed)
+        await dismissCurrentExperience()
     }
 
     @MainActor

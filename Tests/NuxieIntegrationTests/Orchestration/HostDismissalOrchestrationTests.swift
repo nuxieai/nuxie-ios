@@ -24,7 +24,7 @@ final class HostDismissalOrchestrationTests: AsyncSpec {
                 try? FileManager.default.removeItem(at: storageURL)
             }
 
-            it("waits for the durable local exit capture, not network delivery") { @MainActor in
+            it("returns at screen gone while durable exit capture continues") { @MainActor in
                 let triggerName = "host-dismissal-trigger"
                 let experienceId = "host-dismissal-experience"
                 let flowId = "host-dismissal-flow"
@@ -84,12 +84,15 @@ final class HostDismissalOrchestrationTests: AsyncSpec {
 
                 try await waitForHostExitCapture(in: exitCaptureGate)
 
-                expect(dismissalCompletion.isFinished).to(beFalse())
+                let returnedAtScreenGone = await waitForHostDismissalCompletion(
+                    in: dismissalCompletion
+                )
+                expect(returnedAtScreenGone).to(beTrue())
                 expect(updates.updates.compactMap(\.journeyUpdate)).to(beEmpty())
 
-                // The terminal snapshot is committed first. Deletion and the
-                // broker result remain ordered after the stable EventLog
-                // capture, which is blocked in beforeSend at this point.
+                // The in-memory terminal transition and screen close have
+                // returned. The write-behind lane has committed its tombstone
+                // and is now blocked in EventLog capture.
                 let durableTerminal = try XCTUnwrap(
                     booted.journeyStoreOnDisk().loadJourney(id: journey.id)
                 )
@@ -101,7 +104,11 @@ final class HostDismissalOrchestrationTests: AsyncSpec {
                 await booted.eventLog.drain()
 
                 expect(dismissalCompletion.isFinished).to(beTrue())
-                expect(booted.journeyStoreOnDisk().loadJourney(id: journey.id)).to(beNil())
+                let tombstoneRemoved = await waitForHostTombstoneRemoval(
+                    in: booted,
+                    journeyId: journey.id
+                )
+                expect(tombstoneRemoved).to(beTrue())
                 let directTrackCallsAfterDismissal = await api.trackEventCallCount
                 expect(directTrackCallsAfterDismissal)
                     .to(equal(directTrackCallsBeforeDismissal))
@@ -155,7 +162,9 @@ final class HostDismissalOrchestrationTests: AsyncSpec {
                 let failedFlush = await booted.eventLog.flushEvents()
                 expect(failedFlush).to(beFalse())
                 let queuedAfterFailure = await booted.eventLog.getQueuedEventCount()
-                expect(queuedAfterFailure).to(equal(queuedBeforeFailure))
+                // Other queued rows may resolve terminally in the same flush;
+                // the failed host exit itself must remain pending.
+                expect(queuedAfterFailure).to(beGreaterThan(0))
                 let failedExitAttempts = await api.sentEvents.filter {
                     $0.name == JourneyEvents.journeyExited
                 }.count
@@ -220,6 +229,10 @@ final class HostDismissalOrchestrationTests: AsyncSpec {
                 _ = await booted.eventLog.flushEvents()
 
                 await booted.kill()
+                // A killed process cannot run its in-memory retry task. Keep
+                // this process-shaped harness from advancing that old lane
+                // while the replacement stack recovers the tombstone.
+                sleepProvider.shouldCompleteImmediately = false
                 await booted.presentation.dismissCurrentExperienceFromHost()
 
                 let interrupted = try XCTUnwrap(
@@ -289,6 +302,31 @@ final class HostDismissalOrchestrationTests: AsyncSpec {
             }
         }
     }
+}
+
+private func waitForHostTombstoneRemoval(
+    in stack: OrchestrationStack,
+    journeyId: String
+) async -> Bool {
+    for _ in 0..<200 {
+        if stack.journeyStoreOnDisk().loadJourney(id: journeyId) == nil {
+            return true
+        }
+        try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    return false
+}
+
+private func waitForHostDismissalCompletion(
+    in probe: HostDismissalCompletionProbe
+) async -> Bool {
+    for _ in 0..<200 {
+        if probe.isFinished {
+            return true
+        }
+        try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    return false
 }
 
 private final class HostDismissalCompletionProbe: @unchecked Sendable {

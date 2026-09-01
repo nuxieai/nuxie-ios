@@ -2,6 +2,59 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 final class JourneyStateOwnershipTests: XCTestCase {
+    func testFirstPresentationOutcomeWinsWhenSecondTerminalOutcomeFollows() async {
+        let journey = makeJourney()
+        let firstTransitionAt = Date(timeIntervalSince1970: 1_700_000_100)
+        let secondTransitionAt = Date(timeIntervalSince1970: 1_700_000_200)
+
+        let first = await journey.transitionPresentationOutcome(
+            reason: .dismissed,
+            outcome: .hostDismissed,
+            initiatingDistinctId: "host-user",
+            at: firstTransitionAt
+        )
+        XCTAssertNotNil(first)
+
+        let second = await journey.transitionPresentationOutcome(
+            reason: .goalMet,
+            outcome: .goalMet,
+            initiatingDistinctId: "goal-user",
+            at: secondTransitionAt
+        )
+        XCTAssertNil(second)
+
+        let terminal = await journey.snapshot()
+        XCTAssertEqual(terminal.exitReason, .dismissed)
+        XCTAssertEqual(terminal.completedAt, firstTransitionAt)
+        XCTAssertEqual(terminal.terminalPresentationOutcome, .hostDismissed)
+        XCTAssertEqual(terminal.terminalInitiatingDistinctId, "host-user")
+    }
+
+    func testFirstTerminalTransitionWinsAcrossLocalDiscardAndPresentationEntries() async {
+        let journey = makeJourney()
+        let discardedAt = Date(timeIntervalSince1970: 1_700_000_100)
+
+        let discarded = await journey.discardLocally(
+            terminalStatus: .superseded,
+            at: discardedAt
+        )
+        XCTAssertTrue(discarded)
+
+        let competing = await journey.transitionPresentationOutcome(
+            reason: .goalMet,
+            outcome: .goalMet,
+            initiatingDistinctId: "goal-user",
+            at: Date(timeIntervalSince1970: 1_700_000_200)
+        )
+        XCTAssertNil(competing)
+
+        let terminal = await journey.snapshot()
+        XCTAssertEqual(terminal.status, .superseded)
+        XCTAssertEqual(terminal.updatedAt, discardedAt)
+        XCTAssertNil(terminal.exitReason)
+        XCTAssertNil(terminal.terminalPresentationOutcome)
+    }
+
     func testConcurrentUpdatesAreSerializedWithoutLostWrites() async {
         let journey = makeJourney()
 

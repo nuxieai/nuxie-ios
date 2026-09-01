@@ -383,6 +383,17 @@ enum JourneyScreenAuthoredEventPhase: String, Codable, Sendable {
     case dropped
 }
 
+/// Exact presentation outcome selected by the run's first terminal transition.
+enum JourneyRunPresentationOutcome: String, Codable, Sendable {
+    case userDismissed = "user_dismissed"
+    case hostDismissed = "host_dismissed"
+    case identityChanged = "identity_changed"
+    case goalMet = "goal_met"
+    case purchaseCompleted = "purchase_completed"
+    case timeout
+    case error
+}
+
 struct JourneyScreenAuthoredEvent: Codable, Sendable {
     let id: String
     let name: String
@@ -892,6 +903,13 @@ struct JourneySnapshot: Codable, Sendable {
     /// A host-authored terminal transition whose stable exit fact has not yet
     /// been acknowledged by EventLog's durable capture seam.
     internal var pendingHostExitCapture: Bool
+    /// Host completion accounting still needs its idempotent store write.
+    internal var pendingHostCompletion: Bool
+    /// The originating trigger still needs its terminal journey update.
+    internal var pendingHostTriggerCompletion: Bool
+    /// Presentation terminal winner and the identity that initiated it.
+    internal var terminalPresentationOutcome: JourneyRunPresentationOutcome?
+    internal var terminalInitiatingDistinctId: String?
 
     /// Timestamps
     public let startedAt: Date
@@ -961,6 +979,10 @@ struct JourneySnapshot: Codable, Sendable {
         self.pendingResponseFieldWrites = [:]
         self.responseSessionRetryRequired = false
         self.pendingHostExitCapture = false
+        self.pendingHostCompletion = false
+        self.pendingHostTriggerCompletion = false
+        self.terminalPresentationOutcome = nil
+        self.terminalInitiatingDistinctId = nil
 
         self.startedAt = now
         self.updatedAt = now
@@ -1000,6 +1022,10 @@ struct JourneySnapshot: Codable, Sendable {
         case pendingResponseFieldWrites
         case responseSessionRetryRequired
         case pendingHostExitCapture
+        case pendingHostCompletion
+        case pendingHostTriggerCompletion
+        case terminalPresentationOutcome
+        case terminalInitiatingDistinctId
         case startedAt
         case updatedAt
         case completedAt
@@ -1050,6 +1076,24 @@ struct JourneySnapshot: Codable, Sendable {
             Bool.self,
             forKey: .pendingHostExitCapture
         ) ?? false
+        terminalPresentationOutcome = try container.decodeIfPresent(
+            JourneyRunPresentationOutcome.self,
+            forKey: .terminalPresentationOutcome
+        )
+        let isLegacyHostDismissal = pendingHostExitCapture
+            && terminalPresentationOutcome == nil
+        pendingHostCompletion = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .pendingHostCompletion
+        ) ?? isLegacyHostDismissal
+        pendingHostTriggerCompletion = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .pendingHostTriggerCompletion
+        ) ?? (isLegacyHostDismissal && context["_origin_event_id"]?.value is String)
+        terminalInitiatingDistinctId = try container.decodeIfPresent(
+            String.self,
+            forKey: .terminalInitiatingDistinctId
+        )
         startedAt = try container.decode(Date.self, forKey: .startedAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
@@ -1087,6 +1131,20 @@ struct JourneySnapshot: Codable, Sendable {
         if pendingHostExitCapture {
             try container.encode(true, forKey: .pendingHostExitCapture)
         }
+        if pendingHostCompletion {
+            try container.encode(true, forKey: .pendingHostCompletion)
+        }
+        if pendingHostTriggerCompletion {
+            try container.encode(true, forKey: .pendingHostTriggerCompletion)
+        }
+        try container.encodeIfPresent(
+            terminalPresentationOutcome,
+            forKey: .terminalPresentationOutcome
+        )
+        try container.encodeIfPresent(
+            terminalInitiatingDistinctId,
+            forKey: .terminalInitiatingDistinctId
+        )
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(completedAt, forKey: .completedAt)
@@ -1309,6 +1367,22 @@ final class Journey: Sendable {
         await stateOwner.versionedSnapshot()
     }
 
+    func transitionPresentationOutcome(
+        reason: JourneyExitReason,
+        outcome: JourneyRunPresentationOutcome?,
+        initiatingDistinctId: String?,
+        at now: Date
+    ) async -> JourneySnapshot? {
+        await stateOwner.transitionToTerminal(
+            .presentation(
+                reason: reason,
+                outcome: outcome,
+                initiatingDistinctId: initiatingDistinctId
+            ),
+            at: now
+        )
+    }
+
     @discardableResult
     func replace(
         _ snapshot: JourneySnapshot,
@@ -1317,41 +1391,14 @@ final class Journey: Sendable {
         await stateOwner.replace(snapshot, ifRevisionEquals: revision)
     }
 
-    func reserveHostDismissal() async -> Bool {
-        await stateOwner.reserveHostDismissal()
-    }
-
-    func hasHostDismissalReservation() async -> Bool {
-        await stateOwner.hasHostDismissalReservation
-    }
-
-    @discardableResult
-    func replaceForTerminalTransition(
-        _ snapshot: JourneySnapshot,
-        ifRevisionEquals revision: UInt64,
-        authority: JourneyTerminalTransitionAuthority
-    ) async -> Bool {
-        await stateOwner.replaceForTerminalTransition(
-            snapshot,
-            ifRevisionEquals: revision,
-            authority: authority
-        )
-    }
-
-    func releaseHostDismissalReservation() async {
-        await stateOwner.releaseHostDismissalReservation()
-    }
-
     func discardLocally(
         terminalStatus: JourneyStatus,
-        at date: Date,
-        authority: JourneyTerminalTransitionAuthority
-    ) async -> JourneyLocalDiscardCommit? {
-        await stateOwner.discardLocally(
-            terminalStatus: terminalStatus,
-            at: date,
-            authority: authority
-        )
+        at date: Date
+    ) async -> Bool {
+        await stateOwner.transitionToTerminal(
+            .localDiscard(status: terminalStatus),
+            at: date
+        ) != nil
     }
 
     @discardableResult
@@ -1412,21 +1459,18 @@ struct JourneyVersionedSnapshot: Sendable {
     let revision: UInt64
 }
 
-struct JourneyLocalDiscardCommit: Sendable {
-    let previous: JourneySnapshot
-    let revokedHostDismissalReservation: Bool
-}
-
-enum JourneyTerminalTransitionAuthority: Equatable, Sendable {
-    case ordinary
-    case host
-    case authoritativeOwnershipLoss
+private enum JourneyTerminalTransition: Sendable {
+    case presentation(
+        reason: JourneyExitReason,
+        outcome: JourneyRunPresentationOutcome?,
+        initiatingDistinctId: String?
+    )
+    case localDiscard(status: JourneyStatus)
 }
 
 private actor JourneyStateOwner {
     private var value: JourneySnapshot
     private var revision: UInt64 = 0
-    private var hostDismissalReserved = false
 
     init(_ value: JourneySnapshot) {
         self.value = value
@@ -1440,6 +1484,65 @@ private actor JourneyStateOwner {
         JourneyVersionedSnapshot(snapshot: value, revision: revision)
     }
 
+    /// The single live-to-terminal arbiter for presentation outcomes and
+    /// authoritative local quarantine. The first admitted transition wins.
+    func transitionToTerminal(
+        _ transition: JourneyTerminalTransition,
+        at now: Date
+    ) -> JourneySnapshot? {
+        guard value.status.isLive else { return nil }
+        switch transition {
+        case let .presentation(reason, outcome, initiatingDistinctId):
+            if reason == .cancelled {
+                value.cancel(at: now)
+            } else {
+                value.complete(reason: reason, at: now)
+            }
+            value.terminalPresentationOutcome = outcome
+            value.terminalInitiatingDistinctId = initiatingDistinctId
+            let isHostDismissal = outcome == .hostDismissed
+            value.pendingHostExitCapture = isHostDismissal
+            value.pendingHostCompletion = isHostDismissal
+            value.pendingHostTriggerCompletion = isHostDismissal
+                && value.getContext("_origin_event_id") is String
+            value.executionState.lifecycleGeneration &+= 1
+
+            let terminalTransitionId = "terminal:\(value.id):\(value.epoch)"
+            if let response = value.responseSession,
+               response.state == .draft,
+               value.responseSessionReceipts[terminalTransitionId] == nil {
+                let abandoned = ResponseSessionSnapshot(
+                    responseId: response.responseId,
+                    journeyId: response.journeyId,
+                    responseSchemaKey: response.responseSchemaKey,
+                    responseSchemaVersionId: response.responseSchemaVersionId,
+                    schemaVersion: response.schemaVersion,
+                    state: .abandoned,
+                    values: response.values,
+                    version: response.version + 1,
+                    createdAt: response.createdAt,
+                    updatedAt: now.ISO8601Format(),
+                    submittedAt: response.submittedAt,
+                    abandonedAt: now.ISO8601Format()
+                )
+                value.responseSession = abandoned
+                value.responseSessionReceipts[terminalTransitionId] = .accepted(
+                    status: .abandoned,
+                    snapshot: abandoned
+                )
+            }
+        case let .localDiscard(terminalStatus):
+            if terminalStatus == .cancelled {
+                value.cancel(at: now)
+            } else {
+                value.status = terminalStatus
+                value.updatedAt = now
+            }
+        }
+        revision &+= 1
+        return value
+    }
+
     func replace(
         _ snapshot: JourneySnapshot,
         ifRevisionEquals expectedRevision: UInt64
@@ -1448,76 +1551,6 @@ private actor JourneyStateOwner {
         value = snapshot
         revision &+= 1
         return true
-    }
-
-    var hasHostDismissalReservation: Bool {
-        hostDismissalReserved
-    }
-
-    func reserveHostDismissal() -> Bool {
-        guard value.status.isLive else { return false }
-        hostDismissalReserved = true
-        return true
-    }
-
-    func replaceForTerminalTransition(
-        _ snapshot: JourneySnapshot,
-        ifRevisionEquals expectedRevision: UInt64,
-        authority: JourneyTerminalTransitionAuthority
-    ) -> Bool {
-        guard revision == expectedRevision else { return false }
-        if hostDismissalReserved, authority == .ordinary {
-            return false
-        }
-        value = snapshot
-        revision &+= 1
-        if authority == .authoritativeOwnershipLoss {
-            hostDismissalReserved = false
-        }
-        return true
-    }
-
-    func releaseHostDismissalReservation() {
-        hostDismissalReserved = false
-    }
-
-    /// Local quarantine/ownership loss is unconditional once admitted. It is
-    /// intentionally a single actor operation rather than a bounded CAS loop:
-    /// stale callbacks must not be able to keep an old-user journey alive by
-    /// repeatedly advancing its revision.
-    func discardLocally(
-        terminalStatus: JourneyStatus,
-        at date: Date,
-        authority: JourneyTerminalTransitionAuthority
-    ) -> JourneyLocalDiscardCommit? {
-        let revokesPendingHostExit = authority == .authoritativeOwnershipLoss
-            && value.status == .completed
-            && value.pendingHostExitCapture
-        guard value.status.isLive || revokesPendingHostExit else { return nil }
-        if hostDismissalReserved, authority == .ordinary { return nil }
-
-        let previous = value
-        let revokedHostDismissalReservation = hostDismissalReserved
-            && authority == .authoritativeOwnershipLoss
-        if terminalStatus == .cancelled {
-            value.cancel(at: date)
-        } else {
-            value.status = terminalStatus
-            value.updatedAt = date
-        }
-        if revokesPendingHostExit {
-            value.exitReason = nil
-            value.completedAt = nil
-            value.pendingHostExitCapture = false
-        }
-        if authority == .authoritativeOwnershipLoss {
-            hostDismissalReserved = false
-        }
-        revision &+= 1
-        return JourneyLocalDiscardCommit(
-            previous: previous,
-            revokedHostDismissalReservation: revokedHostDismissalReservation
-        )
     }
 
     func update<T: Sendable>(

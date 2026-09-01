@@ -112,10 +112,6 @@ protocol ExperienceRuntimeDelegate: AnyObject {
 
     func experienceViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason)
 
-    func experienceViewControllerWillRequestHostDismiss(
-        _ controller: ExperienceViewController
-    ) async
-
     @discardableResult
     func experienceViewControllerDidRequestHostDismiss(
         _ controller: ExperienceViewController
@@ -228,10 +224,6 @@ extension ExperienceRuntimeDelegate {
         )
         return true
     }
-
-    func experienceViewControllerWillRequestHostDismiss(
-        _ controller: ExperienceViewController
-    ) async {}
 }
 
 /// ExperienceViewController - displays native experience content with loading and error states.
@@ -410,8 +402,6 @@ class ExperienceViewController: NuxiePlatformViewController {
     private let recoveryAffordanceDelay: TimeInterval
     private let presentationDiagnosticsEnabled: Bool
     private var recoveryAffordanceTask: Task<Void, Never>?
-    private var inFlightCommerceOperationCount = 0
-    private var commerceOperationWaiters: [CheckedContinuation<Void, Never>] = []
     private var hostDismissalRequested = false
     private let screenEmissionDispatcher: ScreenEmissionDispatcher
     private let screenEmissionPublicationGate = ExperienceInteractiveOperationGate()
@@ -2112,36 +2102,13 @@ extension ExperienceViewController {
         hostDismissalRequested = true
     }
 
-    func cancelHostDismissal() {
-        hostDismissalRequested = false
-    }
-
-    func waitForInFlightCommerceBeforeHostDismissal() async {
-        beginHostDismissal()
-        guard inFlightCommerceOperationCount > 0 else { return }
-        await withCheckedContinuation { continuation in
-            commerceOperationWaiters.append(continuation)
-        }
-    }
-
     private func beginCommerceOperation(
         _ operation: @escaping @MainActor () async -> Void
     ) {
         guard !hostDismissalRequested else { return }
-        inFlightCommerceOperationCount += 1
-        Task { @MainActor [weak self] in
-            defer { self?.finishCommerceOperation() }
+        Task { @MainActor in
             await operation()
         }
-    }
-
-    private func finishCommerceOperation() {
-        guard inFlightCommerceOperationCount > 0 else { return }
-        inFlightCommerceOperationCount -= 1
-        guard inFlightCommerceOperationCount == 0 else { return }
-        let waiters = commerceOperationWaiters
-        commerceOperationWaiters.removeAll()
-        waiters.forEach { $0.resume() }
     }
 
     fileprivate func handleNativePurchase(placementId: String) {

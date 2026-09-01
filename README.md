@@ -200,10 +200,11 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
   decide when an experience is shown; applications do not construct or present
   experience view controllers directly.
 - `await NuxieSDK.shared.dismiss()`: dismisses the presented experience. It is a
-  no-op when none is presented, waits for that experience's in-flight purchase or
-  restore without interrupting StoreKit, and abandons its in-progress server-effect
-  wait before dismissing. The journey exits as dismissed, and a pending
-  `triggerAndWait` resolves as a completed journey with that exit reason.
+  no-op when none is presented, closes the screen after selecting the in-memory
+  journey outcome, and does not wait for purchase, restore, persistence, or journey
+  bookkeeping. StoreKit observers and recoverable write-behind work continue
+  independently; a pending `triggerAndWait` later resolves as a completed journey
+  with the dismissed exit reason.
 - On macOS, `target: "in_app"` link actions open in the default browser (no in-app Safari view).
 
 ## Configuration Highlights

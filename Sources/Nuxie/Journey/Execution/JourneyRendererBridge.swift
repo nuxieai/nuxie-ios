@@ -261,13 +261,6 @@ final class JourneyRendererBridge:
   }
 
   @MainActor
-  func experienceViewControllerWillRequestHostDismiss(
-    _ controller: ExperienceViewController
-  ) async {
-    await journeyService?.reserveHostDismissal(journeyId: journeyId)
-  }
-
-  @MainActor
   @discardableResult
   func experienceViewControllerDidRequestHostDismiss(
     _ controller: ExperienceViewController

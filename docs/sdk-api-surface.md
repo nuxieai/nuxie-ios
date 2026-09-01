@@ -114,7 +114,7 @@ view controller or present an experience by version ID.
 
 | Entry point | Semantics |
 | --- | --- |
-| `dismiss() async` | Callable from any task. Dismiss the presented experience; no-op if none is presented. It waits for that experience's in-flight purchase or restore without interrupting StoreKit, abandons its in-progress server-effect wait, then exits the journey as dismissed. `$journey_exited` carries `reason: "dismissed"` and `dismissed_by: "host"`; a pending `triggerAndWait` resolves to `TriggerResult.journeyCompleted` with `JourneyUpdate.exitReason == .dismissed`. |
+| `dismiss() async` | Callable from any task. Dismiss the presented experience; no-op if none is presented. It closes the screen after selecting the in-memory journey outcome and does not wait for in-flight purchase, restore, persistence, or journey bookkeeping; StoreKit observers and recoverable write-behind work continue independently. `$journey_exited` carries `reason: "dismissed"` and `dismissed_by: "host"`; a pending `triggerAndWait` resolves asynchronously to `TriggerResult.journeyCompleted` with `JourneyUpdate.exitReason == .dismissed`. |
 
 ## Features (feature access)
 
