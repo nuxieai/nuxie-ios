@@ -325,11 +325,10 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             identityService: identity,
             featureService: features
         )
-        var product = Self.projectionProduct(
+        let product = Self.projectionProduct(
             productId: "external-product",
             storeProductId: "external-store-product"
         )
-        product.providerFeatureAccess = "revenuecat"
 
         _ = try await service.purchase(product)
         await observer.retryStoredEvidence()

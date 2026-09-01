@@ -622,8 +622,7 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(purchaseUpdateCount) == 0
                     }
 
-                    it("does not project signed provider access from a delegate outcome") {
-                        mockProduct.providerFeatureAccess = "revenuecat"
+                    it("does not project signed product grants from a delegate outcome") {
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_premium",
@@ -643,7 +642,6 @@ final class TransactionServiceTests: AsyncSpec {
                     }
 
                     it("mints one operation id per purchased delegate callback") {
-                        mockProduct.providerFeatureAccess = "revenuecat"
                         mockPurchaseDelegate.configureForSuccess()
 
                         _ = try await transactionService.purchase(mockProduct)
@@ -658,8 +656,7 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(Set(operationIds)).to(haveCount(2))
                     }
 
-                    it("passes signed provider grants through the external delegate") {
-                        mockProduct.providerFeatureAccess = "revenuecat"
+                    it("passes signed product grants through the external delegate") {
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_premium",
@@ -681,7 +678,6 @@ final class TransactionServiceTests: AsyncSpec {
                     }
 
                     it("does not attribute a suspended checkout to a new customer") {
-                        mockProduct.providerFeatureAccess = "revenuecat"
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_premium",
@@ -711,7 +707,6 @@ final class TransactionServiceTests: AsyncSpec {
                     }
 
                     it("keeps provider fixed quotas and credits server-authoritative") {
-                        mockProduct.providerFeatureAccess = "revenuecat"
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_exports",
@@ -921,7 +916,6 @@ final class TransactionServiceTests: AsyncSpec {
                     }
 
                     it("does not persist pending grants for an external delegate") {
-                        mockProduct.providerFeatureAccess = "revenuecat"
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_premium",

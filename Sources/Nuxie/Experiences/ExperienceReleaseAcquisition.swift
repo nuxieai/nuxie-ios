@@ -344,13 +344,12 @@ private struct ExperienceReleaseLifecycleDocument: Decodable {
 }
 
 struct ExperienceReleaseProductDocument: Decodable, Equatable, Sendable {
-    struct ProviderFeatureAccess: Decodable, Equatable, Sendable {
-        let provider: String
-    }
     struct Store: Decodable, Equatable, Sendable {
         let platform: String
         let productId: String
         let productType: String
+        let basePlanId: String?
+        let purchaseOptionId: String?
     }
 
     struct Entitlement: Decodable, Equatable, Sendable {
@@ -378,7 +377,6 @@ struct ExperienceReleaseProductDocument: Decodable, Equatable, Sendable {
 
     let id: String
     let type: String
-    let providerFeatureAccess: ProviderFeatureAccess?
     let store: Store
     let preview: Preview
     let entitlements: [Entitlement]
@@ -389,10 +387,14 @@ struct ExperienceReleasePlacementDocument: Decodable, Equatable, Sendable {
         let introEligibility: AppStorePlacementOptions.IntroEligibility
         let billingPlan: StoreProduct.BillingPlan
     }
+    struct GooglePlay: Decodable, Equatable, Sendable {
+        let offerId: String
+    }
 
     let id: String
     let productId: String
     let appStore: AppStore?
+    let googlePlay: GooglePlay?
 
     var appStoreOptions: AppStorePlacementOptions {
         guard let appStore else { return .default }

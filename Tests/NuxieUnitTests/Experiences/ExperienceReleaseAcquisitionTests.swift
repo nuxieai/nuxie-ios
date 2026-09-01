@@ -211,7 +211,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(requests.count, 2)
     }
 
-    func testSignedProductPreviewDocumentCarriesTestStoreFacts() throws {
+    func testSignedProductDocumentCarriesAppPlatformStoreFacts() throws {
         let data = try JSONSerialization.data(withJSONObject: [
             "id": "catalog_monthly",
             "type": "subscription",
@@ -232,7 +232,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 "introOfferLabel": "7-day free trial",
                 "renewalLabel": "then $9.99/month",
             ],
-            "providerFeatureAccess": ["provider": "revenuecat"],
             "entitlements": [],
         ])
 
@@ -245,7 +244,9 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(preview.price, "$9.99")
         XCTAssertTrue(preview.hasTrial)
         XCTAssertEqual(preview.renewalLabel, "then $9.99/month")
-        XCTAssertEqual(product.providerFeatureAccess?.provider, "revenuecat")
+        XCTAssertEqual(product.store.platform, "apple_app_store")
+        XCTAssertNil(product.store.basePlanId)
+        XCTAssertNil(product.store.purchaseOptionId)
     }
 
     func testResourceMetricsIncludeRejectedCacheReadBeforeReplacementDownload() async throws {
@@ -1302,8 +1303,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(admitted?.publishedAtSeq, entry.locator.publishedAtSeq)
     }
 
-    func testActiveSignedProductAuthorityFailsClosedOnConflictingReleases() throws {
-        func product(provider: Any) throws -> ExperienceReleaseProductDocument {
+    func testActiveSignedAppleProductUsesNativeStoreKitAuthority() throws {
+        func product() throws -> ExperienceReleaseProductDocument {
             let json: [String: Any] = [
                 "id": "shared-product",
                 "type": "subscription",
@@ -1313,7 +1314,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("Shared Product"),
-                "providerFeatureAccess": provider,
                 "entitlements": [],
             ]
             return try JSONDecoder().decode(
@@ -1321,8 +1321,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 from: JSONSerialization.data(withJSONObject: json)
             )
         }
-        let native = try product(provider: NSNull())
-        let provider = try product(provider: ["provider": "revenuecat"])
+        let native = try product()
 
         XCTAssertEqual(
             activeProductEvidenceAuthority(
@@ -1332,18 +1331,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             .nativeStoreKit
         )
         XCTAssertEqual(
-            activeProductEvidenceAuthority(
-                products: [provider],
-                storeProductId: "shared-store-product"
-            ),
-            .providerConnector
-        )
-        XCTAssertEqual(
-            activeProductEvidenceAuthority(
-                products: [native, provider],
-                storeProductId: "shared-store-product"
-            ),
-            .ambiguous
+            activeProductEvidenceAuthority(products: [], storeProductId: "shared-store-product"),
+            .readyNoMatch
         )
     }
 
@@ -1409,7 +1398,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("Projection"),
-                "providerFeatureAccess": NSNull(),
                 "entitlements": [[
                     "id": "entitlement-premium",
                     "featureId": "feature-premium",
@@ -1494,15 +1482,12 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         )
     }
 
-    func testPinnedProviderHistoryDoesNotPoisonActiveNativeRestoreAuthority() async throws {
+    func testPinnedHistoryDoesNotPoisonActiveNativeRestoreAuthority() async throws {
         let (base, delivery) = try releaseEntry(
             riv: Data("RIVE authority recovery".utf8),
             image: Data([3, 5, 8])
         )
-        func authorityEntry(
-            suffix: String,
-            provider: Any
-        ) throws -> ExperienceReleaseProfileEntry {
+        func authorityEntry(suffix: String) throws -> ExperienceReleaseProfileEntry {
             try resign(entry: base) { root in
                 var identity = try XCTUnwrap(root["identity"] as? [String: Any])
                 identity["experienceId"] = "experience-recovery-\(suffix)"
@@ -1518,17 +1503,13 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                         "productType": "autoRenewable",
                     ],
                     "preview": productPreview("Recovery \(suffix)"),
-                    "providerFeatureAccess": provider,
                     "entitlements": [],
                 ]]
                 root["placements"] = []
             }
         }
-        let native = try authorityEntry(suffix: "native", provider: NSNull())
-        let provider = try authorityEntry(
-            suffix: "provider",
-            provider: ["provider": "revenuecat"]
-        )
+        let active = try authorityEntry(suffix: "active")
+        let historical = try authorityEntry(suffix: "historical")
         let loader = ExperienceLoader(
             productService: ProductService(),
             releaseStore: makeStore(cache: temporaryDirectory()),
@@ -1601,24 +1582,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
 
         _ = try await loader.replaceReleaseProfile(.init(
             delivery: delivery,
-            active: [native, provider],
-            pinned: []
-        ))
-        let conflictingActiveAuthority = await loader.purchaseEvidenceAuthority(
-            storeProductId: "shared-recovery-product"
-        )
-        XCTAssertEqual(conflictingActiveAuthority, .ambiguous)
-        XCTAssertTrue(api.recordedCustomers.isEmpty)
-        let ambiguousFinishCount = await finishes.count()
-        XCTAssertEqual(ambiguousFinishCount, 0)
-        let ambiguousReads = await source.readCounts()
-        XCTAssertEqual(ambiguousReads.unfinished, 1)
-        XCTAssertEqual(ambiguousReads.currentEntitlements, 1)
-
-        _ = try await loader.replaceReleaseProfile(.init(
-            delivery: delivery,
-            active: [native],
-            pinned: [provider]
+            active: [active],
+            pinned: [historical]
         ))
         let activeOnlyAuthority = await loader.purchaseEvidenceAuthority(
             storeProductId: "shared-recovery-product"
@@ -1628,17 +1593,17 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let convergedFinishCount = await finishes.count()
         XCTAssertEqual(convergedFinishCount, 1)
         let convergedReads = await source.readCounts()
-        XCTAssertEqual(convergedReads.unfinished, 2)
-        XCTAssertEqual(convergedReads.currentEntitlements, 2)
+        XCTAssertEqual(convergedReads.unfinished, 1)
+        XCTAssertEqual(convergedReads.currentEntitlements, 1)
 
         _ = try await loader.replaceReleaseProfile(.init(
             delivery: delivery,
-            active: [native],
-            pinned: [provider]
+            active: [active],
+            pinned: [historical]
         ))
         let repeatedReads = await source.readCounts()
-        XCTAssertEqual(repeatedReads.unfinished, 2)
-        XCTAssertEqual(repeatedReads.currentEntitlements, 2)
+        XCTAssertEqual(repeatedReads.unfinished, 1)
+        XCTAssertEqual(repeatedReads.currentEntitlements, 1)
         XCTAssertEqual(api.recordedCustomers, ["customer-a"])
         let repeatedFinishCount = await finishes.count()
         XCTAssertEqual(repeatedFinishCount, 1)
@@ -2089,7 +2054,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("Stale Monthly"),
-                "providerFeatureAccess": NSNull(),
                 "entitlements": [],
             ]]
             root["placements"] = [[
@@ -2190,7 +2154,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("Pro Monthly"),
-                "providerFeatureAccess": NSNull(),
                 "entitlements": [],
             ]]
             root["placements"] = [[
@@ -2271,6 +2234,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 "platform": "google_play",
                 "productId": "premium_monthly",
                 "productType": "subscription",
+                "basePlanId": "monthly",
+                "purchaseOptionId": NSNull(),
             ]
             products[0] = storeProduct
             root["products"] = products
@@ -2392,7 +2357,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("Purchase Only"),
-                "providerFeatureAccess": ["provider": "revenuecat"],
                 "entitlements": [[
                     "id": "entitlement_pro",
                     "featureId": "feature_pro",
@@ -2445,7 +2409,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             storeProductID: productID
         )
         XCTAssertEqual(cachedByProduct?.entitlements.map(\.id), ["entitlement_pro"])
-        XCTAssertEqual(cachedByProduct?.providerFeatureAccess?.provider, "revenuecat")
         XCTAssertEqual(cachedByStore?.id, "product_purchase_only")
         let exactOptimisticAllowances = await store.optimisticEntitlementAllowances(
             releaseDescriptorSHA256: entry.descriptorSha256,
@@ -2529,12 +2492,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             ["entitlement_pro"],
             "purchase-time mappings must survive an app process restart"
         )
-        XCTAssertEqual(
-            restartedHistoricalMapping?.providerFeatureAccess?.provider,
-            "revenuecat",
-            "signed provider cutover state must survive an offline app process restart"
-        )
-
         let experience = try await store.experienceForPresentation(
             experienceId: entry.locator.experienceId,
             versionId: entry.locator.experienceVersionId,
@@ -2573,7 +2530,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "periodLabel": "year",
                     "renewalLabel": "$39.99/year",
                 ]) { _, new in new },
-                "providerFeatureAccess": NSNull(),
                 "entitlements": [],
             ]]
             root["placements"] = [[
@@ -2640,7 +2596,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                         "productType": "autoRenewable",
                     ],
                     "preview": productPreview(id),
-                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ]
             }

@@ -56,8 +56,7 @@ final class NativeStoreKitServiceFixture: @unchecked Sendable {
 
     func preparedProduct(
         from store: NativeStoreKitTestHarness,
-        id: NativeStoreKitTestProduct = .consumable,
-        providerFeatureAccess: String? = nil
+        id: NativeStoreKitTestProduct = .consumable
     ) async throws -> StoreProduct {
         var product = try await store.product(id: id)
         product.purchaseContext = PurchaseCommercialContext(
@@ -79,7 +78,6 @@ final class NativeStoreKitServiceFixture: @unchecked Sendable {
             storeProductId: product.storeProductId,
             displayPrice: product.price
         )
-        product.providerFeatureAccess = providerFeatureAccess
         return product
     }
 

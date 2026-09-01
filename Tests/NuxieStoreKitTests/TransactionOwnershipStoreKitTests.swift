@@ -78,10 +78,7 @@ final class TransactionOwnershipStoreKitTests: NativeStoreKitTestCase {
             mode: .full,
             delegate: delegate
         )
-        let product = try await fixture.preparedProduct(
-            from: store,
-            providerFeatureAccess: "revenuecat"
-        )
+        let product = try await fixture.preparedProduct(from: store)
 
         _ = try await fixture.service.purchase(product)
         let transactionId = try XCTUnwrap(delegate.transactionId)

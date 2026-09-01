@@ -25,31 +25,10 @@ func activeProductEvidenceAuthority(
     products: [ExperienceReleaseProductDocument],
     storeProductId: String
 ) -> ActiveProductEvidenceAuthorityResolution {
-    let authorities = Set(products
-        .filter {
-            $0.store.platform == "apple_app_store"
-                && $0.store.productId == storeProductId
-        }
-        .map {
-            $0.providerFeatureAccess == nil
-                ? PurchaseEvidenceAuthority.nativeStoreKit
-                : .providerConnector
-        })
-    switch authorities.count {
-    case 0:
-        return .readyNoMatch
-    case 1:
-        switch authorities.first {
-        case .nativeStoreKit:
-            return .nativeStoreKit
-        case .providerConnector:
-            return .providerConnector
-        default:
-            return .ambiguous
-        }
-    default:
-        return .ambiguous
-    }
+    products.contains {
+        $0.store.platform == "apple_app_store"
+            && $0.store.productId == storeProductId
+    } ? .nativeStoreKit : .readyNoMatch
 }
 
 /// Authenticates release profiles and resolves descriptor-native experiences.
@@ -1683,7 +1662,6 @@ actor ExperienceLoader {
                     displayPrice: testProduct.price,
                     price: nil
                 )
-                testProduct.providerFeatureAccess = binding.product.providerFeatureAccess?.provider
                 testProducts.append(testProduct)
             }
             return testProducts
@@ -1730,7 +1708,6 @@ actor ExperienceLoader {
                     NSDecimalNumber(decimal: $0.price).doubleValue
                 }
             )
-            resolvedProduct.providerFeatureAccess = binding.product.providerFeatureAccess?.provider
             storeProducts.append(resolvedProduct)
         }
         return storeProducts

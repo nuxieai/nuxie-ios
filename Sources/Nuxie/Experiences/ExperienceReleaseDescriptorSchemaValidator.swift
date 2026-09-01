@@ -63,8 +63,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             let product = try object(
                 value,
                 required: [
-                    "id", "type", "providerFeatureAccess", "store", "preview",
-                    "entitlements",
+                    "id", "type", "store", "preview", "entitlements",
                 ],
                 path: path
             )
@@ -74,31 +73,45 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 values: ["subscription", "consumable", "nonConsumable"],
                 path: "\(path).type"
             )
-            if !(product["providerFeatureAccess"] is NSNull) {
-                let access = try object(
-                    product["providerFeatureAccess"],
-                    required: ["provider"],
-                    path: "\(path).providerFeatureAccess"
-                )
-                try enumeration(
-                    access["provider"],
-                    values: ["revenuecat", "superwall"],
-                    path: "\(path).providerFeatureAccess.provider"
-                )
+            let storeValue = try dictionary(product["store"], path: "\(path).store")
+            guard let platform = storeValue["platform"] as? String else {
+                try invalid("\(path).store.platform")
             }
-            let store = try object(
-                product["store"],
-                required: ["platform", "productId", "productType"],
-                path: "\(path).store"
-            )
+            let store: [String: Any]
+            switch platform {
+            case "apple_app_store":
+                store = try object(
+                    storeValue,
+                    required: ["platform", "productId", "productType"],
+                    path: "\(path).store"
+                )
+            case "google_play":
+                store = try object(
+                    storeValue,
+                    required: ["platform", "productId", "productType"],
+                    optional: ["basePlanId", "purchaseOptionId"],
+                    path: "\(path).store"
+                )
+                for field in ["basePlanId", "purchaseOptionId"] {
+                    if let value = store[field], !(value is NSNull) {
+                        try boundedString(
+                            value,
+                            minimum: 1,
+                            maximumUTF16: 256,
+                            path: "\(path).store.\(field)"
+                        )
+                    }
+                }
+            default:
+                try invalid("\(path).store.platform")
+            }
             try boundedString(
                 store["productId"],
                 minimum: 1,
                 maximumUTF16: 256,
                 path: "\(path).store.productId"
             )
-            guard let platform = store["platform"] as? String,
-                  let productType = product["type"] as? String,
+            guard let productType = product["type"] as? String,
                   let storeProductType = store["productType"] as? String else {
                 try invalid(path)
             }
@@ -117,8 +130,16 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 guard productType == storeProductType else {
                     try invalid("\(path).store.productType")
                 }
-            default:
-                try invalid("\(path).store.platform")
+                let basePlanID = store["basePlanId"] as? String
+                let purchaseOptionID = store["purchaseOptionId"] as? String
+                if productType == "subscription" {
+                    guard basePlanID != nil, purchaseOptionID == nil else {
+                        try invalid("\(path).store.basePlanId")
+                    }
+                } else if basePlanID != nil {
+                    try invalid("\(path).store.basePlanId")
+                }
+            default: break
             }
             let preview = try object(
                 product["preview"],
@@ -255,6 +276,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             }) else { try invalid("\(path).entitlements") }
             return (
                 id: product["id"] as! String,
+                platform: platform,
                 storeKey: "\(platform)\u{0}\(store["productId"] as! String)"
             )
         }
@@ -268,13 +290,16 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             try invalid("products")
         }
         let productIDs = Set(products.map { $0.id })
+        let productPlatforms = Dictionary(
+            uniqueKeysWithValues: products.map { ($0.id, $0.platform) }
+        )
         let placements = try array(root["placements"], path: "placements").enumerated().map {
             index, value in
             let path = "placements[\(index)]"
             let placement = try object(
                 value,
                 required: ["id", "productId"],
-                optional: ["appStore"],
+                optional: ["appStore", "googlePlay"],
                 path: path
             )
             try identifier(placement["id"], path: "\(path).id")
@@ -298,6 +323,22 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                     values: ["default", "upFront", "monthly"],
                     path: "\(path).appStore.billingPlan"
                 )
+            }
+            if let googlePlayValue = placement["googlePlay"] {
+                let googlePlay = try object(
+                    googlePlayValue,
+                    required: ["offerId"],
+                    path: "\(path).googlePlay"
+                )
+                try boundedString(
+                    googlePlay["offerId"],
+                    minimum: 1,
+                    maximumUTF16: 256,
+                    path: "\(path).googlePlay.offerId"
+                )
+                guard productPlatforms[placement["productId"] as! String] == "google_play" else {
+                    try invalid("\(path).googlePlay")
+                }
             }
             return placement["id"] as! String
         }
