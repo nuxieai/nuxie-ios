@@ -590,6 +590,9 @@ final class DeviceLegServiceTests: XCTestCase {
                 identity: identity,
                 events: events
             ),
+            pinnedReleaseAuthenticator: {
+                _, _ in throw DeviceLegJournalError.invalidState
+            },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed),
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!
         )
@@ -635,6 +638,9 @@ final class DeviceLegServiceTests: XCTestCase {
                 identity: identity,
                 events: events
             ),
+            pinnedReleaseAuthenticator: {
+                _, _ in throw DeviceLegJournalError.invalidState
+            },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed),
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!
         )
@@ -1002,8 +1008,10 @@ final class DeviceLegServiceTests: XCTestCase {
             distinctId: "customer"
         )
         let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let releasePin = try XCTUnwrap(snapshot.profile.releases.first)
         let admitted = try await journal.admit(
             arm: arm,
+            release: releasePin,
             reentry: .init(type: .oneTime, windowSeconds: nil),
             entryStepId: "wait",
             at: Date(timeIntervalSince1970: 1_000)
@@ -1038,6 +1046,137 @@ final class DeviceLegServiceTests: XCTestCase {
         }, [JourneyEvents.journeyLegStarted, JourneyEvents.journeyLegCompleted])
     }
 
+    func testProfileReplacementResumesADueRunFromItsAuthenticatedReleasePin() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let delay = DeviceLeg.Step(
+            kind: .action,
+            id: "wait",
+            action: [
+                "type": .string("delay"),
+                "durationMs": .number(1_000),
+            ],
+            outlets: ["next": "report"],
+            outcome: nil
+        )
+        let complete = DeviceLeg.Step(
+            kind: .complete,
+            id: "report",
+            action: nil,
+            outlets: nil,
+            outcome: "continue"
+        )
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entryStepId: "wait",
+            steps: [delay, complete]
+        )
+        let retained = try XCTUnwrap(snapshot.releasesByDigest.values.first)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let now = MockDateProvider(
+            initialDate: Date(timeIntervalSince1970: 1_000)
+        )
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            dateProvider: now,
+            pinnedReleaseAuthenticator: { _, _ in retained }
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let parked = try await journal.runs()
+        XCTAssertEqual(parked.count, 1)
+        now.advance(by: 2)
+
+        await service.profileDidCommit(
+            removingDeliveredReleases(from: snapshot),
+            distinctId: "customer"
+        )
+
+        let completed = try await journal.runs()
+        XCTAssertTrue(completed.isEmpty)
+        let releasedPin = try await journal.releasePin(
+            descriptorSHA256: retained.descriptorSHA256
+        )
+        XCTAssertNil(releasedPin)
+        let completion = try XCTUnwrap(events.routedEvents.last)
+        XCTAssertEqual(completion.name, JourneyEvents.journeyLegCompleted)
+        XCTAssertEqual(completion.properties["outcome"] as? String, "continue")
+    }
+
+    func testProfileReplacementAbandonsARunWhoseReleasePinCannotAuthenticate() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let delay = DeviceLeg.Step(
+            kind: .action,
+            id: "wait",
+            action: [
+                "type": .string("delay"),
+                "durationMs": .number(60_000),
+            ],
+            outlets: ["next": "report"],
+            outcome: nil
+        )
+        let complete = DeviceLeg.Step(
+            kind: .complete,
+            id: "report",
+            action: nil,
+            outlets: nil,
+            outcome: "continue"
+        )
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entryStepId: "wait",
+            steps: [delay, complete]
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            dateProvider: MockDateProvider(
+                initialDate: Date(timeIntervalSince1970: 1_000)
+            ),
+            pinnedReleaseAuthenticator: { _, _ in
+                throw ExperienceReleaseDescriptorAuthenticationError.invalidSignature
+            }
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let parked = try await journal.runs()
+        XCTAssertEqual(parked.count, 1)
+
+        await service.profileDidCommit(
+            removingDeliveredReleases(from: snapshot),
+            distinctId: "customer"
+        )
+
+        let completed = try await journal.runs()
+        XCTAssertTrue(completed.isEmpty)
+        let completion = try XCTUnwrap(events.routedEvents.last)
+        XCTAssertEqual(completion.name, JourneyEvents.journeyLegCompleted)
+        XCTAssertEqual(completion.properties["outcome"] as? String, "abandoned")
+    }
+
     private func authenticatedSnapshot(
         _ fixture: DeviceLegPlaneProfileTestFixture
     ) async throws -> DeviceLegProfileCatalog.Snapshot {
@@ -1061,7 +1200,10 @@ final class DeviceLegServiceTests: XCTestCase {
         directory: URL,
         dateProvider: DateProviderProtocol = MockDateProvider(),
         featureAccess: @escaping DeviceLegService.FeatureAccessLookup = { _ in nil },
-        dispatcher: (any DeviceLegDispatching)? = nil
+        dispatcher: (any DeviceLegDispatching)? = nil,
+        pinnedReleaseAuthenticator: @escaping DeviceLegService.PinnedReleaseAuthenticator = {
+            _, _ in throw DeviceLegJournalError.invalidState
+        }
     ) -> DeviceLegService {
         DeviceLegService(
             identity: identity,
@@ -1074,8 +1216,26 @@ final class DeviceLegServiceTests: XCTestCase {
                 identity: identity,
                 events: events
             ),
+            pinnedReleaseAuthenticator: pinnedReleaseAuthenticator,
             timezones: SignedTimezoneBundle.installed!,
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!
+        )
+    }
+
+    private func removingDeliveredReleases(
+        from snapshot: DeviceLegProfileCatalog.Snapshot
+    ) -> DeviceLegProfileCatalog.Snapshot {
+        .init(
+            profile: .init(
+                schemaVersion: snapshot.profile.schemaVersion,
+                status: snapshot.profile.status,
+                delivery: snapshot.profile.delivery,
+                features: snapshot.profile.features,
+                facts: snapshot.profile.facts,
+                armedLegs: [],
+                releases: []
+            ),
+            releasesByDigest: [:]
         )
     }
 

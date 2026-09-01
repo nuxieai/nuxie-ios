@@ -197,6 +197,12 @@ final class NuxieCore: @unchecked Sendable {
           events: eventLog,
           appActionHandler: appActionHandler
         ),
+        pinnedReleaseAuthenticator: { entry, reference in
+          try await deviceLegProfiles.authenticatePinnedRelease(
+            entry,
+            reference: reference
+          )
+        },
         timezones: timezones
       )
     } else {

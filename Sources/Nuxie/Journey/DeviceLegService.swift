@@ -24,6 +24,10 @@ protocol DeviceLegServiceProtocol: DeviceLegProfileConsuming {
 /// EventLog's existing durable event queue.
 actor DeviceLegService: DeviceLegServiceProtocol {
     typealias FeatureAccessLookup = @Sendable (String) async -> FeatureAccess?
+    typealias PinnedReleaseAuthenticator = @Sendable (
+        DeviceLegReleaseProfileEntry,
+        ArmedDeviceLeg.Reference
+    ) async throws -> AuthenticatedDeviceLegRelease
 
     private struct ProfileState: Sendable {
         let distinctId: String
@@ -56,6 +60,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     private let journalDirectory: URL?
     private let featureAccess: FeatureAccessLookup
     private let dispatcher: any DeviceLegDispatching
+    private let pinnedReleaseAuthenticator: PinnedReleaseAuthenticator
     private let timezones: SignedTimezoneBundle
     private let currentDeviceTimezone: TimeZone
 
@@ -79,6 +84,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         journalDirectory: URL?,
         featureAccess: @escaping FeatureAccessLookup,
         dispatcher: any DeviceLegDispatching,
+        pinnedReleaseAuthenticator: @escaping PinnedReleaseAuthenticator,
         timezones: SignedTimezoneBundle,
         currentDeviceTimezone: TimeZone = .current
     ) {
@@ -89,6 +95,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         self.journalDirectory = journalDirectory
         self.featureAccess = featureAccess
         self.dispatcher = dispatcher
+        self.pinnedReleaseAuthenticator = pinnedReleaseAuthenticator
         self.timezones = timezones
         self.currentDeviceTimezone = currentDeviceTimezone
     }
@@ -295,7 +302,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
               journal.distinctId == state.distinctId,
               let release = state.snapshot.releasesByDigest[
                 arm.reference.descriptorSha256
-              ] else { return }
+              ], let releasePin = state.snapshot.profile.releases.first(where: {
+                $0.envelope.descriptorSha256
+                    == arm.reference.descriptorSha256
+              }) else { return }
 
         let attempt = AttemptKey(
             arm: stateKey,
@@ -349,6 +359,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         do {
             guard let run = try await journal.admit(
                 arm: admittedArm,
+                release: releasePin,
                 reentry: release.descriptor.leg.reentry,
                 entryStepId: release.descriptor.leg.entryStepId,
                 at: dateProvider.now()
@@ -433,14 +444,21 @@ actor DeviceLegService: DeviceLegServiceProtocol {
               event != nil || foreground,
               let journal else { return }
         do {
-            let now = dateProvider.now()
-            for parked in try await journal.runs() where parked.park != nil {
+            for parked in try await journal.runs()
+            where parked.park != nil && parked.completion == nil {
+                guard isCurrent(state) else { return }
+                guard let release = await release(
+                    for: parked,
+                    state: state,
+                    journal: journal
+                ) else { continue }
                 guard isCurrent(state),
-                      let release = state.snapshot.releasesByDigest[
-                        parked.reference.descriptorSha256
-                      ] else { continue }
+                      self.journal?.distinctId == journal.distinctId else {
+                    return
+                }
                 if event == nil {
-                    guard let wake = parked.park?.wakeAt, wake <= now else { continue }
+                    guard let wake = parked.park?.wakeAt,
+                          wake <= dateProvider.now() else { continue }
                 }
                 let checkpoint = parked.park.flatMap { park -> DeviceLegControlExecutor.Checkpoint? in
                     guard let wakeAt = park.wakeAt,
@@ -465,6 +483,74 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             LogWarning("DeviceLegService: failed to resume parked device leg: \(error)")
         }
         await scheduleNextWake()
+    }
+
+    private func release(
+        for run: DeviceLegRun,
+        state: ProfileState,
+        journal: DeviceLegRunJournal
+    ) async -> AuthenticatedDeviceLegRelease? {
+        if let current = state.snapshot.releasesByDigest[
+            run.reference.descriptorSha256
+        ] {
+            guard matches(current, reference: run.reference) else {
+                await abandon(run, journal: journal)
+                return nil
+            }
+            return current
+        }
+        do {
+            guard let pin = try await journal.releasePin(
+                descriptorSHA256: run.reference.descriptorSha256
+            ) else {
+                throw DeviceLegJournalError.invalidState
+            }
+            let retained = try await pinnedReleaseAuthenticator(
+                pin,
+                run.reference
+            )
+            guard matches(retained, reference: run.reference) else {
+                throw DeviceLegJournalError.invalidState
+            }
+            return retained
+        } catch {
+            LogWarning(
+                "DeviceLegService: retained device-leg release rejected: \(error)"
+            )
+            await abandon(run, journal: journal)
+            return nil
+        }
+    }
+
+    private func matches(
+        _ release: AuthenticatedDeviceLegRelease,
+        reference: ArmedDeviceLeg.Reference
+    ) -> Bool {
+        release.descriptorSHA256 == reference.descriptorSha256
+            && release.descriptor.identity.experienceId
+                == reference.experienceId
+            && release.descriptor.identity.experienceVersionId
+                == reference.versionId
+            && release.descriptor.leg.id == reference.legId
+    }
+
+    private func abandon(
+        _ run: DeviceLegRun,
+        journal: DeviceLegRunJournal
+    ) async {
+        do {
+            try await journal.complete(
+                run.id,
+                outcome: "abandoned",
+                at: dateProvider.now()
+            )
+            try await DeviceLegReporter(journal: journal, events: events)
+                .flushPending()
+        } catch {
+            LogWarning(
+                "DeviceLegService: failed to abandon retained device leg: \(error)"
+            )
+        }
     }
 
     private func execute(
@@ -779,9 +865,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         do {
             let now = dateProvider.now()
             next = try await journal.runs().compactMap { run in
-                guard state.snapshot.releasesByDigest[
-                    run.reference.descriptorSha256
-                ] != nil,
+                guard run.completion == nil,
                       let wake = run.park?.wakeAt,
                       wake > now else { return nil }
                 return wake
