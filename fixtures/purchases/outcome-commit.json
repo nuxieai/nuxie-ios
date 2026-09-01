@@ -1,465 +1,465 @@
 {
-  "suite": "purchases/outcome-commit",
-  "version": 1,
-  "sources": [
-    "checkout",
-    "transaction_stream",
-    "startup_recovery",
-    "deferred_update",
-    "external_delegate"
-  ],
-  "notes": [
-    "Runners MUST drive production producer entry points and MUST NOT invoke the committer directly.",
-    "Evidence identity is portable: iOS maps it to the StoreKit transaction ID and Android maps it to the verified purchase-token identity.",
-    "signedPayload maps to a StoreKit JWS on Apple and to Play originalJson plus signature on Android.",
-    "originalIdentity maps to the StoreKit original transaction ID; Play runners use the purchase token when no separate lineage identity exists.",
-    "Store finalization maps to StoreKit finish on Apple and acknowledge or consume on Play.",
-    "Store entitlement queries map to StoreKit current-entitlement scans on Apple and queryPurchases on Play.",
-    "A verified identity commits once across every source; source is provenance and never changes the commit semantics.",
-    "Each external_delegate purchase action is one delegate callback boundary and MUST mint a fresh operation ID. Identical callbacks therefore commit independently.",
-    "External declarations create no evidence, no optimistic overlay, no StoreKit finish, and no native entitlement scan. Their durable server carrier is $purchase_completed.",
-    "successfulCommits counts completed committer dedupe identities independently from evidence rows and emitted events.",
-    "uniqueEvidenceRows counts distinct evidence identities ever durably persisted, even if an acknowledged row is later retired.",
-    "journeyAdvancements counts routed success signals: capture for purchase completion and the ordinary restore-completed signal for restore.",
-    "committerTerminalOutcomes records cancelled, pending, and failed outcomes observed at the real checkout-to-committer boundary.",
-    "checkoutErrors records only public checkout calls; observer and recovery producer actions do not add entries.",
-    "retry_retained_outcomes drives the platform's production recovery hook and never calls the committer directly.",
-    "A declaration's stable event identity is derived from its operation ID, so one attempted event identity across retries proves that the operation ID was retained.",
-    "minimumCarrierCaptureAttempts requires capture to remain failing until at least one fewer attempt has occurred, then permits success only through retained recovery.",
-    "retainedCarrierRetryRoundLimit counts recovery rounds after the initial commit, independent of each platform's capture attempts per round.",
-    "expectedCarrierCaptureAttemptDelta is a portable per-action assertion; zero on a post-limit retry proves that capture attempts stop at the cap."
-  ],
-  "products": {
-    "pro": {
-      "productId": "product-pro",
-      "storeProductId": "com.example.pro",
-      "placementId": "paywall:pro",
-      "experienceId": "experience-pro",
-      "experienceVersion": "version-pro",
-      "displayPrice": "$9.99",
-      "price": 9.99,
-      "localEntitlementGrants": [
-        {
-          "featureId": "premium"
-        }
-      ]
-    },
-    "coins": {
-      "productId": "product-coins",
-      "storeProductId": "com.example.coins",
-      "placementId": "paywall:coins",
-      "experienceId": "experience-coins",
-      "experienceVersion": "version-coins",
-      "displayPrice": "$1.99",
-      "price": 1.99,
-      "localEntitlementGrants": []
+ "suite": "purchases/outcome-commit",
+ "version": 1,
+ "sources": [
+  "checkout",
+  "transaction_stream",
+  "startup_recovery",
+  "deferred_update",
+  "external_delegate"
+ ],
+ "notes": [
+  "Runners MUST drive production producer entry points and MUST NOT invoke the committer directly.",
+  "Evidence identity is portable: iOS maps it to the StoreKit transaction ID and Android maps it to the verified purchase-token identity.",
+  "signedPayload maps to a StoreKit JWS on Apple and to Play originalJson plus signature on Android.",
+  "originalIdentity maps to the StoreKit original transaction ID; Play runners use the purchase token when no separate lineage identity exists.",
+  "Store finalization maps to StoreKit finish on Apple and acknowledge or consume on Play.",
+  "Store entitlement queries map to StoreKit current-entitlement scans on Apple and queryPurchases on Play.",
+  "A verified identity commits once across every source; source is provenance and never changes the commit semantics.",
+  "Each external_delegate purchase action is one delegate callback boundary and MUST mint a fresh operation ID. Identical callbacks therefore commit independently.",
+  "External declarations create no evidence, no optimistic overlay, no StoreKit finish, and no native entitlement scan. Their durable server carrier is $purchase_completed.",
+  "successfulCommits counts completed committer dedupe identities independently from evidence rows and emitted events.",
+  "uniqueEvidenceRows counts distinct evidence identities ever durably persisted, even if an acknowledged row is later retired.",
+  "journeyAdvancements counts routed success signals: capture for purchase completion and the ordinary restore-completed signal for restore.",
+  "committerTerminalOutcomes records cancelled, pending, and failed outcomes observed at the real checkout-to-committer boundary.",
+  "checkoutErrors records only public checkout calls; observer and recovery producer actions do not add entries.",
+  "retry_retained_outcomes drives the platform's production recovery hook and never calls the committer directly.",
+  "A declaration's stable event identity is derived from its operation ID, so one attempted event identity across retries proves that the operation ID was retained.",
+  "minimumCarrierCaptureAttempts requires capture to remain failing until at least one fewer attempt has occurred, then permits success only through retained recovery.",
+  "retainedCarrierRetryRoundLimit counts recovery rounds after the initial commit, independent of each platform's capture attempts per round.",
+  "expectedCarrierCaptureAttemptDelta is a portable per-action assertion; zero on a post-limit retry proves that capture attempts stop at the cap."
+ ],
+ "products": {
+  "pro": {
+   "productId": "product-pro",
+   "storeProductId": "com.example.pro",
+   "placementId": "paywall:pro",
+   "experienceId": "experience-pro",
+   "experienceVersion": "version-pro",
+   "displayPrice": "$9.99",
+   "price": 9.99,
+   "localEntitlementGrants": [
+    {
+     "featureId": "premium"
     }
+   ]
   },
-  "evidence": {
-    "pro-transaction": {
-      "identity": "transaction-pro-1",
-      "originalIdentity": "original-pro-1",
-      "signedPayload": "signed-pro-1",
-      "product": "pro"
+  "coins": {
+   "productId": "product-coins",
+   "storeProductId": "com.example.coins",
+   "placementId": "paywall:coins",
+   "experienceId": "experience-coins",
+   "experienceVersion": "version-coins",
+   "displayPrice": "$1.99",
+   "price": 1.99,
+   "localEntitlementGrants": []
+  }
+ },
+ "evidence": {
+  "pro-transaction": {
+   "identity": "transaction-pro-1",
+   "originalIdentity": "original-pro-1",
+   "signedPayload": "signed-pro-1",
+   "product": "pro"
+  }
+ },
+ "cases": [
+  {
+   "name": "same verified evidence from checkout stream and startup recovery commits once",
+   "actions": [
+    {
+     "entry": "checkout",
+     "outcome": "verified",
+     "evidence": "pro-transaction",
+     "product": "pro"
+    },
+    {
+     "entry": "transaction_stream",
+     "outcome": "verified",
+     "evidence": "pro-transaction"
+    },
+    {
+     "entry": "startup_recovery",
+     "outcome": "verified",
+     "evidence": "pro-transaction"
     }
+   ],
+   "expect": {
+    "successfulCommits": 1,
+    "uniqueEvidenceRows": 1,
+    "journeyAdvancements": 1,
+    "purchaseCompletedEvents": 1,
+    "restoreCompletedEvents": 0,
+    "purchaseFailedEvents": 0,
+    "serverSyncRequests": 1,
+    "scheduledSyncTasks": 1,
+    "pendingRecords": 0,
+    "overlayEverPresent": true,
+    "storeEntitlementQueries": 1,
+    "checkoutErrors": [],
+    "committerTerminalOutcomes": [],
+    "completionSources": [
+     "checkout"
+    ],
+    "completionCarriesEvidenceIdentity": true,
+    "completionCarriesProductMapping": true
+   }
   },
-  "cases": [
+  {
+   "name": "transaction stream with pending ownership derives deferred update and startup recovery deduplicates",
+   "actions": [
     {
-      "name": "same verified evidence from checkout stream and startup recovery commits once",
-      "actions": [
-        {
-          "entry": "checkout",
-          "outcome": "verified",
-          "evidence": "pro-transaction",
-          "product": "pro"
-        },
-        {
-          "entry": "transaction_stream",
-          "outcome": "verified",
-          "evidence": "pro-transaction"
-        },
-        {
-          "entry": "startup_recovery",
-          "outcome": "verified",
-          "evidence": "pro-transaction"
-        }
-      ],
-      "expect": {
-        "successfulCommits": 1,
-        "uniqueEvidenceRows": 1,
-        "journeyAdvancements": 1,
-        "purchaseCompletedEvents": 1,
-        "restoreCompletedEvents": 0,
-        "purchaseFailedEvents": 0,
-        "serverSyncRequests": 1,
-        "scheduledSyncTasks": 1,
-        "pendingRecords": 0,
-        "overlayEverPresent": true,
-        "storeEntitlementQueries": 1,
-        "checkoutErrors": [],
-        "committerTerminalOutcomes": [],
-        "completionSources": [
-          "checkout"
-        ],
-        "completionCarriesEvidenceIdentity": true,
-        "completionCarriesProductMapping": true
-      }
+     "entry": "checkout",
+     "outcome": "pending",
+     "product": "pro"
     },
     {
-      "name": "transaction stream with pending ownership derives deferred update and startup recovery deduplicates",
-      "actions": [
-        {
-          "entry": "checkout",
-          "outcome": "pending",
-          "product": "pro"
-        },
-        {
-          "entry": "deferred_update",
-          "outcome": "verified",
-          "evidence": "pro-transaction"
-        },
-        {
-          "entry": "startup_recovery",
-          "outcome": "verified",
-          "evidence": "pro-transaction"
-        }
-      ],
-      "expect": {
-        "successfulCommits": 1,
-        "uniqueEvidenceRows": 1,
-        "journeyAdvancements": 1,
-        "purchaseCompletedEvents": 1,
-        "restoreCompletedEvents": 0,
-        "purchaseFailedEvents": 0,
-        "serverSyncRequests": 1,
-        "scheduledSyncTasks": 1,
-        "pendingRecords": 0,
-        "overlayEverPresent": true,
-        "storeEntitlementQueries": 1,
-        "checkoutErrors": [
-          "pending"
-        ],
-        "committerTerminalOutcomes": [
-          {
-            "kind": "pending",
-            "source": "checkout",
-            "terminal": true
-          }
-        ],
-        "completionSources": [
-          "deferred_update"
-        ],
-        "completionCarriesEvidenceIdentity": true,
-        "completionCarriesProductMapping": true
-      }
+     "entry": "deferred_update",
+     "outcome": "verified",
+     "evidence": "pro-transaction"
     },
     {
-      "name": "external purchase advances immediately without native evidence",
-      "actions": [
-        {
-          "entry": "external_delegate",
-          "operation": "purchase",
-          "outcome": "external",
-          "product": "pro"
-        }
-      ],
-      "expect": {
-        "successfulCommits": 1,
-        "uniqueEvidenceRows": 0,
-        "journeyAdvancements": 1,
-        "purchaseCompletedEvents": 1,
-        "restoreCompletedEvents": 0,
-        "purchaseFailedEvents": 0,
-        "serverSyncRequests": 0,
-        "scheduledSyncTasks": 0,
-        "pendingRecords": 0,
-        "overlayEverPresent": false,
-        "storeEntitlementQueries": 0,
-        "storeFinalizationCalls": 0,
-        "checkoutErrors": [],
-        "committerTerminalOutcomes": [],
-        "completionSources": [
-          "external_delegate"
-        ],
-        "completionCarriesEvidenceIdentity": false,
-        "completionCarriesProductMapping": true
-      }
-    },
-    {
-      "name": "external carrier failure retries one operation without failing checkout",
-      "actions": [
-        {
-          "entry": "external_delegate",
-          "operation": "purchase",
-          "outcome": "external",
-          "product": "pro",
-          "carrierCaptureSucceeds": false
-        },
-        {
-          "entry": "retry_retained_outcomes",
-          "outcome": "retry",
-          "carrierCaptureSucceeds": true
-        }
-      ],
-      "expect": {
-        "successfulCommits": 1,
-        "uniqueEvidenceRows": 0,
-        "journeyAdvancements": 1,
-        "purchaseCompletedEvents": 1,
-        "restoreCompletedEvents": 0,
-        "purchaseFailedEvents": 0,
-        "serverSyncRequests": 0,
-        "scheduledSyncTasks": 0,
-        "pendingRecords": 0,
-        "overlayEverPresent": false,
-        "storeEntitlementQueries": 0,
-        "storeFinalizationCalls": 0,
-        "checkoutErrors": [],
-        "committerTerminalOutcomes": [],
-        "completionSources": [
-          "external_delegate"
-        ],
-        "completionCarriesEvidenceIdentity": false,
-        "completionCarriesProductMapping": true,
-        "minimumCarrierCaptureAttempts": 4,
-        "successfulCarrierCaptures": 1,
-        "carrierCaptureOperationIdentityCount": 1
-      }
-    },
-    {
-      "name": "external carrier failure stops at the retained retry cap without failing checkout",
-      "actions": [
-        {
-          "entry": "external_delegate",
-          "operation": "purchase",
-          "outcome": "external",
-          "product": "pro",
-          "carrierCaptureSucceeds": false
-        },
-        {
-          "entry": "retry_retained_outcomes",
-          "outcome": "retry",
-          "carrierCaptureSucceeds": false
-        },
-        {
-          "entry": "retry_retained_outcomes",
-          "outcome": "retry",
-          "carrierCaptureSucceeds": false
-        },
-        {
-          "entry": "retry_retained_outcomes",
-          "outcome": "retry",
-          "carrierCaptureSucceeds": false
-        },
-        {
-          "entry": "retry_retained_outcomes",
-          "outcome": "retry",
-          "carrierCaptureSucceeds": true,
-          "expectedCarrierCaptureAttemptDelta": 0
-        }
-      ],
-      "expect": {
-        "successfulCommits": 0,
-        "uniqueEvidenceRows": 0,
-        "journeyAdvancements": 0,
-        "purchaseCompletedEvents": 0,
-        "restoreCompletedEvents": 0,
-        "purchaseFailedEvents": 0,
-        "serverSyncRequests": 0,
-        "scheduledSyncTasks": 0,
-        "pendingRecords": 0,
-        "overlayEverPresent": false,
-        "storeEntitlementQueries": 0,
-        "storeFinalizationCalls": 0,
-        "checkoutErrors": [],
-        "committerTerminalOutcomes": [],
-        "completionSources": [],
-        "completionCarriesEvidenceIdentity": false,
-        "completionCarriesProductMapping": false,
-        "successfulCarrierCaptures": 0,
-        "carrierCaptureOperationIdentityCount": 1,
-        "retainedCarrierRetryRoundLimit": 3,
-        "carrierCaptureAttemptsStopAtRetryLimit": true
-      }
-    },
-    {
-      "name": "external purchase dedupe is per callback operation",
-      "actions": [
-        {
-          "entry": "external_delegate",
-          "operation": "purchase",
-          "outcome": "external",
-          "product": "coins"
-        },
-        {
-          "entry": "external_delegate",
-          "operation": "purchase",
-          "outcome": "external",
-          "product": "coins"
-        }
-      ],
-      "expect": {
-        "successfulCommits": 2,
-        "uniqueEvidenceRows": 0,
-        "journeyAdvancements": 2,
-        "purchaseCompletedEvents": 2,
-        "restoreCompletedEvents": 0,
-        "purchaseFailedEvents": 0,
-        "serverSyncRequests": 0,
-        "scheduledSyncTasks": 0,
-        "pendingRecords": 0,
-        "overlayEverPresent": false,
-        "storeEntitlementQueries": 0,
-        "storeFinalizationCalls": 0,
-        "checkoutErrors": [],
-        "committerTerminalOutcomes": [],
-        "completionSources": [
-          "external_delegate",
-          "external_delegate"
-        ],
-        "completionCarriesEvidenceIdentity": false,
-        "completionCarriesProductMapping": true,
-        "completionEventIdsDistinct": true
-      }
-    },
-    {
-      "name": "external restore is a declaration and does not scan native entitlements",
-      "actions": [
-        {
-          "entry": "external_delegate",
-          "operation": "restore",
-          "outcome": "external"
-        }
-      ],
-      "expect": {
-        "successfulCommits": 1,
-        "uniqueEvidenceRows": 0,
-        "journeyAdvancements": 1,
-        "purchaseCompletedEvents": 0,
-        "restoreCompletedEvents": 1,
-        "purchaseFailedEvents": 0,
-        "serverSyncRequests": 0,
-        "scheduledSyncTasks": 0,
-        "pendingRecords": 0,
-        "overlayEverPresent": false,
-        "storeEntitlementQueries": 0,
-        "storeFinalizationCalls": 0,
-        "checkoutErrors": [],
-        "committerTerminalOutcomes": [],
-        "completionSources": [],
-        "completionCarriesEvidenceIdentity": false,
-        "completionCarriesProductMapping": false
-      }
-    },
-    {
-      "name": "cancelled checkout preserves cancellation behavior",
-      "actions": [
-        {
-          "entry": "checkout",
-          "outcome": "cancelled",
-          "product": "pro"
-        }
-      ],
-      "expect": {
-        "successfulCommits": 0,
-        "uniqueEvidenceRows": 0,
-        "journeyAdvancements": 0,
-        "purchaseCompletedEvents": 0,
-        "restoreCompletedEvents": 0,
-        "purchaseFailedEvents": 0,
-        "serverSyncRequests": 0,
-        "scheduledSyncTasks": 0,
-        "pendingRecords": 0,
-        "overlayEverPresent": false,
-        "storeEntitlementQueries": 0,
-        "checkoutErrors": [
-          "cancelled"
-        ],
-        "committerTerminalOutcomes": [
-          {
-            "kind": "cancelled",
-            "source": "checkout",
-            "terminal": true
-          }
-        ],
-        "completionSources": [],
-        "completionCarriesEvidenceIdentity": false,
-        "completionCarriesProductMapping": false
-      }
-    },
-    {
-      "name": "pending checkout preserves pending behavior",
-      "actions": [
-        {
-          "entry": "checkout",
-          "outcome": "pending",
-          "product": "pro"
-        }
-      ],
-      "expect": {
-        "successfulCommits": 0,
-        "uniqueEvidenceRows": 0,
-        "journeyAdvancements": 0,
-        "purchaseCompletedEvents": 0,
-        "restoreCompletedEvents": 0,
-        "purchaseFailedEvents": 0,
-        "serverSyncRequests": 0,
-        "scheduledSyncTasks": 0,
-        "pendingRecords": 1,
-        "overlayEverPresent": false,
-        "storeEntitlementQueries": 0,
-        "checkoutErrors": [
-          "pending"
-        ],
-        "committerTerminalOutcomes": [
-          {
-            "kind": "pending",
-            "source": "checkout",
-            "terminal": true
-          }
-        ],
-        "completionSources": [],
-        "completionCarriesEvidenceIdentity": false,
-        "completionCarriesProductMapping": false
-      }
-    },
-    {
-      "name": "failed checkout preserves TransactionService failure ownership",
-      "actions": [
-        {
-          "entry": "checkout",
-          "outcome": "failed",
-          "product": "pro",
-          "reason": "fixture_failure"
-        }
-      ],
-      "expect": {
-        "successfulCommits": 0,
-        "uniqueEvidenceRows": 0,
-        "journeyAdvancements": 0,
-        "purchaseCompletedEvents": 0,
-        "restoreCompletedEvents": 0,
-        "purchaseFailedEvents": 1,
-        "serverSyncRequests": 0,
-        "scheduledSyncTasks": 0,
-        "pendingRecords": 0,
-        "overlayEverPresent": false,
-        "storeEntitlementQueries": 0,
-        "checkoutErrors": [
-          "failed"
-        ],
-        "committerTerminalOutcomes": [
-          {
-            "kind": "failed",
-            "source": "checkout",
-            "reason": "fixture_failure",
-            "terminal": true
-          }
-        ],
-        "completionSources": [],
-        "completionCarriesEvidenceIdentity": false,
-        "completionCarriesProductMapping": false
-      }
+     "entry": "startup_recovery",
+     "outcome": "verified",
+     "evidence": "pro-transaction"
     }
-  ]
+   ],
+   "expect": {
+    "successfulCommits": 1,
+    "uniqueEvidenceRows": 1,
+    "journeyAdvancements": 1,
+    "purchaseCompletedEvents": 1,
+    "restoreCompletedEvents": 0,
+    "purchaseFailedEvents": 0,
+    "serverSyncRequests": 1,
+    "scheduledSyncTasks": 1,
+    "pendingRecords": 0,
+    "overlayEverPresent": true,
+    "storeEntitlementQueries": 1,
+    "checkoutErrors": [
+     "pending"
+    ],
+    "committerTerminalOutcomes": [
+     {
+      "kind": "pending",
+      "source": "checkout",
+      "terminal": true
+     }
+    ],
+    "completionSources": [
+     "deferred_update"
+    ],
+    "completionCarriesEvidenceIdentity": true,
+    "completionCarriesProductMapping": true
+   }
+  },
+  {
+   "name": "external purchase advances immediately without native evidence",
+   "actions": [
+    {
+     "entry": "external_delegate",
+     "operation": "purchase",
+     "outcome": "external",
+     "product": "pro"
+    }
+   ],
+   "expect": {
+    "successfulCommits": 1,
+    "uniqueEvidenceRows": 0,
+    "journeyAdvancements": 1,
+    "purchaseCompletedEvents": 1,
+    "restoreCompletedEvents": 0,
+    "purchaseFailedEvents": 0,
+    "serverSyncRequests": 0,
+    "scheduledSyncTasks": 0,
+    "pendingRecords": 0,
+    "overlayEverPresent": false,
+    "storeEntitlementQueries": 0,
+    "storeFinalizationCalls": 0,
+    "checkoutErrors": [],
+    "committerTerminalOutcomes": [],
+    "completionSources": [
+     "external_delegate"
+    ],
+    "completionCarriesEvidenceIdentity": false,
+    "completionCarriesProductMapping": true
+   }
+  },
+  {
+   "name": "external carrier failure retries one operation without failing checkout",
+   "actions": [
+    {
+     "entry": "external_delegate",
+     "operation": "purchase",
+     "outcome": "external",
+     "product": "pro",
+     "carrierCaptureSucceeds": false
+    },
+    {
+     "entry": "retry_retained_outcomes",
+     "outcome": "retry",
+     "carrierCaptureSucceeds": true
+    }
+   ],
+   "expect": {
+    "successfulCommits": 1,
+    "uniqueEvidenceRows": 0,
+    "journeyAdvancements": 1,
+    "purchaseCompletedEvents": 1,
+    "restoreCompletedEvents": 0,
+    "purchaseFailedEvents": 0,
+    "serverSyncRequests": 0,
+    "scheduledSyncTasks": 0,
+    "pendingRecords": 0,
+    "overlayEverPresent": false,
+    "storeEntitlementQueries": 0,
+    "storeFinalizationCalls": 0,
+    "checkoutErrors": [],
+    "committerTerminalOutcomes": [],
+    "completionSources": [
+     "external_delegate"
+    ],
+    "completionCarriesEvidenceIdentity": false,
+    "completionCarriesProductMapping": true,
+    "minimumCarrierCaptureAttempts": 2,
+    "successfulCarrierCaptures": 1,
+    "carrierCaptureOperationIdentityCount": 1
+   }
+  },
+  {
+   "name": "external carrier failure stops at the retained retry cap without failing checkout",
+   "actions": [
+    {
+     "entry": "external_delegate",
+     "operation": "purchase",
+     "outcome": "external",
+     "product": "pro",
+     "carrierCaptureSucceeds": false
+    },
+    {
+     "entry": "retry_retained_outcomes",
+     "outcome": "retry",
+     "carrierCaptureSucceeds": false
+    },
+    {
+     "entry": "retry_retained_outcomes",
+     "outcome": "retry",
+     "carrierCaptureSucceeds": false
+    },
+    {
+     "entry": "retry_retained_outcomes",
+     "outcome": "retry",
+     "carrierCaptureSucceeds": false
+    },
+    {
+     "entry": "retry_retained_outcomes",
+     "outcome": "retry",
+     "carrierCaptureSucceeds": true,
+     "expectedCarrierCaptureAttemptDelta": 0
+    }
+   ],
+   "expect": {
+    "successfulCommits": 0,
+    "uniqueEvidenceRows": 0,
+    "journeyAdvancements": 0,
+    "purchaseCompletedEvents": 0,
+    "restoreCompletedEvents": 0,
+    "purchaseFailedEvents": 0,
+    "serverSyncRequests": 0,
+    "scheduledSyncTasks": 0,
+    "pendingRecords": 0,
+    "overlayEverPresent": false,
+    "storeEntitlementQueries": 0,
+    "storeFinalizationCalls": 0,
+    "checkoutErrors": [],
+    "committerTerminalOutcomes": [],
+    "completionSources": [],
+    "completionCarriesEvidenceIdentity": false,
+    "completionCarriesProductMapping": false,
+    "successfulCarrierCaptures": 0,
+    "carrierCaptureOperationIdentityCount": 1,
+    "retainedCarrierRetryRoundLimit": 3,
+    "carrierCaptureAttemptsStopAtRetryLimit": true
+   }
+  },
+  {
+   "name": "external purchase dedupe is per callback operation",
+   "actions": [
+    {
+     "entry": "external_delegate",
+     "operation": "purchase",
+     "outcome": "external",
+     "product": "coins"
+    },
+    {
+     "entry": "external_delegate",
+     "operation": "purchase",
+     "outcome": "external",
+     "product": "coins"
+    }
+   ],
+   "expect": {
+    "successfulCommits": 2,
+    "uniqueEvidenceRows": 0,
+    "journeyAdvancements": 2,
+    "purchaseCompletedEvents": 2,
+    "restoreCompletedEvents": 0,
+    "purchaseFailedEvents": 0,
+    "serverSyncRequests": 0,
+    "scheduledSyncTasks": 0,
+    "pendingRecords": 0,
+    "overlayEverPresent": false,
+    "storeEntitlementQueries": 0,
+    "storeFinalizationCalls": 0,
+    "checkoutErrors": [],
+    "committerTerminalOutcomes": [],
+    "completionSources": [
+     "external_delegate",
+     "external_delegate"
+    ],
+    "completionCarriesEvidenceIdentity": false,
+    "completionCarriesProductMapping": true,
+    "completionEventIdsDistinct": true
+   }
+  },
+  {
+   "name": "external restore is a declaration and does not scan native entitlements",
+   "actions": [
+    {
+     "entry": "external_delegate",
+     "operation": "restore",
+     "outcome": "external"
+    }
+   ],
+   "expect": {
+    "successfulCommits": 1,
+    "uniqueEvidenceRows": 0,
+    "journeyAdvancements": 1,
+    "purchaseCompletedEvents": 0,
+    "restoreCompletedEvents": 1,
+    "purchaseFailedEvents": 0,
+    "serverSyncRequests": 0,
+    "scheduledSyncTasks": 0,
+    "pendingRecords": 0,
+    "overlayEverPresent": false,
+    "storeEntitlementQueries": 0,
+    "storeFinalizationCalls": 0,
+    "checkoutErrors": [],
+    "committerTerminalOutcomes": [],
+    "completionSources": [],
+    "completionCarriesEvidenceIdentity": false,
+    "completionCarriesProductMapping": false
+   }
+  },
+  {
+   "name": "cancelled checkout preserves cancellation behavior",
+   "actions": [
+    {
+     "entry": "checkout",
+     "outcome": "cancelled",
+     "product": "pro"
+    }
+   ],
+   "expect": {
+    "successfulCommits": 0,
+    "uniqueEvidenceRows": 0,
+    "journeyAdvancements": 0,
+    "purchaseCompletedEvents": 0,
+    "restoreCompletedEvents": 0,
+    "purchaseFailedEvents": 0,
+    "serverSyncRequests": 0,
+    "scheduledSyncTasks": 0,
+    "pendingRecords": 0,
+    "overlayEverPresent": false,
+    "storeEntitlementQueries": 0,
+    "checkoutErrors": [
+     "cancelled"
+    ],
+    "committerTerminalOutcomes": [
+     {
+      "kind": "cancelled",
+      "source": "checkout",
+      "terminal": true
+     }
+    ],
+    "completionSources": [],
+    "completionCarriesEvidenceIdentity": false,
+    "completionCarriesProductMapping": false
+   }
+  },
+  {
+   "name": "pending checkout preserves pending behavior",
+   "actions": [
+    {
+     "entry": "checkout",
+     "outcome": "pending",
+     "product": "pro"
+    }
+   ],
+   "expect": {
+    "successfulCommits": 0,
+    "uniqueEvidenceRows": 0,
+    "journeyAdvancements": 0,
+    "purchaseCompletedEvents": 0,
+    "restoreCompletedEvents": 0,
+    "purchaseFailedEvents": 0,
+    "serverSyncRequests": 0,
+    "scheduledSyncTasks": 0,
+    "pendingRecords": 1,
+    "overlayEverPresent": false,
+    "storeEntitlementQueries": 0,
+    "checkoutErrors": [
+     "pending"
+    ],
+    "committerTerminalOutcomes": [
+     {
+      "kind": "pending",
+      "source": "checkout",
+      "terminal": true
+     }
+    ],
+    "completionSources": [],
+    "completionCarriesEvidenceIdentity": false,
+    "completionCarriesProductMapping": false
+   }
+  },
+  {
+   "name": "failed checkout preserves TransactionService failure ownership",
+   "actions": [
+    {
+     "entry": "checkout",
+     "outcome": "failed",
+     "product": "pro",
+     "reason": "fixture_failure"
+    }
+   ],
+   "expect": {
+    "successfulCommits": 0,
+    "uniqueEvidenceRows": 0,
+    "journeyAdvancements": 0,
+    "purchaseCompletedEvents": 0,
+    "restoreCompletedEvents": 0,
+    "purchaseFailedEvents": 1,
+    "serverSyncRequests": 0,
+    "scheduledSyncTasks": 0,
+    "pendingRecords": 0,
+    "overlayEverPresent": false,
+    "storeEntitlementQueries": 0,
+    "checkoutErrors": [
+     "failed"
+    ],
+    "committerTerminalOutcomes": [
+     {
+      "kind": "failed",
+      "source": "checkout",
+      "reason": "fixture_failure",
+      "terminal": true
+     }
+    ],
+    "completionSources": [],
+    "completionCarriesEvidenceIdentity": false,
+    "completionCarriesProductMapping": false
+   }
+  }
+ ]
 }
