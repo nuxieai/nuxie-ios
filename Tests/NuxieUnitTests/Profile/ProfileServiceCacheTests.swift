@@ -143,6 +143,14 @@ private actor ProfileMailboxProbe {
     }
 }
 
+private actor CachedMailboxAdmissionProbe {
+    private(set) var references: [ExperienceReference]?
+
+    func record(_ references: [ExperienceReference]) {
+        self.references = references
+    }
+}
+
 final class ProfileServiceCacheTests: AsyncSpec {
     override class func spec() {
         describe("ProfileService cache identity checks") {
@@ -666,6 +674,77 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 expect(mockFactory.experienceService.releaseProfiles.last ?? nil)
                     .to(equal(profile.releases))
                 expect(mockFactory.experienceService.prefetchedExperiences).to(beEmpty())
+            }
+
+            it("allows a cached mailbox handler to read its admitted routing catalog during startup") {
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let distinctId = "cached-mailbox-user"
+                let reference = ExperienceReference(
+                    experienceId: "mailbox-experience",
+                    versionId: "mailbox-version"
+                )
+                let mailbox = JourneyMailboxEntry(
+                    journeyId: "unclaimed-cached-journey",
+                    experienceId: reference.experienceId,
+                    experienceVersion: reference.versionId,
+                    epoch: 0,
+                    stateVersion: JourneyStateEnvelope.currentVersion,
+                    envelope: JourneyStateEnvelope(
+                        context: [:],
+                        executionState: JourneyExecutionState(),
+                        snapshots: [:],
+                        responseSession: nil
+                    ),
+                    expiresAt: mockFactory.dateProvider.now().addingTimeInterval(600)
+                )
+                try await cache.store(
+                    CachedProfile(
+                        response: ProfileResponse(
+                            segments: [],
+                            releases: Self.releaseProfile(
+                                experienceId: reference.experienceId,
+                                versionId: reference.versionId
+                            ),
+                            mailbox: [mailbox]
+                        ),
+                        distinctId: distinctId,
+                        cachedAt: mockFactory.dateProvider.now(),
+                        locale: "en_US"
+                    ),
+                    forKey: distinctId
+                )
+                let gate = ReleaseProfileAuthenticationGate()
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.experienceService.releaseProfileAuthenticationGate = gate
+                let service = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: mockFactory.segmentService,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: ConfigurationLocaleIdentifierProvider(
+                        configuredLocale: { "en_US" }
+                    )
+                )
+                profileService = service
+                await gate.waitUntilSuspended()
+                let probe = CachedMailboxAdmissionProbe()
+                await service.setJourneyMailboxHandler { _, user in
+                    // JourneyService resolves a mailbox's pinned experience
+                    // through this same profile read before claiming it.
+                    guard let admission = await service.getTriggerAdmission(
+                        distinctId: user
+                    ) else { return }
+                    await probe.record(admission.effectiveExperienceReferences)
+                }
+                await gate.resume()
+
+                await expect { await probe.references }
+                    .toEventually(equal([reference]), timeout: .seconds(1))
+                await service.clearAllCache()
             }
 
             it("hydrates membership only from the persisted admitted profile snapshot") {
