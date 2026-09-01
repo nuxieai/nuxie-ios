@@ -194,8 +194,26 @@ struct PurchaseBackedFeatureUseRequest: Codable, Sendable {
     let featureId: String
     let requiredBalance: Double
     let eventData: EventData
+    let idempotencyKey: String
     let entityId: String?
     let purchase: Purchase
+
+    init(
+        customerId: String,
+        featureId: String,
+        requiredBalance: Double,
+        eventData: EventData,
+        entityId: String?,
+        purchase: Purchase
+    ) {
+        self.customerId = customerId
+        self.featureId = featureId
+        self.requiredBalance = requiredBalance
+        self.eventData = eventData
+        self.idempotencyKey = purchase.eventId
+        self.entityId = entityId
+        self.purchase = purchase
+    }
 }
 
 struct PurchaseBackedFeatureUseResponse: Codable, Sendable {
