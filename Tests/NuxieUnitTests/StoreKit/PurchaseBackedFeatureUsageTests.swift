@@ -414,6 +414,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertEqual(object["customerId"] as? String, "customer-a")
         XCTAssertEqual(object["featureId"] as? String, "credits")
         XCTAssertEqual(object["requiredBalance"] as? Double, 2.5)
+        XCTAssertEqual(object["idempotencyKey"] as? String, "stable-event")
         XCTAssertEqual(object["entityId"] as? String, "workspace-1")
         let purchase = try XCTUnwrap(object["purchase"] as? [String: Any])
         XCTAssertEqual(purchase["transaction_jwt"] as? String, "signed-jws")
@@ -492,6 +493,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertEqual(request.eventData.value, 2)
         XCTAssertEqual(request.eventData.properties?["source"], AnyCodable("export"))
         XCTAssertFalse(request.purchase.eventId.isEmpty)
+        XCTAssertEqual(request.idempotencyKey, request.purchase.eventId)
         let updateCount = await features.recordedUpdates().count
         XCTAssertEqual(updateCount, 1)
         XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
@@ -730,6 +732,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         let requests = await api.recordedRequests()
         XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(requests[0].purchase.eventId, requests[1].purchase.eventId)
+        XCTAssertEqual(requests[0].idempotencyKey, requests[0].purchase.eventId)
+        XCTAssertEqual(requests[0].idempotencyKey, requests[1].idempotencyKey)
         XCTAssertEqual(
             events.events().map(\.0),
             Array(
