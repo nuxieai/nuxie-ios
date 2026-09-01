@@ -740,12 +740,63 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     }
 
-    func testRejectsCustomProviderFeatureAccessAuthority() throws {
+    func testRejectsRemovedProviderFeatureAccessField() throws {
         let descriptor = try mutatedValidDescriptor { root in
             var products = try XCTUnwrap(root["products"] as? [[String: Any]])
-            products[0]["providerFeatureAccess"] = ["provider": "custom"]
+            products[0]["providerFeatureAccess"] = ["provider": "revenuecat"]
             root["products"] = products
         }
+        assertAuthenticationError(
+            try signedEnvelope(descriptorBytes: descriptor),
+            is: "experience_release.descriptor.invalid"
+        )
+    }
+
+    func testAcceptsGooglePlayBasePlanAndOffer() throws {
+        let descriptor = try mutatedValidDescriptor { root in
+            var products = try XCTUnwrap(root["products"] as? [[String: Any]])
+            products[0]["store"] = [
+                "platform": "google_play",
+                "productId": "premium",
+                "productType": "subscription",
+                "basePlanId": "monthly",
+                "purchaseOptionId": NSNull(),
+            ]
+            root["products"] = products
+            var placements = try XCTUnwrap(root["placements"] as? [[String: Any]])
+            placements[0]["googlePlay"] = ["offerId": "trial-7d"]
+            root["placements"] = placements
+        }
+
+        XCTAssertNoThrow(try authenticate(descriptorBytes: descriptor))
+    }
+
+    func testRejectsGooglePlaySubscriptionWithoutBasePlan() throws {
+        let descriptor = try mutatedValidDescriptor { root in
+            var products = try XCTUnwrap(root["products"] as? [[String: Any]])
+            products[0]["store"] = [
+                "platform": "google_play",
+                "productId": "premium",
+                "productType": "subscription",
+                "basePlanId": NSNull(),
+                "purchaseOptionId": NSNull(),
+            ]
+            root["products"] = products
+        }
+
+        assertAuthenticationError(
+            try signedEnvelope(descriptorBytes: descriptor),
+            is: "experience_release.descriptor.invalid"
+        )
+    }
+
+    func testRejectsGooglePlayOfferOnAppleProduct() throws {
+        let descriptor = try mutatedValidDescriptor { root in
+            var placements = try XCTUnwrap(root["placements"] as? [[String: Any]])
+            placements[0]["googlePlay"] = ["offerId": "trial-7d"]
+            root["placements"] = placements
+        }
+
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: descriptor),
             is: "experience_release.descriptor.invalid"
@@ -763,7 +814,6 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("monthly"),
-                "providerFeatureAccess": NSNull(),
                 "entitlements": [],
             ]]
             root["placements"] = [["id": "paywall:monthly", "productId": "monthly"]]
@@ -779,14 +829,12 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                     "id": "yearly", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "yearly", "productType": "autoRenewable"],
                     "preview": productPreview("yearly"),
-                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ],
                 [
                     "id": "monthly", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "monthly", "productType": "autoRenewable"],
                     "preview": productPreview("monthly"),
-                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ],
             ]
@@ -808,14 +856,12 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                     "id": "\u{10000}", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "store-a", "productType": "autoRenewable"],
                     "preview": productPreview("store-a"),
-                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ],
                 [
                     "id": "\u{E000}", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "store-b", "productType": "autoRenewable"],
                     "preview": productPreview("store-b"),
-                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ],
             ]

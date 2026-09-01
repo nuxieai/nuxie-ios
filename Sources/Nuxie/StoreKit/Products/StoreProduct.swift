@@ -186,9 +186,6 @@ public struct StoreProduct: Equatable, Codable, Sendable {
     /// Exact signed commercial identity persisted before native checkout.
     var purchaseContext: PurchaseCommercialContext? = nil
     var localEntitlementGrants: [LocalEntitlementGrant] = []
-    /// Provider Feature Access is trusted only when it came from the signed
-    /// release descriptor after a connector cutover completed.
-    var providerFeatureAccess: String? = nil
     /// Authored preview copy used only by the isolated Test Store.
     var previewIntroOfferLabel: String? = nil
     /// A fresh, single-checkout token installed immediately before the delegate.
@@ -449,7 +446,6 @@ public struct StoreProduct: Equatable, Codable, Sendable {
             && lhs.previewIntroOfferLabel == rhs.previewIntroOfferLabel
             && lhs.isTestStoreProduct == rhs.isTestStoreProduct
             && lhs.localEntitlementGrants == rhs.localEntitlementGrants
-            && lhs.providerFeatureAccess == rhs.providerFeatureAccess
     }
 
     private enum CodingKeys: String, CodingKey {
