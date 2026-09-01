@@ -28,6 +28,10 @@ struct DeviceLegRun {
     var park: Park?
     var context: ArmedDeviceLeg.Context
     var outputs = ArmedDeviceLeg.Context(event: [:], responses: [:])
+    /// Stable effect identities claimed before any host-visible side effect.
+    /// A claimed effect is deliberately not a resume point: process death
+    /// after this write abandons the run instead of replaying the effect.
+    var effectReceipts: [String: String] = [:]
     var completion: Completion?
 
     var id: String { "\(journeyId):\(generation)" }
@@ -139,6 +143,9 @@ struct DeviceLegRunJournal {
             guard var run = state.runs[id], run.startedQueued, run.completion == nil else {
                 throw DeviceLegJournalError.invalidState
             }
+            // A receipt belongs to one visit to an effect cursor. Once that
+            // visit advances, a later loop back must claim a fresh identity.
+            run.effectReceipts.removeValue(forKey: run.stepId)
             run.stepId = stepId
             run.context = context
             run.park = checkpoint.map {
@@ -156,6 +163,30 @@ struct DeviceLegRunJournal {
             run.stepId = stepId
             run.park = .init(wakeAt: until)
             state.runs[id] = run
+        }
+    }
+
+    /// Persist a stable effect identity before dispatch. Re-entering an
+    /// explicitly parked unsupported cursor reuses the same identity, while a
+    /// process death after this claim is recovered as abandonment.
+    func claimEffect(_ id: String, stepId: String) async throws -> String {
+        try await update { state in
+            guard var run = state.runs[id],
+                  run.startedQueued,
+                  run.completion == nil,
+                  run.stepId == stepId else {
+                throw DeviceLegJournalError.invalidState
+            }
+            if let existing = run.effectReceipts[stepId] {
+                run.park = nil
+                state.runs[id] = run
+                return existing
+            }
+            let effectId = UUID.v7().uuidString.lowercased()
+            run.effectReceipts[stepId] = effectId
+            run.park = nil
+            state.runs[id] = run
+            return effectId
         }
     }
 
@@ -267,7 +298,66 @@ struct DeviceLegRunJournal {
     }
 }
 
-extension DeviceLegRun: Codable, Sendable {}
+extension DeviceLegRun: Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case journeyId
+        case generation
+        case reference
+        case startedAt
+        case isEnrollment
+        case startedEventId
+        case completedEventId
+        case startedQueued
+        case stepId
+        case park
+        case context
+        case outputs
+        case effectReceipts
+        case completion
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        journeyId = try container.decode(String.self, forKey: .journeyId)
+        generation = try container.decode(Int.self, forKey: .generation)
+        reference = try container.decode(ArmedDeviceLeg.Reference.self, forKey: .reference)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        isEnrollment = try container.decode(Bool.self, forKey: .isEnrollment)
+        startedEventId = try container.decode(String.self, forKey: .startedEventId)
+        completedEventId = try container.decode(String.self, forKey: .completedEventId)
+        startedQueued = try container.decodeIfPresent(Bool.self, forKey: .startedQueued) ?? false
+        stepId = try container.decode(String.self, forKey: .stepId)
+        park = try container.decodeIfPresent(Park.self, forKey: .park)
+        context = try container.decode(ArmedDeviceLeg.Context.self, forKey: .context)
+        outputs = try container.decodeIfPresent(
+            ArmedDeviceLeg.Context.self,
+            forKey: .outputs
+        ) ?? .init(event: [:], responses: [:])
+        effectReceipts = try container.decodeIfPresent(
+            [String: String].self,
+            forKey: .effectReceipts
+        ) ?? [:]
+        completion = try container.decodeIfPresent(Completion.self, forKey: .completion)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(journeyId, forKey: .journeyId)
+        try container.encode(generation, forKey: .generation)
+        try container.encode(reference, forKey: .reference)
+        try container.encode(startedAt, forKey: .startedAt)
+        try container.encode(isEnrollment, forKey: .isEnrollment)
+        try container.encode(startedEventId, forKey: .startedEventId)
+        try container.encode(completedEventId, forKey: .completedEventId)
+        try container.encode(startedQueued, forKey: .startedQueued)
+        try container.encode(stepId, forKey: .stepId)
+        try container.encodeIfPresent(park, forKey: .park)
+        try container.encode(context, forKey: .context)
+        try container.encode(outputs, forKey: .outputs)
+        try container.encode(effectReceipts, forKey: .effectReceipts)
+        try container.encodeIfPresent(completion, forKey: .completion)
+    }
+}
 extension DeviceLegRun.Park: Codable, Sendable {}
 extension DeviceLegRun.Completion: Codable, Sendable {}
 extension DeviceLegCheckmark: Codable, Sendable {}

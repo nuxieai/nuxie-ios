@@ -55,6 +55,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     private let sleepProvider: SleepProviderProtocol
     private let journalDirectory: URL?
     private let featureAccess: FeatureAccessLookup
+    private let dispatcher: any DeviceLegDispatching
     private let timezones: SignedTimezoneBundle
     private let currentDeviceTimezone: TimeZone
 
@@ -77,6 +78,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         sleepProvider: SleepProviderProtocol,
         journalDirectory: URL?,
         featureAccess: @escaping FeatureAccessLookup,
+        dispatcher: any DeviceLegDispatching,
         timezones: SignedTimezoneBundle,
         currentDeviceTimezone: TimeZone = .current
     ) {
@@ -86,6 +88,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         self.sleepProvider = sleepProvider
         self.journalDirectory = journalDirectory
         self.featureAccess = featureAccess
+        self.dispatcher = dispatcher
         self.timezones = timezones
         self.currentDeviceTimezone = currentDeviceTimezone
     }
@@ -551,16 +554,126 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 )
                 return
 
-            case .dispatch(let stepId, _):
-                // Presentation and effect dispatch attach to this durable
-                // cursor in the next slice. Keeping it parked preserves the
-                // authenticated program without fabricating completion.
-                do {
-                    try await journal.park(run.id, stepId: stepId, until: nil)
-                } catch {
-                    LogWarning("DeviceLegService: failed to retain effect cursor: \(error)")
+            case .dispatch(let stepId, let action):
+                guard let identityFence = identity.performWithCurrentIdentityFence(
+                    journal.distinctId,
+                    { _ in () }
+                ) else {
+                    await finish(
+                        run,
+                        outcome: "abandoned",
+                        leg: leg,
+                        journal: journal
+                    )
+                    return
                 }
-                return
+                let effectId: String
+                do {
+                    effectId = try await journal.claimEffect(
+                        run.id,
+                        stepId: stepId
+                    )
+                } catch {
+                    LogWarning("DeviceLegService: failed to claim effect cursor: \(error)")
+                    return
+                }
+                guard await isCurrentIdentity(
+                    identityFence.token,
+                    journal: journal
+                ) else {
+                    await finish(
+                        run,
+                        outcome: "abandoned",
+                        leg: leg,
+                        journal: journal
+                    )
+                    return
+                }
+                let result = await dispatcher.dispatch(.init(
+                    runId: run.id,
+                    journeyId: run.journeyId,
+                    generation: run.generation,
+                    reference: run.reference,
+                    release: release,
+                    stepId: stepId,
+                    action: action,
+                    context: run.context,
+                    effectId: effectId,
+                    distinctId: journal.distinctId,
+                    identityFence: identityFence.token
+                ))
+                guard await isCurrentIdentity(
+                    identityFence.token,
+                    journal: journal
+                ) else {
+                    await finish(
+                        run,
+                        outcome: "abandoned",
+                        leg: leg,
+                        journal: journal
+                    )
+                    return
+                }
+                switch result {
+                case .outlet(let outlet):
+                    guard case .advance(let nextStepId, let context) = executor.selectOutlet(
+                        step,
+                        outlet: outlet,
+                        context: run.context
+                    ) else {
+                        await finish(
+                            run,
+                            outcome: "abandoned",
+                            leg: leg,
+                            journal: journal
+                        )
+                        return
+                    }
+                    do {
+                        try await journal.transition(
+                            run.id,
+                            stepId: nextStepId,
+                            context: context
+                        )
+                    } catch {
+                        LogWarning("DeviceLegService: failed to persist effect transition: \(error)")
+                        return
+                    }
+                    run.stepId = nextStepId
+                    run.context = context
+                    run.park = nil
+                    checkpoint = nil
+
+                case .complete(let outcome):
+                    await finish(
+                        run,
+                        outcome: outcome,
+                        leg: leg,
+                        journal: journal
+                    )
+                    return
+
+                case .unsupported:
+                    do {
+                        try await journal.park(
+                            run.id,
+                            stepId: stepId,
+                            until: nil
+                        )
+                    } catch {
+                        LogWarning("DeviceLegService: failed to retain effect cursor: \(error)")
+                    }
+                    return
+
+                case .failed:
+                    await finish(
+                        run,
+                        outcome: "abandoned",
+                        leg: leg,
+                        journal: journal
+                    )
+                    return
+                }
 
             case .invalid:
                 await finish(
@@ -618,6 +731,16 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         self.journal?.distinctId == journal.distinctId
             && journal.distinctId == identity.getDistinctId()
             && profileState?.distinctId == identity.getDistinctId()
+    }
+
+    private func isCurrentIdentity(
+        _ token: IdentityFenceToken,
+        journal: DeviceLegRunJournal
+    ) async -> Bool {
+        guard isCurrentIdentity(journal: journal) else { return false }
+        return await MainActor.run {
+            identity.publishIfCurrentIdentityFenceToken(token) {}
+        }
     }
 
     private func executorSignal(

@@ -185,6 +185,17 @@ enum DeviceLegSchemaValidator {
             _ = try object(action, required: ["type", "placementId"])
             try Common.validateJourneyPurchasePlacementId(action["placementId"], path: "leg.placementId", placementIDs: placements)
         case "restore": _ = try object(action, required: ["type"])
+        case "send_event":
+            try Common.validateCanonicalJourneyAction(
+                action,
+                path: "leg.action",
+                screenIDs: screens,
+                placementIDs: placements
+            )
+            guard let eventName = action["eventName"] as? String,
+                  !eventName.hasPrefix("$") else {
+                throw invalid
+            }
         default:
             try Common.validateCanonicalJourneyAction(action, path: "leg.action", screenIDs: screens, placementIDs: placements)
         }

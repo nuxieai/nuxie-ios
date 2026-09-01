@@ -268,6 +268,107 @@ final class DeviceLegRunJournalTests: XCTestCase {
         XCTAssertNil(advanced.park)
     }
 
+    func testEffectClaimMigratesOldSnapshotAndBecomesAnAbandonmentBoundary() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "effect",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.park(run.id, stepId: "effect", until: nil)
+
+        // Simulate the v1 snapshot shape written before effect receipts were
+        // added. The schema version intentionally remains unchanged.
+        let root = directory.appendingPathComponent(
+            "device-leg-journal-v1",
+            isDirectory: true
+        )
+        let file = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: nil
+            ).first
+        )
+        var snapshot = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: file))
+                as? [String: Any]
+        )
+        var storedRuns = try XCTUnwrap(snapshot["runs"] as? [String: Any])
+        var storedRun = try XCTUnwrap(storedRuns[run.id] as? [String: Any])
+        storedRun.removeValue(forKey: "effectReceipts")
+        storedRuns[run.id] = storedRun
+        snapshot["runs"] = storedRuns
+        try JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys])
+            .write(to: file, options: .atomic)
+
+        let reopened = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let effectId = try await reopened.claimEffect(run.id, stepId: "effect")
+        let repeated = try await reopened.claimEffect(run.id, stepId: "effect")
+        XCTAssertEqual(repeated, effectId)
+        let claimedRuns = try await reopened.runs()
+        let claimed = try XCTUnwrap(claimedRuns.first)
+        XCTAssertNil(claimed.park)
+        XCTAssertEqual(claimed.effectReceipts["effect"], effectId)
+
+        let recovered = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let resumable = try await recovered.recover(at: date(200))
+        XCTAssertTrue(resumable.isEmpty)
+        let rows = try await recovered.runs()
+        XCTAssertEqual(rows.first?.completion?.outcome, "abandoned")
+    }
+
+    func testEffectClaimExpiresAfterTheCursorAdvances() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "effect",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+
+        let first = try await journal.claimEffect(run.id, stepId: "effect")
+        try await journal.transition(
+            run.id,
+            stepId: "branch",
+            context: run.context
+        )
+        try await journal.transition(
+            run.id,
+            stepId: "effect",
+            context: run.context
+        )
+        let second = try await journal.claimEffect(run.id, stepId: "effect")
+
+        XCTAssertNotEqual(
+            second,
+            first,
+            "A later visit to the same authored action is a new effect occurrence"
+        )
+    }
+
     func testInterruptedCompletionCaptureReplaysTheSameEventAndBufferedAnswersAfterRelaunch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

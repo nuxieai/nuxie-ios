@@ -22,7 +22,7 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 | `$journey_leg_started` | active | platform | yes | governed | batch | `journeyLegStarted` | Device starts one leg, echoing its generation; generation zero also enrolls a new journey. |
 | `$journey_leg_completed` | active | platform | yes | governed | batch | `journeyLegCompleted` | Device queues the outcome and declared buffered outputs, then forgets the run. |
 | `$journey_transition` | active | platform | yes | exempt / governed | `/i/event` or batch | hidden: state-sync protocol | A run advances between nodes, or pending-action resume records a response-snapshot conflict. |
-| `$journey_milestone` | active | platform | yes | exempt | `/i/event` | `milestoneReached` | A run reaches an authored milestone through scoped `trackForTrigger` plus local history, or the runner's `trackWithResponse` fallback. |
+| `$journey_milestone` | active | platform | yes | exempt / governed | `/i/event` or batch | `milestoneReached` | A run reaches an authored milestone through scoped `trackForTrigger`, the runner's `trackWithResponse` fallback, or a stable partitioned device-leg capture. |
 | `$journey_converted` | active | platform / server | yes | exempt | `/i/event` or none | `journeyConverted` | A Goal is satisfied locally or arrives as a server down-fact. |
 | `$journey_exited` | active | platform | yes | exempt / governed | `/i/event` or batch | `journeyEnded` | A run reaches a terminal state; host exits use stable governed capture. |
 | `$journey_effect_requested` | active | platform | yes | governed | batch | hidden: effect protocol | Device requests a durable server effect. |
