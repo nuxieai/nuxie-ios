@@ -1,18 +1,17 @@
 import CryptoKit
 import Foundation
 
-/// Opaque durable namespace for one configured Nuxie app environment. The
-/// publishable credential is never written to disk. Changing credentials or
-/// environment intentionally fails closed instead of replaying another
-/// setup's retained device-leg authority.
+/// Opaque durable namespace for one transport-authenticated Nuxie app
+/// environment. A rotatable publishable credential is not app identity and
+/// never participates in the retained device-leg address.
 struct DeviceLegStorageScope: Equatable, Hashable, Sendable {
     private static let domain = "nuxie.device-leg-storage.v1\u{0}"
 
     private let namespaceHash: String
 
-    init(apiKey: String, environment: Environment) {
+    init(authority: ProfileDeliveryAuthority) {
         namespaceHash = Self.digest(
-            Self.domain + environment.rawValue + "\u{0}" + apiKey
+            Self.domain + authority.environment + "\u{0}" + authority.appId
         )
     }
 

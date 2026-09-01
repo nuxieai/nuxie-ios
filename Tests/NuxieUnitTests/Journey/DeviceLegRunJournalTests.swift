@@ -6,6 +6,36 @@ import XCTest
 #endif
 
 final class DeviceLegRunJournalTests: XCTestCase {
+    func testStorageScopeSurvivesCredentialRotationAndIsolatesAppAuthority() {
+        let authority = ProfileDeliveryAuthority(
+            appId: "app-a",
+            environment: "production"
+        )
+        // A replacement publishable key authenticating the same authority
+        // produces the same durable address because credentials never enter
+        // the scope constructor.
+        let beforeRotation = DeviceLegStorageScope(authority: authority)
+        let afterRotation = DeviceLegStorageScope(authority: authority)
+        XCTAssertEqual(
+            beforeRotation.customerDigest(distinctId: "customer"),
+            afterRotation.customerDigest(distinctId: "customer")
+        )
+        XCTAssertNotEqual(
+            beforeRotation.customerDigest(distinctId: "customer"),
+            DeviceLegStorageScope(authority: .init(
+                appId: "app-b",
+                environment: "production"
+            )).customerDigest(distinctId: "customer")
+        )
+        XCTAssertNotEqual(
+            beforeRotation.customerDigest(distinctId: "customer"),
+            DeviceLegStorageScope(authority: .init(
+                appId: "app-a",
+                environment: "development"
+            )).customerDigest(distinctId: "customer")
+        )
+    }
+
     func testSharedReportVectorsPreserveOutputsAndForwardLifecycleWithStableRetries() async throws {
         struct Vector: Decodable {
             let binding: ArmedDeviceLeg.Binding
@@ -936,16 +966,20 @@ final class DeviceLegRunJournalTests: XCTestCase {
             directory: directory,
             distinctId: "customer",
             storageScope: .init(
-                apiKey: "pk_live_first",
-                environment: .production
+                authority: .init(
+                    appId: "app-first",
+                    environment: "production"
+                )
             )
         )
         let second = try DeviceLegRunJournal(
             directory: directory,
             distinctId: "customer",
             storageScope: .init(
-                apiKey: "pk_live_second",
-                environment: .production
+                authority: .init(
+                    appId: "app-second",
+                    environment: "production"
+                )
             )
         )
         let candidate = arm()

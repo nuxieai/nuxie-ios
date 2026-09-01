@@ -86,7 +86,7 @@ actor DeviceLegProfileCatalog {
         fileprivate let snapshot: Snapshot
         fileprivate let promotions:
             [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
-        fileprivate let authority: ProfileDeliveryAuthority
+        let authority: ProfileDeliveryAuthority
     }
 
     private let authorizationKeys: [ExperiencePackageAuthorizationKey]
