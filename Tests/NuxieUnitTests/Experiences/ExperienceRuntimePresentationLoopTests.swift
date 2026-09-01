@@ -723,6 +723,15 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         }
         let workFinished = await recorder.waitForOperationCount(operationCountBeforeWork + 2)
         XCTAssertTrue(workFinished)
+        // The session records the operations before result delivery and
+        // completion hop to MainActor; under load the second pair can land
+        // after this continuation resumes. Yield until all four deliveries
+        // arrive before asserting their order.
+        let deliveryDeadline = Date().addingTimeInterval(5)
+        while delivery.count < 4, Date() < deliveryDeadline {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
         XCTAssertEqual(delivery, ["effect-1", "completion-1", "effect-2", "completion-2"])
 
         await loop.shutdown()

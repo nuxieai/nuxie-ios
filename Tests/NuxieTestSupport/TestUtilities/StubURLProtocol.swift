@@ -34,6 +34,12 @@ final class StubURLProtocol: URLProtocol {
     // MARK: - URLProtocol Overrides
     
     override class func canInit(with request: URLRequest) -> Bool {
+        // Fail closed for test hosts: a late background fetch racing the
+        // owning test's reset() must never escape to the real network (it
+        // resolves DNS and injects wall-clock nondeterminism into unit
+        // runs). Unmatched claimed requests fail with unsupportedURL in
+        // startLoading instead.
+        if request.url?.host?.hasSuffix(".test") == true { return true }
         lock.lock()
         defer { lock.unlock() }
         return handlers.contains { $0.0(request) }
