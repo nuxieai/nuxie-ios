@@ -58,12 +58,12 @@ final class EventCatalogConformanceTests: XCTestCase {
     // Independent per-event pin for fields that cannot always be inferred
     // from a generic source call (for example trackForTrigger's policy flag).
     private static let expectedSemanticRows = #"""
-$app_action_requested	processCapture	governed	batch	true	true
+$app_action_requested	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
 $app_backgrounded	trackForTrigger	governed	/i/event response lane	true	true
 $app_installed	trackForTrigger	governed	/i/event response lane	true	true
 $app_opened	trackForTrigger	governed	/i/event response lane	true	true
 $app_updated	trackForTrigger	governed	/i/event response lane	true	true
-$customer_updated	processCapture	governed	batch	true	true
+$customer_updated	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
 $event_sent	processCapture	governed	batch	true	true
 $experience_artifact_load_failed	processCapture	governed	batch	true	true
 $experience_artifact_load_succeeded	processCapture	governed	batch	true	true
@@ -84,7 +84,7 @@ $journey_exited	trackWithResponse|captureStableSystemEvent	exempt|governed	/i/ev
 $journey_handoff	trackForTrigger	exempt	/i/event response lane	true	true
 $journey_leg_started	captureStableSystemEvent	governed	batch	true	true
 $journey_leg_completed	captureStableSystemEvent	governed	batch	true	true
-$journey_milestone	trackWithResponse|trackForTrigger	exempt|exempt	/i/event response lane|/i/event response lane	true|true	true|true
+$journey_milestone	trackWithResponse|trackForTrigger|captureStableSystemEvent	exempt|exempt|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
 $journey_parked	processCapture	governed	batch	true	true
 $journey_started	none	exempt	none	false	false
 $journey_superseded	commitServerFacts	exempt	none	true	false

@@ -1,19 +1,32 @@
 {
   "$app_action_requested": {
     "authoredBy": "designer",
-    "beforeSend": "governed",
+    "beforeSend": [
+      "governed",
+      "governed"
+    ],
     "constant": "JourneyEvents.appActionRequested",
     "docs": false,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3836"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3836",
+      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:177"
     ],
-    "endpoint": "batch",
+    "endpoint": [
+      "batch",
+      "batch"
+    ],
     "fixtures": [
       "fixtures/events/experience-events.json"
     ],
     "forwarding": "hidden: delivered through didRequestAppAction",
-    "lane": "processCapture",
-    "persists": true,
+    "lane": [
+      "processCapture",
+      "captureStableSystemEvent"
+    ],
+    "persists": [
+      true,
+      true
+    ],
     "properties": {
       "experience_id": {
         "required": true,
@@ -39,10 +52,28 @@
         "required": false,
         "source": "active authored-action screen",
         "type": "String"
+      },
+      "experience_version_id": {
+        "required": false,
+        "source": "partitioned device-leg reference versionId",
+        "type": "String"
+      },
+      "leg_generation": {
+        "required": false,
+        "source": "partitioned DeviceLegRun generation",
+        "type": "Int"
+      },
+      "leg_id": {
+        "required": false,
+        "source": "partitioned authenticated device-leg reference",
+        "type": "String"
       }
     },
     "status": "active",
-    "wire": true
+    "wire": [
+      true,
+      true
+    ]
   },
   "$app_backgrounded": {
     "authoredBy": "platform",
@@ -199,19 +230,32 @@
   },
   "$customer_updated": {
     "authoredBy": "designer",
-    "beforeSend": "governed",
+    "beforeSend": [
+      "governed",
+      "governed"
+    ],
     "constant": "JourneyEvents.customerUpdated",
     "docs": false,
     "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3530"
+      "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3530",
+      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:118"
     ],
-    "endpoint": "batch",
+    "endpoint": [
+      "batch",
+      "batch"
+    ],
     "fixtures": [
       "fixtures/events/experience-events.json"
     ],
     "forwarding": "hidden: identity and PII rider",
-    "lane": "processCapture",
-    "persists": true,
+    "lane": [
+      "processCapture",
+      "captureStableSystemEvent"
+    ],
+    "persists": [
+      true,
+      true
+    ],
     "properties": {
       "attributes_updated": {
         "required": true,
@@ -232,10 +276,28 @@
         "required": false,
         "source": "active authored-action screen",
         "type": "String"
+      },
+      "experience_version_id": {
+        "required": false,
+        "source": "partitioned device-leg reference versionId",
+        "type": "String"
+      },
+      "leg_generation": {
+        "required": false,
+        "source": "partitioned DeviceLegRun generation",
+        "type": "Int"
+      },
+      "leg_id": {
+        "required": false,
+        "source": "partitioned authenticated device-leg reference",
+        "type": "String"
       }
     },
     "status": "active",
-    "wire": true
+    "wire": [
+      true,
+      true
+    ]
   },
   "$event_sent": {
     "authoredBy": "designer",
@@ -1210,51 +1272,72 @@
     "authoredBy": "platform",
     "beforeSend": [
       "exempt",
-      "exempt"
+      "exempt",
+      "governed"
     ],
     "constant": "JourneyEvents.journeyMilestone",
     "docs": true,
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3492",
-      "Sources/Nuxie/Journey/JourneyService.swift:3147"
+      "Sources/Nuxie/Journey/JourneyService.swift:3147",
+      "Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:132"
     ],
     "endpoint": [
       "/i/event response lane",
-      "/i/event response lane"
+      "/i/event response lane",
+      "batch"
     ],
     "fixtures": [],
     "forwarding": "milestoneReached",
     "lane": [
       "trackWithResponse",
-      "trackForTrigger"
+      "trackForTrigger",
+      "captureStableSystemEvent"
     ],
     "pathNotes": [
       "JourneyRunner fallback sends and persists through trackWithResponse.",
-      "The scoped path sends through trackScopedEvent/trackForTrigger with persistence disabled, then persists the prepared event through storePreparedEventInHistory."
+      "The scoped path sends through trackScopedEvent/trackForTrigger with persistence disabled, then persists the prepared event through storePreparedEventInHistory.",
+      "Authenticated device legs durably claim the effect before capture and identify the exact leg instead of using the retired ownership epoch."
     ],
     "persists": [
+      true,
       true,
       true
     ],
     "properties": {
       "epoch": {
-        "required": true,
-        "source": "JourneySnapshot ownership epoch",
-        "type": "String"
+        "required": false,
+        "source": "legacy JourneySnapshot ownership epoch; absent from partitioned device legs",
+        "type": "Int"
       },
       "experience_id": {
         "required": true,
-        "source": "JourneySnapshot.experienceId",
+        "source": "JourneySnapshot or authenticated device-leg reference",
         "type": "String"
       },
       "experience_version": {
-        "required": true,
-        "source": "JourneySnapshot.experienceVersion",
+        "required": false,
+        "source": "legacy JourneySnapshot.experienceVersion",
+        "type": "String"
+      },
+      "experience_version_id": {
+        "required": false,
+        "source": "partitioned device-leg reference versionId",
         "type": "String"
       },
       "journey_id": {
         "required": true,
-        "source": "JourneySnapshot id",
+        "source": "JourneySnapshot or DeviceLegRun journey id",
+        "type": "String"
+      },
+      "leg_generation": {
+        "required": false,
+        "source": "partitioned DeviceLegRun generation",
+        "type": "Int"
+      },
+      "leg_id": {
+        "required": false,
+        "source": "partitioned authenticated device-leg reference",
         "type": "String"
       },
       "milestone_id": {
@@ -1265,6 +1348,7 @@
     },
     "status": "active",
     "wire": [
+      true,
       true,
       true
     ]

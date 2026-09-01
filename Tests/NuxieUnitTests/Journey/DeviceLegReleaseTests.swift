@@ -106,6 +106,37 @@ final class DeviceLegReleaseTests: XCTestCase {
         }
     }
 
+    func testRejectsReservedAuthoredEventNamesBeforeAdmission() throws {
+        let fixture = try golden()
+        let bytes = try XCTUnwrap(
+            Data(base64Encoded: fixture.envelope.descriptorBytesBase64)
+        )
+        var root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+        )
+        var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+        leg["entryStepId"] = "send"
+        leg["steps"] = [
+            [
+                "kind": "action",
+                "id": "send",
+                "action": [
+                    "type": "send_event",
+                    "eventName": "$journey_milestone",
+                ],
+                "outlets": ["next": "report"],
+            ],
+            [
+                "kind": "complete",
+                "id": "report",
+                "outcome": "continue",
+            ],
+        ]
+        root["leg"] = leg
+
+        XCTAssertThrowsError(try DeviceLegSchemaValidator.validate(root))
+    }
+
     func testRejectsTamperingWrongDomainWrongLegAndReplay() throws {
         let fixture = try golden()
         var altered = fixture.envelope

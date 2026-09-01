@@ -192,6 +192,11 @@ final class NuxieCore: @unchecked Sendable {
             entityId: nil
           )
         },
+        dispatcher: DeviceLegEffectDispatcher(
+          identity: identity,
+          events: eventLog,
+          appActionHandler: appActionHandler
+        ),
         timezones: timezones
       )
     } else {
