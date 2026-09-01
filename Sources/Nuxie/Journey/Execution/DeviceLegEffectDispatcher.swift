@@ -105,8 +105,8 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
             return await appAction(request)
         case "exit":
             guard let action = decode(Exit.self, request.action) else { return .failed }
-            if let reason = action.reason {
-                return reason.isEmpty ? .failed : .complete(reason)
+            if let reason = action.reason, !reason.isEmpty {
+                return .complete(reason)
             }
             return .complete("completed")
         default:

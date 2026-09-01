@@ -244,6 +244,51 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertTrue(runs.isEmpty)
     }
 
+    func testExitWithAnEmptyReasonUsesTheDefaultCompletedOutcome() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let exit = DeviceLeg.Step(
+            kind: .action,
+            id: "exit",
+            action: [
+                "type": .string("exit"),
+                "reason": .string(""),
+            ],
+            outlets: [:],
+            outcome: nil
+        )
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            completionOutputs: [:],
+            entryStepId: "exit",
+            steps: [exit]
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+
+        XCTAssertEqual(
+            events.routedEvents.last?.properties["outcome"] as? String,
+            "completed"
+        )
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let runs = try await journal.runs()
+        XCTAssertTrue(runs.isEmpty)
+    }
+
     func testLocalEffectsResolveContextWithoutResponseSessionSynchronization() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
