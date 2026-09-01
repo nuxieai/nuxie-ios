@@ -178,10 +178,6 @@ final class NuxieCore: @unchecked Sendable {
       supportedRuntime: ExperienceReleaseRuntime.current,
       highWaterStore: highWaterStore
     )
-    let deviceLegStorageScope = DeviceLegStorageScope(
-      apiKey: configuration.apiKey,
-      environment: configuration.environment
-    )
     let profileStorageScope = ProfileStorageScope(
       apiKey: configuration.apiKey,
       environment: configuration.environment
@@ -194,7 +190,9 @@ final class NuxieCore: @unchecked Sendable {
         dateProvider: dateProvider,
         sleepProvider: sleepProvider,
         journalDirectory: releasePaths.admission,
-        storageScope: deviceLegStorageScope,
+        // The profile transport supplies the stable authenticated app scope.
+        // The publishable key is rotatable and must not address durable runs.
+        storageScope: nil,
         featureAccess: { featureId in
           await builtFeatureService.get().getCached(
             featureId: featureId,

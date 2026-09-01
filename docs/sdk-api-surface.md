@@ -208,10 +208,11 @@ experience model.
 
 Descriptor delivery follows a fixed resilience policy:
 
-- A fully authenticated profile snapshot may launch offline for up to 24 hours
-  from its recorded fetch time. Expired snapshots are evicted before any
-  release behavior is installed; an unavailable refresh leaves signed
-  experience authority empty rather than falling back to stale content.
+- A fully authenticated canonical plane profile may launch offline without an
+  age cutoff. The SDK revalidates stale snapshots opportunistically, while the
+  last authenticated snapshot remains the device's offline execution
+  authority. Legacy release profiles retain a 24-hour window and are evicted
+  on expiry before their release behavior is installed.
 - Content-addressed RIV, asset, and listener-script objects are retained in a
   256 MiB on-disk LRU. Verified cache hits refresh recency. Pruning runs under
   the cache's root transaction and protects every object in the release being

@@ -67,15 +67,18 @@ private actor DeviceLegProfileSequenceAPI: ProfileFetching {
 
 private actor RecordingDeviceLegProfileConsumer: DeviceLegProfileConsuming {
     private(set) var commits: [DeviceLegProfileCatalog.Snapshot] = []
+    private(set) var authorities: [ProfileDeliveryAuthority] = []
     private(set) var clearedDistinctIds: [String] = []
     private(set) var clearAllCount = 0
 
     func profileDidCommit(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        authority: ProfileDeliveryAuthority,
         distinctId: String
     ) {
         _ = distinctId
         commits.append(snapshot)
+        authorities.append(authority)
     }
 
     func profileDidClear(distinctId: String) {
@@ -185,6 +188,8 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         let initialRuntimeCommits = await runtime.commits
         XCTAssertEqual(initialRuntimeCommits.count, 1)
         XCTAssertEqual(initialRuntimeCommits.first?.releasesByDigest.count, 1)
+        let initialRuntimeAuthorities = await runtime.authorities
+        XCTAssertEqual(initialRuntimeAuthorities, [fixture.deliveryAuthority])
 
         do {
             _ = try await service.refetchProfile(distinctId: "customer")
