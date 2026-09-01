@@ -24,7 +24,10 @@
     "committerTerminalOutcomes records cancelled, pending, and failed outcomes observed at the real checkout-to-committer boundary.",
     "checkoutErrors records only public checkout calls; observer and recovery producer actions do not add entries.",
     "retry_retained_outcomes drives the platform's production recovery hook and never calls the committer directly.",
-    "A declaration's stable event identity is derived from its operation ID, so one attempted event identity across retries proves that the operation ID was retained."
+    "A declaration's stable event identity is derived from its operation ID, so one attempted event identity across retries proves that the operation ID was retained.",
+    "minimumCarrierCaptureAttempts requires capture to remain failing until at least one fewer attempt has occurred, then permits success only through retained recovery.",
+    "retainedCarrierRetryRoundLimit counts recovery rounds after the initial commit, independent of each platform's capture attempts per round.",
+    "expectedCarrierCaptureAttemptDelta is a portable per-action assertion; zero on a post-limit retry proves that capture attempts stop at the cap."
   ],
   "products": {
     "pro": {
@@ -218,9 +221,65 @@
         ],
         "completionCarriesEvidenceIdentity": false,
         "completionCarriesProductMapping": true,
-        "minimumCarrierCaptureAttempts": 3,
+        "minimumCarrierCaptureAttempts": 4,
         "successfulCarrierCaptures": 1,
         "carrierCaptureOperationIdentityCount": 1
+      }
+    },
+    {
+      "name": "external carrier failure stops at the retained retry cap without failing checkout",
+      "actions": [
+        {
+          "entry": "external_delegate",
+          "operation": "purchase",
+          "outcome": "external",
+          "product": "pro",
+          "carrierCaptureSucceeds": false
+        },
+        {
+          "entry": "retry_retained_outcomes",
+          "outcome": "retry",
+          "carrierCaptureSucceeds": false
+        },
+        {
+          "entry": "retry_retained_outcomes",
+          "outcome": "retry",
+          "carrierCaptureSucceeds": false
+        },
+        {
+          "entry": "retry_retained_outcomes",
+          "outcome": "retry",
+          "carrierCaptureSucceeds": false
+        },
+        {
+          "entry": "retry_retained_outcomes",
+          "outcome": "retry",
+          "carrierCaptureSucceeds": true,
+          "expectedCarrierCaptureAttemptDelta": 0
+        }
+      ],
+      "expect": {
+        "successfulCommits": 0,
+        "uniqueEvidenceRows": 0,
+        "journeyAdvancements": 0,
+        "purchaseCompletedEvents": 0,
+        "restoreCompletedEvents": 0,
+        "purchaseFailedEvents": 0,
+        "serverSyncRequests": 0,
+        "scheduledSyncTasks": 0,
+        "pendingRecords": 0,
+        "overlayEverPresent": false,
+        "storeEntitlementQueries": 0,
+        "storeFinalizationCalls": 0,
+        "checkoutErrors": [],
+        "committerTerminalOutcomes": [],
+        "completionSources": [],
+        "completionCarriesEvidenceIdentity": false,
+        "completionCarriesProductMapping": false,
+        "successfulCarrierCaptures": 0,
+        "carrierCaptureOperationIdentityCount": 1,
+        "retainedCarrierRetryRoundLimit": 3,
+        "carrierCaptureAttemptsStopAtRetryLimit": true
       }
     },
     {

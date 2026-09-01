@@ -1765,7 +1765,7 @@
     "constant": "SystemEventNames.purchaseCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1542"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1558"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -1927,8 +1927,8 @@
     "constant": "SystemEventNames.purchaseSynced",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1847",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:2042"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1863",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:2058"
     ],
     "endpoint": [
       "batch",

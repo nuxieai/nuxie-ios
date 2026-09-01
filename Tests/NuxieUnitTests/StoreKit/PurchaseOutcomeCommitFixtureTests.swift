@@ -43,6 +43,7 @@ private struct PurchaseOutcomeCommitFixture: Decodable {
         let product: String?
         let reason: String?
         let carrierCaptureSucceeds: Bool?
+        let expectedCarrierCaptureAttemptDelta: Int?
     }
 
     struct Expectation: Decodable {
@@ -67,6 +68,8 @@ private struct PurchaseOutcomeCommitFixture: Decodable {
         let minimumCarrierCaptureAttempts: Int?
         let successfulCarrierCaptures: Int?
         let carrierCaptureOperationIdentityCount: Int?
+        let retainedCarrierRetryRoundLimit: Int?
+        let carrierCaptureAttemptsStopAtRetryLimit: Bool?
     }
 
     struct Case: Decodable {
@@ -97,8 +100,50 @@ private struct RecordedPurchaseOutcomeEvent: Sendable {
     let price: Double?
 }
 
+private actor PurchaseOutcomeCaptureGate {
+    private var armed = false
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func suspendNextPurchaseCompletion() {
+        armed = true
+        started = false
+        released = false
+    }
+
+    func pauseIfArmed(eventName: String) async {
+        guard eventName == SystemEventNames.purchaseCompleted, armed else { return }
+        armed = false
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 private final class PurchaseOutcomeEventSink {
     private let lock = NSLock()
+    private let captureGate = PurchaseOutcomeCaptureGate()
     private var storage: [RecordedPurchaseOutcomeEvent] = []
     private var routedCaptureResult = true
     private var carrierCaptureResult = true
@@ -118,6 +163,7 @@ private final class PurchaseOutcomeEventSink {
         distinctId: String
     ) async -> Bool {
         _ = distinctId
+        await captureGate.pauseIfArmed(eventName: name)
         let routes = lock.withLock {
             routedCaptureAttempts += 1
             return routedCaptureResult
@@ -135,6 +181,7 @@ private final class PurchaseOutcomeEventSink {
         distinctId: String
     ) async -> Bool {
         _ = distinctId
+        await captureGate.pauseIfArmed(eventName: name)
         let captures = lock.withLock {
             captureOnlyAttempts += 1
             captureOnlyEventIds.append(eventId)
@@ -153,6 +200,18 @@ private final class PurchaseOutcomeEventSink {
 
     func setCarrierCaptureResult(_ result: Bool) {
         lock.withLock { carrierCaptureResult = result }
+    }
+
+    func suspendNextPurchaseCompletionCapture() async {
+        await captureGate.suspendNextPurchaseCompletion()
+    }
+
+    func waitUntilPurchaseCompletionCaptureStarts() async {
+        await captureGate.waitUntilStarted()
+    }
+
+    func releasePurchaseCompletionCapture() async {
+        await captureGate.release()
     }
 
     var routedAttemptCount: Int {
@@ -293,6 +352,7 @@ private actor PurchaseOutcomeSyncAPI {
     }
 
     var requestCount: Int { requests.count }
+    var requestedTransactionJWSs: [String] { requests.map(\.transactionJwt) }
 }
 
 extension PurchaseOutcomeSyncAPI: PurchaseSynchronizing {}
@@ -538,6 +598,9 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
 
     private let products: [String: PurchaseOutcomeCommitFixture.Product]
     private let evidence: [String: PurchaseOutcomeCommitFixture.Evidence]
+    private let vectorName: String
+    private let minimumCarrierCaptureAttempts: Int?
+    private(set) var retainedRetryCaptureAttemptDeltas: [Int] = []
 
     init(
         fixture: PurchaseOutcomeCommitFixture,
@@ -546,6 +609,8 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
     ) {
         products = fixture.products
         evidence = fixture.evidence
+        vectorName = vector.name
+        minimumCarrierCaptureAttempts = vector.expect.minimumCarrierCaptureAttempts
         identity.setDistinctId("fixture-customer")
         scope = PurchaseStorageScope(
             appIdentifierHash: "purchase-outcome-fixture-\(vectorIndex)",
@@ -619,7 +684,8 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
     }
 
     func run(_ action: PurchaseOutcomeCommitFixture.Action) async throws -> String? {
-        if let carrierCaptureSucceeds = action.carrierCaptureSucceeds {
+        if action.entry != "retry_retained_outcomes",
+           let carrierCaptureSucceeds = action.carrierCaptureSucceeds {
             eventSink.setCarrierCaptureResult(carrierCaptureSucceeds)
         }
         switch action.entry {
@@ -688,7 +754,31 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
             return nil
 
         case "retry_retained_outcomes":
+            if action.carrierCaptureSucceeds == true,
+               let minimumCarrierCaptureAttempts {
+                eventSink.setCarrierCaptureResult(false)
+                while eventSink.captureOnlyAttemptCount
+                    < minimumCarrierCaptureAttempts - 1 {
+                    let attemptsBeforeFailure = eventSink.captureOnlyAttemptCount
+                    await observer.retryStoredEvidence()
+                    guard eventSink.captureOnlyAttemptCount
+                        > attemptsBeforeFailure else { break }
+                }
+            }
+            if let carrierCaptureSucceeds = action.carrierCaptureSucceeds {
+                eventSink.setCarrierCaptureResult(carrierCaptureSucceeds)
+            }
+            let attemptsBeforeRetry = eventSink.captureOnlyAttemptCount
             await observer.retryStoredEvidence()
+            let attemptDelta = eventSink.captureOnlyAttemptCount - attemptsBeforeRetry
+            retainedRetryCaptureAttemptDeltas.append(attemptDelta)
+            if let expectedDelta = action.expectedCarrierCaptureAttemptDelta {
+                XCTAssertEqual(
+                    attemptDelta,
+                    expectedDelta,
+                    "\(vectorName): retained retry carrier-attempt delta"
+                )
+            }
             return nil
 
         default:
@@ -750,6 +840,40 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
                 finish: { [finalizationProbe] in await finalizationProbe.finalize() }
             ),
             source: source
+        ))
+    }
+
+    func commitRevokedOutcome(
+        evidenceKey: String,
+        transactionJws: String
+    ) async throws -> PurchaseCommitResult {
+        guard let fixtureEvidence = evidence[evidenceKey] else {
+            throw FixtureRunnerError.missingFixtureValue(
+                "evidence.\(evidenceKey)"
+            )
+        }
+        let product = try makeProduct(key: fixtureEvidence.product)
+        return await observer.commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: transactionJws,
+                transactionId: fixtureEvidence.identity,
+                originalTransactionId: fixtureEvidence.originalIdentity,
+                productId: product.storeProductId,
+                appAccountToken: scope.appAccountToken(
+                    distinctId: identity.getDistinctId()
+                ),
+                attributedDistinctId: identity.getDistinctId(),
+                productFeatureIds: storeProductFeatureIds(
+                    product.localEntitlementGrants
+                ),
+                commercialContext: product.purchaseContext,
+                finishRequired: false,
+                resolvesPendingPurchase: false,
+                allowsDurableCheckoutAuthority: false,
+                requiresAuthorityResolution: false,
+                isRevoked: true
+            ),
+            source: .transactionStream
         ))
     }
 
@@ -1010,6 +1134,97 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
         await harness.shutdown()
     }
 
+    func testRevocationDuringCompletionCaptureKeepsRevokedEvidenceAndSkipsActiveSync() async throws {
+        let fixture = try Self.loadFixture()
+        let vector = try XCTUnwrap(fixture.cases.first)
+        let checkoutAction = try XCTUnwrap(vector.actions.first)
+        let harness = PurchaseOutcomeFixtureHarness(
+            fixture: fixture,
+            vector: vector,
+            vectorIndex: 105
+        )
+        await harness.eventSink.suspendNextPurchaseCompletionCapture()
+
+        let checkout = Task {
+            try await harness.run(checkoutAction)
+        }
+        await harness.eventSink.waitUntilPurchaseCompletionCaptureStarts()
+
+        let revoked = try await harness.commitRevokedOutcome(
+            evidenceKey: "pro-transaction",
+            transactionJws: "revoked-pro-1"
+        )
+        let revokedSynced = await revoked.syncTask?.value
+        await harness.eventSink.releasePurchaseCompletionCapture()
+        let checkoutError = try await checkout.value
+
+        let retained = try XCTUnwrap(
+            harness.evidenceStore.evidence(transactionId: "transaction-pro-1")
+        )
+        let completed = harness.eventSink.events(
+            named: SystemEventNames.purchaseCompleted
+        )
+        let requestedJWSs = await harness.syncAPI.requestedTransactionJWSs
+
+        XCTAssertNil(checkoutError)
+        XCTAssertEqual(revokedSynced, true)
+        XCTAssertEqual(completed.count, 1, "the mid-capture emission race is accepted")
+        XCTAssertTrue(retained.isRevoked)
+        XCTAssertEqual(retained.transactionJws, "")
+        XCTAssertNotNil(retained.backendSyncedAt)
+        XCTAssertNotNil(retained.completionDeliveredAt)
+        XCTAssertEqual(requestedJWSs, ["revoked-pro-1"])
+        XCTAssertEqual(harness.syncTaskProbe.count, 1)
+        await harness.shutdown()
+    }
+
+    func testCompletionClaimPreservesAcknowledgementLandingDuringCapture() async throws {
+        let fixture = try Self.loadFixture()
+        let vector = try XCTUnwrap(fixture.cases.first)
+        let checkoutAction = try XCTUnwrap(vector.actions.first)
+        let evidence = try XCTUnwrap(fixture.evidence["pro-transaction"])
+        let product = try XCTUnwrap(fixture.products[evidence.product])
+        let harness = PurchaseOutcomeFixtureHarness(
+            fixture: fixture,
+            vector: vector,
+            vectorIndex: 106
+        )
+        await harness.eventSink.suspendNextPurchaseCompletionCapture()
+
+        let checkout = Task {
+            try await harness.run(checkoutAction)
+        }
+        await harness.eventSink.waitUntilPurchaseCompletionCaptureStarts()
+
+        let synced = await harness.observer.syncTransaction(
+            transactionJws: evidence.signedPayload,
+            transactionId: evidence.identity,
+            productId: product.storeProductId,
+            originalTransactionId: evidence.originalIdentity
+        )
+        let acknowledgedDuringCapture = try XCTUnwrap(
+            harness.evidenceStore.evidence(transactionId: evidence.identity)
+        )
+        XCTAssertTrue(synced)
+        XCTAssertEqual(acknowledgedDuringCapture.transactionJws, "")
+        XCTAssertNotNil(acknowledgedDuringCapture.backendSyncedAt)
+
+        await harness.eventSink.releasePurchaseCompletionCapture()
+        let checkoutError = try await checkout.value
+        let retained = try XCTUnwrap(
+            harness.evidenceStore.evidence(transactionId: evidence.identity)
+        )
+        let requestedJWSs = await harness.syncAPI.requestedTransactionJWSs
+
+        XCTAssertNil(checkoutError)
+        XCTAssertEqual(retained.transactionJws, "")
+        XCTAssertNotNil(retained.backendSyncedAt)
+        XCTAssertNotNil(retained.completionDeliveredAt)
+        XCTAssertEqual(requestedJWSs, [evidence.signedPayload])
+        XCTAssertEqual(harness.syncTaskProbe.count, 0)
+        await harness.shutdown()
+    }
+
     func testExternalDeclarationDurablyCapturesCarrierBeforeRoutingCompletes() async throws {
         let fixture = try Self.loadFixture()
         let vector = try XCTUnwrap(fixture.cases.first(where: {
@@ -1039,38 +1254,6 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
         )
         XCTAssertGreaterThanOrEqual(harness.eventSink.captureOnlyAttemptCount, 2)
         XCTAssertGreaterThanOrEqual(harness.eventSink.routedAttemptCount, 2)
-        await harness.shutdown()
-    }
-
-    func testExternalDeclarationDropsAfterBoundedCarrierRetries() async throws {
-        let fixture = try Self.loadFixture()
-        let vector = try XCTUnwrap(fixture.cases.first(where: {
-            $0.name == "external carrier failure retries one operation without failing checkout"
-        }))
-        let action = try XCTUnwrap(vector.actions.first)
-        let harness = PurchaseOutcomeFixtureHarness(
-            fixture: fixture,
-            vector: vector,
-            vectorIndex: 104
-        )
-
-        let checkoutError = try await harness.run(action)
-        for _ in 0..<4 {
-            await harness.observer.retryStoredEvidence()
-        }
-        let attemptsAtLimit = harness.eventSink.captureOnlyAttemptCount
-        harness.eventSink.setCarrierCaptureResult(true)
-        await harness.observer.retryStoredEvidence()
-        let commitCount = await harness.observer
-            .completedSuccessfulPurchaseCommitCount()
-
-        XCTAssertNil(checkoutError)
-        XCTAssertTrue(harness.eventSink.events(
-            named: SystemEventNames.purchaseCompleted
-        ).isEmpty)
-        XCTAssertEqual(commitCount, 0)
-        XCTAssertEqual(harness.eventSink.captureOnlyAttemptCount, attemptsAtLimit)
-        XCTAssertLessThanOrEqual(attemptsAtLimit, 8)
         await harness.shutdown()
     }
 
@@ -1284,6 +1467,30 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
                 harness.eventSink.carrierCaptureOperationIdentityCount,
                 identityCount,
                 "\(vector.name): retained carrier operation identity"
+            )
+        }
+        if let retryRoundLimit = expectation.retainedCarrierRetryRoundLimit {
+            let iOSCaptureAttemptsPerCommit = 2
+            XCTAssertEqual(
+                harness.eventSink.captureOnlyAttemptCount,
+                iOSCaptureAttemptsPerCommit * (1 + retryRoundLimit),
+                "\(vector.name): iOS carrier-attempt cap"
+            )
+        }
+        if expectation.carrierCaptureAttemptsStopAtRetryLimit == true {
+            guard let retryRoundLimit = expectation.retainedCarrierRetryRoundLimit else {
+                XCTFail("\(vector.name): stopped-at-cap requires a retry-round limit")
+                return
+            }
+            guard harness.retainedRetryCaptureAttemptDeltas.count
+                > retryRoundLimit else {
+                XCTFail("\(vector.name): missing post-cap recovery probe")
+                return
+            }
+            XCTAssertEqual(
+                harness.retainedRetryCaptureAttemptDeltas[retryRoundLimit],
+                0,
+                "\(vector.name): capture attempts after retry cap"
             )
         }
 

@@ -1306,66 +1306,71 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             )
         }
 
-        // Once durable state records that finishing completed (or that the host
-        // owns it in observer mode), a retrying producer must not reassert its
-        // original finish requirement and finish the transaction twice.
-        let shouldFinish = existing?.finishRequired
-            ?? verified.finishRequired
-            ?? policy.finishAfterRecording
-        let transactionJws: String
-        if purchaseCommitJourneyRouting.contains(commitKey), let existing {
-            // A routed-capture retry rebuilds from the current durable row.
-            // Backend acknowledgement may already have cleared the signed
-            // receipt while the Journey signal remained pending.
-            transactionJws = existing.transactionJws
-        } else if existing?.isRevoked == true && !verified.isRevoked {
-            transactionJws = existing!.transactionJws
-        } else if verified.transactionJws.isEmpty {
-            transactionJws = existing?.transactionJws ?? ""
-        } else {
-            transactionJws = verified.transactionJws
+        let makeCommittedEvidence = {
+            [self] (existing: StoredTransactionEvidence?) -> StoredTransactionEvidence in
+            // Once durable state records that finishing completed (or that the
+            // host owns it in observer mode), a retrying producer must not
+            // reassert its original requirement and finish twice.
+            let shouldFinish = existing?.finishRequired
+                ?? verified.finishRequired
+                ?? policy.finishAfterRecording
+            let transactionJws: String
+            if existing?.backendSyncedAt != nil {
+                // Backend acknowledgement owns the cleared receipt even if a
+                // producer still carries its original signed payload.
+                transactionJws = existing!.transactionJws
+            } else if purchaseCommitJourneyRouting.contains(commitKey),
+                      let existing {
+                // A routed-capture retry rebuilds from the current durable row.
+                transactionJws = existing.transactionJws
+            } else if existing?.isRevoked == true && !verified.isRevoked {
+                transactionJws = existing!.transactionJws
+            } else if verified.transactionJws.isEmpty {
+                transactionJws = existing?.transactionJws ?? ""
+            } else {
+                transactionJws = verified.transactionJws
+            }
+            return StoredTransactionEvidence(
+                scope: existing?.scope ?? pendingRecord?.scope ?? purchaseStorageScope,
+                // A revoked row's signed payload is authoritative: an active
+                // producer arriving after revocation must not rewrite it.
+                transactionJws: transactionJws,
+                transactionId: verified.transactionId,
+                originalTransactionId: verified.originalTransactionId,
+                productId: verified.productId,
+                distinctId: existing?.distinctId
+                    ?? (verified.requiresTokenOwnership
+                        // Recovery ownership outranks the caller's expectation.
+                        ? recoveredOwner ?? activeDistinctId
+                        : verified.attributedDistinctId
+                            ?? pendingRecord?.distinctId
+                            ?? accountOwner
+                            ?? deterministicAccountOwner
+                            ?? activeDistinctId),
+                recordedAt: existing?.recordedAt
+                    ?? verified.recordedAt
+                    ?? pendingRecord?.recordedAt
+                    ?? dateProvider.now(),
+                productFeatureIds: existing?.productFeatureIds.isEmpty == false
+                    ? existing!.productFeatureIds
+                    : (verified.productFeatureIds.isEmpty
+                        ? pendingRecord?.productFeatureIds ?? []
+                        : verified.productFeatureIds),
+                isRevoked: verified.isRevoked || existing?.isRevoked == true,
+                finishRequired: shouldFinish,
+                commercialContext: existing?.commercialContext
+                    ?? verified.commercialContext
+                    ?? pendingRecord?.commercialContext,
+                checkoutCompletionEventId: existing?.checkoutCompletionEventId
+                    ?? verified.checkoutCompletionEventId
+                    ?? pendingRecord?.checkoutCompletionEventId,
+                completionDeliveredAt: existing?.completionDeliveredAt
+                    ?? verified.completionDeliveredAt,
+                backendSyncedAt: existing?.backendSyncedAt
+                    ?? verified.backendSyncedAt
+            )
         }
-        var committedEvidence = StoredTransactionEvidence(
-            scope: existing?.scope ?? pendingRecord?.scope ?? purchaseStorageScope,
-            // A revoked row's signed payload is authoritative: an active
-            // producer arriving after revocation must not rewrite it
-            // (monotonic revocation; the row stays exactly as revoked).
-            transactionJws: transactionJws,
-            transactionId: verified.transactionId,
-            originalTransactionId: verified.originalTransactionId,
-            productId: verified.productId,
-            distinctId: existing?.distinctId
-                ?? (verified.requiresTokenOwnership
-                    // Recovery: token-derived ownership outranks the
-                    // caller's expected customer (see the guard above).
-                    ? recoveredOwner ?? activeDistinctId
-                    : verified.attributedDistinctId
-                        ?? pendingRecord?.distinctId
-                        ?? accountOwner
-                        ?? deterministicAccountOwner
-                        ?? activeDistinctId),
-            recordedAt: existing?.recordedAt
-                ?? verified.recordedAt
-                ?? pendingRecord?.recordedAt
-                ?? dateProvider.now(),
-            productFeatureIds: existing?.productFeatureIds.isEmpty == false
-                ? existing!.productFeatureIds
-                : (verified.productFeatureIds.isEmpty
-                    ? pendingRecord?.productFeatureIds ?? []
-                    : verified.productFeatureIds),
-            isRevoked: verified.isRevoked || existing?.isRevoked == true,
-            finishRequired: shouldFinish,
-            commercialContext: existing?.commercialContext
-                ?? verified.commercialContext
-                ?? pendingRecord?.commercialContext,
-            checkoutCompletionEventId: existing?.checkoutCompletionEventId
-                ?? verified.checkoutCompletionEventId
-                ?? pendingRecord?.checkoutCompletionEventId,
-            completionDeliveredAt: existing?.completionDeliveredAt
-                ?? verified.completionDeliveredAt,
-            backendSyncedAt: existing?.backendSyncedAt
-                ?? verified.backendSyncedAt
-        )
+        var committedEvidence = makeCommittedEvidence(existing)
         let routeCompletionToJourneys: Bool
         if purchaseCommitJourneyRouting.contains(commitKey) {
             routeCompletionToJourneys = true
@@ -1391,15 +1396,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // die on a failing store write: completion capture comes first (the
         // claim is persisted only after the event is durably captured), and
         // the unchanged row carries everything the capture needs.
-        var evidenceChanged = false
-        if existing != committedEvidence {
-            guard let currentEvidence = await persistEvidenceAndReload(
-                committedEvidence,
-                refreshProjection: false
-            ) else { return .rejected }
-            committedEvidence = currentEvidence
-            evidenceChanged = true
-        }
+        guard let initialChange = reloadAndApplyEvidenceChange(
+            transactionId: verified.transactionId,
+            makeCommittedEvidence
+        ) else { return .rejected }
+        committedEvidence = initialChange.evidence
+        var evidenceChanged = initialChange.changed
 
         if let checkoutRecovery {
             guard await retireCheckoutRecovery(
@@ -1417,16 +1419,18 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
         if committedEvidence.finishRequired, let finish = verified.finish {
             await finish()
-            committedEvidence = replacingCommitState(
-                committedEvidence,
-                finishRequired: false
-            )
-            guard let currentEvidence = await persistEvidenceAndReload(
-                committedEvidence,
-                refreshProjection: false
+            guard let finishChange = reloadAndApplyEvidenceChange(
+                transactionId: verified.transactionId,
+                { current in
+                    guard let current else { return nil }
+                    return replacingCommitState(
+                        current,
+                        finishRequired: false
+                    )
+                }
             ) else { return .rejected }
-            committedEvidence = currentEvidence
-            evidenceChanged = true
+            committedEvidence = finishChange.evidence
+            evidenceChanged = evidenceChanged || finishChange.changed
         }
 
         // Actor reentrancy in pending-record retirement or StoreKit finishing
@@ -1443,6 +1447,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
            committedEvidence.completionDeliveredAt == nil,
            committedEvidence.distinctId == identityService.getDistinctId(),
            let context = committedEvidence.commercialContext {
+            // A revocation may land while capture is suspended. This emission
+            // race is accepted: the admitted completion may still emit, as in
+            // the historical refund window, and the server reconciles it.
+            // Durable evidence and sync eligibility reload after this await.
             let captured = await capturePurchaseCompletion(
                 properties: purchaseCompletionProperties(
                     context: context,
@@ -1459,19 +1467,22 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             )
             if captured {
                 purchaseCommitJourneyRouting.remove(commitKey)
-                committedEvidence = replacingCommitState(
-                    committedEvidence,
-                    completionDeliveredAt: dateProvider.now()
-                )
-                if let currentEvidence = await persistEvidenceAndReload(
-                    committedEvidence,
-                    refreshProjection: false
+                let deliveredAt = dateProvider.now()
+                if let completionChange = reloadAndApplyEvidenceChange(
+                    transactionId: verified.transactionId,
+                    { current in
+                        guard let current else { return nil }
+                        return replacingCommitState(
+                            current,
+                            completionDeliveredAt: deliveredAt
+                        )
+                    }
                 ) {
-                    committedEvidence = currentEvidence
+                    committedEvidence = completionChange.evidence
                     completionAccepted = committedEvidence.commercialContext == nil
                         || committedEvidence.isRevoked
                         || committedEvidence.completionDeliveredAt != nil
-                    evidenceChanged = true
+                    evidenceChanged = evidenceChanged || completionChange.changed
                 } else {
                     completionAccepted = false
                 }
@@ -1489,9 +1500,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // A duplicate token-ownership recovery producer whose commit changed
         // nothing durable never resubmits the receipt; the stored-evidence
         // pump owns retries of previously recorded failures.
-        let currentEvidence = storedEvidence()[verified.transactionId]
+        let currentEvidence = reloadAndApplyEvidenceChange(
+            transactionId: verified.transactionId,
+            { $0 }
+        )?.evidence
         let syncTask: Task<Bool, Never>?
         if verified.requiresTokenOwnership && !evidenceChanged {
+            syncTask = nil
+        } else if currentEvidence?.backendSyncedAt != nil {
             syncTask = nil
         } else if currentEvidence?.isRevoked == true && !verified.isRevoked {
             // A revocation announced while this active producer was suspended
@@ -2239,39 +2255,48 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return retained
     }
 
-    private func persistEvidenceAndReload(
-        _ evidence: StoredTransactionEvidence,
-        refreshProjection: Bool
-    ) async -> StoredTransactionEvidence? {
-        guard await persistEvidence(
-            evidence,
-            refreshProjection: refreshProjection
-        ) else { return nil }
-        return storedEvidence()[evidence.transactionId]
+    /// Reloads the actor-canonical row and applies one replacement without an
+    /// actor suspension between the read and durable write. The verified
+    /// committer expresses every post-await change as a transformation of this
+    /// current row rather than persisting a pre-await snapshot.
+    private func reloadAndApplyEvidenceChange(
+        transactionId: String,
+        _ change: (StoredTransactionEvidence?) -> StoredTransactionEvidence?
+    ) -> (evidence: StoredTransactionEvidence, changed: Bool)? {
+        var entries = storedEvidence()
+        guard !evidenceStoreUnreadable,
+              let proposed = change(entries[transactionId]),
+              proposed.scope == purchaseStorageScope,
+              proposed.transactionId == transactionId else { return nil }
+        let existingRevocation = entries[transactionId].flatMap {
+            $0.isRevoked ? $0 : nil
+        }
+        let mustRemainRevoked = proposed.isRevoked
+            || revokedOriginalTransactionIds.contains(proposed.originalTransactionId)
+            || entries.values.contains {
+                $0.originalTransactionId == proposed.originalTransactionId
+                    && $0.isRevoked
+            }
+        let evidenceToPersist = mustRemainRevoked && !proposed.isRevoked
+            ? evidenceWithRevocation(proposed, preserving: existingRevocation)
+            : proposed
+        guard entries[transactionId] != evidenceToPersist else {
+            return (evidenceToPersist, false)
+        }
+        entries[transactionId] = evidenceToPersist
+        guard evidenceStore.save(entries) else { return nil }
+        evidenceByTransactionId = entries
+        return (evidenceToPersist, true)
     }
 
     private func persistEvidence(
         _ evidence: StoredTransactionEvidence,
         refreshProjection: Bool = true
     ) async -> Bool {
-        guard evidence.scope == purchaseStorageScope else { return false }
-        var entries = storedEvidence()
-        guard !evidenceStoreUnreadable else { return false }
-        let existingRevocation = entries[evidence.transactionId].flatMap {
-            $0.isRevoked ? $0 : nil
-        }
-        let mustRemainRevoked = evidence.isRevoked
-            || revokedOriginalTransactionIds.contains(evidence.originalTransactionId)
-            || entries.values.contains {
-                $0.originalTransactionId == evidence.originalTransactionId
-                    && $0.isRevoked
-            }
-        let evidenceToPersist = mustRemainRevoked && !evidence.isRevoked
-            ? evidenceWithRevocation(evidence, preserving: existingRevocation)
-            : evidence
-        entries[evidence.transactionId] = evidenceToPersist
-        guard evidenceStore.save(entries) else { return false }
-        evidenceByTransactionId = entries
+        guard reloadAndApplyEvidenceChange(
+            transactionId: evidence.transactionId,
+            { _ in evidence }
+        ) != nil else { return false }
         if refreshProjection {
             await refreshOptimisticProjection()
         }
