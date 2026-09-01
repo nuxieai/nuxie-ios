@@ -230,7 +230,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     private var cachedProfile: CachedProfile?
     /// Nil means no complete catalog generation has been admitted yet. An
     /// admitted empty catalog is represented by a non-nil snapshot whose
-    /// reference arrays are empty; durable commerce recovery depends on that
+    /// reference arrays are empty; durable purchase recovery depends on that
     /// distinction.
     private var triggerAdmission: ProfileTriggerAdmission?
     

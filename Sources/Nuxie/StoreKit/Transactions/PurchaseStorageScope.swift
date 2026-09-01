@@ -114,14 +114,15 @@ struct PurchaseCommercialContext: Codable, Equatable, Sendable {
 func purchaseCompletionProperties(
     context: PurchaseCommercialContext,
     transactionId: String?,
-    testStore: Bool
+    testStore: Bool,
+    source: PurchaseOutcomeSource
 ) -> [String: Any] {
     var properties: [String: Any] = [
         "product_id": context.productId,
         "placement_id": context.placementId,
         "store_product_id": context.storeProductId,
         "experience_id": context.experienceId,
-        "source": "purchase",
+        "source": source.rawValue,
         "test_store": testStore,
     ]
     if let transactionId {

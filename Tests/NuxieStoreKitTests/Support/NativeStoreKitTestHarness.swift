@@ -17,7 +17,7 @@ enum NativeStoreKitTestError: Error {
     case transactionStateDidNotConverge(String)
 }
 
-/// Owns the StoreKitTest process state shared by one native-commerce test.
+/// Owns the StoreKitTest process state shared by one native-purchase test.
 /// Tests express scenarios through this seam while product lookup, reset,
 /// unfinished-transaction polling, and cleanup remain deterministic here.
 final class NativeStoreKitTestHarness: @unchecked Sendable {
@@ -25,7 +25,7 @@ final class NativeStoreKitTestHarness: @unchecked Sendable {
 
     init() throws {
         guard let configurationURL = Bundle(for: NativeStoreKitTestHarness.self).url(
-            forResource: "NuxieNativeCommerce",
+            forResource: "NuxieNativePurchase",
             withExtension: "storekit"
         ) else {
             throw NativeStoreKitTestError.missingConfiguration

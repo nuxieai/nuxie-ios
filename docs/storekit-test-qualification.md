@@ -3,7 +3,7 @@
 `NuxieSDKStoreKitTests` is the launch-qualification suite for Nuxie's real
 StoreKit 2 checkout, restore, transaction-observation, and finishing paths. It
 uses the checked-in
-`Tests/NuxieStoreKitTests/Fixtures/NuxieNativeCommerce.storekit` catalog and a
+`Tests/NuxieStoreKitTests/Fixtures/NuxieNativePurchase.storekit` catalog and a
 dedicated empty application host. No production app target bundles the local
 catalog.
 

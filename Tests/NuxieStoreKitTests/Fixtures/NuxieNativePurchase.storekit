@@ -10,7 +10,7 @@
       "internalID" : "176A37A1",
       "localizations" : [
         {
-          "description" : "A repeatable native commerce test purchase.",
+          "description" : "A repeatable native purchase test.",
           "displayName" : "Test Credits",
           "locale" : "en_US"
         }
@@ -25,7 +25,7 @@
       "internalID" : "9F2235CB",
       "localizations" : [
         {
-          "description" : "A durable native commerce test purchase.",
+          "description" : "A durable native purchase test.",
           "displayName" : "Test Lifetime Access",
           "locale" : "en_US"
         }

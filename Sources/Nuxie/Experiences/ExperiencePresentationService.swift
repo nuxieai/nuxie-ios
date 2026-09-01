@@ -572,7 +572,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         )
         guard currentPresentationID == presentationID else { return }
 
-        await experienceViewController.waitForInFlightCommerceBeforeHostDismissal()
+        await experienceViewController.waitForInFlightPurchaseBeforeHostDismissal()
         guard currentPresentationID == presentationID else { return }
 
         let terminalized = await runtimeDelegate?.experienceViewControllerDidRequestHostDismiss(

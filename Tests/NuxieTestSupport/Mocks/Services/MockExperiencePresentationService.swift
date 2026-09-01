@@ -291,7 +291,7 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
         if let controller {
             controller.beginHostDismissal()
             await delegate?.experienceViewControllerWillRequestHostDismiss(controller)
-            await controller.waitForInFlightCommerceBeforeHostDismissal()
+            await controller.waitForInFlightPurchaseBeforeHostDismissal()
             terminalized = await delegate?.experienceViewControllerDidRequestHostDismiss(
                 controller
             ) ?? true

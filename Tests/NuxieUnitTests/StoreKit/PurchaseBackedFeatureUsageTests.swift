@@ -1045,7 +1045,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertEqual(store.load().valueTreatingAbsentAsEmpty([:])!.count, 3)
     }
 
-    func testDelegateTransferredStoreKitEvidenceRemainsEligibleWhileTestStoreDoesNot() async throws {
+    func testExistingNativeEvidenceRemainsEligibleAfterDelegateConfigurationWhileTestStoreDoesNot() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
 
@@ -1363,9 +1363,9 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
                 entityId: nil,
                 metadata: nil
             )
-            XCTFail("Expected CommerceStoreError.evidenceUnreadable")
-        } catch let error as CommerceStoreError {
-            XCTAssertEqual(error, .evidenceUnreadable)
+            XCTFail("Expected TransactionEvidenceError.unreadable")
+        } catch let error as TransactionEvidenceError {
+            XCTAssertEqual(error, .unreadable)
         }
     }
 

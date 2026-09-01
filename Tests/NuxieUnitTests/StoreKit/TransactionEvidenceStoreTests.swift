@@ -86,6 +86,93 @@ private actor ActiveAuthoritySwitch {
     func get() -> ActiveProductEvidenceAuthorityResolution { value }
 }
 
+private actor SuspendedTransactionFinalization {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func perform() async {
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
+private actor SuspendedRevocationProjection {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func observe(_ evidence: [OptimisticPurchaseEvidence]?) async {
+        guard evidence?.contains(where: \.revoked) == true,
+              !started else { return }
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
+private actor RecordingTransactionSyncAPI {
+    private var transactionJWSs: [String] = []
+
+    func syncTransaction(
+        transactionJwt: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse {
+        transactionJWSs.append(transactionJwt)
+        return PurchaseResponse(
+            success: true,
+            customerId: distinctId,
+            features: nil,
+            error: nil
+        )
+    }
+
+    var recordedTransactionJWSs: [String] { transactionJWSs }
+}
+
+extension RecordingTransactionSyncAPI: PurchaseSynchronizing {}
+
 final class TransactionEvidenceStoreTests: QuickSpec {
     override class func spec() {
         describe("TransactionEvidenceStore") {
@@ -257,6 +344,124 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty,
             "an external delegate outcome must not manufacture StoreKit evidence"
         )
+    }
+
+    func testConcurrentRevocationPreventsStaleActiveCompletionAndSync() async throws {
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("revocation-race-customer")
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(
+            apiKey: "revocation-race"
+        ))
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: identity,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
+        )
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let eventSink = TransactionEvidenceEventSink()
+        let syncAPI = RecordingTransactionSyncAPI()
+        let finalization = SuspendedTransactionFinalization()
+        let revocationProjection = SuspendedRevocationProjection()
+        let product = Self.projectionProduct(
+            productId: "revocation-race-product",
+            storeProductId: "revocation-race-store-product"
+        )
+        let context = try XCTUnwrap(product.purchaseContext)
+        let observer = TransactionObserver(
+            api: syncAPI,
+            features: features,
+            identity: identity,
+            settings: settings,
+            eventSink: eventSink,
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: evidenceStore,
+            projectionPublisher: { evidence, _, _, _ in
+                await revocationProjection.observe(evidence)
+            },
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+        let transactionId = "revocation-race-transaction"
+        let originalTransactionId = "revocation-race-original"
+
+        let activeCommit = Task {
+            await observer.commit(.verified(
+                VerifiedPurchaseEvidence(
+                    transactionJws: "active-jws",
+                    transactionId: transactionId,
+                    originalTransactionId: originalTransactionId,
+                    productId: product.storeProductId,
+                    attributedDistinctId: identity.getDistinctId(),
+                    commercialContext: context,
+                    finishRequired: true,
+                    resolvesPendingPurchase: false,
+                    allowsDurableCheckoutAuthority: false,
+                    requiresAuthorityResolution: false,
+                    finish: { await finalization.perform() }
+                ),
+                source: .checkout
+            ))
+        }
+        await finalization.waitUntilStarted()
+
+        let revokedCommit = Task {
+            await observer.commit(.verified(
+                VerifiedPurchaseEvidence(
+                    transactionJws: "revoked-jws",
+                    transactionId: transactionId,
+                    originalTransactionId: originalTransactionId,
+                    productId: product.storeProductId,
+                    attributedDistinctId: "different-customer",
+                    commercialContext: context,
+                    finishRequired: true,
+                    resolvesPendingPurchase: false,
+                    allowsDurableCheckoutAuthority: false,
+                    requiresAuthorityResolution: false,
+                    isRevoked: true,
+                    finish: {}
+                ),
+                source: .transactionStream
+            ))
+        }
+        await revocationProjection.waitUntilStarted()
+        await finalization.release()
+        let activeResult = await activeCommit.value
+        let coercedBeforeRevocationPersist = evidenceStore.load()
+            .valueTreatingAbsentAsEmpty([:])?[transactionId]
+        let requestsBeforeRevocationPersist = await syncAPI.recordedTransactionJWSs
+
+        XCTAssertTrue(activeResult.committed)
+        XCTAssertNil(activeResult.syncTask)
+        XCTAssertEqual(coercedBeforeRevocationPersist?.isRevoked, true)
+        XCTAssertEqual(coercedBeforeRevocationPersist?.transactionJws, "active-jws")
+        XCTAssertTrue(requestsBeforeRevocationPersist.isEmpty)
+        XCTAssertFalse(eventSink.names.contains(SystemEventNames.purchaseCompleted))
+
+        await revocationProjection.release()
+        let revokedResult = await revokedCommit.value
+        let retainedAfterRejectedRevocation = evidenceStore.load()
+            .valueTreatingAbsentAsEmpty([:])?[transactionId]
+
+        XCTAssertFalse(revokedResult.committed)
+        XCTAssertNil(revokedResult.syncTask)
+        XCTAssertEqual(retainedAfterRejectedRevocation?.isRevoked, true)
+        XCTAssertEqual(retainedAfterRejectedRevocation?.transactionJws, "revoked-jws")
+
+        await observer.retryStoredEvidence()
+
+        let retained = evidenceStore.load()
+            .valueTreatingAbsentAsEmpty([:])?[transactionId]
+        let recordedJWSs = await syncAPI.recordedTransactionJWSs
+
+        XCTAssertEqual(recordedJWSs, ["revoked-jws"])
+        XCTAssertEqual(retained?.isRevoked, true)
+        XCTAssertEqual(retained?.transactionJws, "")
+        XCTAssertNotNil(retained?.backendSyncedAt)
+        await observer.stopListening()
     }
 
     func testFreshObserverRelaunchRederivesOverlayFromEvidenceAndCachedDescriptor() async throws {
@@ -526,7 +731,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         await observer.handleVerifiedTransaction(
             active,
             jwsRepresentation: "active-jws",
-            source: .storeUpdates
+            source: .transactionStream
         )
         let activeProjection = await recorder.latest()
         XCTAssertEqual(activeProjection?.first?.revoked, false)
@@ -543,7 +748,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
                 finish: {}
             ),
             jwsRepresentation: "revoked-jws",
-            source: .storeUpdates
+            source: .transactionStream
         )
         let revokedProjection = await recorder.latest()
         XCTAssertEqual(revokedProjection?.first?.revoked, true)
@@ -615,7 +820,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
                 finish: {}
             ),
             jwsRepresentation: "revoked-jws",
-            source: .storeUpdates
+            source: .transactionStream
         )
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
 
@@ -818,81 +1023,6 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         XCTAssertEqual(retained?.finishRequired, true)
         XCTAssertEqual(retained?.transactionJws, "")
         XCTAssertNotNil(retained?.backendSyncedAt)
-    }
-
-    func testDeduplicatedSyncDrainsEvidencePersistedAfterObserverWonRace() async {
-        let mocks = MockFactory.shared
-        let configuration = NuxieConfiguration(apiKey: "isolated")
-        let settings = NuxieRuntimeSettings(configuration: configuration)
-        let evidenceStore = InMemoryTransactionEvidenceStore()
-        let features = FeatureService(
-            api: mocks.nuxieApi,
-            identity: mocks.identityService,
-            profile: mocks.profileService,
-            dateProvider: mocks.dateProvider,
-            featureInfo: FeatureInfo(),
-            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
-        )
-        let observer = TransactionObserver(
-            api: mocks.nuxieApi,
-            features: features,
-            identity: mocks.identityService,
-            settings: settings,
-            eventSink: TransactionEvidenceEventSink(),
-            transactionServiceProvider: { fatalError("unused in this test") },
-            evidenceStore: evidenceStore
-        )
-        let evidence = StoreTransactionEvidence(
-            transactionJws: "signed-jws",
-            transactionId: "transaction-race",
-            originalTransactionId: "original-race",
-            productId: "product-race",
-            finish: {}
-        )
-        let product = StoreProduct(
-            productId: "product-race",
-            placementId: "placement-race",
-            name: "Product",
-            price: "$1.00",
-            period: nil
-        )
-
-        let firstRecord = await observer.recordVerifiedPurchase(
-            evidence: evidence,
-            product: product,
-            distinctId: "customer-1",
-            finishRequired: true
-        )
-        XCTAssertTrue(firstRecord)
-        let firstSync = await observer.syncTransaction(
-            transactionJws: evidence.transactionJws,
-            transactionId: evidence.transactionId,
-            productId: evidence.productId,
-            originalTransactionId: evidence.originalTransactionId
-        )
-        XCTAssertTrue(firstSync)
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.finishRequired == true)
-        await observer.markTransactionFinished(transactionId: evidence.transactionId)
-        XCTAssertNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
-
-        // Model the direct purchase callback persisting after the observer has
-        // already completed the same transaction from Transaction.updates.
-        let lateRecord = await observer.recordVerifiedPurchase(
-            evidence: evidence,
-            product: product,
-            distinctId: "customer-1",
-            finishRequired: true
-        )
-        XCTAssertTrue(lateRecord)
-        XCTAssertNotNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
-        let deduplicatedSync = await observer.syncTransaction(
-            transactionJws: evidence.transactionJws,
-            transactionId: evidence.transactionId,
-            productId: evidence.productId,
-            originalTransactionId: evidence.originalTransactionId
-        )
-        XCTAssertTrue(deduplicatedSync)
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.finishRequired == true)
     }
 
     @MainActor

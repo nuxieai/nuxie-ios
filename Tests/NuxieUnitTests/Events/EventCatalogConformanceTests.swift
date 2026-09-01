@@ -95,13 +95,13 @@ $permission_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event re
 $permission_granted	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
 $products_unavailable	processCapture	governed	batch	true	true
 $purchase_cancelled	trackForTrigger	governed	/i/event response lane	true	true
-$purchase_completed	captureStableSystemEvent|trackForTrigger	governed|governed	batch|/i/event response lane	true|true	true|true
+$purchase_completed	captureStableSystemEvent	governed	batch	true	true
 $purchase_failed	trackForTrigger	governed	/i/event response lane	true	true
 $purchase_pending	trackForTrigger	governed	/i/event response lane	true	true
 $purchase_synced	captureStableSystemEvent|trackForTrigger	governed|governed	batch|/i/event response lane	true|true	true|true
 $response_set	none	exempt	none	false	false
 $response_unset	none	exempt	none	false	false
-$restore_completed	trackForTrigger	governed	/i/event response lane	true	true
+$restore_completed	captureStableSystemEvent|trackForTrigger	governed|governed	batch|/i/event response lane	true|true	true|true
 $restore_failed	trackForTrigger	governed	/i/event response lane	true	true
 $restore_no_purchases	trackForTrigger	governed	/i/event response lane	true	true
 $screen_dismissed	processCapture	governed	batch	true	true

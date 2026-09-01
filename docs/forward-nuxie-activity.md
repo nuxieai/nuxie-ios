@@ -124,7 +124,7 @@ the separate `nuxie(_:didRequestAppAction:)` delegate callback described in
 ## Filtering
 
 `beforeSend` governs ordinary capture, including lifecycle, presentation,
-commerce, permission, and designer-authored events. Returning `nil` suppresses
+purchase, permission, and designer-authored events. Returning `nil` suppresses
 the wire event, history row, and activity callback together. Renaming an event
 does not change its public activity case. Journey protocol facts and server
 down-facts are not passed through `beforeSend`.

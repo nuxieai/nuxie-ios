@@ -28,10 +28,10 @@ enum StoreReadResult<Value> {
 
 extension StoreReadResult: Sendable where Value: Sendable {}
 
-/// Unreadable durable commerce state must surface as a retryable failure,
+/// Unreadable durable transaction evidence must surface as a retryable failure,
 /// never as authoritative absence (internal review A12).
-enum CommerceStoreError: Error, Equatable {
-    case evidenceUnreadable
+enum TransactionEvidenceError: Error, Equatable, Sendable {
+    case unreadable
 }
 
 final class StoreReadFailureLogger {

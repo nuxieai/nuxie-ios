@@ -173,11 +173,11 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     }
   }
 
-  /// Exact commerce shapes copied by the maintained public documentation.
+  /// Exact purchase shapes copied by the maintained public documentation.
   /// This is intentionally compile-only: docs checks pin the snippets to
   /// these call sites, and this target proves that the public Swift surface
   /// accepts them.
-  private func _compileOnlyCommerceDocumentationSurface() async throws {
+  private func _compileOnlyPurchaseDocumentationSurface() async throws {
     let terms = StoreProduct.IntroductoryTerms(
       price: "$0.00",
       period: .week,

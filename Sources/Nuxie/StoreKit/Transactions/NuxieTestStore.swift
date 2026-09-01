@@ -37,7 +37,7 @@ protocol NuxieTestStorePurchasing: Sendable {
 }
 
 /// A deliberately unmistakable, local-only checkout surface for qualifying
-/// Experiences and Journey branches before App Store commerce is configured.
+/// Experiences and Journey branches before App Store purchases are configured.
 /// It never creates a StoreKit transaction or calls a host purchase delegate.
 actor NuxieTestStore: NuxieTestStorePurchasing {
     private var purchasedProductsByDistinctId: [String: [String: StoreProduct]] = [:]

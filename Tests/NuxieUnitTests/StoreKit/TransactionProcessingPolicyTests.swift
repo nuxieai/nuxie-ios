@@ -2,9 +2,9 @@ import XCTest
 @testable import Nuxie
 
 final class TransactionProcessingPolicyTests: XCTestCase {
-    func testSignedConnectorEntitlementSyncRemainsProviderOwned() {
+    func testProviderEvidenceRemainsProviderOwned() {
         let policy = transactionProcessingPolicy(
-            source: .nuxieEntitlementSync(distinctId: "customer-a"),
+            resolvesPendingPurchase: false,
             evidenceAuthority: .providerConnector,
             observerMode: false
         )
@@ -14,9 +14,9 @@ final class TransactionProcessingPolicyTests: XCTestCase {
         XCTAssertFalse(policy.resolvesPendingPurchase)
     }
 
-    func testOutcomeOnlyEntitlementSyncRemainsNativeSDKOwned() {
+    func testNativeEvidenceRemainsSDKOwned() {
         let policy = transactionProcessingPolicy(
-            source: .nuxieEntitlementSync(distinctId: "customer-a"),
+            resolvesPendingPurchase: false,
             evidenceAuthority: .nativeStoreKit,
             observerMode: false
         )
@@ -26,31 +26,33 @@ final class TransactionProcessingPolicyTests: XCTestCase {
         XCTAssertFalse(policy.resolvesPendingPurchase)
     }
 
-    func testSignedConnectorStoreUpdatesRemainProviderOwned() {
+    func testProviderDeferredUpdateRetainsPendingResolutionIntent() {
         let policy = transactionProcessingPolicy(
-            source: .storeUpdates,
+            resolvesPendingPurchase: true,
             evidenceAuthority: .providerConnector,
             observerMode: false
         )
 
         XCTAssertTrue(policy.providerOwnsTransaction)
         XCTAssertFalse(policy.finishAfterRecording)
+        XCTAssertTrue(policy.resolvesPendingPurchase)
     }
 
-    func testOutcomeOnlyDelegateStoreUpdatesRemainNativeSDKOwned() {
+    func testNativeDeferredUpdateFinishesAndResolvesPendingPurchase() {
         let policy = transactionProcessingPolicy(
-            source: .storeUpdates,
+            resolvesPendingPurchase: true,
             evidenceAuthority: .nativeStoreKit,
             observerMode: false
         )
 
         XCTAssertFalse(policy.providerOwnsTransaction)
         XCTAssertTrue(policy.finishAfterRecording)
+        XCTAssertTrue(policy.resolvesPendingPurchase)
     }
 
-    func testConflictingActiveProductAuthorityFailsClosedForEntitlementSync() {
+    func testConflictingActiveProductAuthorityFailsClosed() {
         let policy = transactionProcessingPolicy(
-            source: .nuxieEntitlementSync(distinctId: "customer-a"),
+            resolvesPendingPurchase: false,
             evidenceAuthority: .ambiguous,
             observerMode: false
         )

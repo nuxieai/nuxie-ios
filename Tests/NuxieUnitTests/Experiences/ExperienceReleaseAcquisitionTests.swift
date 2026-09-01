@@ -28,17 +28,17 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         super.tearDown()
     }
 
-    func testCommerceDescriptorCacheEpochIgnoresObsoleteMappingsAndCachedSignedProfileRehydratesActiveAndPinned() async throws {
+    func testPurchaseDescriptorCacheEpochRehydratesActiveAndPinnedWithoutObsoleteMappings() async throws {
         let cache = temporaryDirectory()
         let (active, delivery) = try releaseEntry(
-            riv: Data("RIVE commerce cache epoch".utf8),
+            riv: Data("RIVE purchase cache epoch".utf8),
             image: Data([2, 4, 9, 1])
         )
         let pinned = try resign(entry: active) { root in
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
-            identity["experienceId"] = "experience-pinned-commerce-epoch"
-            identity["experienceVersionId"] = "version-pinned-commerce-epoch"
-            identity["buildId"] = "build-pinned-commerce-epoch"
+            identity["experienceId"] = "experience-pinned-purchase-epoch"
+            identity["experienceVersionId"] = "version-pinned-purchase-epoch"
+            identity["buildId"] = "build-pinned-purchase-epoch"
             identity["publishedAtSeq"] = 41
             root["identity"] = identity
         }
@@ -70,7 +70,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         // ProfileServiceCacheTests proves startup forwards a signed profile
         // restored from disk through replaceReleaseProfile. This test starts
         // at that admission boundary and proves it repersists both active and
-        // pinned current authority into the new commerce epoch.
+        // pinned current authority into the new purchase epoch.
         let cachedSignedProfile = ExperienceReleaseProfile(
             delivery: delivery,
             active: [active],
@@ -80,7 +80,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(catalog.definitions.count, 2)
 
         let currentDirectory = cache.appendingPathComponent(
-            "authenticated_descriptors_commerce_v2",
+            "authenticated_descriptors_purchase_v3",
             isDirectory: true
         )
         XCTAssertTrue(FileManager.default.fileExists(
@@ -2371,7 +2371,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(
             productService.requestCount,
             1,
-            "an empty Placement catalog must not turn preview commerce into a product-free screen"
+            "an empty Placement catalog must not turn preview purchases into a product-free screen"
         )
     }
 

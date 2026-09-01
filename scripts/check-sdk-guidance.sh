@@ -117,11 +117,11 @@ for provider_example in \
 done
 
 for completion_contract in \
-  'one checkout-scoped completion' \
-  'callback and StoreKit observer' \
-  'idempotent by StoreKit transaction ID'; do
+  'one transaction committer' \
+  'same transaction surfacing through several StoreKit paths' \
+  'deduplicate only per callback operation'; do
   grep -Fq "$completion_contract" README.md \
-    || fail "README is missing durable completion guidance: $completion_contract"
+    || fail "README is missing unified completion guidance: $completion_contract"
 done
 if grep -R -Fq 'shouldObservePurchases = true' \
   Examples/SwiftUI-Superwall Examples/UIKit-Superwall; then

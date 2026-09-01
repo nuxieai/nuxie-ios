@@ -42,6 +42,42 @@ extension SystemEventSink {
             distinctId: distinctId
         )
     }
+
+    /// Captures one stable event identity with an explicit local-routing
+    /// policy. External commercial declarations can require the durable
+    /// carrier before Journey routing; cold recovery remains capture-only.
+    func captureStableSystemEvent(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String,
+        routeToJourneys: Bool,
+        ensureDurableCarrier: Bool = false
+    ) async -> Bool {
+        if ensureDurableCarrier {
+            guard await captureOnly(
+                name,
+                properties: properties,
+                eventId: eventId,
+                distinctId: distinctId
+            ) else { return false }
+        }
+        if routeToJourneys {
+            return await capture(
+                name,
+                properties: properties,
+                eventId: eventId,
+                distinctId: distinctId
+            )
+        }
+        if ensureDurableCarrier { return true }
+        return await captureOnly(
+            name,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId
+        )
+    }
 }
 
 final class DiscardingSystemEventSink: SystemEventSink, Sendable {

@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import Nuxie
 
-final class CommerceStoreCorruptionTests: XCTestCase {
+final class TransactionEvidenceStoreCorruptionTests: XCTestCase {
     private let scope = PurchaseStorageScope.testFixture
 
     func testTransactionEvidenceCorruptionIsUnknownAndCannotBeDiscarded() throws {
@@ -29,6 +29,15 @@ final class CommerceStoreCorruptionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture.file), fixture.contents)
     }
 
+    func testLegacyExternalAuthorityRemainsReadableForPruning() throws {
+        let encoded = Data(#""outcomeOnlyDelegate""#.utf8)
+
+        XCTAssertEqual(
+            try JSONDecoder().decode(PurchaseEvidenceAuthority.self, from: encoded),
+            .providerConnector
+        )
+    }
+
     func testAccountOwnershipCorruptionIsUnknownAndCannotBeDiscarded() throws {
         let fixture = try corruptStoreFixture(fileName: "account-ownership.json")
         let store = PurchaseAccountOwnershipStore(
@@ -51,7 +60,7 @@ final class CommerceStoreCorruptionTests: XCTestCase {
         fileName: String
     ) throws -> (root: URL, file: URL, contents: Data) {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("commerce-corruption-\(UUID().uuidString)")
+            .appendingPathComponent("purchase-corruption-\(UUID().uuidString)")
         addTeardownBlock {
             try? FileManager.default.removeItem(at: root)
         }

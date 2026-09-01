@@ -78,25 +78,14 @@ actor TransactionService {
     /// after this shorter abandonment window.
     static let checkoutRecoveryTTL: TimeInterval = 15 * 60
 
-    /// An outcome-only delegate cannot prove whether `.purchased` came from
-    /// StoreKit or another processor. Keep exact checkout correlation briefly
-    /// so Transaction.updates can win either side of the callback race, then
-    /// retire only the commercial marker. Durable SDK account-token ownership
-    /// remains available for later receipt sync and finishing.
-    static let outcomeOnlyStoreKitObservationTTL: TimeInterval = 30
-
     /// Exact pre-checkout contexts, including deferred purchases. Durable,
     /// loaded lazily, scope-checked, and pruned by TTL.
     private var cachedPendingPurchases: [String: PendingPurchaseRecord]?
     private var pendingPurchaseStateUnreadable = false
-    /// Process-local authority for Journey routing. Durable recovery markers
-    /// restore commercial facts after relaunch, but only a checkout still
-    /// executing in this process may advance the paywall's Journey.
+    /// Process-local Journey authority. Durable checkout records preserve
+    /// commercial attribution after relaunch, but only a checkout still
+    /// executing in this process may route an ordinary checkout completion.
     private var activeCheckoutKeys: Set<String> = []
-
-    private func pendingKey(productId: String, distinctId: String) -> String {
-        "\(distinctId)::\(productId)"
-    }
 
     private func activeCheckoutKey(
         appAccountToken: UUID,
@@ -118,6 +107,10 @@ actor TransactionService {
             appAccountToken: appAccountToken,
             productId: productId
         ))
+    }
+
+    private func pendingKey(productId: String, distinctId: String) -> String {
+        "\(distinctId)::\(productId)"
     }
 
     private func pendingKey(productId: String) -> String {
@@ -236,17 +229,17 @@ actor TransactionService {
             }
         }
         pendingPurchaseStateUnreadable = false
-        let now = dateProvider.now()
         let pruned = loaded.filter {
             guard $0.value.scope == purchaseStorageScope else { return false }
-            if $0.value.state == .checkout,
-               let deadline = $0.value.storeKitObservationDeadline,
-               deadline <= now {
+            // Unified external declarations never create native recovery
+            // markers. Drop any provider/ambiguous marker decoded from an
+            // earlier SDK before it can influence StoreKit evidence ownership.
+            guard $0.value.evidenceAuthority == .nativeStoreKit else {
                 return false
             }
             let cutoff = dateProvider.date(
                 byAddingTimeInterval: -Self.pendingPurchaseTTL,
-                to: now
+                to: dateProvider.now()
             )
             return $0.value.recordedAt > cutoff
         }
@@ -432,12 +425,8 @@ actor TransactionService {
         // attribution after this point.
         let initiatingDistinctId = identityService?.getDistinctId() ?? "anonymous"
         var checkoutProduct: StoreProduct
-        let outcome: NativePurchaseResult
-        var testStoreTransactionId: String?
-        var observedCompletionTransactionId: String?
-        var purchaseCompletionAlreadyReported = false
-        var checkoutCompletionEventId: String?
-        var checkoutRecoveryToRetireAfterCompletion = false
+        let outcome: NativePurchaseResult?
+        let purchaseOutcome: PurchaseOutcome
         let usesTestStore = testStore != nil
         // The delegate is checkout identity. Capture it before any suspension
         // so a concurrent configuration change cannot change which provider
@@ -451,7 +440,13 @@ actor TransactionService {
                 distinctId: initiatingDistinctId
             )
             outcome = response.result
-            testStoreTransactionId = response.transactionId
+            purchaseOutcome = makePurchaseOutcome(
+                response.result,
+                product: checkoutProduct,
+                distinctId: initiatingDistinctId,
+                testStoreTransactionId: response.transactionId,
+                usesTestStore: true
+            )
         } else {
             let checkoutToken = try await checkoutIntroEligibilityToken(
                 for: product,
@@ -460,42 +455,30 @@ actor TransactionService {
             checkoutProduct = product.preparedForCheckout(
                 introEligibilityToken: checkoutToken
             )
-            checkoutProduct = try prepareStoreKitCheckout(
-                product: checkoutProduct,
-                distinctId: initiatingDistinctId,
-                evidenceAuthority: checkoutEvidenceAuthority(
-                    product: checkoutProduct,
-                    delegate: checkoutDelegate
-                ),
-                localEntitlementGrants: usesNativeStoreKit
-                    ? optimisticLocalEntitlementGrants(
-                        checkoutProduct.localEntitlementGrants
-                    )
-                    : providerOptimisticGrants(
-                        for: checkoutProduct,
-                        delegate: checkoutDelegate
-                    )
-            )
-            if let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken {
-                checkoutCompletionEventId = checkoutRecoveryRecord(
-                    appAccountToken: appAccountToken,
-                    productId: checkoutProduct.storeProductId
-                )?.checkoutCompletionEventId
-                let key = activeCheckoutKey(
-                    appAccountToken: appAccountToken,
-                    productId: checkoutProduct.storeProductId
-                )
-                activeCheckoutKeys.insert(key)
-                activeCheckoutKeyToClear = key
-            }
-            testStoreTransactionId = nil
-
             if let delegate = checkoutDelegate {
+                guard let context = checkoutProduct.purchaseContext else {
+                    throw StoreKitError.apiMisuse(
+                        reason: "External checkout requires an authenticated release context"
+                    )
+                }
                 switch await delegate.purchase(product: checkoutProduct) {
                 case .purchased:
-                    outcome = .purchased(nil)
+                    outcome = nil
+                    purchaseOutcome = .external(
+                        ExternalPurchaseDeclaration(
+                            operationId: UUID().uuidString.lowercased(),
+                            distinctId: initiatingDistinctId,
+                            kind: .purchased(
+                                context: context,
+                                transactionId: nil,
+                                testStore: false
+                            )
+                        ),
+                        source: .externalDelegate
+                    )
                 case .cancelled:
                     outcome = .cancelled
+                    purchaseOutcome = .cancelled(source: .externalDelegate)
                 case .failed(let error):
                     if isProductUnavailable(error) {
                         outcome = .productTermsChanged
@@ -505,182 +488,65 @@ actor TransactionService {
                     } else {
                         outcome = .failed(error)
                     }
+                    purchaseOutcome = .failed(
+                        reason: error.localizedDescription,
+                        source: .externalDelegate
+                    )
                 case .pending:
                     outcome = .pending
+                    purchaseOutcome = .pending(source: .externalDelegate)
                 }
             } else {
-                outcome = await nativePurchaseAdapter.purchase(product: checkoutProduct)
+                checkoutProduct = try prepareStoreKitCheckout(
+                    product: checkoutProduct,
+                    distinctId: initiatingDistinctId,
+                    evidenceAuthority: .nativeStoreKit,
+                    localEntitlementGrants: optimisticLocalEntitlementGrants(
+                        checkoutProduct.localEntitlementGrants
+                    )
+                )
+                if let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken {
+                    let key = activeCheckoutKey(
+                        appAccountToken: appAccountToken,
+                        productId: checkoutProduct.storeProductId
+                    )
+                    activeCheckoutKeys.insert(key)
+                    activeCheckoutKeyToClear = key
+                }
+                let nativeOutcome = await nativePurchaseAdapter.purchase(
+                    product: checkoutProduct
+                )
+                outcome = nativeOutcome
+                purchaseOutcome = makePurchaseOutcome(
+                    nativeOutcome,
+                    product: checkoutProduct,
+                    distinctId: initiatingDistinctId,
+                    testStoreTransactionId: nil,
+                    usesTestStore: false
+                )
             }
         }
 
+        let commitResult = await transactionObserver.commit(purchaseOutcome)
+        guard let outcome else {
+            guard commitResult.committed else {
+                throw StoreKitError.purchaseFailed(nil)
+            }
+            LogInfo(
+                "TransactionService: External purchase declared for product: \(product.productId)"
+            )
+            return PurchaseSyncResult(syncTask: commitResult.syncTask)
+        }
+
         switch outcome {
-        case .purchased(let evidence):
-            if evidence == nil,
-               let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken,
-               let recovery = checkoutRecoveryRecord(
-                    appAccountToken: appAccountToken,
-                    productId: checkoutProduct.storeProductId
-               ) {
-                switch recovery.evidenceAuthority {
-                case .providerConnector, .nativeStoreKit, .ambiguous:
-                    checkoutRecoveryToRetireAfterCompletion = true
-                case .outcomeOnlyDelegate:
-                    if let transactionId = recovery.observedTransactionId {
-                        checkoutRecoveryToRetireAfterCompletion = true
-                        observedCompletionTransactionId = transactionId
-                        purchaseCompletionAlreadyReported = recovery
-                            .completionReportedAt != nil
-                    } else {
-                        let now = dateProvider.now()
-                        guard boundOutcomeOnlyStoreKitObservation(
-                            recovery,
-                            deadline: dateProvider.date(
-                                byAddingTimeInterval: Self
-                                    .outcomeOnlyStoreKitObservationTTL,
-                                to: now
-                            )
-                        ) else {
-                            throw StoreKitError.purchaseFailed(nil)
-                        }
-                    }
-                }
+        case .purchased:
+            guard commitResult.committed else {
+                throw StoreKitError.purchaseFailed(nil)
             }
-            if let evidence {
-                guard await transactionObserver.recordVerifiedPurchase(
-                    evidence: evidence,
-                    product: checkoutProduct,
-                    distinctId: initiatingDistinctId,
-                    finishRequired: settings.purchaseHandlingMode() != .observer
-                        || checkoutDelegate != nil
-                ) else {
-                    throw StoreKitError.purchaseFailed(nil)
-                }
-                if let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken {
-                    guard retireCheckoutRecovery(
-                        appAccountToken: appAccountToken,
-                        productId: checkoutProduct.storeProductId
-                    ) else {
-                        throw StoreKitError.purchaseFailed(nil)
-                    }
-                }
-                // A delegate that returns verified StoreKit evidence has
-                // explicitly transferred transaction ownership to Nuxie, so
-                // finish it even when the host also uses observer mode.
-                if settings.purchaseHandlingMode() != .observer || checkoutDelegate != nil {
-                    await evidence.finish()
-                    await transactionObserver.markTransactionFinished(
-                        transactionId: evidence.transactionId
-                    )
-                }
-            }
-            LogInfo("TransactionService: Purchase completed successfully for product: \(product.productId)")
-            if !purchaseCompletionAlreadyReported,
-               isActiveCustomer(initiatingDistinctId),
-               let commercialContext = checkoutProduct.purchaseContext {
-                let completionTransactionId = evidence?.transactionId
-                    ?? observedCompletionTransactionId
-                    ?? testStoreTransactionId
-                let properties = purchaseCompletionProperties(
-                    context: commercialContext,
-                    transactionId: completionTransactionId,
-                    testStore: usesTestStore
-                )
-                var completionCaptured = false
-                if let exactTransactionId = evidence?.transactionId
-                    ?? observedCompletionTransactionId {
-                    if await transactionObserver.claimPurchaseCompletion(
-                        transactionId: exactTransactionId
-                    ) {
-                        let transactionCompletionEventId = await
-                            transactionObserver.purchaseCompletionEventId(
-                                transactionId: exactTransactionId
-                            )
-                        let captured = await eventSink.capture(
-                            SystemEventNames.purchaseCompleted,
-                            properties: properties,
-                            eventId: checkoutCompletionEventId
-                                ?? transactionCompletionEventId,
-                            distinctId: initiatingDistinctId
-                        )
-                        let marked = if captured {
-                            await transactionObserver.markPurchaseCompletionCaptured(
-                                transactionId: exactTransactionId
-                            )
-                        } else {
-                            false
-                        }
-                        if !marked {
-                            await transactionObserver.releasePurchaseCompletionClaim(
-                                transactionId: exactTransactionId
-                            )
-                        }
-                        completionCaptured = marked
-                    }
-                } else if usesTestStore,
-                          let completionTransactionId {
-                    completionCaptured = await eventSink.capture(
-                        SystemEventNames.purchaseCompleted,
-                        properties: properties,
-                        eventId: await transactionObserver.purchaseCompletionEventId(
-                            transactionId: completionTransactionId
-                        ),
-                        distinctId: initiatingDistinctId
-                    )
-                } else if let checkoutCompletionEventId {
-                    completionCaptured = await eventSink.capture(
-                        SystemEventNames.purchaseCompleted,
-                        properties: properties,
-                        eventId: checkoutCompletionEventId,
-                        distinctId: initiatingDistinctId
-                    )
-                } else {
-                    eventSink.emit(SystemEventNames.purchaseCompleted, properties: properties)
-                    completionCaptured = true
-                }
-                if completionCaptured,
-                   let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken,
-                   let checkoutCompletionEventId {
-                    _ = markCheckoutCompletionReported(
-                        appAccountToken: appAccountToken,
-                        productId: checkoutProduct.storeProductId,
-                        completionEventId: checkoutCompletionEventId,
-                        reportedAt: dateProvider.now()
-                    )
-                }
-            }
-
-            if checkoutRecoveryToRetireAfterCompletion,
-               let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken,
-               checkoutRecoveryRecord(
-                   appAccountToken: appAccountToken,
-                   productId: checkoutProduct.storeProductId
-               )?.completionReportedAt != nil {
-                _ = retireCheckoutRecovery(
-                    appAccountToken: appAccountToken,
-                    productId: checkoutProduct.storeProductId
-                )
-            }
-
-            var syncTask: Task<Bool, Never>?
-            if usesTestStore {
-                return PurchaseSyncResult()
-            }
-            if let evidence {
-                syncTask = Task {
-                    let synced = await transactionObserver.syncTransaction(
-                        transactionJws: evidence.transactionJws,
-                        transactionId: evidence.transactionId,
-                        productId: evidence.productId,
-                        originalTransactionId: evidence.originalTransactionId
-                    )
-                    if synced {
-                        LogInfo("TransactionService: Purchase synced successfully for product: \(product.productId)")
-                    }
-                    return synced
-                }
-            }
-
-            return PurchaseSyncResult(syncTask: syncTask)
+            LogInfo(
+                "TransactionService: Purchase completed successfully for product: \(product.productId)"
+            )
+            return PurchaseSyncResult(syncTask: commitResult.syncTask)
             
         case .alreadyOwned:
             removeCheckoutRecovery(for: checkoutProduct)
@@ -735,11 +601,9 @@ actor TransactionService {
             
         case .pending:
             LogInfo("TransactionService: Purchase pending for product: \(product.productId)")
-            // Keep a durable marker for every StoreKit-capable checkout path.
-            // Provider delegates may own receipt submission and finishing, but
-            // the shared Transaction.updates observer still needs to correlate
-            // a later Ask-to-Buy/SCA approval with the paywall action.
-            if !usesTestStore && (usesNativeStoreKit || checkoutDelegate != nil) {
+            // Native Ask-to-Buy/SCA remains correlated through the durable
+            // pre-checkout marker. External delegates own their pending state.
+            if usesNativeStoreKit {
                 var entries = pendingPurchases()
                 let key = pendingKey(
                     productId: checkoutProduct.storeProductId,
@@ -756,10 +620,7 @@ actor TransactionService {
                         localEntitlementGrants: existing.localEntitlementGrants,
                         state: .pending,
                         evidenceAuthority: existing.evidenceAuthority,
-                        checkoutCompletionEventId: existing.checkoutCompletionEventId,
-                        storeKitObservationDeadline: nil,
-                        completionReportedAt: existing.completionReportedAt,
-                        observedTransactionId: existing.observedTransactionId
+                        checkoutCompletionEventId: existing.checkoutCompletionEventId
                     )
                     guard setPendingPurchases(entries) else {
                         throw StoreKitError.purchaseFailed(nil)
@@ -789,6 +650,78 @@ actor TransactionService {
         }
     }
 
+    private func makePurchaseOutcome(
+        _ result: NativePurchaseResult,
+        product: StoreProduct,
+        distinctId: String,
+        testStoreTransactionId: String?,
+        usesTestStore: Bool
+    ) -> PurchaseOutcome {
+        switch result {
+        case .purchased(let evidence):
+            if usesTestStore, let context = product.purchaseContext {
+                return .external(
+                    ExternalPurchaseDeclaration(
+                        operationId: testStoreTransactionId
+                            ?? UUID().uuidString.lowercased(),
+                        distinctId: distinctId,
+                        kind: .purchased(
+                            context: context,
+                            transactionId: testStoreTransactionId,
+                            testStore: true
+                        )
+                    ),
+                    source: .checkout
+                )
+            }
+            guard let evidence else {
+                return .failed(
+                    reason: "verified_evidence_unavailable",
+                    source: .checkout
+                )
+            }
+            return .verified(
+                VerifiedPurchaseEvidence(
+                    transactionJws: evidence.transactionJws,
+                    transactionId: evidence.transactionId,
+                    originalTransactionId: evidence.originalTransactionId,
+                    productId: evidence.productId,
+                    appAccountToken: product.nativeCheckoutAppAccountToken,
+                    attributedDistinctId: distinctId,
+                    recordedAt: dateProvider.now(),
+                    productFeatureIds: storeProductFeatureIds(
+                        product.localEntitlementGrants
+                    ),
+                    commercialContext: product.purchaseContext,
+                    finishRequired: settings.purchaseHandlingMode() != .observer,
+                    resolvesPendingPurchase: true,
+                    allowsDurableCheckoutAuthority: true,
+                    requiresAuthorityResolution: false,
+                    finish: evidence.finish
+                ),
+                source: .checkout
+            )
+        case .alreadyOwned:
+            return .failed(reason: "already_owned", source: .checkout)
+        case .subscriptionChangeRequired:
+            return .failed(
+                reason: "subscription_change_required",
+                source: .checkout
+            )
+        case .cancelled:
+            return .cancelled(source: .checkout)
+        case .pending:
+            return .pending(source: .checkout)
+        case .productTermsChanged:
+            return .failed(reason: "product_terms_changed", source: .checkout)
+        case .invalidEligibilityOverride(let error), .failed(let error):
+            return .failed(
+                reason: error.localizedDescription,
+                source: .checkout
+            )
+        }
+    }
+
     private func removeCheckoutRecovery(for product: StoreProduct) {
         guard let token = product.nativeCheckoutAppAccountToken else { return }
         _ = consumeCheckoutRecovery(
@@ -798,8 +731,7 @@ actor TransactionService {
     }
 
     /// Persists exact checkout attribution and installs the same deterministic
-    /// account token on the StoreProduct before either Nuxie's adapter or a
-    /// configured delegate is allowed to open StoreKit.
+    /// account token before Nuxie's native StoreKit adapter opens checkout.
     private func prepareStoreKitCheckout(
         product: StoreProduct,
         distinctId: String,
@@ -824,22 +756,7 @@ actor TransactionService {
         )) else {
             throw StoreKitError.purchaseFailed(nil)
         }
-        // Unsigned delegates do not receive optimistic grants and cannot
-        // project them from an outcome alone. Retain the signed native mapping
-        // only in the protected recovery record so a verified StoreKit update
-        // inside the observation window can apply it through Nuxie's pipeline.
-        let recoveryLocalEntitlementGrants = evidenceAuthority
-            == .outcomeOnlyDelegate
-            ? optimisticLocalEntitlementGrants(product.localEntitlementGrants)
-            : localEntitlementGrants
         let recordedAt = dateProvider.now()
-        let preCallbackObservationDeadline = evidenceAuthority
-            == .outcomeOnlyDelegate
-            ? dateProvider.date(
-                byAddingTimeInterval: Self.outcomeOnlyStoreKitObservationTTL,
-                to: recordedAt
-            )
-            : nil
         let recovery = PendingPurchaseRecord(
             scope: purchaseStorageScope,
             distinctId: distinctId,
@@ -849,7 +766,7 @@ actor TransactionService {
             productFeatureIds: storeProductFeatureIds(
                 product.localEntitlementGrants
             ),
-            localEntitlementGrants: recoveryLocalEntitlementGrants.map {
+            localEntitlementGrants: localEntitlementGrants.map {
                 StoredLocalEntitlementGrant(
                     featureId: $0.featureId,
                     featureExternalId: $0.featureExternalId,
@@ -861,8 +778,7 @@ actor TransactionService {
             evidenceAuthority: evidenceAuthority,
             checkoutCompletionEventId: (["purchase-completed-checkout"]
                 + purchaseStorageScope.storageComponents
-                + [UUID().uuidString.lowercased()]).joined(separator: ":"),
-            storeKitObservationDeadline: preCallbackObservationDeadline
+                + [UUID().uuidString.lowercased()]).joined(separator: ":")
         )
         var entries = pendingPurchases()
         let recoveryKey = pendingKey(
@@ -890,147 +806,9 @@ actor TransactionService {
         var prepared = product.preparedForNativeCheckout(
             appAccountToken: appAccountToken
         )
-        // The checkout copy is also the exact value passed to the delegate and
-        // recorded with any returned StoreKit evidence. Strip grants here so
-        // neither a generic delegate nor a mismatched maintained adapter can
-        // reintroduce unauthorised optimistic access through the evidence path.
+        // Record only the signed grants the verified-evidence path may project.
         prepared.localEntitlementGrants = localEntitlementGrants
         return prepared
-    }
-
-    private func checkoutEvidenceAuthority(
-        product: StoreProduct,
-        delegate: (any NuxiePurchaseDelegate)?
-    ) -> PurchaseEvidenceAuthority {
-        guard delegate != nil else { return .nativeStoreKit }
-        return product.providerFeatureAccess == nil
-            ? .outcomeOnlyDelegate
-            : .providerConnector
-    }
-
-    private func boundOutcomeOnlyStoreKitObservation(
-        _ recovery: PendingPurchaseRecord,
-        deadline: Date
-    ) -> Bool {
-        var entries = pendingPurchases()
-        guard !pendingPurchaseStateUnreadable else { return false }
-        let key = pendingKey(
-            productId: recovery.commercialContext.storeProductId,
-            distinctId: recovery.distinctId
-        )
-        guard entries[key] == recovery else {
-            // Transaction.updates may have already consumed the exact marker.
-            return true
-        }
-        entries[key] = PendingPurchaseRecord(
-            scope: recovery.scope,
-            distinctId: recovery.distinctId,
-            appAccountToken: recovery.appAccountToken,
-            commercialContext: recovery.commercialContext,
-            recordedAt: recovery.recordedAt,
-            productFeatureIds: recovery.productFeatureIds,
-            localEntitlementGrants: recovery.localEntitlementGrants,
-            state: .checkout,
-            evidenceAuthority: recovery.evidenceAuthority,
-            checkoutCompletionEventId: recovery.checkoutCompletionEventId,
-            storeKitObservationDeadline: deadline,
-            completionReportedAt: recovery.completionReportedAt,
-            observedTransactionId: recovery.observedTransactionId
-        )
-        return setPendingPurchases(entries)
-    }
-
-    func markOutcomeOnlyTransactionObserved(
-        _ recovery: PendingPurchaseRecord,
-        transactionId: String
-    ) -> Bool {
-        guard recovery.evidenceAuthority == .outcomeOnlyDelegate else {
-            return false
-        }
-        var entries = pendingPurchases()
-        let key = pendingKey(
-            productId: recovery.commercialContext.storeProductId,
-            distinctId: recovery.distinctId
-        )
-        guard entries[key] == recovery else { return false }
-        entries[key] = PendingPurchaseRecord(
-            scope: recovery.scope,
-            distinctId: recovery.distinctId,
-            appAccountToken: recovery.appAccountToken,
-            commercialContext: recovery.commercialContext,
-            recordedAt: recovery.recordedAt,
-            productFeatureIds: recovery.productFeatureIds,
-            localEntitlementGrants: recovery.localEntitlementGrants,
-            state: recovery.state,
-            evidenceAuthority: recovery.evidenceAuthority,
-            checkoutCompletionEventId: recovery.checkoutCompletionEventId,
-            storeKitObservationDeadline: recovery.storeKitObservationDeadline,
-            completionReportedAt: recovery.completionReportedAt,
-            observedTransactionId: transactionId
-        )
-        return setPendingPurchases(entries)
-    }
-
-    func markOutcomeOnlyCompletionReported(
-        appAccountToken: UUID,
-        productId: String,
-        transactionId: String,
-        reportedAt: Date
-    ) -> Bool {
-        var entries = pendingPurchases()
-        guard let entry = entries.first(where: {
-            $0.value.appAccountToken == appAccountToken
-                && $0.value.commercialContext.storeProductId == productId
-                && $0.value.observedTransactionId == transactionId
-        }) else { return false }
-        let recovery = entry.value
-        entries[entry.key] = PendingPurchaseRecord(
-            scope: recovery.scope,
-            distinctId: recovery.distinctId,
-            appAccountToken: recovery.appAccountToken,
-            commercialContext: recovery.commercialContext,
-            recordedAt: recovery.recordedAt,
-            productFeatureIds: recovery.productFeatureIds,
-            localEntitlementGrants: recovery.localEntitlementGrants,
-            state: recovery.state,
-            evidenceAuthority: recovery.evidenceAuthority,
-            checkoutCompletionEventId: recovery.checkoutCompletionEventId,
-            storeKitObservationDeadline: recovery.storeKitObservationDeadline,
-            completionReportedAt: recovery.completionReportedAt ?? reportedAt,
-            observedTransactionId: recovery.observedTransactionId
-        )
-        return setPendingPurchases(entries)
-    }
-
-    func markCheckoutCompletionReported(
-        appAccountToken: UUID,
-        productId: String,
-        completionEventId: String,
-        reportedAt: Date
-    ) -> Bool {
-        var entries = pendingPurchases()
-        guard let entry = entries.first(where: {
-            $0.value.appAccountToken == appAccountToken
-                && $0.value.commercialContext.storeProductId == productId
-                && $0.value.checkoutCompletionEventId == completionEventId
-        }) else { return false }
-        let recovery = entry.value
-        entries[entry.key] = PendingPurchaseRecord(
-            scope: recovery.scope,
-            distinctId: recovery.distinctId,
-            appAccountToken: recovery.appAccountToken,
-            commercialContext: recovery.commercialContext,
-            recordedAt: recovery.recordedAt,
-            productFeatureIds: recovery.productFeatureIds,
-            localEntitlementGrants: recovery.localEntitlementGrants,
-            state: recovery.state,
-            evidenceAuthority: recovery.evidenceAuthority,
-            checkoutCompletionEventId: recovery.checkoutCompletionEventId,
-            storeKitObservationDeadline: recovery.storeKitObservationDeadline,
-            completionReportedAt: recovery.completionReportedAt ?? reportedAt,
-            observedTransactionId: recovery.observedTransactionId
-        )
-        return setPendingPurchases(entries)
     }
 
     private func checkoutIntroEligibilityToken(
@@ -1067,16 +845,6 @@ actor TransactionService {
         return purchaseError == .productUnavailable
     }
 
-    private func providerOptimisticGrants(
-        for product: StoreProduct,
-        delegate: (any NuxiePurchaseDelegate)?
-    ) -> [StoreProduct.LocalEntitlementGrant] {
-        guard delegate != nil, product.providerFeatureAccess != nil else {
-            return []
-        }
-        return optimisticLocalEntitlementGrants(product.localEntitlementGrants)
-    }
-
     private func isActiveCustomer(_ distinctId: String) -> Bool {
         (identityService?.getDistinctId() ?? "anonymous") == distinctId
     }
@@ -1087,6 +855,43 @@ actor TransactionService {
         LogDebug("TransactionService: Starting restore purchases")
 
         let initiatingDistinctId = identityService?.getDistinctId() ?? "anonymous"
+        // Test Store is an isolated billing environment and has the same
+        // precedence for purchase and restore. A configured host delegate is
+        // consulted only when Test Store is not active.
+        if testStore == nil, let delegate = purchaseDelegate {
+            switch await delegate.restorePurchases() {
+            case .restored:
+                let result = await transactionObserver.commit(.external(
+                    ExternalPurchaseDeclaration(
+                        operationId: UUID().uuidString.lowercased(),
+                        distinctId: initiatingDistinctId,
+                        kind: .restored(testStore: false)
+                    ),
+                    source: .externalDelegate
+                ))
+                guard result.committed else {
+                    throw StoreKitError.restoreFailed(nil)
+                }
+                LogInfo("TransactionService: External restore declared successfully")
+                return
+            case .failed(let error):
+                LogError("TransactionService: Restore failed, error: \(error)")
+                if isActiveCustomer(initiatingDistinctId) {
+                    eventSink.emit(SystemEventNames.restoreFailed, properties: [
+                        "error": error.localizedDescription,
+                        "test_store": false,
+                    ])
+                }
+                throw StoreKitError.restoreFailed(error)
+            case .noPurchases:
+                LogInfo("TransactionService: No purchases to restore")
+                if isActiveCustomer(initiatingDistinctId) {
+                    eventSink.emit(SystemEventNames.restoreNoPurchases, properties: [:])
+                }
+                return
+            }
+        }
+
         enum RestoreOutcome {
             case restored
             case testStoreRestored
@@ -1101,12 +906,6 @@ actor TransactionService {
             )
             switch response.result {
             case .restored: result = .testStoreRestored
-            case .failed(let error): result = .failed(error)
-            case .noPurchases: result = .noPurchases
-            }
-        } else if let delegate = purchaseDelegate {
-            switch await delegate.restorePurchases() {
-            case .restored: result = .restored
             case .failed(let error): result = .failed(error)
             case .noPurchases: result = .noPurchases
             }
