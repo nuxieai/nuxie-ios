@@ -839,7 +839,12 @@ internal actor ProfileService: ProfileServiceProtocol {
     func getTriggerAdmission(
         distinctId: String
     ) async -> ProfileTriggerAdmission? {
-        await awaitInitialDiskLoad()
+        // Admission publishes the authenticated catalog before delivering its
+        // mailbox. A mailbox handler reads that catalog to resolve a Journey;
+        // joining the disk-load task here would make it await its own handler.
+        if cachedProfileForDistinctId(distinctId) == nil {
+            await awaitInitialDiskLoad()
+        }
         guard let cachedProfile,
               cachedProfile.distinctId == distinctId,
               dateProvider.timeIntervalSince(cachedProfile.cachedAt) < cacheTTL else {
