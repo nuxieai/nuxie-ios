@@ -39,7 +39,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             identity["experienceId"] = "experience-pinned-purchase-epoch"
             identity["experienceVersionId"] = "version-pinned-purchase-epoch"
             identity["buildId"] = "build-pinned-purchase-epoch"
-            identity["publishedAtSeq"] = 41
+            identity["releaseSequence"] = 41
             root["identity"] = identity
         }
 
@@ -335,7 +335,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             identity["experienceId"] = "experience-second-cache"
             identity["experienceVersionId"] = "version-second-cache"
             identity["buildId"] = "build-second-cache"
-            identity["publishedAtSeq"] = 2
+            identity["releaseSequence"] = 2
             root["identity"] = identity
         }
         let bytesByDigest = [
@@ -415,7 +415,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             identity["experienceId"] = "experience-inflight-second"
             identity["experienceVersionId"] = "version-inflight-second"
             identity["buildId"] = "build-inflight-second"
-            identity["publishedAtSeq"] = 2
+            identity["releaseSequence"] = 2
             root["identity"] = identity
         }
         let bytesByDigest = Dictionary(uniqueKeysWithValues: [
@@ -879,8 +879,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 experienceVersionId: entry.locator.experienceVersionId,
                 buildId: entry.locator.buildId,
                 versionNumber: entry.locator.versionNumber,
-                publishedAt: entry.locator.publishedAt,
-                publishedAtSeq: entry.locator.publishedAtSeq
+                releaseCreatedAt: entry.locator.releaseCreatedAt,
+                releaseSequence: entry.locator.releaseSequence
             ),
             descriptorSha256: entry.descriptorSha256,
             envelopeBytesBase64: entry.envelopeBytesBase64
@@ -1300,7 +1300,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             environment: entry.locator.environment,
             experienceId: entry.locator.experienceId
         ))
-        XCTAssertEqual(admitted?.publishedAtSeq, entry.locator.publishedAtSeq)
+        XCTAssertEqual(admitted?.releaseSequence, entry.locator.releaseSequence)
     }
 
     func testActiveSignedAppleProductUsesNativeStoreKitAuthority() throws {
@@ -1413,7 +1413,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let second = try resign(entry: first) { root in
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
             identity["buildId"] = "build-descriptor-allowance-notification-v2"
-            identity["publishedAtSeq"] = first.locator.publishedAtSeq + 1
+            identity["releaseSequence"] = first.locator.releaseSequence + 1
             root["identity"] = identity
             var products = try XCTUnwrap(root["products"] as? [[String: Any]])
             products[0]["entitlements"] = [[
@@ -1688,14 +1688,14 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
             identity["experienceVersionId"] = "version-older"
             identity["buildId"] = "build-older"
-            identity["publishedAtSeq"] = 20
+            identity["releaseSequence"] = 20
             root["identity"] = identity
         }
         let newer = try resign(entry: entry) { root in
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
             identity["experienceVersionId"] = "version-newer"
             identity["buildId"] = "build-newer"
-            identity["publishedAtSeq"] = 21
+            identity["releaseSequence"] = 21
             root["identity"] = identity
         }
 
@@ -2081,7 +2081,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
         let replacement = try resign(entry: entry) { root in
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
-            identity["publishedAtSeq"] = entry.locator.publishedAtSeq + 1
+            identity["releaseSequence"] = entry.locator.releaseSequence + 1
             root["identity"] = identity
             var metadata = try XCTUnwrap(root["metadata"] as? [String: Any])
             metadata["name"] = "Replacement behavior"
@@ -2443,7 +2443,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let updatedEntry = try resign(entry: entry) { root in
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
             identity["buildId"] = "build-product-mapping-v2"
-            identity["publishedAtSeq"] = entry.locator.publishedAtSeq + 1
+            identity["releaseSequence"] = entry.locator.releaseSequence + 1
             root["identity"] = identity
             var products = try XCTUnwrap(root["products"] as? [[String: Any]])
             products[0]["entitlements"] = [[
@@ -2780,7 +2780,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let replacement = try resign(entry: entry) { root in
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
             identity["buildId"] = replacementBuildID
-            identity["publishedAtSeq"] = entry.locator.publishedAtSeq + 1
+            identity["releaseSequence"] = entry.locator.releaseSequence + 1
             root["identity"] = identity
         }
         StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) { request in

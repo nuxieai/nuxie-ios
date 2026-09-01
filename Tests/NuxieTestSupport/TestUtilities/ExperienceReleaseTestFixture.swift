@@ -50,8 +50,8 @@ struct ExperienceReleaseTestFixture {
         identity["experienceVersionId"] = "release-only-version"
         identity["buildId"] = "release-only-build"
         identity["versionNumber"] = 1
-        identity["publishedAt"] = "2026-08-12T00:00:00.000Z"
-        identity["publishedAtSeq"] = 11
+        identity["releaseCreatedAt"] = "2026-08-12T00:00:00.000Z"
+        identity["releaseSequence"] = 11
         root["identity"] = identity
 
         let rivDigest = SHA256Provider.hexDigest(riv)

@@ -233,7 +233,7 @@ final class JourneyStorePathSafetyTests: XCTestCase {
                 versionId: "flow",
                 name: "Experience",
                 reentry: .everyTime,
-                publishedAt: "2026-01-01T00:00:00Z",
+                releaseCreatedAt: "2026-01-01T00:00:00Z",
                 trigger: nil,
                 goal: nil,
                 exitPolicy: nil,

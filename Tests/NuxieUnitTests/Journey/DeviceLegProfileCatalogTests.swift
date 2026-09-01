@@ -70,11 +70,11 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
             experienceId: identity.experienceId
         )
         try await store.admitActiveBatch([key: ExperienceReleaseHighWaterMark(
-            publishedAtSeq: identity.publishedAtSeq + 1,
+            releaseSequence: identity.releaseSequence + 1,
             experienceVersionId: "newer-version",
             buildId: "newer-build",
             versionNumber: identity.versionNumber + 1,
-            publishedAt: identity.publishedAt,
+            releaseCreatedAt: identity.releaseCreatedAt,
             descriptorSHA256: String(repeating: "b", count: 64)
         )])
 
@@ -102,11 +102,11 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
             experienceId: identity.experienceId
         )
         let newerMark = ExperienceReleaseHighWaterMark(
-            publishedAtSeq: identity.publishedAtSeq + 1,
+            releaseSequence: identity.releaseSequence + 1,
             experienceVersionId: "newer-version",
             buildId: "newer-build",
             versionNumber: identity.versionNumber + 1,
-            publishedAt: identity.publishedAt,
+            releaseCreatedAt: identity.releaseCreatedAt,
             descriptorSHA256: String(repeating: "b", count: 64)
         )
         try await store.admitActiveBatch([key: newerMark])

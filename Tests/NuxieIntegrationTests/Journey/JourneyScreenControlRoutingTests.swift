@@ -343,8 +343,8 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 experienceVersionId: versionId,
                 buildId: "signed-build",
                 versionNumber: 1,
-                publishedAt: "2026-08-13T00:00:00.000Z",
-                publishedAtSeq: 1
+                releaseCreatedAt: "2026-08-13T00:00:00.000Z",
+                releaseSequence: 1
             )
             return Experience(
                 behavior: ExperienceBehaviorDefinition(
@@ -353,7 +353,7 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                     artifactContentHash: String(repeating: "a", count: 64),
                     name: "Signed screen controls",
                     reentry: .everyTime,
-                    publishedAt: identity.publishedAt,
+                    releaseCreatedAt: identity.releaseCreatedAt,
                     trigger: .event(.init(eventName: "paywall_trigger", condition: nil)),
                     goal: goal,
                     exitPolicy: exitPolicy,

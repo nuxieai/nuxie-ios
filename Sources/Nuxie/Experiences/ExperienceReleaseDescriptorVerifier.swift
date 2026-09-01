@@ -90,7 +90,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             supported: supportedRuntime
         )
         try validateRuntimeBindings(descriptor.screenBehaviors)
-        let publishedAtSeqToPromote = try validateReplayPolicy(
+        let releaseSequenceToPromote = try validateReplayPolicy(
             replayPolicy,
             identity: descriptor.identity,
             descriptorSHA256: envelope.descriptorSha256
@@ -100,16 +100,16 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             exactDescriptorBytes: descriptorBytes,
             descriptorSHA256: envelope.descriptorSha256,
             descriptor: descriptor,
-            publishedAtSeqToPromote: publishedAtSeqToPromote
+            releaseSequenceToPromote: releaseSequenceToPromote
         )
     }
 
     func validateIdentity(_ identity: ExperienceReleaseIdentity) throws {
         guard identity.versionNumber > 0,
                   identity.versionNumber <= 9_007_199_254_740_991,
-                  identity.publishedAtSeq >= 0,
-                  identity.publishedAtSeq <= 9_007_199_254_740_991,
-                  isZodOffsetDateTime(identity.publishedAt),
+                  identity.releaseSequence >= 0,
+                  identity.releaseSequence <= 9_007_199_254_740_991,
+                  isZodOffsetDateTime(identity.releaseCreatedAt),
                   ["test", "live"].contains(identity.environment),
                   [
                     identity.appId,
@@ -201,7 +201,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         return AuthenticatedDeviceLegRelease(
             authenticatedKeyID: envelope.signature.keyId, exactDescriptorBytes: bytes,
             descriptorSHA256: envelope.descriptorSha256, descriptor: descriptor,
-            publishedAtSeqToPromote: try validateReplayPolicy(replayPolicy, identity: descriptor.identity,
+            releaseSequenceToPromote: try validateReplayPolicy(replayPolicy, identity: descriptor.identity,
                 descriptorSHA256: envelope.descriptorSha256)
         )
     }
@@ -212,12 +212,12 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         descriptorSHA256: String
     ) throws -> Int? {
         switch policy {
-        case .active(let minimumPublishedAtSeq):
-            guard minimumPublishedAtSeq >= 0,
-                  identity.publishedAtSeq >= minimumPublishedAtSeq else {
+        case .active(let minimumReleaseSequence):
+            guard minimumReleaseSequence >= 0,
+                  identity.releaseSequence >= minimumReleaseSequence else {
                 throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
             }
-            return identity.publishedAtSeq
+            return identity.releaseSequence
         case .pinned(let experienceVersionId, let buildId, let expectedDigest):
             guard identity.experienceVersionId == experienceVersionId,
                   identity.buildId == buildId,

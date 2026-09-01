@@ -52,7 +52,7 @@ final class DeviceLegReleaseTests: XCTestCase {
         XCTAssertEqual(release.descriptor.leg.id, String(repeating: "a", count: 64))
         XCTAssertEqual(release.descriptor.leg.steps.first?.outcome, "continue")
         XCTAssertNil(release.descriptor.render)
-        XCTAssertEqual(release.publishedAtSeqToPromote, fixture.identity.publishedAtSeq)
+        XCTAssertEqual(release.releaseSequenceToPromote, fixture.identity.releaseSequence)
     }
 
     func testAuthenticatesRenderedLegWithExactScreenClosure() throws {
@@ -75,7 +75,7 @@ final class DeviceLegReleaseTests: XCTestCase {
         let authenticated = try ExperienceReleaseDescriptorVerifier().authenticateDeviceLeg(
             envelopeBytes: JSONEncoder().encode(fixture.envelope), authorizationKeys: [key(fixture.publicKey)],
             expectedIdentity: fixture.identity, expectedLegId: String(repeating: "a", count: 64),
-            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0)
+            supportedRuntime: supported, replayPolicy: .active(minimumReleaseSequence: 0)
         )
         XCTAssertFalse(authenticated.descriptor.leg.screens.isEmpty)
         XCTAssertNotNil(authenticated.descriptor.render)
@@ -143,7 +143,14 @@ final class DeviceLegReleaseTests: XCTestCase {
         altered.descriptorBytesBase64 = Data("{}".utf8).base64EncodedString()
         XCTAssertThrowsError(try authenticate(altered, key: fixture.publicKey, identity: fixture.identity))
         XCTAssertThrowsError(try authenticate(fixture.envelope, key: fixture.publicKey, identity: fixture.identity, legId: String(repeating: "b", count: 64)))
-        XCTAssertThrowsError(try authenticate(fixture.envelope, key: fixture.publicKey, identity: fixture.identity, minimum: fixture.identity.publishedAtSeq + 1))
+        XCTAssertThrowsError(
+            try authenticate(
+                fixture.envelope,
+                key: fixture.publicKey,
+                identity: fixture.identity,
+                minimum: fixture.identity.releaseSequence + 1
+            )
+        )
         let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
         let wrongDomain = try sign(bytes, domain: ExperienceReleaseDescriptorLimits.signatureDomain)
         XCTAssertThrowsError(try authenticate(wrongDomain, key: signingKey.publicKey.rawRepresentation, identity: fixture.identity)) { error in
@@ -155,7 +162,7 @@ final class DeviceLegReleaseTests: XCTestCase {
             supportedRuntime: runtime, replayPolicy: .pinned(experienceVersionId: fixture.identity.experienceVersionId,
                 buildId: fixture.identity.buildId, descriptorSHA256: fixture.envelope.descriptorSha256)
         )
-        XCTAssertNil(pinned.publishedAtSeqToPromote)
+        XCTAssertNil(pinned.releaseSequenceToPromote)
     }
 
     func testRejectsAuthenticatedCrossLegCursorsServerActionsAndChainFields() throws {
@@ -185,7 +192,7 @@ final class DeviceLegReleaseTests: XCTestCase {
         try ExperienceReleaseDescriptorVerifier().authenticateDeviceLeg(
             envelopeBytes: JSONEncoder().encode(envelope), authorizationKeys: [key(publicKey)],
             expectedIdentity: identity, expectedLegId: legId, supportedRuntime: runtime,
-            replayPolicy: .active(minimumPublishedAtSeq: minimum)
+            replayPolicy: .active(minimumReleaseSequence: minimum)
         )
     }
 

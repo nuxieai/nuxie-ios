@@ -960,8 +960,8 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
                     experienceVersionId: fixtureProduct.experienceVersion,
                     buildId: "fixture-build",
                     versionNumber: 1,
-                    publishedAt: "2026-08-31T00:00:00Z",
-                    publishedAtSeq: 1
+                    releaseCreatedAt: "2026-08-31T00:00:00Z",
+                    releaseSequence: 1
                 ),
                 descriptorSHA256: String(repeating: "f", count: 64)
             ),

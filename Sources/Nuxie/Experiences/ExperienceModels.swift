@@ -7,7 +7,7 @@ struct Experience: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, versionId, buildId, artifactContentHash, authenticatedReleaseID
         case behaviorPresentation
-        case behaviorPresentationScreens, assetBaseURL, name, reentry, publishedAt
+        case behaviorPresentationScreens, assetBaseURL, name, reentry, releaseCreatedAt
         case trigger, goal, exitPolicy, conversionAnchor, timeLimitSeconds
         case experienceType, journey, products
     }
@@ -32,8 +32,8 @@ struct Experience: Codable, Sendable {
     let name: String
     /// Re-enrollment policy supplied by the server.
     let reentry: ExperienceReentry
-    /// ISO-8601 publication timestamp.
-    let publishedAt: String
+    /// ISO-8601 creation time of the immutable signed release artifact.
+    let releaseCreatedAt: String
     /// Optional event enrollment trigger.
     let trigger: ExperienceTrigger?
     /// Optional conversion goal.
@@ -77,7 +77,7 @@ struct Experience: Codable, Sendable {
         self.assetBaseURL = assetBaseURL
         name = behavior.name
         reentry = behavior.reentry
-        publishedAt = behavior.publishedAt
+        releaseCreatedAt = behavior.releaseCreatedAt
         trigger = behavior.trigger
         goal = behavior.goal
         exitPolicy = behavior.exitPolicy
@@ -106,7 +106,7 @@ struct Experience: Codable, Sendable {
         buildId: String = "test-build",
         name: String,
         reentry: ExperienceReentry,
-        publishedAt: String,
+        releaseCreatedAt: String,
         trigger: ExperienceTrigger?,
         goal: GoalConfig?,
         exitPolicy: ExitPolicy?,
@@ -127,7 +127,7 @@ struct Experience: Codable, Sendable {
         self.assetBaseURL = assetBaseURL
         self.name = name
         self.reentry = reentry
-        self.publishedAt = publishedAt
+        self.releaseCreatedAt = releaseCreatedAt
         self.trigger = trigger
         self.goal = goal
         self.exitPolicy = exitPolicy
@@ -157,7 +157,7 @@ struct Experience: Codable, Sendable {
         self.assetBaseURL = assetBaseURL ?? metadata.assetBaseURL
         name = metadata.name
         reentry = metadata.reentry
-        publishedAt = metadata.publishedAt
+        releaseCreatedAt = metadata.releaseCreatedAt
         trigger = metadata.trigger
         goal = metadata.goal
         exitPolicy = metadata.exitPolicy
@@ -206,7 +206,7 @@ struct Experience: Codable, Sendable {
         assetBaseURL = try container.decode(URL.self, forKey: .assetBaseURL)
         name = try container.decode(String.self, forKey: .name)
         reentry = try container.decode(ExperienceReentry.self, forKey: .reentry)
-        publishedAt = try container.decode(String.self, forKey: .publishedAt)
+        releaseCreatedAt = try container.decode(String.self, forKey: .releaseCreatedAt)
         trigger = try container.decodeIfPresent(ExperienceTrigger.self, forKey: .trigger)
         goal = try container.decodeIfPresent(GoalConfig.self, forKey: .goal)
         exitPolicy = try container.decodeIfPresent(ExitPolicy.self, forKey: .exitPolicy)
@@ -244,7 +244,7 @@ struct Experience: Codable, Sendable {
         try container.encode(assetBaseURL, forKey: .assetBaseURL)
         try container.encode(name, forKey: .name)
         try container.encode(reentry, forKey: .reentry)
-        try container.encode(publishedAt, forKey: .publishedAt)
+        try container.encode(releaseCreatedAt, forKey: .releaseCreatedAt)
         try container.encodeIfPresent(trigger, forKey: .trigger)
         try container.encodeIfPresent(goal, forKey: .goal)
         try container.encodeIfPresent(exitPolicy, forKey: .exitPolicy)

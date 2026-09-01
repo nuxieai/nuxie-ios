@@ -34,7 +34,7 @@ struct ResponseBuilders {
             versionId: flowId,
             name: name,
             reentry: .oneTime,
-            publishedAt: Date().ISO8601Format(),
+            releaseCreatedAt: Date().ISO8601Format(),
             trigger: .event(EventTriggerConfig(
                 eventName: eventName,
                 condition: nil

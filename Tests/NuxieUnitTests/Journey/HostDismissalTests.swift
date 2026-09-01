@@ -2222,8 +2222,8 @@ private struct HostJourneyHarness {
             experienceVersionId: versionId,
             buildId: "host-dismiss-build",
             versionNumber: 1,
-            publishedAt: "2026-08-23T00:00:00.000Z",
-            publishedAtSeq: 1
+            releaseCreatedAt: "2026-08-23T00:00:00.000Z",
+            releaseSequence: 1
         )
         return Experience(
             behavior: ExperienceBehaviorDefinition(
@@ -2235,7 +2235,7 @@ private struct HostJourneyHarness {
                 artifactContentHash: String(repeating: "a", count: 64),
                 name: "Host dismissal",
                 reentry: reentry,
-                publishedAt: identity.publishedAt,
+                releaseCreatedAt: identity.releaseCreatedAt,
                 trigger: .event(.init(eventName: triggerEvent, condition: nil)),
                 goal: nil,
                 exitPolicy: exitPolicy,

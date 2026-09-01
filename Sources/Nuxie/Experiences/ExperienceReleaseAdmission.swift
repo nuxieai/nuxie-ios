@@ -39,11 +39,11 @@ struct ExperienceReleaseHighWaterKey: Hashable, Sendable {
 }
 
 struct ExperienceReleaseHighWaterMark: Codable, Equatable, Sendable {
-    let publishedAtSeq: Int
+    let releaseSequence: Int
     let experienceVersionId: String
     let buildId: String
     let versionNumber: Int
-    let publishedAt: String
+    let releaseCreatedAt: String
     let descriptorSHA256: String
 }
 
@@ -63,16 +63,16 @@ actor InMemoryExperienceReleaseHighWaterStore: ExperienceReleaseHighWaterStore {
         _ candidates: [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
     ) throws {
         for (key, candidate) in candidates {
-            guard candidate.publishedAtSeq >= 0,
+            guard candidate.releaseSequence >= 0,
                   values[key].map({ current in
-                      candidate.publishedAtSeq > current.publishedAtSeq
+                      candidate.releaseSequence > current.releaseSequence
                           || candidate == current
                   }) ?? true else {
                 throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
             }
         }
         for (key, candidate) in candidates {
-            if values[key].map({ candidate.publishedAtSeq > $0.publishedAtSeq }) ?? true {
+            if values[key].map({ candidate.releaseSequence > $0.releaseSequence }) ?? true {
                 values[key] = candidate
             }
         }
@@ -124,9 +124,9 @@ struct PersistentExperienceReleaseHighWaterStore: ExperienceReleaseHighWaterStor
             var ledger = try Self.readLedger(targetURL)
             for (key, candidate) in candidates {
                 let digest = Self.digest(for: key)
-                guard candidate.publishedAtSeq >= 0,
+                guard candidate.releaseSequence >= 0,
                       ledger[digest].map({ current in
-                          candidate.publishedAtSeq > current.publishedAtSeq
+                          candidate.releaseSequence > current.releaseSequence
                               || candidate == current
                       }) ?? true else {
                     throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
@@ -134,7 +134,7 @@ struct PersistentExperienceReleaseHighWaterStore: ExperienceReleaseHighWaterStor
             }
             for (key, candidate) in candidates {
                 let digest = Self.digest(for: key)
-                if ledger[digest].map({ candidate.publishedAtSeq > $0.publishedAtSeq }) ?? true {
+                if ledger[digest].map({ candidate.releaseSequence > $0.releaseSequence }) ?? true {
                     ledger[digest] = candidate
                 }
             }
@@ -183,7 +183,7 @@ struct PersistentExperienceReleaseHighWaterStore: ExperienceReleaseHighWaterStor
             from: data
         ), ledger.allSatisfy({ key, value in
                   key.count == 64 && key.allSatisfy { $0.isHexDigit && !$0.isUppercase }
-                      && value.publishedAtSeq >= 0
+                      && value.releaseSequence >= 0
                       && value.descriptorSHA256.count == 64
                       && value.descriptorSHA256.allSatisfy {
                           $0.isHexDigit && !$0.isUppercase
@@ -191,7 +191,7 @@ struct PersistentExperienceReleaseHighWaterStore: ExperienceReleaseHighWaterStor
                       && !value.experienceVersionId.isEmpty
                       && !value.buildId.isEmpty
                       && value.versionNumber >= 0
-                      && !value.publishedAt.isEmpty
+                      && !value.releaseCreatedAt.isEmpty
               }) else {
             throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
         }
@@ -250,8 +250,8 @@ actor ExperienceReleaseAdmission {
                     experienceId: identity.experienceId
                 )
                 replayPolicy = .active(
-                    minimumPublishedAtSeq:
-                        try await store.highWater(for: key)?.publishedAtSeq ?? 0
+                    minimumReleaseSequence:
+                        try await store.highWater(for: key)?.releaseSequence ?? 0
                 )
             case .pinned(let experienceVersionId, let buildId, let descriptorSHA256):
                 replayPolicy = .pinned(
@@ -276,17 +276,17 @@ actor ExperienceReleaseAdmission {
                     experienceId: identity.experienceId
                 )
                 let mark = ExperienceReleaseHighWaterMark(
-                    publishedAtSeq: identity.publishedAtSeq,
+                    releaseSequence: identity.releaseSequence,
                     experienceVersionId: identity.experienceVersionId,
                     buildId: identity.buildId,
                     versionNumber: identity.versionNumber,
-                    publishedAt: identity.publishedAt,
+                    releaseCreatedAt: identity.releaseCreatedAt,
                     descriptorSHA256: value.descriptorSHA256
                 )
                 if let existing = promotions[key] {
-                    if mark.publishedAtSeq > existing.publishedAtSeq {
+                    if mark.releaseSequence > existing.releaseSequence {
                         promotions[key] = mark
-                    } else if mark.publishedAtSeq == existing.publishedAtSeq,
+                    } else if mark.releaseSequence == existing.releaseSequence,
                               mark != existing {
                         throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
                     }
@@ -312,9 +312,9 @@ actor ExperienceReleaseAdmission {
         for batch in batches {
             for (key, mark) in batch.promotions {
                 if let existing = promotions[key] {
-                    if mark.publishedAtSeq > existing.publishedAtSeq {
+                    if mark.releaseSequence > existing.releaseSequence {
                         promotions[key] = mark
-                    } else if mark.publishedAtSeq == existing.publishedAtSeq,
+                    } else if mark.releaseSequence == existing.releaseSequence,
                               mark != existing {
                         throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
                     }

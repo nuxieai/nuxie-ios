@@ -40,7 +40,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             root["identity"],
             required: [
                 "appId", "environment", "experienceId", "experienceVersionId",
-                "versionNumber", "buildId", "publishedAt", "publishedAtSeq",
+                "versionNumber", "buildId", "releaseCreatedAt", "releaseSequence",
             ],
             path: "identity"
         )

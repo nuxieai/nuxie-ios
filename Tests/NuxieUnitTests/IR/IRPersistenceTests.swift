@@ -21,7 +21,7 @@ final class IRPersistenceTests: AsyncSpec {
                 versionId: "flow_1",
                 name: "Experience",
                 reentry: .everyTime,
-                publishedAt: "2026-01-01T00:00:00Z",
+                releaseCreatedAt: "2026-01-01T00:00:00Z",
                 trigger: .event(EventTriggerConfig(
                     eventName: "app_opened",
                     condition: makeEnvelope(.pred(op: "eq", key: "source", value: .string("push")))

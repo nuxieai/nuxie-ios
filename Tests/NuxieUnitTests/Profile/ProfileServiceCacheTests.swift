@@ -1953,8 +1953,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 experienceVersionId: versionId,
                 buildId: "build_release",
                 versionNumber: 1,
-                publishedAt: "2026-08-12T00:00:00Z",
-                publishedAtSeq: 1
+                releaseCreatedAt: "2026-08-12T00:00:00Z",
+                releaseSequence: 1
             ),
             descriptorSha256: digest,
             envelopeBytes: try! JSONEncoder().encode(ExperienceReleaseDescriptorEnvelope(

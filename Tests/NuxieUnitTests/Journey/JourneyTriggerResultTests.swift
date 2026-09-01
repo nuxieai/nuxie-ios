@@ -67,7 +67,7 @@ final class JourneyTriggerResultTests: AsyncSpec {
                     versionId: reference.versionId,
                     name: "Start Failure",
                     reentry: .everyTime,
-                    publishedAt: "2026-08-23T00:00:00Z",
+                    releaseCreatedAt: "2026-08-23T00:00:00Z",
                     trigger: .event(EventTriggerConfig(
                         eventName: "start_failure",
                         condition: nil
@@ -114,7 +114,7 @@ final class JourneyTriggerResultTests: AsyncSpec {
                     versionId: admittedReference.versionId,
                     name: "Admitted Generation",
                     reentry: .everyTime,
-                    publishedAt: "2026-08-28T00:00:00Z",
+                    releaseCreatedAt: "2026-08-28T00:00:00Z",
                     trigger: .event(EventTriggerConfig(
                         eventName: "generation-pinned-trigger",
                         condition: nil
@@ -151,7 +151,7 @@ final class JourneyTriggerResultTests: AsyncSpec {
                     versionId: replacementReference.versionId,
                     name: "Replacement Generation",
                     reentry: .everyTime,
-                    publishedAt: "2026-08-28T00:00:01Z",
+                    releaseCreatedAt: "2026-08-28T00:00:01Z",
                     trigger: nil,
                     goal: nil,
                     exitPolicy: nil,
@@ -226,7 +226,7 @@ final class JourneyTriggerResultTests: AsyncSpec {
                     versionId: reference.versionId,
                     name: "Snapshot",
                     reentry: .everyTime,
-                    publishedAt: "2026-08-23T00:00:00Z",
+                    releaseCreatedAt: "2026-08-23T00:00:00Z",
                     trigger: .event(EventTriggerConfig(
                         eventName: "snapshot-trigger",
                         condition: IREnvelope(

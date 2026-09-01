@@ -899,9 +899,9 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 highestByStream[key] = item
                 continue
             }
-            if item.identity.publishedAtSeq > existing.identity.publishedAtSeq {
+            if item.identity.releaseSequence > existing.identity.releaseSequence {
                 highestByStream[key] = item
-            } else if item.identity.publishedAtSeq == existing.identity.publishedAtSeq,
+            } else if item.identity.releaseSequence == existing.identity.releaseSequence,
                       item.identity != existing.identity || item.digest != existing.digest {
                 throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
             }
@@ -1594,8 +1594,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             experienceVersionId: identity.experienceVersionId,
             buildId: identity.buildId,
             versionNumber: identity.versionNumber,
-            publishedAt: identity.publishedAt,
-            publishedAtSeq: identity.publishedAtSeq
+            releaseCreatedAt: identity.releaseCreatedAt,
+            releaseSequence: identity.releaseSequence
         )
     }
 
@@ -1698,7 +1698,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             artifactContentHash: render.riv.sha256,
             name: metadata.name,
             reentry: reentry,
-            publishedAt: identity.publishedAt,
+            releaseCreatedAt: identity.releaseCreatedAt,
             trigger: trigger,
             goal: goal,
             exitPolicy: exitMode.map(ExitPolicy.init(mode:)),

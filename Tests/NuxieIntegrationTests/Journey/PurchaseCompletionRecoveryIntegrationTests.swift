@@ -344,8 +344,8 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                             experienceVersionId: "version-1",
                             buildId: "build-1",
                             versionNumber: 1,
-                            publishedAt: "2026-08-19T00:00:00Z",
-                            publishedAtSeq: 1
+                            releaseCreatedAt: "2026-08-19T00:00:00Z",
+                            releaseSequence: 1
                         ),
                         descriptorSHA256: String(repeating: "a", count: 64)
                     ),

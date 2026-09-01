@@ -298,8 +298,8 @@ struct ExperienceReleaseIdentity: Codable, Equatable, Hashable, Sendable {
     let experienceVersionId: String
     let buildId: String
     let versionNumber: Int
-    let publishedAt: String
-    let publishedAtSeq: Int
+    let releaseCreatedAt: String
+    let releaseSequence: Int
 
     init(
         appId: String,
@@ -308,8 +308,8 @@ struct ExperienceReleaseIdentity: Codable, Equatable, Hashable, Sendable {
         experienceVersionId: String,
         buildId: String,
         versionNumber: Int,
-        publishedAt: String,
-        publishedAtSeq: Int
+        releaseCreatedAt: String,
+        releaseSequence: Int
     ) {
         self.appId = appId
         self.environment = environment
@@ -317,14 +317,14 @@ struct ExperienceReleaseIdentity: Codable, Equatable, Hashable, Sendable {
         self.experienceVersionId = experienceVersionId
         self.buildId = buildId
         self.versionNumber = versionNumber
-        self.publishedAt = publishedAt
-        self.publishedAtSeq = publishedAtSeq
+        self.releaseCreatedAt = releaseCreatedAt
+        self.releaseSequence = releaseSequence
     }
 
     init(from decoder: Decoder) throws {
         try requireExactReleaseKeys(decoder, [
             "appId", "environment", "experienceId", "experienceVersionId",
-            "buildId", "versionNumber", "publishedAt", "publishedAtSeq",
+            "buildId", "versionNumber", "releaseCreatedAt", "releaseSequence",
         ])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         appId = try container.decode(String.self, forKey: .appId)
@@ -333,13 +333,13 @@ struct ExperienceReleaseIdentity: Codable, Equatable, Hashable, Sendable {
         experienceVersionId = try container.decode(String.self, forKey: .experienceVersionId)
         buildId = try container.decode(String.self, forKey: .buildId)
         versionNumber = try container.decode(Int.self, forKey: .versionNumber)
-        publishedAt = try container.decode(String.self, forKey: .publishedAt)
-        publishedAtSeq = try container.decode(Int.self, forKey: .publishedAtSeq)
+        releaseCreatedAt = try container.decode(String.self, forKey: .releaseCreatedAt)
+        releaseSequence = try container.decode(Int.self, forKey: .releaseSequence)
     }
 
     private enum CodingKeys: String, CodingKey {
         case appId, environment, experienceId, experienceVersionId, buildId
-        case versionNumber, publishedAt, publishedAtSeq
+        case versionNumber, releaseCreatedAt, releaseSequence
     }
 }
 
@@ -350,8 +350,8 @@ struct ExperienceReleaseIdentityExpectation: Equatable, Sendable {
     let experienceVersionId: String
     let buildId: String
     let versionNumber: Int
-    let publishedAt: String
-    let publishedAtSeq: Int
+    let releaseCreatedAt: String
+    let releaseSequence: Int
 
     var identity: ExperienceReleaseIdentity {
         ExperienceReleaseIdentity(
@@ -361,14 +361,14 @@ struct ExperienceReleaseIdentityExpectation: Equatable, Sendable {
             experienceVersionId: experienceVersionId,
             buildId: buildId,
             versionNumber: versionNumber,
-            publishedAt: publishedAt,
-            publishedAtSeq: publishedAtSeq
+            releaseCreatedAt: releaseCreatedAt,
+            releaseSequence: releaseSequence
         )
     }
 }
 
 enum ExperienceReleaseReplayPolicy: Equatable, Sendable {
-    case active(minimumPublishedAtSeq: Int)
+    case active(minimumReleaseSequence: Int)
     case pinned(
         experienceVersionId: String,
         buildId: String,
@@ -419,7 +419,7 @@ struct AuthenticatedExperienceReleaseDescriptor: Sendable {
     let descriptor: ExperienceReleaseDescriptor
     /// Active releases return the authenticated sequence for monotonic
     /// high-water promotion. Pinned rollback releases deliberately return nil.
-    let publishedAtSeqToPromote: Int?
+    let releaseSequenceToPromote: Int?
 }
 
 enum ExperienceReleaseDescriptorAuthenticationError: LocalizedError, Equatable, Sendable {
