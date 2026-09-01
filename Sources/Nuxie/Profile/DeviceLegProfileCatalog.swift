@@ -7,12 +7,86 @@ actor DeviceLegProfileCatalog {
     struct Snapshot: Sendable {
         let profile: JourneyPlaneProfile
         let releasesByDigest: [String: AuthenticatedDeviceLegRelease]
+
+        /// A current enrollment arm carries the live experience policy. A
+        /// pinned continuation can legitimately retain an older version whose
+        /// policy differs, so it is only authoritative when no enrollment arm
+        /// for that experience is present. The remaining identity fields make
+        /// malformed but authenticated ties deterministic.
+        var liveReentryPolicies: [String: DeviceLeg.Reentry] {
+            var selected: [String: ReentryCandidate] = [:]
+            for arm in profile.armedLegs {
+                guard let release = releasesByDigest[
+                    arm.reference.descriptorSha256
+                ] else { continue }
+                let candidate = ReentryCandidate(
+                    isEnrollment: arm.binding.type == .new,
+                    release: release
+                )
+                let experienceId = release.descriptor.identity.experienceId
+                if let current = selected[experienceId],
+                   !candidate.outranks(current) {
+                    continue
+                }
+                selected[experienceId] = candidate
+            }
+            return selected.mapValues(\.reentry)
+        }
+
+        private struct ReentryCandidate {
+            let isEnrollment: Bool
+            let publishedAtSeq: Int
+            let versionNumber: Int
+            let publishedAt: String
+            let versionId: String
+            let buildId: String
+            let descriptorSHA256: String
+            let reentry: DeviceLeg.Reentry
+
+            init(
+                isEnrollment: Bool,
+                release: AuthenticatedDeviceLegRelease
+            ) {
+                let identity = release.descriptor.identity
+                self.isEnrollment = isEnrollment
+                publishedAtSeq = identity.publishedAtSeq
+                versionNumber = identity.versionNumber
+                publishedAt = identity.publishedAt
+                versionId = identity.experienceVersionId
+                buildId = identity.buildId
+                descriptorSHA256 = release.descriptorSHA256
+                reentry = release.descriptor.leg.reentry
+            }
+
+            func outranks(_ other: Self) -> Bool {
+                if isEnrollment != other.isEnrollment {
+                    return isEnrollment
+                }
+                if publishedAtSeq != other.publishedAtSeq {
+                    return publishedAtSeq > other.publishedAtSeq
+                }
+                if versionNumber != other.versionNumber {
+                    return versionNumber > other.versionNumber
+                }
+                if publishedAt != other.publishedAt {
+                    return publishedAt > other.publishedAt
+                }
+                if versionId != other.versionId {
+                    return versionId > other.versionId
+                }
+                if buildId != other.buildId {
+                    return buildId > other.buildId
+                }
+                return descriptorSHA256 > other.descriptorSHA256
+            }
+        }
     }
 
     struct Prepared: Sendable {
         fileprivate let snapshot: Snapshot
         fileprivate let promotions:
             [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
+        fileprivate let authority: ProfileDeliveryAuthority
     }
 
     private let authorizationKeys: [ExperiencePackageAuthorizationKey]
@@ -20,6 +94,10 @@ actor DeviceLegProfileCatalog {
     private let highWaterStore: any ExperienceReleaseHighWaterStore
     private let verifier = ExperienceReleaseDescriptorVerifier()
     private var current: (distinctId: String, snapshot: Snapshot)?
+    /// Bound to the transport-authenticated app/environment of the first
+    /// committed canonical profile for this setup. Clearing customer delivery
+    /// does not change configured app authority.
+    private var authority: ProfileDeliveryAuthority?
 
     init(
         authorizationKeys: [ExperiencePackageAuthorizationKey],
@@ -31,7 +109,14 @@ actor DeviceLegProfileCatalog {
         self.highWaterStore = highWaterStore
     }
 
-    func prepare(_ profile: JourneyPlaneProfile) async throws -> Prepared {
+    func prepare(
+        _ profile: JourneyPlaneProfile,
+        authority deliveryAuthority: ProfileDeliveryAuthority
+    ) async throws -> Prepared {
+        guard deliveryAuthority.isValid,
+              authority == nil || authority == deliveryAuthority else {
+            throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+        }
         // Cached profiles are decoded through ProfileResponse's synthesized
         // Codable conformance. Re-run the exact whole-profile decoder here so
         // disk reloads enforce the same shape, linkage, and cardinality rules
@@ -54,6 +139,13 @@ actor DeviceLegProfileCatalog {
 
         for entry in validatedProfile.releases {
             let identity = entry.locator.identity
+            let entryAuthority = ProfileDeliveryAuthority(
+                appId: identity.appId,
+                environment: identity.environment
+            )
+            guard deliveryAuthority == entryAuthority else {
+                throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+            }
             let key = ExperienceReleaseHighWaterKey(
                 appId: identity.appId,
                 environment: identity.environment,
@@ -122,7 +214,8 @@ actor DeviceLegProfileCatalog {
                 profile: validatedProfile,
                 releasesByDigest: authenticated
             ),
-            promotions: promotions
+            promotions: promotions,
+            authority: deliveryAuthority
         )
     }
 
@@ -133,6 +226,13 @@ actor DeviceLegProfileCatalog {
         admission: ProfileSideEffectAdmission? = nil
     ) async throws -> Bool {
         guard admission?() ?? true else { return false }
+        guard authority == nil || authority == prepared.authority else {
+            throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+        }
+        // Establish before the first suspension so two reentrant commits
+        // cannot publish different app authorities through one setup. Empty
+        // canonical deliveries bind authority too.
+        authority = prepared.authority
         try await highWaterStore.admitActiveBatch(prepared.promotions)
         guard admission?() ?? true else { return false }
         current = (distinctId, prepared.snapshot)
@@ -160,6 +260,13 @@ actor DeviceLegProfileCatalog {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
         }
         let identity = entry.locator.identity
+        let entryAuthority = ProfileDeliveryAuthority(
+            appId: identity.appId,
+            environment: identity.environment
+        )
+        guard let authority, authority == entryAuthority else {
+            throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+        }
         return try verifier.authenticateDeviceLeg(
             envelopeBytes: JSONEncoder().encode(entry.envelope),
             authorizationKeys: authorizationKeys,

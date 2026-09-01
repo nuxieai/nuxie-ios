@@ -25,8 +25,25 @@ final class DeviceLegProfileFence: @unchecked Sendable {
         }
     }
 
+    func token() -> DeviceLegProfileFenceToken {
+        lock.withLock { DeviceLegProfileFenceToken(generation: generation) }
+    }
+
     func isCurrent(_ token: DeviceLegProfileFenceToken) -> Bool {
         lock.withLock { generation == token.generation }
+    }
+
+    /// Runs one synchronous durable commit while the generation is stable.
+    /// The lock gives profile replacement and journal admission one exact
+    /// ordering without holding actor isolation across file I/O.
+    func performIfCurrent<Value>(
+        _ token: DeviceLegProfileFenceToken,
+        _ operation: () throws -> Value
+    ) rethrows -> Value? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard generation == token.generation else { return nil }
+        return try operation()
     }
 
     @discardableResult
@@ -54,8 +71,36 @@ struct DeviceLegDispatchRequest: Sendable {
     let effectId: String
     let distinctId: String
     let identityFence: IdentityFenceToken
-    let profileFence: DeviceLegProfileFence
-    let profileFenceToken: DeviceLegProfileFenceToken
+    let executionFence: DeviceLegProfileFence
+    let executionFenceToken: DeviceLegProfileFenceToken
+}
+
+/// Admits the event store's final synchronous mutation only while both the
+/// authenticated execution snapshot and customer identity remain current.
+/// The lock order matches the other device-leg publications: execution first,
+/// then identity.
+private struct DeviceLegEventCommitAdmission: StableEventCaptureCommitAdmission {
+    let identity: IdentityServiceProtocol
+    let identityFenceToken: IdentityFenceToken
+    let executionFence: DeviceLegProfileFence
+    let executionFenceToken: DeviceLegProfileFenceToken
+
+    func commitIfCurrent(
+        _ commit: () throws -> StableEventCaptureCommit
+    ) rethrows -> StableEventCaptureCommit? {
+        guard let identityAdmission = try executionFence.performIfCurrent(
+            executionFenceToken,
+            {
+                try identity.performIfCurrentIdentityFenceToken(
+                    identityFenceToken,
+                    commit
+                )
+            }
+        ) else {
+            return nil
+        }
+        return identityAdmission
+    }
 }
 
 enum DeviceLegDispatchResult: Equatable, Sendable {
@@ -131,7 +176,8 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
                 action.eventName,
                 properties: properties,
                 eventId: request.effectId,
-                distinctId: request.distinctId
+                distinctId: request.distinctId,
+                admission: eventCommitAdmission(request)
               ),
               await requestIsCurrent(request) else {
             return .failed
@@ -152,8 +198,8 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         let attributesBox = UncheckedSendable(attributes)
         let updated = await MainActor.run {
             var identityUpdated = false
-            let profileUpdated = request.profileFence.publishIfCurrent(
-                request.profileFenceToken
+            let executionUpdated = request.executionFence.publishIfCurrent(
+                request.executionFenceToken
             ) {
                 identityUpdated = identity.publishIfCurrentIdentityFenceToken(
                     request.identityFence
@@ -161,7 +207,7 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
                     identity.setUserProperties(attributesBox.value)
                 }
             }
-            return profileUpdated && identityUpdated
+            return executionUpdated && identityUpdated
         }
         guard updated else { return .failed }
         var properties = legAttribution(request)
@@ -184,7 +230,8 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
                 JourneyEvents.journeyMilestone,
                 properties: properties,
                 eventId: request.effectId,
-                distinctId: request.distinctId
+                distinctId: request.distinctId,
+                admission: eventCommitAdmission(request)
               ),
               await requestIsCurrent(request) else {
             return .failed
@@ -214,8 +261,8 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         )
         let delivered = await MainActor.run {
             var identityDelivered = false
-            let profileDelivered = request.profileFence.publishIfCurrent(
-                request.profileFenceToken
+            let executionDelivered = request.executionFence.publishIfCurrent(
+                request.executionFenceToken
             ) {
                 identityDelivered = identity.publishIfCurrentIdentityFenceToken(
                     request.identityFence
@@ -223,7 +270,7 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
                     appActionHandler(value)
                 }
             }
-            return profileDelivered && identityDelivered
+            return executionDelivered && identityDelivered
         }
         guard delivered else {
             return .failed
@@ -250,9 +297,21 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
             event,
             properties: properties,
             eventId: request.effectId,
-            distinctId: request.distinctId
+            distinctId: request.distinctId,
+            admission: eventCommitAdmission(request)
         ), await requestIsCurrent(request) else { return false }
         return await requestIsCurrent(request)
+    }
+
+    private func eventCommitAdmission(
+        _ request: DeviceLegDispatchRequest
+    ) -> DeviceLegEventCommitAdmission {
+        DeviceLegEventCommitAdmission(
+            identity: identity,
+            identityFenceToken: request.identityFence,
+            executionFence: request.executionFence,
+            executionFenceToken: request.executionFenceToken
+        )
     }
 
     private func legAttribution(
@@ -274,11 +333,11 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
     }
 
     private func requestIsCurrent(_ request: DeviceLegDispatchRequest) async -> Bool {
-        guard request.profileFence.isCurrent(request.profileFenceToken),
+        guard request.executionFence.isCurrent(request.executionFenceToken),
               await identityFenceIsCurrent(request.identityFence) else {
             return false
         }
-        return request.profileFence.isCurrent(request.profileFenceToken)
+        return request.executionFence.isCurrent(request.executionFenceToken)
     }
 
     private func decode<Value: Decodable>(

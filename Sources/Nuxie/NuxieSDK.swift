@@ -122,6 +122,13 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         },
         overrides: overrides
       )
+      let eventLog = core.eventLog
+      let journeyService = core.journeys
+      let deviceLegService = core.deviceLegs
+      let deviceLegAdmission = eventLog.reserveCommittedAdmission {
+        [weak deviceLegService] in
+        deviceLegService?.eventAdmissionGeneration()
+      }
 
       // Start the lifecycle coordinator over the built graph. It always owns
       // automatic lifecycle events; customers can filter them with beforeSend.
@@ -142,14 +149,16 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       // events BEFORE the log opens — capture commands buffer until configure
       // finishes, so the subscriber observes every committed event.
       LogDebug("Setting up event system...")
-      let eventLog = core.eventLog
-      let journeyService = core.journeys
-      let deviceLegService = core.deviceLegs
 
       let eventSystemSetupTask = Task {
         guard !Task.isCancelled else { return }
-        await eventLog.subscribeCommitted { [weak deviceLegService] event in
-          await deviceLegService?.handleEvent(event)
+        await eventLog.subscribeCommitted(
+          reservation: deviceLegAdmission
+        ) { [weak deviceLegService] event, admittedProfileGeneration in
+          await deviceLegService?.handleEvent(
+            event,
+            admittedProfileGeneration: admittedProfileGeneration
+          )
         }
         await eventLog.subscribeCommitted { [weak journeyService] event in
           await journeyService?.handleEvent(event)

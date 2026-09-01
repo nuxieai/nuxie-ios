@@ -89,6 +89,24 @@ final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchec
             )
         }
     }
+    func performIfCurrentIdentityFenceToken<T>(
+        _ token: IdentityFenceToken,
+        _ publication: () throws -> T
+    ) rethrows -> T? {
+        try identityPublicationLock.withLock {
+            let isCurrent = lock.withLock {
+                token.distinctId == distinctId
+                    && token.generation == identityFenceGeneration
+            }
+            guard isCurrent else { return nil }
+            let value = try publication()
+            let isStillCurrent = lock.withLock {
+                token.distinctId == distinctId
+                    && token.generation == identityFenceGeneration
+            }
+            return isStillCurrent ? value : nil
+        }
+    }
     @MainActor
     func mutateIdentity(
         _ mutation: IdentityMutation,
@@ -142,15 +160,7 @@ final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchec
         _ token: IdentityFenceToken,
         _ publication: () -> Void
     ) -> Bool {
-        identityPublicationLock.withLock {
-            let isCurrent = lock.withLock {
-                token.distinctId == distinctId
-                    && token.generation == identityFenceGeneration
-            }
-            guard isCurrent else { return false }
-            publication()
-            return true
-        }
+        performIfCurrentIdentityFenceToken(token, publication) != nil
     }
     func setOnceUserProperties(_ properties: [String: Any]) {
         lock.withLock {

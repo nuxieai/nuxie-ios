@@ -58,6 +58,8 @@ private struct TrackPayload: @unchecked Sendable {
   let properties: [String: Any]
   let forcedDistinctId: String  // snapshot at call site
   let routeToSubscribers: Bool
+  /// Subscriber-specific authority captured synchronously at `track`.
+  let subscriberAdmissions: [UInt64: UInt64]
 }
 
 private enum CaptureCommand: Sendable {
@@ -68,14 +70,14 @@ private enum CaptureCommand: Sendable {
 }
 
 private enum RouteResolution: Sendable {
-  case event(NuxieEvent)
+  case event(RoutedCommittedEvent)
   case skipped
 }
 
 private enum RouteCommand: Sendable {
   case resolved(sequence: UInt64, RouteResolution)
   /// Storage failures have no durable commit sequence to order against.
-  case undurable(NuxieEvent)
+  case undurable(RoutedCommittedEvent)
   case barrier(CheckedContinuation<Void, Never>)
   case shutdown
 }
@@ -109,7 +111,56 @@ enum EventFlushStrategy: Equatable, Sendable {
 /// A committed-event subscriber callback. Invoked in commit order, after the
 /// event is persisted (pending delivery) and staged for the network.
 typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
+typealias CommittedEventAdmissionProvider = @Sendable () -> UInt64?
+typealias AdmittedCommittedEventHandler =
+  @Sendable (NuxieEvent, UInt64?) async -> Void
 typealias ForwardingEventHandler = @Sendable (DurableForwardingEvent) async -> Void
+
+/// Reserves a committed subscriber's stable identifier before asynchronous
+/// actor registration. This lets synchronous capture preserve the subscriber's
+/// authority even when the event is tracked immediately after SDK setup.
+struct CommittedEventAdmissionReservation: Hashable, Sendable {
+  let subscriberIdentifier: UInt64
+}
+
+private struct RoutedCommittedEvent: Sendable {
+  let event: NuxieEvent
+  let subscriberAdmissions: [UInt64: UInt64]
+}
+
+/// Admission providers must be callable from EventLog's synchronous,
+/// nonisolated track entry point. Subscriber handlers remain actor-owned; this
+/// registry stores only their stable identifiers and thread-safe providers.
+private final class CommittedEventAdmissionRegistry: @unchecked Sendable {
+  private let lock = NSLock()
+  private var nextIdentifier: UInt64 = 0
+  private var providers: [UInt64: CommittedEventAdmissionProvider] = [:]
+
+  func register(
+    provider: CommittedEventAdmissionProvider?
+  ) -> UInt64 {
+    lock.withLock {
+      let identifier = nextIdentifier
+      nextIdentifier &+= 1
+      if let provider {
+        providers[identifier] = provider
+      }
+      return identifier
+    }
+  }
+
+  func capture() -> [UInt64: UInt64] {
+    let snapshot = lock.withLock { providers }
+    var admissions: [UInt64: UInt64] = [:]
+    admissions.reserveCapacity(snapshot.count)
+    for (identifier, provider) in snapshot {
+      if let admission = provider() {
+        admissions[identifier] = admission
+      }
+    }
+    return admissions
+  }
+}
 
 private struct ForwardingSubscriber: Sendable {
   let isEnabled: @Sendable () -> Bool
@@ -368,6 +419,27 @@ protocol EventLogProtocol:
     handler: @escaping CommittedEventHandler
   ) async
 
+  /// Capture subscriber-specific execution authority at the synchronous event
+  /// boundary, then deliver it alongside the committed event. A missing value
+  /// means the subscriber was not authorized when capture began.
+  func reserveCommittedAdmission(
+    admission: @escaping CommittedEventAdmissionProvider
+  ) -> CommittedEventAdmissionReservation
+
+  /// Attach the actor-owned handler for a synchronously reserved admission.
+  /// Callers must install the handler before configuring the event log.
+  func subscribeCommitted(
+    where filter: (@Sendable (NuxieEvent) -> Bool)?,
+    reservation: CommittedEventAdmissionReservation,
+    handler: @escaping AdmittedCommittedEventHandler
+  ) async
+
+  func subscribeCommitted(
+    where filter: (@Sendable (NuxieEvent) -> Bool)?,
+    admission: @escaping CommittedEventAdmissionProvider,
+    handler: @escaping AdmittedCommittedEventHandler
+  ) async
+
   /// Subscribe only to rows made newly durable by this process. This stream
   /// does not replay retained history and is independent from journey routing.
   func subscribeForwarding(
@@ -490,6 +562,28 @@ protocol EventLogProtocol:
 extension EventLogProtocol {
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
+  }
+
+  func subscribeCommitted(
+    reservation: CommittedEventAdmissionReservation,
+    handler: @escaping AdmittedCommittedEventHandler
+  ) async {
+    await subscribeCommitted(
+      where: nil,
+      reservation: reservation,
+      handler: handler
+    )
+  }
+
+  func subscribeCommitted(
+    admission: @escaping CommittedEventAdmissionProvider,
+    handler: @escaping AdmittedCommittedEventHandler
+  ) async {
+    await subscribeCommitted(
+      where: nil,
+      admission: admission,
+      handler: handler
+    )
   }
 
   func subscribeForwarding(handler: @escaping ForwardingEventHandler) async {
@@ -615,6 +709,8 @@ actor EventLog: EventLogProtocol {
   private nonisolated let captureContinuation: AsyncStream<CaptureCommand>.Continuation
   private var captureWorker: Task<Void, Never>?
   private nonisolated let routeContinuation: AsyncStream<RouteCommand>.Continuation
+  private nonisolated let committedAdmissionRegistry =
+    CommittedEventAdmissionRegistry()
   private var routeWorker: Task<Void, Never>?
   private var nextRouteSequenceToDeliver: UInt64 = 0
   private var pendingRouteResolutions: [UInt64: RouteResolution] = [:]
@@ -639,8 +735,9 @@ actor EventLog: EventLogProtocol {
   // MARK: - Committed-event subscribers
 
   private struct Subscriber {
+    let identifier: UInt64
     let filter: (@Sendable (NuxieEvent) -> Bool)?
-    let handler: CommittedEventHandler
+    let handler: AdmittedCommittedEventHandler
   }
   private var subscribers: [Subscriber] = []
   private var forwardingSubscribers: [ForwardingSubscriber] = []
@@ -859,7 +956,46 @@ actor EventLog: EventLogProtocol {
     where filter: (@Sendable (NuxieEvent) -> Bool)?,
     handler: @escaping CommittedEventHandler
   ) {
-    subscribers.append(Subscriber(filter: filter, handler: handler))
+    let identifier = committedAdmissionRegistry.register(provider: nil)
+    subscribers.append(Subscriber(
+      identifier: identifier,
+      filter: filter,
+      handler: { event, _ in await handler(event) }
+    ))
+  }
+
+  nonisolated func reserveCommittedAdmission(
+    admission: @escaping CommittedEventAdmissionProvider
+  ) -> CommittedEventAdmissionReservation {
+    CommittedEventAdmissionReservation(
+      subscriberIdentifier: committedAdmissionRegistry.register(
+        provider: admission
+      )
+    )
+  }
+
+  public func subscribeCommitted(
+    where filter: (@Sendable (NuxieEvent) -> Bool)?,
+    reservation: CommittedEventAdmissionReservation,
+    handler: @escaping AdmittedCommittedEventHandler
+  ) {
+    subscribers.append(Subscriber(
+      identifier: reservation.subscriberIdentifier,
+      filter: filter,
+      handler: handler
+    ))
+  }
+
+  public func subscribeCommitted(
+    where filter: (@Sendable (NuxieEvent) -> Bool)?,
+    admission: @escaping CommittedEventAdmissionProvider,
+    handler: @escaping AdmittedCommittedEventHandler
+  ) {
+    subscribeCommitted(
+      where: filter,
+      reservation: reserveCommittedAdmission(admission: admission),
+      handler: handler
+    )
   }
 
   public func subscribeForwarding(
@@ -937,7 +1073,8 @@ actor EventLog: EventLogProtocol {
       name: event,
       properties: custom,
       forcedDistinctId: distinctIdOverride,
-      routeToSubscribers: true
+      routeToSubscribers: true,
+      subscriberAdmissions: committedAdmissionRegistry.capture()
     )
 
     captureContinuation.yield(.track(payload))
@@ -953,7 +1090,8 @@ actor EventLog: EventLogProtocol {
       name: event,
       properties: properties ?? [:],
       forcedDistinctId: distinctIdOverride,
-      routeToSubscribers: false
+      routeToSubscribers: false,
+      subscriberAdmissions: [:]
     )))
   }
 
@@ -1401,10 +1539,14 @@ actor EventLog: EventLogProtocol {
     eventId: String,
     distinctId: String,
     ownership: JourneyEventOwnership?,
-    routeToSubscribers: Bool
+    routeToSubscribers: Bool,
+    admission: (any StableEventCaptureCommitAdmission)? = nil
   ) async -> DurableOwnedTriggerCaptureResult {
     guard !event.isEmpty else { return .failed }
     guard !closeFlag.isClosed else { return .failed }
+    let subscriberAdmissions = routeToSubscribers
+      ? committedAdmissionRegistry.capture()
+      : [:]
     await acquireTriggerDelivery()
     defer { releaseTriggerDelivery() }
 
@@ -1500,7 +1642,8 @@ actor EventLog: EventLogProtocol {
         event: transformedEvent.map(makeStoredEvent(from:)),
         recordedAt: attemptedTimestamp,
         ownership: ownership,
-        assigningCommitSequence: true
+        assigningCommitSequence: true,
+        admission: admission
       )
       let outcome = commit.outcome
       guard let commitSequence = commit.commitSequence else {
@@ -1548,7 +1691,8 @@ actor EventLog: EventLogProtocol {
       resolveRoute(
         commitSequence,
         event: routeToSubscribers && newlyDurableEvent != nil
-          && capture.routesLocally ? capture.event : nil
+          && capture.routesLocally ? capture.event : nil,
+        subscriberAdmissions: subscriberAdmissions
       )
       do {
         try await performCleanupIfNeeded()
@@ -1558,6 +1702,11 @@ actor EventLog: EventLogProtocol {
         LogWarning("EventLog: stable capture retention cleanup failed")
       }
       return .captured(capture)
+    } catch StableEventCaptureCommitAdmissionError.rejected {
+      // Revocation is an expected fail-closed outcome. No history mutation
+      // was attempted, so coverage remains exactly as authoritative as it was
+      // before this capture began.
+      return .failed
     } catch {
       LogError("EventLog: failed to durably capture system event")
       await recordHistoryGap(at: attemptedTimestamp)
@@ -1935,6 +2084,7 @@ actor EventLog: EventLogProtocol {
 
   public func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async {
     guard !facts.isEmpty else { return }
+    let subscriberAdmissions = committedAdmissionRegistry.capture()
     await ready.wait()
 
     let formatter = ISO8601DateFormatter()
@@ -1993,7 +2143,8 @@ actor EventLog: EventLogProtocol {
           deliveryState: .delivered,
           receivedAt: receivedAt,
           origin: .server,
-          routeToSubscribers: true
+          routeToSubscribers: true,
+          subscriberAdmissions: subscriberAdmissions
         )
         if inserted {
           try await performCleanupIfNeeded()
@@ -2328,7 +2479,11 @@ actor EventLog: EventLogProtocol {
       // buffer in the stream until the store opens.
       await ready.wait()
       guard let finalEvent = await buildEvent(from: payload) else { return }
-      await commit(finalEvent, routeToSubscribers: payload.routeToSubscribers)
+      await commit(
+        finalEvent,
+        routeToSubscribers: payload.routeToSubscribers,
+        subscriberAdmissions: payload.subscriberAdmissions
+      )
 
     case .flush(let cont):
       guard await ready.isOpen() else {
@@ -2360,12 +2515,12 @@ actor EventLog: EventLogProtocol {
         forKey: nextRouteSequenceToDeliver
       ) {
         nextRouteSequenceToDeliver &+= 1
-        guard case .event(let event) = next else { continue }
-        await routeToCommittedSubscribers(event)
+        guard case .event(let routed) = next else { continue }
+        await routeToCommittedSubscribers(routed)
       }
 
-    case .undurable(let event):
-      await routeToCommittedSubscribers(event)
+    case .undurable(let routed):
+      await routeToCommittedSubscribers(routed)
 
     case .barrier(let cont):
       cont.resume()
@@ -2375,10 +2530,15 @@ actor EventLog: EventLogProtocol {
     }
   }
 
-  private func routeToCommittedSubscribers(_ event: NuxieEvent) async {
+  private func routeToCommittedSubscribers(
+    _ routed: RoutedCommittedEvent
+  ) async {
     for subscriber in subscribers {
-      if let filter = subscriber.filter, !filter(event) { continue }
-      await subscriber.handler(event)
+      if let filter = subscriber.filter, !filter(routed.event) { continue }
+      await subscriber.handler(
+        routed.event,
+        routed.subscriberAdmissions[subscriber.identifier]
+      )
     }
   }
 
@@ -2411,7 +2571,8 @@ actor EventLog: EventLogProtocol {
     receivedAt: Date,
     origin: StoredEventOrigin = .device,
     stageForDelivery: Bool = false,
-    routeToSubscribers: Bool = false
+    routeToSubscribers: Bool = false,
+    subscriberAdmissions: [UInt64: UInt64] = [:]
   ) async throws -> Bool {
     let admission = forwardingAdmission(receivedAt: receivedAt)
     let commit = try await store.insert(
@@ -2437,7 +2598,8 @@ actor EventLog: EventLogProtocol {
     }
     resolveRoute(
       commitSequence,
-      event: commit.newlyDurable && routeToSubscribers ? event : nil
+      event: commit.newlyDurable && routeToSubscribers ? event : nil,
+      subscriberAdmissions: subscriberAdmissions
     )
     return commit.newlyDurable
   }
@@ -2468,17 +2630,30 @@ actor EventLog: EventLogProtocol {
     ))
   }
 
-  private func resolveRoute(_ commitSequence: UInt64, event: NuxieEvent?) {
+  private func resolveRoute(
+    _ commitSequence: UInt64,
+    event: NuxieEvent?,
+    subscriberAdmissions: [UInt64: UInt64] = [:]
+  ) {
     routeContinuation.yield(.resolved(
       sequence: commitSequence,
-      event.map(RouteResolution.event) ?? .skipped
+      event.map {
+        .event(RoutedCommittedEvent(
+          event: $0,
+          subscriberAdmissions: subscriberAdmissions
+        ))
+      } ?? .skipped
     ))
   }
 
   /// Persist the canonical captured record (stored row == wire payload,
   /// marked pending), stage it for network delivery, then announce it to
   /// committed-event subscribers in order.
-  private func commit(_ event: NuxieEvent, routeToSubscribers: Bool) async {
+  private func commit(
+    _ event: NuxieEvent,
+    routeToSubscribers: Bool,
+    subscriberAdmissions: [UInt64: UInt64]
+  ) async {
     extractUserProperties(from: event)
     var wasPersisted = false
     do {
@@ -2487,7 +2662,8 @@ actor EventLog: EventLogProtocol {
         deliveryState: .pending,
         receivedAt: event.timestamp,
         stageForDelivery: true,
-        routeToSubscribers: routeToSubscribers
+        routeToSubscribers: routeToSubscribers,
+        subscriberAdmissions: subscriberAdmissions
       )
       wasPersisted = true
       try await performCleanupIfNeeded()
@@ -2502,7 +2678,10 @@ actor EventLog: EventLogProtocol {
     await enqueueForDelivery(event, isPersisted: wasPersisted)
 
     if routeToSubscribers, !wasPersisted {
-      routeContinuation.yield(.undurable(event))
+      routeContinuation.yield(.undurable(RoutedCommittedEvent(
+        event: event,
+        subscriberAdmissions: subscriberAdmissions
+      )))
     }
   }
 
@@ -3871,6 +4050,13 @@ protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
     eventId: String,
     distinctId: String
   ) async -> DurableTriggerCapture?
+  func captureAndRouteSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String,
+    admission: any StableEventCaptureCommitAdmission
+  ) async -> DurableTriggerCapture?
 }
 
 extension EventLog {
@@ -3887,6 +4073,29 @@ extension EventLog {
       distinctId: distinctId,
       ownership: nil,
       routeToSubscribers: true
+    ) {
+    case .captured(let capture):
+      return capture
+    case .ownershipLost, .failed:
+      return nil
+    }
+  }
+
+  func captureAndRouteSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String,
+    admission: any StableEventCaptureCommitAdmission
+  ) async -> DurableTriggerCapture? {
+    switch await captureStableSystemEvent(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId,
+      ownership: nil,
+      routeToSubscribers: true,
+      admission: admission
     ) {
     case .captured(let capture):
       return capture

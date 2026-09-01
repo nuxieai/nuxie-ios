@@ -3,10 +3,16 @@ import Foundation
 struct ProfileCacheValidator: Codable, Equatable, Sendable {
     let rawValue: String
     let resourceScope: String?
+    let authority: ProfileDeliveryAuthority?
 
-    init(rawValue: String, resourceScope: String? = nil) {
+    init(
+        rawValue: String,
+        resourceScope: String? = nil,
+        authority: ProfileDeliveryAuthority? = nil
+    ) {
         self.rawValue = rawValue
         self.resourceScope = resourceScope
+        self.authority = authority
     }
 }
 

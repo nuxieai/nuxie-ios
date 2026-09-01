@@ -280,24 +280,32 @@ public final class MockIdentityService: IdentityServiceProtocol, @unchecked Send
         return IdentityFenced(value: value, token: captured.1)
     }
 
+    public func performIfCurrentIdentityFenceToken<T>(
+        _ token: IdentityFenceToken,
+        _ publication: () throws -> T
+    ) rethrows -> T? {
+        try identityPublicationLock.withLock {
+            let isCurrent = lock.withLock {
+                _distinctId == token.distinctId
+                    && _identityFenceGeneration == token.generation
+            }
+            guard isCurrent else { return nil }
+            let value = try publication()
+            let isStillCurrent = lock.withLock {
+                _distinctId == token.distinctId
+                    && _identityFenceGeneration == token.generation
+            }
+            return isStillCurrent ? value : nil
+        }
+    }
+
     @MainActor
     @discardableResult
     public func publishIfCurrentIdentityFenceToken(
         _ token: IdentityFenceToken,
         _ publication: () -> Void
     ) -> Bool {
-        identityPublicationLock.withLock {
-            let isCurrent = lock.withLock {
-                _distinctId == token.distinctId
-                    && _identityFenceGeneration == token.generation
-            }
-            guard isCurrent else { return false }
-            publication()
-            return lock.withLock {
-                _distinctId == token.distinctId
-                    && _identityFenceGeneration == token.generation
-            }
-        }
+        performIfCurrentIdentityFenceToken(token, publication) != nil
     }
 
     public func setOnceUserProperties(_ properties: [String: Any]) {
