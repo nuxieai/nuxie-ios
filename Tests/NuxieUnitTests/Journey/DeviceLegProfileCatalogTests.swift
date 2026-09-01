@@ -121,6 +121,61 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         XCTAssertEqual(retainedMark, newerMark)
     }
 
+    func testReauthenticatesADurableReleaseUnderItsExactPinnedIdentity() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let store = InMemoryExperienceReleaseHighWaterStore()
+        let catalog = try makeCatalog(
+            fixture,
+            store: store
+        )
+        let entry = try XCTUnwrap(fixture.profile.releases.first)
+        let reference = try XCTUnwrap(fixture.profile.armedLegs.first?.reference)
+        let key = ExperienceReleaseHighWaterKey(
+            appId: entry.locator.appId,
+            environment: entry.locator.environment,
+            experienceId: entry.locator.experienceId
+        )
+        let newerMark = ExperienceReleaseHighWaterMark(
+            publishedAtSeq: entry.locator.publishedAtSeq + 1,
+            experienceVersionId: "newer-version",
+            buildId: "newer-build",
+            versionNumber: entry.locator.versionNumber + 1,
+            publishedAt: entry.locator.publishedAt,
+            descriptorSHA256: String(repeating: "b", count: 64)
+        )
+        try await store.admitActiveBatch([key: newerMark])
+
+        let release = try await catalog.authenticatePinnedRelease(
+            entry,
+            reference: reference
+        )
+
+        XCTAssertEqual(release.descriptorSHA256, reference.descriptorSha256)
+        XCTAssertEqual(release.descriptor.identity, entry.locator.identity)
+        XCTAssertEqual(release.descriptor.leg.id, reference.legId)
+        XCTAssertNil(release.publishedAtSeqToPromote)
+        let retainedMark = await store.highWater(for: key)
+        XCTAssertEqual(retainedMark, newerMark)
+
+        do {
+            _ = try await catalog.authenticatePinnedRelease(
+                entry,
+                reference: .init(
+                    experienceId: reference.experienceId,
+                    versionId: "other-version",
+                    legId: reference.legId,
+                    descriptorSha256: reference.descriptorSha256
+                )
+            )
+            XCTFail("Expected retained release linkage rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .invalidDescriptor
+            )
+        }
+    }
+
     func testPrepareStrictlyRevalidatesCachedTypedProfile() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
         var malformedRoot = fixture.root

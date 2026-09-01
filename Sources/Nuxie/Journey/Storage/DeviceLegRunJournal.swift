@@ -58,6 +58,7 @@ struct DeviceLegRunJournal {
         var schemaVersion = "nuxie.device-leg-journal.v1"
         var runs: [String: DeviceLegRun] = [:]
         var checklist: [String: DeviceLegCheckmark] = [:]
+        var releasePinsByDigest: [String: DeviceLegReleaseProfileEntry] = [:]
     }
 
     let distinctId: String
@@ -76,8 +77,18 @@ struct DeviceLegRunJournal {
 
     /// Called only after the arm and its signed release have been admitted.
     /// Persist before running any action, including emitting the started fact.
-    func admit(arm: ArmedDeviceLeg, reentry: DeviceLeg.Reentry, entryStepId: String, at: Date) async throws -> DeviceLegRun? {
-        try await update { state in
+    func admit(
+        arm: ArmedDeviceLeg,
+        release: DeviceLegReleaseProfileEntry,
+        reentry: DeviceLeg.Reentry,
+        entryStepId: String,
+        at: Date
+    ) async throws -> DeviceLegRun? {
+        guard Self.pin(release, matches: arm.reference) else {
+            throw DeviceLegJournalError.invalidState
+        }
+        let releaseBytes = try ExactJSONCodec.encode(release)
+        return try await update { state in
             let previous = state.checklist[arm.reference.experienceId]
             let journeyId: String
             let generation: Int
@@ -113,6 +124,17 @@ struct DeviceLegRunJournal {
                                    stepId: entryStepId, context: arm.context)
             guard state.runs[run.id] == nil else { return nil }
             guard state.runs.count < 1024 else { throw DeviceLegJournalError.storageLimit }
+            if let existing = state.releasePinsByDigest[
+                arm.reference.descriptorSha256
+            ] {
+                guard try ExactJSONCodec.encode(existing) == releaseBytes else {
+                    throw DeviceLegJournalError.invalidState
+                }
+            } else {
+                state.releasePinsByDigest[
+                    arm.reference.descriptorSha256
+                ] = release
+            }
             state.runs[run.id] = run
             return run
         }
@@ -120,6 +142,12 @@ struct DeviceLegRunJournal {
 
     func runs() async throws -> [DeviceLegRun] {
         try await read { $0.runs.values.sorted { $0.startedEventId < $1.startedEventId } }
+    }
+
+    func releasePin(
+        descriptorSHA256: String
+    ) async throws -> DeviceLegReleaseProfileEntry? {
+        try await read { $0.releasePinsByDigest[descriptorSHA256] }
     }
 
     func checkmark(experienceId: String) async throws -> DeviceLegCheckmark? {
@@ -194,9 +222,21 @@ struct DeviceLegRunJournal {
     /// remain parked so the executor can evaluate them against current facts.
     func recover(at: Date) async throws -> [DeviceLegRun] {
         try await update { state in
-            for (id, var run) in state.runs where run.park == nil && run.completion == nil {
-                run.completion = .init(outcome: "abandoned", at: at)
-                state.runs[id] = run
+            for (id, var run) in state.runs where run.completion == nil {
+                let pin = state.releasePinsByDigest[
+                    run.reference.descriptorSha256
+                ]
+                if run.park == nil
+                    || pin.map({ Self.pin($0, matches: run.reference) }) != true {
+                    run.completion = .init(outcome: "abandoned", at: at)
+                    state.runs[id] = run
+                }
+            }
+            let referencedDigests = Set(state.runs.values.map {
+                $0.reference.descriptorSha256
+            })
+            state.releasePinsByDigest = state.releasePinsByDigest.filter {
+                referencedDigests.contains($0.key)
             }
             return state.runs.values.filter { $0.park != nil && $0.completion == nil }
                 .sorted { $0.startedEventId < $1.startedEventId }
@@ -263,7 +303,23 @@ struct DeviceLegRunJournal {
                                                  outcome: newer?.outcome ?? completion.outcome, completedAt: newer?.completedAt ?? completion.at,
                                                  lastEnrollmentAt: lastEnrollment)
             state.runs.removeValue(forKey: current.id)
+            let digest = current.reference.descriptorSha256
+            if !state.runs.values.contains(where: {
+                $0.reference.descriptorSha256 == digest
+            }) {
+                state.releasePinsByDigest.removeValue(forKey: digest)
+            }
         }
+    }
+
+    private static func pin(
+        _ release: DeviceLegReleaseProfileEntry,
+        matches reference: ArmedDeviceLeg.Reference
+    ) -> Bool {
+        release.envelope.descriptorSha256 == reference.descriptorSha256
+            && release.locator.experienceId == reference.experienceId
+            && release.locator.experienceVersionId == reference.versionId
+            && release.locator.legId == reference.legId
     }
 
     private func read<Value: Sendable>(_ operation: @escaping @Sendable (Snapshot) throws -> Value) async throws -> Value {
@@ -363,4 +419,39 @@ extension DeviceLegRun.Completion: Codable, Sendable {}
 extension DeviceLegCheckmark: Codable, Sendable {}
 extension DeviceLegJournalError: Error {}
 extension DeviceLegRunJournal: Sendable {}
-extension DeviceLegRunJournal.Snapshot: Codable {}
+extension DeviceLegRunJournal.Snapshot: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case runs
+        case checklist
+        case releasePinsByDigest
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(String.self, forKey: .schemaVersion)
+        runs = try container.decode(
+            [String: DeviceLegRun].self,
+            forKey: .runs
+        )
+        checklist = try container.decode(
+            [String: DeviceLegCheckmark].self,
+            forKey: .checklist
+        )
+        releasePinsByDigest = try container.decodeIfPresent(
+            [String: DeviceLegReleaseProfileEntry].self,
+            forKey: .releasePinsByDigest
+        ) ?? [:]
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(runs, forKey: .runs)
+        try container.encode(checklist, forKey: .checklist)
+        try container.encode(
+            releasePinsByDigest,
+            forKey: .releasePinsByDigest
+        )
+    }
+}
