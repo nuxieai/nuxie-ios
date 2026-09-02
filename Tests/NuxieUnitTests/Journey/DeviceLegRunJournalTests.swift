@@ -1141,6 +1141,94 @@ final class DeviceLegRunJournalTests: XCTestCase {
         XCTAssertNil(advanced.park)
     }
 
+    func testTransitionAdmissionRejectsRevokedExecutionAuthority() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "present",
+            at: date(1)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(
+            identity.performWithCurrentIdentityFence("customer", { _ in () })
+        )
+        let executionFence = DeviceLegProfileFence()
+        let executionToken = executionFence.token()
+        let admission = DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFence.token,
+            executionFence: executionFence,
+            executionFenceToken: executionToken
+        )
+        _ = executionFence.advance()
+
+        let committed = try await journal.transition(
+            run.id,
+            stepId: "late-route",
+            context: .init(event: ["late": .bool(true)], responses: [:]),
+            admission: admission
+        )
+
+        XCTAssertFalse(committed)
+        let retainedRuns = try await journal.runs()
+        let retained = try XCTUnwrap(retainedRuns.first)
+        XCTAssertEqual(retained.stepId, "present")
+        XCTAssertTrue(retained.context.event.dictionary.isEmpty)
+    }
+
+    func testCompletionAdmissionRejectsRevokedIdentityAuthority() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "present",
+            at: date(1)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(
+            identity.performWithCurrentIdentityFence("customer", { _ in () })
+        )
+        let executionFence = DeviceLegProfileFence()
+        let admission = DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFence.token,
+            executionFence: executionFence,
+            executionFenceToken: executionFence.token()
+        )
+        identity.setDistinctId("replacement-customer")
+
+        let committed = try await journal.complete(
+            run.id,
+            outcome: "host_dismissed",
+            at: date(2),
+            admission: admission
+        )
+
+        XCTAssertFalse(committed)
+        let retainedRuns = try await journal.runs()
+        let retained = try XCTUnwrap(retainedRuns.first)
+        XCTAssertNil(retained.completion)
+    }
+
     func testEffectClaimMigratesOldSnapshotAndBecomesAnAbandonmentBoundary() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -1506,6 +1594,16 @@ private actor LostCompletionAcknowledgement: RoutedStableSystemEventCapturing {
             admission: admission
         )
         return event == JourneyEvents.journeyLegCompleted ? nil : captured
+    }
+
+    func captureAndRouteSystemEventBatch(
+        _ items: [RoutedStableSystemEventBatchItem],
+        admission: any StableEventCaptureBatchCommitAdmission
+    ) async -> [String: DurableTriggerCapture]? {
+        await events.captureAndRouteSystemEventBatch(
+            items,
+            admission: admission
+        )
     }
 }
 

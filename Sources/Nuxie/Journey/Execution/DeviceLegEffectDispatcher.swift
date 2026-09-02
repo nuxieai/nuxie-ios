@@ -79,15 +79,59 @@ struct DeviceLegDispatchRequest: Sendable {
 /// authenticated execution snapshot and customer identity remain current.
 /// The lock order matches the other device-leg publications: execution first,
 /// then identity.
-private struct DeviceLegEventCommitAdmission: StableEventCaptureCommitAdmission {
+struct DeviceLegCommitAdmission:
+    StableEventCaptureCommitAdmission,
+    StableEventCaptureBatchCommitAdmission
+{
     let identity: IdentityServiceProtocol
-    let identityFenceToken: IdentityFenceToken
+    let identityFenceToken: IdentityFenceToken?
     let executionFence: DeviceLegProfileFence
     let executionFenceToken: DeviceLegProfileFenceToken
+
+    static func executionOnly(
+        identity: IdentityServiceProtocol,
+        executionFence: DeviceLegProfileFence,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) -> Self {
+        Self(
+            identity: identity,
+            identityFenceToken: nil,
+            executionFence: executionFence,
+            executionFenceToken: executionFenceToken
+        )
+    }
 
     func commitIfCurrent(
         _ commit: () throws -> StableEventCaptureCommit
     ) rethrows -> StableEventCaptureCommit? {
+        try commitWhileCurrent(commit)
+    }
+
+    func commitBatchIfCurrent(
+        _ commit: () throws -> [StableEventCaptureCommit]
+    ) rethrows -> [StableEventCaptureCommit]? {
+        try commitWhileCurrent(commit)
+    }
+
+    /// Journal state and its corresponding event publication share the same
+    /// execution and identity authority. The journal calls this around its
+    /// final synchronous file replacement so revocation cannot land between an
+    /// async preflight read and the durable mutation.
+    func commitJournalIfCurrent<Value>(
+        _ commit: () throws -> Value
+    ) rethrows -> Value? {
+        try commitWhileCurrent(commit)
+    }
+
+    private func commitWhileCurrent<Value>(
+        _ commit: () throws -> Value
+    ) rethrows -> Value? {
+        guard let identityFenceToken else {
+            return try executionFence.performIfCurrent(
+                executionFenceToken,
+                commit
+            )
+        }
         guard let identityAdmission = try executionFence.performIfCurrent(
             executionFenceToken,
             {
@@ -305,8 +349,8 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
 
     private func eventCommitAdmission(
         _ request: DeviceLegDispatchRequest
-    ) -> DeviceLegEventCommitAdmission {
-        DeviceLegEventCommitAdmission(
+    ) -> DeviceLegCommitAdmission {
+        DeviceLegCommitAdmission(
             identity: identity,
             identityFenceToken: request.identityFence,
             executionFence: request.executionFence,

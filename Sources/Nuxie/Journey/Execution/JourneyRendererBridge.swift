@@ -250,14 +250,17 @@ final class JourneyRendererBridge:
     }
   }
 
-  func experienceViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRuntimeDismiss(
-        journeyId: journeyId,
-        reason: reason,
-        controller: controller
-      )
-    }
+  @discardableResult
+  func experienceViewControllerDidRequestDismiss(
+    _ controller: ExperienceViewController,
+    reason: CloseReason
+  ) async -> Bool {
+    await journeyService?.handleRuntimeDismiss(
+      journeyId: journeyId,
+      reason: reason,
+      controller: controller
+    )
+    return true
   }
 
   @MainActor

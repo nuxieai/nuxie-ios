@@ -93,6 +93,33 @@ final class DeviceLegReleaseTests: XCTestCase {
         XCTAssertThrowsError(try DeviceLegSchemaValidator.validate(root))
     }
 
+    func testRejectsHostDismissalThatImmediatelyDismissesAgain() throws {
+        let fixture = try golden(entryKey: "renderedEntry")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+        leg["steps"] = [
+            [
+                "kind": "action",
+                "id": "dismiss",
+                "action": ["type": "dismiss"],
+                "outlets": [:],
+            ],
+        ]
+        leg["entryStepId"] = "dismiss"
+        leg["routes"] = []
+        root["leg"] = leg
+        XCTAssertNoThrow(try DeviceLegSchemaValidator.validate(root))
+
+        leg["routes"] = [[
+            "host": ["kind": "journey"],
+            "eventName": "host_dismissed",
+            "entryStepId": "dismiss",
+        ]]
+        root["leg"] = leg
+        XCTAssertThrowsError(try DeviceLegSchemaValidator.validate(root))
+    }
+
     func testValidatesWaitPayloadSchemaBeforeAdmission() throws {
         let fixture = try golden()
         let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))

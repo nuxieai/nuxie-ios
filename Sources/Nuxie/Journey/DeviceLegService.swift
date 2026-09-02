@@ -22,6 +22,11 @@ protocol DeviceLegServiceProtocol: DeviceLegProfileConsuming {
     func onAppWillEnterForeground() async
     func onAppBecameActive() async
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
+    func shutdown() async
+}
+
+extension DeviceLegServiceProtocol {
+    func shutdown() async {}
 }
 
 /// Owns the complete local lifecycle of authenticated flat device legs. The
@@ -47,6 +52,20 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         let arm: StateArmKey
         let eventId: String?
         let profileGeneration: UInt64
+    }
+
+    private enum PresentationLifecycleResult {
+        case accepted
+        case completed
+        case rejected
+    }
+
+    private struct PendingPresentationDismissalContinuation: Sendable {
+        let run: DeviceLegRun
+        let release: AuthenticatedDeviceLegRelease
+        let executionFenceToken: DeviceLegProfileFenceToken
+        let occurredAtMillis: Int64
+        let journal: DeviceLegRunJournal
     }
 
     /// The journal publishes a state-arm receipt from its filesystem
@@ -82,6 +101,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
     private let journalDirectory: URL?
+    private let journalBeforePersist: (@Sendable () throws -> Void)?
     /// Production starts without a journal namespace and installs one only
     /// after profile transport authenticates the configured Nuxie app. Tests
     /// may inject a fixed scope for direct journal inspection.
@@ -89,6 +109,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     private let acceptsProfileAuthorityScope: Bool
     private let featureAccess: FeatureAccessLookup
     private let dispatcher: any DeviceLegDispatching
+    private let presenter: (any DeviceLegPresenting)?
     private let pinnedReleaseAuthenticator: PinnedReleaseAuthenticator
     private let timezones: SignedTimezoneBundle
     private let currentDeviceTimezone: TimeZone
@@ -117,8 +138,21 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     /// profile/identity transition retries it successfully.
     private var revokingCustomers: Set<String> = []
     private var inFlightAttempts: Set<AttemptKey> = []
+    private var pendingPresentationDismissalContinuations: [
+        String: PendingPresentationDismissalContinuation
+    ] = [:]
+    /// The renderer resolves purchase references against the active screen
+    /// instance before starting commerce. Keep that exact value with the
+    /// claimed run so only its matching SDK outcome can advance the cursor.
+    private var pendingPresentationPurchasePlacements: [String: String] = [:]
+    /// Presentation emissions are both routed through EventLog subscribers
+    /// and applied directly to their owning run. While a stable emission is
+    /// in that direct lane, exclude its owner from generic parked/action
+    /// resumption so the subscriber cannot advance the journal first.
+    private var directlyRoutedPresentationRunByEventId: [String: String] = [:]
     private var wakeTask: Task<Void, Never>?
     private var wakeGeneration: UInt64 = 0
+    private var experimentExposureRetryTasks: [String: Task<Void, Never>] = [:]
 
     init(
         identity: IdentityServiceProtocol,
@@ -129,19 +163,23 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         storageScope: DeviceLegStorageScope? = .testFixture,
         featureAccess: @escaping FeatureAccessLookup,
         dispatcher: any DeviceLegDispatching,
+        presenter: (any DeviceLegPresenting)? = nil,
         pinnedReleaseAuthenticator: @escaping PinnedReleaseAuthenticator,
         timezones: SignedTimezoneBundle,
-        currentDeviceTimezone: TimeZone = .current
+        currentDeviceTimezone: TimeZone = .current,
+        journalBeforePersist: (@Sendable () throws -> Void)? = nil
     ) {
         self.identity = identity
         self.events = events
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
         self.journalDirectory = journalDirectory
+        self.journalBeforePersist = journalBeforePersist
         self.storageScope = storageScope
         acceptsProfileAuthorityScope = storageScope == nil
         self.featureAccess = featureAccess
         self.dispatcher = dispatcher
+        self.presenter = presenter
         self.pinnedReleaseAuthenticator = pinnedReleaseAuthenticator
         self.timezones = timezones
         self.currentDeviceTimezone = currentDeviceTimezone
@@ -149,11 +187,16 @@ actor DeviceLegService: DeviceLegServiceProtocol {
 
     deinit {
         wakeTask?.cancel()
+        experimentExposureRetryTasks.values.forEach { $0.cancel() }
     }
 
     func initialize() async {
         guard !initialized else { return }
         initialized = true
+        await presenter?.setDeviceLegPresentationAvailabilityHandler {
+            [weak self] in
+            Task { await self?.presentationDidBecomeAvailable() }
+        }
         if storageScope != nil {
             await openJournal(for: identity.getDistinctId())
         }
@@ -161,6 +204,19 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         guard let state = currentProfileState() else { return }
         await resumeParkedRuns(state: state, event: nil)
         await evaluateStateArms(state: state, kinds: nil)
+    }
+
+    func shutdown() async {
+        guard initialized || profileState != nil || journal != nil else { return }
+        // Revoke execution before asking the shared presenter to tear down its
+        // surface. Renderer callbacks emitted by teardown then fail every
+        // profile and execution-fence check.
+        initialized = false
+        foreground = false
+        cancelWake()
+        await presenter?.setDeviceLegPresentationAvailabilityHandler(nil)
+        await profileDidClearAll()
+        await cancelAndAwaitExperimentExposureRetries()
     }
 
     func profileDidCommit(
@@ -233,6 +289,12 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
+        pendingPresentationDismissalContinuations.removeAll()
+        pendingPresentationPurchasePlacements.removeAll()
+        directlyRoutedPresentationRunByEventId.removeAll()
+        await presenter?.shutdownDeviceLegPresentation(
+            ownerDistinctId: distinctId
+        )
         if let journalToAbandon {
             await abandon(journalToAbandon)
         }
@@ -241,12 +303,22 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     func profileDidClearAll() async {
         cancelWake()
         let journalToAbandon = journal
+        let presentationOwner = journalToAbandon?.distinctId
+            ?? profileState?.distinctId
         _ = profileFence.advance()
         _ = executionFence.advance()
         profileState = nil
         clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
+        pendingPresentationDismissalContinuations.removeAll()
+        pendingPresentationPurchasePlacements.removeAll()
+        directlyRoutedPresentationRunByEventId.removeAll()
+        if let presentationOwner {
+            await presenter?.shutdownDeviceLegPresentation(
+                ownerDistinctId: presentationOwner
+            )
+        }
         if let journalToAbandon {
             await abandon(journalToAbandon)
         }
@@ -267,13 +339,25 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         _ event: NuxieEvent,
         admittedProfileGeneration: UInt64?
     ) async {
+        let directlyRoutedRunId = directlyRoutedPresentationRunByEventId
+            .removeValue(forKey: event.id)
         guard initialized,
               event.distinctId == identity.getDistinctId(),
               event.name != JourneyEvents.journeyLegStarted,
               event.name != JourneyEvents.journeyLegCompleted,
               let state = currentProfileState() else { return }
 
-        await resumeParkedRuns(state: state, event: event)
+        await resumeParkedRuns(
+            state: state,
+            event: event,
+            excludingRunId: directlyRoutedRunId
+        )
+        guard isCurrent(state) else { return }
+        await resumePresentationActionOutcome(
+            state: state,
+            event: event,
+            excludingRunId: directlyRoutedRunId
+        )
         guard isCurrent(state) else { return }
         guard admittedProfileGeneration == state.generation else {
             await scheduleNextWake()
@@ -287,18 +371,145 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         await scheduleNextWake()
     }
 
+    private func resumePresentationActionOutcome(
+        state: ProfileState,
+        event: NuxieEvent,
+        excludingRunId: String? = nil
+    ) async {
+        guard let expectedType = Self.presentationOutcomeActionType[event.name],
+              let outlet = Self.presentationOutcomeOutlets[event.name],
+              let journal,
+              isCurrent(state),
+              isCurrentIdentity(journal: journal) else { return }
+        let candidates: [DeviceLegRun]
+        do {
+            candidates = try await journal.runs()
+        } catch {
+            return
+        }
+        for candidate in candidates
+        where candidate.completion == nil
+            && candidate.park == nil
+            && candidate.id != excludingRunId {
+            guard isCurrent(state),
+                  isCurrentIdentity(journal: journal) else { continue }
+            let executionFenceToken = executionFence.token()
+            guard let release = await release(
+                for: candidate,
+                state: state,
+                journal: journal,
+                executionFenceToken: executionFenceToken
+            ) else { continue }
+            let leg = release.descriptor.leg
+            guard let step = leg.steps.first(where: {
+                $0.id == candidate.stepId
+            }), let action = step.action,
+                  case .string(let actionType)? = action["type"],
+                  actionType == expectedType,
+                  let effectId = candidate.effectReceipts[step.id],
+                  presentationOutcomeMatches(
+                    event,
+                    effectId: effectId,
+                    runId: candidate.id,
+                    action: action,
+                    release: release
+                  ),
+                  let nextStepId = step.outlets?[outlet] else {
+                continue
+            }
+            do {
+                guard let admission = journalCommitAdmission(
+                    journal: journal,
+                    executionFenceToken: executionFenceToken
+                ), try await journal.transition(
+                    candidate.id,
+                    stepId: nextStepId,
+                    context: candidate.context,
+                    admission: admission
+                ) else { return }
+            } catch {
+                LogWarning(
+                    "DeviceLegService: failed to persist presentation action outcome: \(error)"
+                )
+                return
+            }
+            pendingPresentationPurchasePlacements.removeValue(
+                forKey: candidate.id
+            )
+            var continued = candidate
+            continued.stepId = nextStepId
+            continued.park = nil
+            await continuePresentedRun(
+                continued,
+                release: release,
+                executionFenceToken: executionFenceToken,
+                signal: .init(),
+                journal: journal
+            )
+            return
+        }
+    }
+
+    private func presentationOutcomeMatches(
+        _ event: NuxieEvent,
+        effectId: String,
+        runId: String,
+        action: [String: ExperienceReleaseJSONValue],
+        release: AuthenticatedDeviceLegRelease
+    ) -> Bool {
+        guard event.id == effectId else { return false }
+        guard case .string(let type)? = action["type"] else { return false }
+        guard type == "purchase" else { return type == "restore" }
+        if let eventExperienceId = event.properties["experience_id"] as? String,
+           eventExperienceId != release.descriptor.identity.experienceId {
+            return false
+        }
+        guard let expectedPlacement = pendingPresentationPurchasePlacements[
+                runId
+              ] ?? deviceLegPresentationLiteralString(action["placementId"]),
+              event.properties["placement_id"] as? String
+                == expectedPlacement else {
+            return false
+        }
+        return true
+    }
+
+    private static let presentationOutcomeActionType: [String: String] = [
+        SystemEventNames.purchaseCompleted: "purchase",
+        SystemEventNames.purchaseFailed: "purchase",
+        SystemEventNames.purchaseCancelled: "purchase",
+        SystemEventNames.restoreCompleted: "restore",
+        SystemEventNames.restoreFailed: "restore",
+        SystemEventNames.restoreNoPurchases: "restore",
+    ]
+
+    private static let presentationOutcomeOutlets: [String: String] = [
+        SystemEventNames.purchaseCompleted: "completed",
+        SystemEventNames.purchaseFailed: "failed",
+        SystemEventNames.purchaseCancelled: "cancelled",
+        SystemEventNames.restoreCompleted: "restored",
+        SystemEventNames.restoreFailed: "failed",
+        SystemEventNames.restoreNoPurchases: "noPurchases",
+    ]
+
     func onAppDidEnterBackground() async {
         foreground = false
         cancelWake()
     }
 
     func onAppWillEnterForeground() async {
-        foreground = true
+        // Keep rendered execution closed while ProfileService revalidates the
+        // foreground profile. Its commit callback is awaited by the lifecycle
+        // worker, so resuming an existing presentation here could wait on the
+        // presentation gate that same worker opens only after revalidation.
         foregroundReceiptResetCustomers.removeAll()
         await resetForegroundStateArmReceiptsIfNeeded()
     }
 
     func onAppBecameActive() async {
+        // NuxieLifecycleCoordinator opens foreground presentation admission
+        // before invoking this callback.
+        foreground = true
         await resetForegroundStateArmReceiptsIfNeeded()
         guard initialized, let state = currentProfileState() else { return }
         await resumeParkedRuns(state: state, event: nil)
@@ -310,6 +521,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         to newDistinctId: String
     ) async {
         cancelWake()
+        pendingPresentationPurchasePlacements.removeAll()
+        await presenter?.shutdownDeviceLegPresentation(
+            ownerDistinctId: oldDistinctId
+        )
         if let departing = journal,
            departing.distinctId == oldDistinctId {
             let retired = await abandon(departing)
@@ -322,6 +537,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             profileState = nil
             stateArmReceipts.removeAll()
             inFlightAttempts.removeAll()
+            pendingPresentationDismissalContinuations.removeAll()
         }
         // IdentityService's own fence revokes the departing user's execution.
         // Do not advance the global execution fence here: a queued transition
@@ -389,11 +605,18 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             let opened = try DeviceLegRunJournal(
                 directory: journalDirectory,
                 distinctId: distinctId,
-                storageScope: storageScope
+                storageScope: storageScope,
+                beforePersist: journalBeforePersist
             )
             clearRetainedReleaseCache()
             journal = opened
             _ = try await opened.recover(at: dateProvider.now())
+            if try await !DeviceLegExperimentExposureReporter(
+                journal: opened,
+                events: events
+            ).flushPending() {
+                scheduleExperimentExposureRetry(for: opened)
+            }
             try await DeviceLegReporter(journal: opened, events: events)
                 .flushPending()
             _ = try await opened.finalizeRevocation()
@@ -437,6 +660,12 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         }
         var finalized = false
         do {
+            if try await !DeviceLegExperimentExposureReporter(
+                journal: journal,
+                events: events
+            ).flushPending() {
+                scheduleExperimentExposureRetry(for: journal)
+            }
             try await DeviceLegReporter(journal: journal, events: events)
                 .flushPending()
             finalized = try await journal.finalizeRevocation()
@@ -480,7 +709,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
               ], let releasePin = state.snapshot.profile.releases.first(where: {
                 $0.envelope.descriptorSha256
                     == arm.reference.descriptorSha256
-              }) else { return }
+              }), release.descriptor.leg.screens.isEmpty || foreground else { return }
 
         let attempt = AttemptKey(
             arm: stateKey,
@@ -531,53 +760,68 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             entryCondition: arm.entryCondition,
             context: context
         )
-        guard let profileFenceToken = profileFence.token(
-            ifCurrent: state.generation
-        ) else { return }
-        let executionFenceToken = executionFence.token()
-        do {
-            guard let run = try await journal.admit(
-                arm: admittedArm,
-                release: releasePin,
-                reentry: release.descriptor.leg.reentry,
-                entryStepId: release.descriptor.leg.entryStepId,
-                at: dateProvider.now(),
-                profileFence: profileFence,
-                profileFenceToken: profileFenceToken,
-                stateArmReceipt: arm.entryCondition.type == .event
-                    ? nil
-                    : stateKey,
-                onAdmitted: { [stateArmReceipts] in
-                    guard arm.entryCondition.type != .event else { return }
-                    stateArmReceipts.insert(stateKey)
-                }
+        let presentationReservation = await presentationReservation(
+            for: release,
+            distinctId: state.distinctId
+        )
+        if presenter != nil,
+           !release.descriptor.leg.screens.isEmpty,
+           presentationReservation == nil {
+            // Presentation contention never consumes an arm. State arms are
+            // re-evaluated by the capacity callback; event arms wait for the
+            // next matching event, preserving the canonical no-queue rule.
+            return
+        }
+        await withPresentationReservation(presentationReservation) {
+            guard let profileFenceToken = profileFence.token(
+                ifCurrent: state.generation
             ) else { return }
-            guard executionFence.isCurrent(executionFenceToken),
-                  isCurrentIdentity(journal: journal) else {
-                await finish(
-                    run,
-                    outcome: "abandoned",
-                    leg: release.descriptor.leg,
-                    journal: journal
+            let executionFenceToken = executionFence.token()
+            do {
+                guard let run = try await journal.admit(
+                    arm: admittedArm,
+                    release: releasePin,
+                    reentry: release.descriptor.leg.reentry,
+                    entryStepId: release.descriptor.leg.entryStepId,
+                    at: dateProvider.now(),
+                    profileFence: profileFence,
+                    profileFenceToken: profileFenceToken,
+                    stateArmReceipt: arm.entryCondition.type == .event
+                        ? nil
+                        : stateKey,
+                    onAdmitted: { [stateArmReceipts] in
+                        guard arm.entryCondition.type != .event else { return }
+                        stateArmReceipts.insert(stateKey)
+                    }
+                ) else { return }
+                guard executionFence.isCurrent(executionFenceToken),
+                      isCurrentIdentity(journal: journal) else {
+                    await finishAfterAuthorityLoss(
+                        run,
+                        leg: release.descriptor.leg,
+                        journal: journal,
+                        executionFenceToken: executionFenceToken
+                    )
+                    return
+                }
+                let reporter = DeviceLegReporter(journal: journal, events: events)
+                try await reporter.flushPending()
+                guard let queued = try await journal.runs().first(where: {
+                    $0.id == run.id && $0.startedQueued
+                }) else { return }
+                await execute(
+                    queued,
+                    release: release,
+                    state: state,
+                    executionFenceToken: executionFenceToken,
+                    signal: executorSignal(event),
+                    checkpoint: nil,
+                    journal: journal,
+                    presentationReservation: presentationReservation
                 )
-                return
+            } catch {
+                LogWarning("DeviceLegService: failed to start device leg: \(error)")
             }
-            let reporter = DeviceLegReporter(journal: journal, events: events)
-            try await reporter.flushPending()
-            guard let queued = try await journal.runs().first(where: {
-                $0.id == run.id && $0.startedQueued
-            }) else { return }
-            await execute(
-                queued,
-                release: release,
-                state: state,
-                executionFenceToken: executionFenceToken,
-                signal: executorSignal(event),
-                checkpoint: nil,
-                journal: journal
-            )
-        } catch {
-            LogWarning("DeviceLegService: failed to start device leg: \(error)")
         }
     }
 
@@ -623,16 +867,44 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         return false
     }
 
+    private func presentationReservation(
+        for release: AuthenticatedDeviceLegRelease,
+        distinctId: String
+    ) async -> (any DeviceLegPresentationReservation)? {
+        guard !release.descriptor.leg.screens.isEmpty,
+              let presenter else { return nil }
+        return await presenter.reserveDeviceLegPresentation(
+            ownerDistinctId: distinctId
+        )
+    }
+
+    private func withPresentationReservation<Result>(
+        _ reservation: (any DeviceLegPresentationReservation)?,
+        operation: () async throws -> Result
+    ) async rethrows -> Result {
+        do {
+            let result = try await operation()
+            await reservation?.release()
+            return result
+        } catch {
+            await reservation?.release()
+            throw error
+        }
+    }
+
     private func resumeParkedRuns(
         state: ProfileState,
-        event: NuxieEvent?
+        event: NuxieEvent?,
+        excludingRunId: String? = nil
     ) async {
         guard isCurrent(state),
               event != nil || foreground,
               let journal else { return }
         do {
             for parked in try await journal.runs()
-            where parked.park != nil && parked.completion == nil {
+            where parked.park != nil
+                && parked.completion == nil
+                && parked.id != excludingRunId {
                 guard isCurrent(state),
                       let profileFenceToken = profileFence.token(
                         ifCurrent: state.generation
@@ -663,20 +935,38 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                         wakeAtMillis: wakeMillis
                     )
                 }
-                guard let resumed = try await journal.resumeParked(
-                    parked.id,
-                    profileFence: profileFence,
-                    profileFenceToken: profileFenceToken
-                ) else { return }
-                await execute(
-                    resumed,
-                    release: release,
-                    state: state,
-                    executionFenceToken: executionFenceToken,
-                    signal: executorSignal(event),
-                    checkpoint: checkpoint,
-                    journal: journal
+                let presentationReservation = await presentationReservation(
+                    for: release,
+                    distinctId: state.distinctId
                 )
+                let ownsExistingPresentation = await presenter?
+                    .ownsDeviceLegPresentation(
+                        journeyId: parked.journeyId,
+                        ownerDistinctId: state.distinctId
+                    ) ?? false
+                if presenter != nil,
+                   !release.descriptor.leg.screens.isEmpty,
+                   presentationReservation == nil,
+                   !ownsExistingPresentation {
+                    continue
+                }
+                try await withPresentationReservation(presentationReservation) {
+                    guard let resumed = try await journal.resumeParked(
+                        parked.id,
+                        profileFence: profileFence,
+                        profileFenceToken: profileFenceToken
+                    ) else { return }
+                    await execute(
+                        resumed,
+                        release: release,
+                        state: state,
+                        executionFenceToken: executionFenceToken,
+                        signal: executorSignal(event),
+                        checkpoint: checkpoint,
+                        journal: journal,
+                        presentationReservation: presentationReservation
+                    )
+                }
             }
         } catch {
             LogWarning("DeviceLegService: failed to resume parked device leg: \(error)")
@@ -814,6 +1104,12 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 at: dateProvider.now(),
                 responseOutputs: run.context.responses
             )
+            if try await !DeviceLegExperimentExposureReporter(
+                journal: journal,
+                events: events
+            ).flushPending() {
+                scheduleExperimentExposureRetry(for: journal)
+            }
             try await DeviceLegReporter(journal: journal, events: events)
                 .flushPending()
         } catch {
@@ -823,14 +1119,975 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         }
     }
 
+    private func handlePresentationBatch(
+        _ batch: ScreenEmissionBatch,
+        runId: String,
+        release: AuthenticatedDeviceLegRelease,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> Bool {
+        guard executionFence.isCurrent(executionFenceToken),
+              let journal,
+              isCurrentIdentity(journal: journal) else {
+            return false
+        }
+        let runs: [DeviceLegRun]
+        do {
+            runs = try await journal.runs()
+        } catch {
+            return false
+        }
+        guard var run = runs.first(where: {
+            $0.id == runId && $0.completion == nil
+        }), batch.journeyId == run.journeyId else { return false }
+        let leg = release.descriptor.leg
+        let screenId = batch.source.screenId
+        guard leg.screens.contains(where: { $0.id == screenId }),
+              await presenter?.ownsDeviceLegPresentation(
+                journeyId: run.journeyId,
+                ownerDistinctId: journal.distinctId
+              ) == true else { return false }
+        // Purchase and restore outcomes correlate to the effect receipt on the
+        // current cursor. Another renderer batch must not transition that
+        // cursor, even back to itself, because transition removes the receipt
+        // and would permit a second StoreKit operation with a new effect ID.
+        guard !isAwaitingPresentationCommerceOutcome(run, in: leg) else {
+            return false
+        }
+        let expectedStepId = run.stepId
+        let expectedCheckpoint = controlCheckpoint(from: run.park)
+        let responseCaptures = Set(
+            leg.screens.first(where: { $0.id == screenId })?.responseCaptures ?? []
+        )
+        var context = run.context
+        var responses = context.responses
+        var batchResponsesChanged = false
+        var routedEmission: ScreenEmission?
+        var routeStepId: String?
+        var routedEventName: String?
+        var routedOccurredAtMillis: Int64?
+        var ordinaryItems: [RoutedStableSystemEventBatchItem] = []
+        var ordinaryEmissionsById: [String: ScreenEmission] = [:]
+        var ordinaryOccurredAtMillisById: [String: Int64] = [:]
+        ordinaryItems.reserveCapacity(batch.emissions.count)
+        ordinaryEmissionsById.reserveCapacity(batch.emissions.count)
+        ordinaryOccurredAtMillisById.reserveCapacity(batch.emissions.count)
+
+        for emission in batch.emissions {
+            if emission.name == SystemEventNames.responseSet {
+                guard case .string(let field)? = emission.payload["field"],
+                      let value = emission.payload["value"],
+                      responseCaptures.contains(field) else {
+                    return false
+                }
+                responses[field] = value.releaseJSONValue
+                batchResponsesChanged = true
+                continue
+            }
+            if emission.name == SystemEventNames.responseUnset {
+                guard case .string(let field)? = emission.payload["field"],
+                      responseCaptures.contains(field) else {
+                    return false
+                }
+                responses[field] = nil
+                batchResponsesChanged = true
+                continue
+            }
+            guard let occurredAt = presentationDate(emission.occurredAt),
+                  let occurredAtMillis = milliseconds(occurredAt),
+                  let properties = presentationEventProperties(
+                    payload: ExactJSONObject(
+                        emission.payload.mapValues(\.releaseJSONValue)
+                    ),
+                    screenId: screenId,
+                    run: run
+                  ) else {
+                return false
+            }
+            ordinaryItems.append(RoutedStableSystemEventBatchItem(
+                name: emission.name,
+                properties: properties,
+                eventId: emission.id,
+                distinctId: journal.distinctId,
+                occurredAt: occurredAt
+            ))
+            ordinaryEmissionsById[emission.id] = emission
+            ordinaryOccurredAtMillisById[emission.id] = occurredAtMillis
+        }
+
+        context = ArmedDeviceLeg.Context(
+            event: context.event,
+            responses: responses
+        )
+
+        let publishedOrdinaryEvents = !ordinaryItems.isEmpty
+        if publishedOrdinaryEvents {
+            guard let identityFence = identity.performWithCurrentIdentityFence(
+                journal.distinctId,
+                { _ in () }
+            ) else { return false }
+            let admission = DeviceLegCommitAdmission(
+                identity: identity,
+                identityFenceToken: identityFence.token,
+                executionFence: executionFence,
+                executionFenceToken: executionFenceToken
+            )
+            for item in ordinaryItems {
+                directlyRoutedPresentationRunByEventId[item.eventId] = run.id
+            }
+            guard let captures = await events.captureAndRouteSystemEventBatch(
+                ordinaryItems,
+                admission: admission
+            ) else {
+                for item in ordinaryItems
+                where directlyRoutedPresentationRunByEventId[item.eventId] == run.id {
+                    directlyRoutedPresentationRunByEventId.removeValue(
+                        forKey: item.eventId
+                    )
+                }
+                return false
+            }
+            // Existing captures and terminal beforeSend drops do not enqueue
+            // subscriber work. Retain only newly routed events while a nested
+            // route-worker callback unwinds; its later subscriber delivery
+            // consumes the marker and excludes this run from generic routing.
+            for item in ordinaryItems {
+                guard let capture = captures[item.eventId],
+                      capture.routesLocally,
+                      capture.isNewlyCommitted else {
+                    if directlyRoutedPresentationRunByEventId[item.eventId]
+                        == run.id {
+                        directlyRoutedPresentationRunByEventId.removeValue(
+                            forKey: item.eventId
+                        )
+                    }
+                    continue
+                }
+            }
+            let routingDrained = await events.drainCommittedRouting()
+            if routingDrained {
+                for item in ordinaryItems
+                where directlyRoutedPresentationRunByEventId[item.eventId] == run.id {
+                    directlyRoutedPresentationRunByEventId.removeValue(
+                        forKey: item.eventId
+                    )
+                }
+            }
+            guard ordinaryItems.allSatisfy({ captures[$0.eventId] != nil }) else {
+                return false
+            }
+            guard executionFence.isCurrent(executionFenceToken),
+                  await isCurrentIdentity(identityFence.token, journal: journal) else {
+                return true
+            }
+            for item in ordinaryItems {
+                guard let capture = captures[item.eventId],
+                      capture.routesLocally,
+                      let candidate = presentationRoute(
+                        in: leg,
+                        eventName: capture.event.name,
+                        screenId: screenId
+                      ), let emission = ordinaryEmissionsById[item.eventId],
+                      let occurredAtMillis = ordinaryOccurredAtMillisById[
+                        item.eventId
+                      ] else {
+                    continue
+                }
+                routedEmission = emission
+                routeStepId = candidate
+                routedEventName = capture.event.name
+                routedOccurredAtMillis = occurredAtMillis
+                break
+            }
+        }
+
+        // A renderer invocation is one publication unit. Keep response
+        // mutations in memory until every ordinary event in the same batch is
+        // durably accepted; a rejected invocation must leave no response tail
+        // behind for the renderer to unknowingly roll back.
+        if batchResponsesChanged {
+            guard await persistPresentationResponseContext(
+                context,
+                runId: run.id,
+                expectedStepId: expectedStepId,
+                expectedCheckpoint: expectedCheckpoint,
+                journal: journal,
+                executionFenceToken: executionFenceToken
+            ) else {
+                return await acknowledgePublishedPresentationBatchFailure(
+                    publishedOrdinaryEvents,
+                    run: run,
+                    context: context,
+                    leg: leg,
+                    journal: journal,
+                    executionFenceToken: executionFenceToken
+                )
+            }
+            run.context = context
+        }
+
+        do {
+            guard let current = try await journal.runs().first(where: {
+                $0.id == run.id
+                    && $0.completion == nil
+                    && $0.stepId == expectedStepId
+            }) else {
+                return await acknowledgePublishedPresentationBatchFailure(
+                    publishedOrdinaryEvents,
+                    run: run,
+                    context: ArmedDeviceLeg.Context(
+                        event: context.event,
+                        responses: responses
+                    ),
+                    leg: leg,
+                    journal: journal,
+                    executionFenceToken: executionFenceToken
+                )
+            }
+            run = current
+        } catch {
+            return await acknowledgePublishedPresentationBatchFailure(
+                publishedOrdinaryEvents,
+                run: run,
+                context: ArmedDeviceLeg.Context(
+                    event: context.event,
+                    responses: responses
+                ),
+                leg: leg,
+                journal: journal,
+                executionFenceToken: executionFenceToken
+            )
+        }
+
+        if let routedEmission, let routeStepId {
+            guard let routedOccurredAtMillis else {
+                return await acknowledgePublishedPresentationBatchFailure(
+                    publishedOrdinaryEvents,
+                    run: run,
+                    context: ArmedDeviceLeg.Context(
+                        event: context.event,
+                        responses: responses
+                    ),
+                    leg: leg,
+                    journal: journal,
+                    executionFenceToken: executionFenceToken
+                )
+            }
+            context = ArmedDeviceLeg.Context(
+                event: ExactJSONObject(
+                    routedEmission.payload.mapValues(\.releaseJSONValue)
+                ),
+                responses: responses
+            )
+            do {
+                guard let admission = journalCommitAdmission(
+                    journal: journal,
+                    executionFenceToken: executionFenceToken
+                ), try await journal.transition(
+                    run.id,
+                    stepId: routeStepId,
+                    context: context,
+                    admission: admission
+                ) else {
+                    return await acknowledgePublishedPresentationBatchFailure(
+                        publishedOrdinaryEvents,
+                        run: run,
+                        context: context,
+                        leg: leg,
+                        journal: journal,
+                        executionFenceToken: executionFenceToken
+                    )
+                }
+            } catch {
+                LogWarning("DeviceLegService: failed to persist screen route: \(error)")
+                return await acknowledgePublishedPresentationBatchFailure(
+                    publishedOrdinaryEvents,
+                    run: run,
+                    context: context,
+                    leg: leg,
+                    journal: journal,
+                    executionFenceToken: executionFenceToken
+                )
+            }
+            run.stepId = routeStepId
+            run.context = context
+            run.park = nil
+            let signal = DeviceLegControlExecutor.Signal(event: .init(
+                name: routedEventName ?? routedEmission.name,
+                occurredAtMillis: routedOccurredAtMillis,
+                properties: context.event
+            ), responsesChanged: batchResponsesChanged)
+            let continuedRun = run
+            Task { [weak self] in
+                await self?.continuePresentedRun(
+                    continuedRun,
+                    release: release,
+                    executionFenceToken: executionFenceToken,
+                    signal: signal,
+                    presentationSource: batch.source,
+                    journal: journal
+                )
+            }
+            return true
+        }
+        if batchResponsesChanged,
+           stepAcceptsResponseChange(run.stepId, in: leg) {
+            let continuedRun = run
+            let checkpoint = controlCheckpoint(from: continuedRun.park)
+            Task { [weak self] in
+                await self?.continuePresentedRun(
+                    continuedRun,
+                    release: release,
+                    executionFenceToken: executionFenceToken,
+                    signal: .init(responsesChanged: true),
+                    checkpoint: checkpoint,
+                    presentationSource: batch.source,
+                    journal: journal
+                )
+            }
+        }
+        return true
+    }
+
+    private func handlePresentationPermissionEvent(
+        _ eventName: String,
+        properties: UncheckedSendable<[String: Any]>,
+        run: DeviceLegRun,
+        identityFenceToken: IdentityFenceToken,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async {
+        guard executionFence.isCurrent(executionFenceToken),
+              let journal,
+              await isCurrentIdentity(identityFenceToken, journal: journal) else {
+            return
+        }
+        var scopedProperties = properties.value
+        scopedProperties["journey_id"] = run.journeyId
+        scopedProperties["experience_id"] = run.reference.experienceId
+        scopedProperties["experience_version"] = run.reference.versionId
+        scopedProperties["leg_id"] = run.reference.legId
+        scopedProperties["leg_generation"] = run.generation
+        let scopedPropertiesBox = UncheckedSendable(scopedProperties)
+        let admission = DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFenceToken,
+            executionFence: executionFence,
+            executionFenceToken: executionFenceToken
+        )
+        _ = await events.captureAndRouteSystemEvent(
+            eventName,
+            properties: scopedPropertiesBox.value,
+            eventId: UUID.v7().uuidString,
+            distinctId: journal.distinctId,
+            admission: admission
+        )
+    }
+
+    private func capturePresentationPermissionEvent(
+        _ event: DeviceLegPresentationPermissionEvent,
+        eventId: String,
+        run: DeviceLegRun,
+        identityFenceToken: IdentityFenceToken,
+        executionFenceToken: DeviceLegProfileFenceToken,
+        journal: DeviceLegRunJournal
+    ) async -> DurableTriggerCapture? {
+        guard executionFence.isCurrent(executionFenceToken),
+              await isCurrentIdentity(identityFenceToken, journal: journal) else {
+            return nil
+        }
+        var scopedProperties = Dictionary(
+            uniqueKeysWithValues: event.properties.map { ($0.key, $0.value as Any) }
+        )
+        scopedProperties["journey_id"] = run.journeyId
+        scopedProperties["experience_id"] = run.reference.experienceId
+        scopedProperties["experience_version"] = run.reference.versionId
+        scopedProperties["leg_id"] = run.reference.legId
+        scopedProperties["leg_generation"] = run.generation
+        let scopedPropertiesBox = UncheckedSendable(scopedProperties)
+        let admission = DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFenceToken,
+            executionFence: executionFence,
+            executionFenceToken: executionFenceToken
+        )
+        directlyRoutedPresentationRunByEventId[eventId] = run.id
+        let capture = await events.captureAndRouteSystemEvent(
+            event.name,
+            properties: scopedPropertiesBox.value,
+            eventId: eventId,
+            distinctId: journal.distinctId,
+            occurredAt: dateProvider.now(),
+            admission: admission
+        )
+        await events.drainCommittedRouting()
+        if directlyRoutedPresentationRunByEventId[eventId] == run.id {
+            directlyRoutedPresentationRunByEventId.removeValue(forKey: eventId)
+        }
+        guard let capture,
+              executionFence.isCurrent(executionFenceToken),
+              await isCurrentIdentity(identityFenceToken, journal: journal) else {
+            return nil
+        }
+        return capture
+    }
+
+    private func acknowledgePublishedPresentationBatchFailure(
+        _ publishedOrdinaryEvents: Bool,
+        run: DeviceLegRun,
+        context: ArmedDeviceLeg.Context,
+        leg: DeviceLeg,
+        journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> Bool {
+        guard publishedOrdinaryEvents else { return false }
+        var abandonedRun = run
+        abandonedRun.context = context
+        guard let persisted = await persistCompletion(
+            abandonedRun,
+            outcome: "abandoned",
+            leg: leg,
+            journal: journal,
+            executionFenceToken: executionFenceToken
+        ) else {
+            // The renderer keeps ownership of a rejected batch. Never retire
+            // its response values until either the exact batch can retry or an
+            // abandonment record containing them is durable.
+            return false
+        }
+        // The renderer is awaiting this acknowledgement from inside its
+        // navigation drain. The abandonment record and its collected responses
+        // are already durable; let the callback unwind before report delivery
+        // and presentation teardown try to join that same drain.
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.settlePersistedCompletion(
+                abandonedRun,
+                journal: journal,
+                admission: persisted.admission,
+                dismissPresentation: true
+            )
+        }
+        return true
+    }
+
+    private func handlePresentationOutcome(
+        _ outcome: DeviceLegSurfaceOutcome,
+        screenId: String?,
+        runId: String,
+        release: AuthenticatedDeviceLegRelease,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> Bool {
+        guard executionFence.isCurrent(executionFenceToken),
+              let journal,
+              isCurrentIdentity(journal: journal) else {
+            return false
+        }
+        let runs: [DeviceLegRun]
+        do {
+            runs = try await journal.runs()
+        } catch {
+            return false
+        }
+        guard executionFence.isCurrent(executionFenceToken),
+              isCurrentIdentity(journal: journal) else {
+            return false
+        }
+        guard var run = runs.first(where: { $0.id == runId }) else {
+            return false
+        }
+        if run.completion != nil {
+            do {
+                try await DeviceLegReporter(journal: journal, events: events)
+                    .flushPending()
+                let remainingRuns = try await journal.runs()
+                return !remainingRuns.contains { $0.id == runId }
+            } catch {
+                LogWarning(
+                    "DeviceLegService: failed to retry completed presentation report: \(error)"
+                )
+                return false
+            }
+        }
+        let leg = release.descriptor.leg
+        guard outcome == .dismissed else {
+            return await finish(
+                run,
+                outcome: "abandoned",
+                leg: leg,
+                journal: journal,
+                dismissPresentation: false,
+                executionFenceToken: executionFenceToken
+            )
+        }
+        guard let routeStepId = presentationRoute(
+            in: leg,
+            eventName: "host_dismissed",
+            screenId: screenId
+        ) else {
+            return await finish(
+                run,
+                outcome: "host_dismissed",
+                leg: leg,
+                journal: journal,
+                dismissPresentation: false,
+                executionFenceToken: executionFenceToken
+            )
+        }
+        let hostDismissContext = ArmedDeviceLeg.Context(
+            event: [:],
+            responses: run.context.responses
+        )
+        do {
+            guard let admission = journalCommitAdmission(
+                journal: journal,
+                executionFenceToken: executionFenceToken
+            ), try await journal.transition(
+                run.id,
+                stepId: routeStepId,
+                context: hostDismissContext,
+                admission: admission
+            ) else { return false }
+        } catch {
+            LogWarning("DeviceLegService: failed to persist host-dismiss route: \(error)")
+            return false
+        }
+        run.stepId = routeStepId
+        run.context = hostDismissContext
+        run.park = nil
+        guard executionFence.isCurrent(executionFenceToken),
+              isCurrentIdentity(journal: journal) else {
+            return true
+        }
+        let now = milliseconds(dateProvider.now()) ?? 0
+        pendingPresentationDismissalContinuations[run.id] = .init(
+            run: run,
+            release: release,
+            executionFenceToken: executionFenceToken,
+            occurredAtMillis: now,
+            journal: journal
+        )
+        return true
+    }
+
+    private func handlePresentationFinished(runId: String) async {
+        guard let pending = pendingPresentationDismissalContinuations
+            .removeValue(forKey: runId) else {
+            return
+        }
+        await continuePresentedRun(
+            pending.run,
+            release: pending.release,
+            executionFenceToken: pending.executionFenceToken,
+            signal: .init(event: .init(
+                name: "host_dismissed",
+                occurredAtMillis: pending.occurredAtMillis,
+                properties: [:]
+            )),
+            journal: pending.journal
+        )
+    }
+
+    private func handlePresentationScreenChanged(
+        _ screenId: String,
+        presentedRun: DeviceLegRun,
+        release: AuthenticatedDeviceLegRelease,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> Bool {
+        switch await handlePresentationLifecycleEvent(
+            name: SystemEventNames.screenShown,
+            payload: ["screen_id": .string(screenId)],
+            screenId: screenId,
+            presentedRun: presentedRun,
+            release: release,
+            executionFenceToken: executionFenceToken
+        ) {
+        case .accepted, .completed:
+            return true
+        case .rejected:
+            return false
+        }
+    }
+
+    private func handlePresentationScreenDismissed(
+        _ screenId: String,
+        revealingScreenId: String?,
+        method: String,
+        presentedRun: DeviceLegRun,
+        release: AuthenticatedDeviceLegRelease,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> DeviceLegScreenDismissalResult {
+        var payload: ExactJSONObject<ExperienceReleaseJSONValue> = [
+            "screen_id": .string(screenId),
+            "method": .string(method),
+        ]
+        if let revealingScreenId {
+            payload["revealing_screen_id"] = .string(revealingScreenId)
+        }
+        switch await handlePresentationLifecycleEvent(
+            name: SystemEventNames.screenDismissed,
+            payload: payload,
+            screenId: screenId,
+            presentedRun: presentedRun,
+            release: release,
+            executionFenceToken: executionFenceToken,
+            unhandledOutcome: revealingScreenId == nil
+                ? (method == "error" ? "abandoned" : "host_dismissed")
+                : nil,
+            awaitContinuation: revealingScreenId == nil
+        ) {
+        case .accepted:
+            return .handled
+        case .completed:
+            return .completed
+        case .rejected:
+            return .rejected
+        }
+    }
+
+    private func handlePresentationProductsUnavailable(
+        _ screenId: String,
+        presentedRun: DeviceLegRun,
+        release: AuthenticatedDeviceLegRelease,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> DeviceLegProductFailureResult {
+        let parsedProductIds: [String] = release.descriptor.products.compactMap {
+            product -> String? in
+            guard case .object(let fields) = product,
+                  case .string(let id)? = fields["id"] else { return nil }
+            return id
+        }
+        let productIds = Array(Set(parsedProductIds)).sorted()
+        switch await handlePresentationLifecycleEvent(
+            name: SystemEventNames.productsUnavailable,
+            payload: [
+                "product_ids": .array(productIds.map {
+                    ExperienceReleaseJSONValue.string($0)
+                }),
+            ],
+            screenId: screenId,
+            presentedRun: presentedRun,
+            release: release,
+            executionFenceToken: executionFenceToken,
+            unhandledOutcome: "products_unavailable"
+        ) {
+        case .accepted:
+            return .handled
+        case .completed:
+            return .completed
+        case .rejected:
+            return .rejected
+        }
+    }
+
+    private func handlePresentationLifecycleEvent(
+        name: String,
+        payload: ExactJSONObject<ExperienceReleaseJSONValue>,
+        screenId: String,
+        presentedRun: DeviceLegRun,
+        release: AuthenticatedDeviceLegRelease,
+        executionFenceToken: DeviceLegProfileFenceToken,
+        unhandledOutcome: String? = nil,
+        awaitContinuation: Bool = false
+    ) async -> PresentationLifecycleResult {
+        let occurredAt = dateProvider.now()
+        guard executionFence.isCurrent(executionFenceToken),
+              let journal,
+              isCurrentIdentity(journal: journal) else {
+            return .rejected
+        }
+        guard let capture = await capturePresentationEvent(
+                name: name,
+                eventId: UUID.v7().uuidString,
+                occurredAt: occurredAt,
+                payload: payload,
+                screenId: screenId,
+                run: presentedRun,
+                executionFenceToken: executionFenceToken,
+                journal: journal
+              ) else { return .rejected }
+        let runs: [DeviceLegRun]
+        do {
+            runs = try await journal.runs()
+        } catch {
+            return .rejected
+        }
+        guard var run = runs.first(where: {
+            $0.id == presentedRun.id && $0.completion == nil
+        }) else { return .rejected }
+        if !capture.routesLocally {
+            if let unhandledOutcome {
+                let completed = await finish(
+                    run,
+                    outcome: unhandledOutcome,
+                    leg: release.descriptor.leg,
+                    journal: journal,
+                    dismissPresentation: false,
+                    executionFenceToken: executionFenceToken
+                )
+                return completed ? .completed : .rejected
+            }
+            return .accepted
+        }
+        let routedEventName = capture.event.name
+        guard let routeStepId = presentationRoute(
+            in: release.descriptor.leg,
+            eventName: routedEventName,
+            screenId: screenId
+        ) else {
+            if let unhandledOutcome {
+                let completed = await finish(
+                    run,
+                    outcome: unhandledOutcome,
+                    leg: release.descriptor.leg,
+                    journal: journal,
+                    dismissPresentation: false,
+                    executionFenceToken: executionFenceToken
+                )
+                return completed ? .completed : .rejected
+            }
+            return .accepted
+        }
+        let context = ArmedDeviceLeg.Context(
+            event: payload,
+            responses: run.context.responses
+        )
+        do {
+            guard let admission = journalCommitAdmission(
+                journal: journal,
+                executionFenceToken: executionFenceToken
+            ), try await journal.transition(
+                run.id,
+                stepId: routeStepId,
+                context: context,
+                admission: admission
+            ) else { return .rejected }
+        } catch {
+            LogWarning("DeviceLegService: failed to persist screen lifecycle route: \(error)")
+            return .rejected
+        }
+        run.stepId = routeStepId
+        run.context = context
+        run.park = nil
+        let occurredAtMillis = milliseconds(occurredAt) ?? 0
+        let dismissPresentationOnCompletion = !awaitContinuation
+        let continueRun = { [weak self] in
+            await self?.continuePresentedRun(
+                run,
+                release: release,
+                executionFenceToken: executionFenceToken,
+                signal: .init(event: .init(
+                    name: routedEventName,
+                    occurredAtMillis: occurredAtMillis,
+                    properties: payload
+                )),
+                dismissPresentationOnCompletion: dismissPresentationOnCompletion,
+                journal: journal
+            )
+        }
+        if awaitContinuation {
+            await continueRun()
+            do {
+                let remainsLive = try await journal.runs().contains {
+                    $0.id == run.id && $0.completion == nil
+                }
+                return remainsLive ? .accepted : .completed
+            } catch {
+                return .rejected
+            }
+        } else {
+            Task { await continueRun() }
+        }
+        return .accepted
+    }
+
+    private func capturePresentationEvent(
+        name: String,
+        eventId: String,
+        occurredAt: Date,
+        payload: ExactJSONObject<ExperienceReleaseJSONValue>,
+        screenId: String,
+        run: DeviceLegRun,
+        executionFenceToken: DeviceLegProfileFenceToken,
+        journal: DeviceLegRunJournal
+    ) async -> DurableTriggerCapture? {
+        guard let identityFence = identity.performWithCurrentIdentityFence(
+            journal.distinctId,
+            { _ in () }
+        ), let properties = presentationEventProperties(
+            payload: payload,
+            screenId: screenId,
+            run: run
+        ) else {
+            return nil
+        }
+        let propertiesBox = UncheckedSendable(properties)
+        let admission = DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFence.token,
+            executionFence: executionFence,
+            executionFenceToken: executionFenceToken
+        )
+        directlyRoutedPresentationRunByEventId[eventId] = run.id
+        let capture = await events.captureAndRouteSystemEvent(
+                name,
+                properties: propertiesBox.value,
+                eventId: eventId,
+                distinctId: journal.distinctId,
+                occurredAt: occurredAt,
+                admission: admission
+              )
+        await events.drainCommittedRouting()
+        if directlyRoutedPresentationRunByEventId[eventId] == run.id {
+            directlyRoutedPresentationRunByEventId.removeValue(forKey: eventId)
+        }
+        guard capture != nil,
+              executionFence.isCurrent(executionFenceToken),
+              await isCurrentIdentity(identityFence.token, journal: journal) else {
+            return nil
+        }
+        return capture
+    }
+
+    private func presentationEventProperties(
+        payload: ExactJSONObject<ExperienceReleaseJSONValue>,
+        screenId: String,
+        run: DeviceLegRun
+    ) -> [String: Any]? {
+        guard let data = try? ExactJSONCodec.encode(payload),
+              var properties = try? JSONSerialization.jsonObject(with: data)
+                as? [String: Any] else {
+            return nil
+        }
+        properties["screen_id"] = screenId
+        properties["journey_id"] = run.journeyId
+        properties["experience_id"] = run.reference.experienceId
+        properties["experience_version"] = run.reference.versionId
+        properties["leg_id"] = run.reference.legId
+        properties["leg_generation"] = run.generation
+        return properties
+    }
+
+    private func presentationDate(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value)
+            ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    private func stepAcceptsResponseChange(
+        _ stepId: String,
+        in leg: DeviceLeg
+    ) -> Bool {
+        guard let action = leg.steps.first(where: { $0.id == stepId })?.action,
+              case .string("wait_until")? = action["type"],
+              case .object(let trigger)? = action["trigger"],
+              case .string(let kind)? = trigger["kind"] else {
+            return false
+        }
+        return kind == "response_change"
+            || kind == "event_or_response_change"
+    }
+
+    private func controlCheckpoint(
+        from park: DeviceLegRun.Park?
+    ) -> DeviceLegControlExecutor.Checkpoint? {
+        guard let wakeAt = park?.wakeAt,
+              let wakeMillis = milliseconds(wakeAt) else { return nil }
+        let anchor = park?.anchorAt.flatMap(milliseconds) ?? wakeMillis
+        return .init(anchorAtMillis: anchor, wakeAtMillis: wakeMillis)
+    }
+
+    private func continuePresentedRun(
+        _ run: DeviceLegRun,
+        release: AuthenticatedDeviceLegRelease,
+        executionFenceToken: DeviceLegProfileFenceToken,
+        signal: DeviceLegControlExecutor.Signal,
+        checkpoint: DeviceLegControlExecutor.Checkpoint? = nil,
+        presentationSource: ScreenEmissionSource? = nil,
+        dismissPresentationOnCompletion: Bool = true,
+        journal: DeviceLegRunJournal
+    ) async {
+        guard let state = currentProfileState(),
+              executionFence.isCurrent(executionFenceToken),
+              isCurrentIdentity(journal: journal) else {
+            await finishAfterAuthorityLoss(
+                run,
+                leg: release.descriptor.leg,
+                journal: journal,
+                executionFenceToken: executionFenceToken
+            )
+            return
+        }
+        await execute(
+            run,
+            release: release,
+            state: state,
+            executionFenceToken: executionFenceToken,
+            signal: signal,
+            checkpoint: checkpoint,
+            journal: journal,
+            presentationSource: presentationSource,
+            dismissPresentationOnCompletion: dismissPresentationOnCompletion
+        )
+    }
+
+    private func presentationRoute(
+        in leg: DeviceLeg,
+        eventName: String,
+        screenId: String?
+    ) -> String? {
+        screenId.flatMap { screenId in
+            leg.routes.first(where: {
+                $0.eventName == eventName
+                    && $0.host.kind == .screen
+                    && $0.host.screenId == screenId
+            })?.entryStepId
+        } ?? leg.routes.first(where: {
+            $0.eventName == eventName && $0.host.kind == .journey
+        })?.entryStepId
+    }
+
+    private func persistPresentationResponseContext(
+        _ context: ArmedDeviceLeg.Context,
+        runId: String,
+        expectedStepId: String,
+        expectedCheckpoint: DeviceLegControlExecutor.Checkpoint?,
+        journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> Bool {
+        do {
+            guard let admission = journalCommitAdmission(
+                journal: journal,
+                executionFenceToken: executionFenceToken
+            ), try await journal.transition(
+                runId,
+                stepId: expectedStepId,
+                context: context,
+                checkpoint: expectedCheckpoint,
+                admission: admission
+            ) else {
+                return false
+            }
+            return true
+        } catch {
+            LogWarning(
+                "DeviceLegService: failed to persist screen response: \(error)"
+            )
+            return false
+        }
+    }
+
     private func execute(
         _ initial: DeviceLegRun,
         release: AuthenticatedDeviceLegRelease,
         state: ProfileState,
         executionFenceToken: DeviceLegProfileFenceToken,
-        signal: DeviceLegControlExecutor.Signal,
+        signal initialSignal: DeviceLegControlExecutor.Signal,
         checkpoint initialCheckpoint: DeviceLegControlExecutor.Checkpoint?,
-        journal: DeviceLegRunJournal
+        journal: DeviceLegRunJournal,
+        presentationSource: ScreenEmissionSource? = nil,
+        dismissPresentationOnCompletion: Bool = true,
+        presentationReservation initialPresentationReservation:
+            (any DeviceLegPresentationReservation)? = nil
     ) async {
         let leg = release.descriptor.leg
         let steps = Dictionary(uniqueKeysWithValues: leg.steps.map { ($0.id, $0) })
@@ -843,15 +2100,17 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         )
         var run = initial
         var checkpoint = initialCheckpoint
+        var signal = initialSignal
+        var presentationReservation = initialPresentationReservation
 
         for _ in 0..<10_000 {
             guard executionFence.isCurrent(executionFenceToken),
                   isCurrentIdentity(journal: journal) else {
-                await finish(
+                await finishAfterAuthorityLoss(
                     run,
-                    outcome: "abandoned",
                     leg: leg,
-                    journal: journal
+                    journal: journal,
+                    executionFenceToken: executionFenceToken
                 )
                 return
             }
@@ -861,7 +2120,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     run,
                     outcome: "abandoned",
                     leg: leg,
-                    journal: journal
+                    journal: journal,
+                    dismissPresentation: dismissPresentationOnCompletion,
+                    executionFenceToken: executionFenceToken
                 )
                 return
             }
@@ -873,12 +2134,45 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 checkpoint: checkpoint,
                 signal: signal
             ) {
-            case .advance(let stepId, let context):
+            case .advance(let stepId, let context, let experimentSelection):
+                let experimentExposure: DeviceLegRun.ExperimentExposure?
+                if let experimentSelection,
+                   !run.experimentExposures.contains(where: {
+                       $0.experimentId == experimentSelection.experimentId
+                   }) {
+                    let kind: DeviceLegRun.ExperimentExposure.Kind
+                    let assignedVariantId: String?
+                    switch experimentSelection.source {
+                    case .profile:
+                        kind = .assigned
+                        assignedVariantId = experimentSelection.variantId
+                    case .noAssignment:
+                        kind = .fallback
+                        assignedVariantId = nil
+                    case .invalidAssignment(let variantId):
+                        kind = .invalidAssignment
+                        assignedVariantId = variantId
+                    }
+                    experimentExposure = .init(
+                        experimentId: experimentSelection.experimentId,
+                        variantId: experimentSelection.variantId,
+                        assignedVariantId: assignedVariantId,
+                        isHoldout: experimentSelection.isHoldout,
+                        kind: kind,
+                        eventId: UUID.v7().uuidString.lowercased(),
+                        selectedAt: dateProvider.now(),
+                        shownAt: nil,
+                        queued: false
+                    )
+                } else {
+                    experimentExposure = nil
+                }
                 do {
                     try await journal.transition(
                         run.id,
                         stepId: stepId,
-                        context: context
+                        context: context,
+                        experimentExposure: experimentExposure
                     )
                 } catch {
                     LogWarning("DeviceLegService: failed to persist control transition: \(error)")
@@ -886,6 +2180,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 }
                 run.stepId = stepId
                 run.context = context
+                if let experimentExposure {
+                    run.experimentExposures.append(experimentExposure)
+                }
                 run.park = nil
                 checkpoint = nil
 
@@ -908,7 +2205,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     run,
                     outcome: outcome,
                     leg: leg,
-                    journal: journal
+                    journal: journal,
+                    dismissPresentation: dismissPresentationOnCompletion,
+                    executionFenceToken: executionFenceToken
                 )
                 return
 
@@ -917,11 +2216,11 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     journal.distinctId,
                     { _ in () }
                 ) else {
-                    await finish(
+                    await finishAfterAuthorityLoss(
                         run,
-                        outcome: "abandoned",
                         leg: leg,
-                        journal: journal
+                        journal: journal,
+                        executionFenceToken: executionFenceToken
                     )
                     return
                 }
@@ -940,45 +2239,338 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     identityFence.token,
                     journal: journal
                 ) else {
-                    await finish(
+                    await finishAfterAuthorityLoss(
                         run,
-                        outcome: "abandoned",
                         leg: leg,
-                        journal: journal
+                        journal: journal,
+                        executionFenceToken: executionFenceToken
                     )
                     return
                 }
-                let result = await dispatcher.dispatch(.init(
-                    runId: run.id,
+                if let presenter,
+                   case .string("navigate")? = action["type"] {
+                    guard case .string(let screenId)? = action["screenId"] else {
+                        await finish(
+                            run,
+                            outcome: "abandoned",
+                            leg: leg,
+                            journal: journal,
+                            dismissPresentation: dismissPresentationOnCompletion,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    }
+                    switch await presenter.navigateDeviceLegPresentation(
+                        journeyId: run.journeyId,
+                        ownerDistinctId: journal.distinctId,
+                        screenId: screenId,
+                        transition: action["transition"]
+                    ) {
+                    case .navigated:
+                        await markExperimentExposuresShown(
+                            for: run,
+                            journal: journal,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    case .alreadyActive:
+                        // A no-op navigation does not reactivate the renderer's
+                        // current screen, so synthesize the lifecycle input the
+                        // control graph would receive after a real transition.
+                        await markExperimentExposuresShown(
+                            for: run,
+                            journal: journal,
+                            executionFenceToken: executionFenceToken
+                        )
+                        _ = await handlePresentationScreenChanged(
+                            screenId,
+                            presentedRun: run,
+                            release: release,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    case .productsUnavailable:
+                        // The runtime delegate owns the authenticated
+                        // $products_unavailable route or terminal outcome.
+                        return
+                    case .noPresentation:
+                        break
+                    case .declined, .failed:
+                        await finish(
+                            run,
+                            outcome: "abandoned",
+                            leg: leg,
+                            journal: journal,
+                            dismissPresentation: dismissPresentationOnCompletion,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    }
+                    let reserved: (any DeviceLegPresentationReservation)?
+                    if let presentationReservation {
+                        reserved = presentationReservation
+                    } else {
+                        reserved = await presenter.reserveDeviceLegPresentation(
+                            ownerDistinctId: journal.distinctId
+                        )
+                    }
+                    presentationReservation = nil
+                    let presentedRun = run
+                    let presentationIdentityFenceToken = identityFence.token
+                    let result = await presenter.presentDeviceLeg(.init(
+                        release: release,
+                        delivery: state.snapshot.profile.delivery,
+                        screenId: screenId,
+                        journeyId: run.journeyId,
+                        ownerDistinctId: journal.distinctId,
+                        reservation: reserved,
+                        onScreenChanged: { [weak self] changedScreenId in
+                            guard let self else { return false }
+                            return await self.handlePresentationScreenChanged(
+                                changedScreenId,
+                                presentedRun: presentedRun,
+                                release: release,
+                                executionFenceToken: executionFenceToken
+                            )
+                        },
+                        onScreenDismissed: {
+                            [weak self] dismissedScreenId, revealingScreenId, method in
+                            guard let self else { return .rejected }
+                            return await self.handlePresentationScreenDismissed(
+                                dismissedScreenId,
+                                revealingScreenId: revealingScreenId,
+                                method: method,
+                                presentedRun: presentedRun,
+                                release: release,
+                                executionFenceToken: executionFenceToken
+                            )
+                        },
+                        onProductsUnavailable: { [weak self] screenId in
+                            guard let self else { return .rejected }
+                            return await self.handlePresentationProductsUnavailable(
+                                screenId,
+                                presentedRun: presentedRun,
+                                release: release,
+                                executionFenceToken: executionFenceToken
+                            )
+                        },
+                        onEmissionBatch: { [weak self] batch in
+                            guard let self else { return false }
+                            return await self.handlePresentationBatch(
+                                batch,
+                                runId: presentedRun.id,
+                                release: release,
+                                executionFenceToken: executionFenceToken
+                            )
+                        },
+                        onPermissionEvent: {
+                            [weak self] eventName, properties in
+                            Task {
+                                await self?.handlePresentationPermissionEvent(
+                                    eventName,
+                                    properties: properties,
+                                    run: presentedRun,
+                                    identityFenceToken: presentationIdentityFenceToken,
+                                    executionFenceToken: executionFenceToken
+                                )
+                            }
+                        },
+                        onPresentationRevealed: { [weak self] in
+                            guard let self else { return }
+                            await self.markExperimentExposuresShown(
+                                for: presentedRun,
+                                journal: journal,
+                                executionFenceToken: executionFenceToken
+                            )
+                        },
+                        onOutcome: { [weak self] outcome, activeScreenId in
+                            guard let self else { return false }
+                            return await self.handlePresentationOutcome(
+                                outcome,
+                                screenId: activeScreenId,
+                                runId: presentedRun.id,
+                                release: release,
+                                executionFenceToken: executionFenceToken
+                            )
+                        },
+                        onPresentationFinished: { [weak self] in
+                            Task {
+                                await self?.handlePresentationFinished(
+                                    runId: presentedRun.id
+                                )
+                            }
+                        }
+                    ))
+                    await reserved?.release()
+                    switch result {
+                    case .shown:
+                        return
+                    case .declined, .failed:
+                        await finish(
+                            run,
+                            outcome: "abandoned",
+                            leg: leg,
+                            journal: journal,
+                            dismissPresentation: dismissPresentationOnCompletion,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    }
+                }
+                let result: DeviceLegDispatchResult
+                var presentationSignal: DeviceLegControlExecutor.Signal?
+                if let presenter,
+                   case .string(let type)? = action["type"],
+                   Self.rendererOwnedActionTypes.contains(type),
+                   await presenter.ownsDeviceLegPresentation(
                     journeyId: run.journeyId,
-                    generation: run.generation,
-                    reference: run.reference,
-                    release: release,
-                    stepId: stepId,
-                    action: action,
-                    context: run.context,
-                    effectId: effectId,
-                    distinctId: journal.distinctId,
-                    identityFence: identityFence.token,
-                    executionFence: executionFence,
-                    executionFenceToken: executionFenceToken
-                ))
+                    ownerDistinctId: journal.distinctId
+                   ) {
+                    guard let contextResolvedAction = resolvedPresentationAction(
+                        action,
+                        context: run.context
+                    ), let resolvedAction = await presenter
+                        .resolveDeviceLegPresentationAction(
+                            journeyId: run.journeyId,
+                            ownerDistinctId: journal.distinctId,
+                            action: contextResolvedAction,
+                            source: presentationSource
+                        )
+                    else {
+                        await finish(
+                            run,
+                            outcome: "abandoned",
+                            leg: leg,
+                            journal: journal,
+                            dismissPresentation: dismissPresentationOnCompletion,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    }
+                    if type == "purchase" {
+                        guard case .string(let placementId)? = resolvedAction[
+                            "placementId"
+                        ], !placementId.isEmpty else {
+                            await finish(
+                                run,
+                                outcome: "abandoned",
+                                leg: leg,
+                                journal: journal,
+                                dismissPresentation: dismissPresentationOnCompletion,
+                                executionFenceToken: executionFenceToken
+                            )
+                            return
+                        }
+                        pendingPresentationPurchasePlacements[run.id] =
+                            placementId
+                    }
+                    let presentationResult = await presenter
+                        .dispatchDeviceLegPresentationAction(
+                            journeyId: run.journeyId,
+                            ownerDistinctId: journal.distinctId,
+                            action: resolvedAction,
+                            effectId: effectId
+                        )
+                    guard executionFence.isCurrent(executionFenceToken),
+                          await isCurrentIdentity(
+                            identityFence.token,
+                            journal: journal
+                          ) else {
+                        await finishAfterAuthorityLoss(
+                            run,
+                            leg: leg,
+                            journal: journal,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    }
+                    switch presentationResult {
+                    case .advanced(let outlet):
+                        pendingPresentationPurchasePlacements.removeValue(
+                            forKey: run.id
+                        )
+                        result = .outlet(outlet)
+                    case .permissionResolved(let outlet, let event):
+                        pendingPresentationPurchasePlacements.removeValue(
+                            forKey: run.id
+                        )
+                        guard let capture = await capturePresentationPermissionEvent(
+                            event,
+                            eventId: effectId,
+                            run: run,
+                            identityFenceToken: identityFence.token,
+                            executionFenceToken: executionFenceToken,
+                            journal: journal
+                        ) else {
+                            await finish(
+                                run,
+                                outcome: "abandoned",
+                                leg: leg,
+                                journal: journal,
+                                dismissPresentation: dismissPresentationOnCompletion,
+                                executionFenceToken: executionFenceToken
+                            )
+                            return
+                        }
+                        presentationSignal = capture.routesLocally
+                            ? executorSignal(capture.event)
+                            : .init()
+                        result = .outlet(outlet)
+                    case .awaitingOutcome:
+                        // Commerce remains on this claimed cursor until its
+                        // correlated SDK outcome arrives.
+                        return
+                    case .handled, .productsUnavailable:
+                        pendingPresentationPurchasePlacements.removeValue(
+                            forKey: run.id
+                        )
+                        // Navigation-style actions continue through screen
+                        // lifecycle callbacks.
+                        return
+                    case .noPresentation, .declined, .failed:
+                        await finish(
+                            run,
+                            outcome: "abandoned",
+                            leg: leg,
+                            journal: journal,
+                            dismissPresentation: dismissPresentationOnCompletion,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    }
+                } else {
+                    result = await dispatcher.dispatch(.init(
+                        runId: run.id,
+                        journeyId: run.journeyId,
+                        generation: run.generation,
+                        reference: run.reference,
+                        release: release,
+                        stepId: stepId,
+                        action: action,
+                        context: run.context,
+                        effectId: effectId,
+                        distinctId: journal.distinctId,
+                        identityFence: identityFence.token,
+                        executionFence: executionFence,
+                        executionFenceToken: executionFenceToken
+                    ))
+                }
                 guard executionFence.isCurrent(executionFenceToken),
                       await isCurrentIdentity(
                     identityFence.token,
                     journal: journal
                 ) else {
-                    await finish(
+                    await finishAfterAuthorityLoss(
                         run,
-                        outcome: "abandoned",
                         leg: leg,
-                        journal: journal
+                        journal: journal,
+                        executionFenceToken: executionFenceToken
                     )
                     return
                 }
                 switch result {
                 case .outlet(let outlet):
-                    guard case .advance(let nextStepId, let context) = executor.selectOutlet(
+                    guard case .advance(let nextStepId, let context, _) = executor.selectOutlet(
                         step,
                         outlet: outlet,
                         context: run.context
@@ -987,7 +2579,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                             run,
                             outcome: "abandoned",
                             leg: leg,
-                            journal: journal
+                            journal: journal,
+                            dismissPresentation: dismissPresentationOnCompletion,
+                            executionFenceToken: executionFenceToken
                         )
                         return
                     }
@@ -1005,13 +2599,18 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     run.context = context
                     run.park = nil
                     checkpoint = nil
+                    if let presentationSignal {
+                        signal = presentationSignal
+                    }
 
                 case .complete(let outcome):
                     await finish(
                         run,
                         outcome: outcome,
                         leg: leg,
-                        journal: journal
+                        journal: journal,
+                        dismissPresentation: dismissPresentationOnCompletion,
+                        executionFenceToken: executionFenceToken
                     )
                     return
 
@@ -1032,7 +2631,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                         run,
                         outcome: "abandoned",
                         leg: leg,
-                        journal: journal
+                        journal: journal,
+                        dismissPresentation: dismissPresentationOnCompletion,
+                        executionFenceToken: executionFenceToken
                     )
                     return
                 }
@@ -1042,7 +2643,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     run,
                     outcome: "abandoned",
                     leg: leg,
-                    journal: journal
+                    journal: journal,
+                    dismissPresentation: dismissPresentationOnCompletion,
+                    executionFenceToken: executionFenceToken
                 )
                 return
             }
@@ -1052,16 +2655,82 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             run,
             outcome: "abandoned",
             leg: leg,
-            journal: journal
+            journal: journal,
+            dismissPresentation: dismissPresentationOnCompletion,
+            executionFenceToken: executionFenceToken
         )
     }
 
+    private func markExperimentExposuresShown(
+        for run: DeviceLegRun,
+        journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async {
+        guard run.experimentExposures.contains(where: {
+            $0.shownAt == nil && !$0.queued
+        }), let admission = journalCommitAdmission(
+            journal: journal,
+            executionFenceToken: executionFenceToken
+        ) else { return }
+        do {
+            guard try await journal.markExperimentExposuresShown(
+                run.id,
+                at: dateProvider.now(),
+                admission: admission
+            ) else { return }
+            let settled = try await DeviceLegExperimentExposureReporter(
+                journal: journal,
+                events: events
+            ).flushPending(admission: admission)
+            if !settled {
+                scheduleExperimentExposureRetry(for: journal)
+            }
+        } catch {
+            LogWarning(
+                "DeviceLegService: failed to queue shown experiment exposure: \(error)"
+            )
+            scheduleExperimentExposureRetry(for: journal)
+        }
+    }
+
+    @discardableResult
     private func finish(
         _ run: DeviceLegRun,
         outcome: String,
         leg: DeviceLeg,
-        journal: DeviceLegRunJournal
-    ) async {
+        journal: DeviceLegRunJournal,
+        dismissPresentation: Bool = true,
+        executionFenceToken: DeviceLegProfileFenceToken? = nil,
+        requireCurrentIdentity: Bool = true
+    ) async -> Bool {
+        guard let persisted = await persistCompletion(
+            run,
+            outcome: outcome,
+            leg: leg,
+            journal: journal,
+            executionFenceToken: executionFenceToken,
+            requireCurrentIdentity: requireCurrentIdentity
+        ) else { return false }
+        return await settlePersistedCompletion(
+            run,
+            journal: journal,
+            admission: persisted.admission,
+            dismissPresentation: dismissPresentation
+        )
+    }
+
+    private struct PersistedCompletion {
+        let admission: DeviceLegCommitAdmission?
+    }
+
+    private func persistCompletion(
+        _ run: DeviceLegRun,
+        outcome: String,
+        leg: DeviceLeg,
+        journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken? = nil,
+        requireCurrentIdentity: Bool = true
+    ) async -> PersistedCompletion? {
         let projected = leg.completionOutputs[outcome].flatMap {
             DeviceLegBoundaryProjector.project(
                 context: run.context,
@@ -1072,21 +2741,110 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             ? "abandoned"
             : outcome
         do {
-            try await journal.complete(
+            let admission: DeviceLegCommitAdmission?
+            if let executionFenceToken {
+                guard let currentAdmission = journalCommitAdmission(
+                    journal: journal,
+                    executionFenceToken: executionFenceToken,
+                    requireCurrentIdentity: requireCurrentIdentity
+                ) else { return nil }
+                admission = currentAdmission
+            } else {
+                admission = nil
+            }
+            guard try await journal.complete(
                 run.id,
                 outcome: finalOutcome,
                 at: dateProvider.now(),
                 eventOutputs: projected?.event ?? [:],
                 responseOutputs: finalOutcome == "abandoned"
                     ? run.context.responses
-                    : projected?.responses ?? [:]
-            )
+                    : projected?.responses ?? [:],
+                admission: admission
+            ) else { return nil }
+            return PersistedCompletion(admission: admission)
+        } catch {
+            LogWarning("DeviceLegService: failed to persist device leg completion: \(error)")
+            await scheduleNextWake()
+            return nil
+        }
+    }
+
+    private func settlePersistedCompletion(
+        _ run: DeviceLegRun,
+        journal: DeviceLegRunJournal,
+        admission: DeviceLegCommitAdmission?,
+        dismissPresentation: Bool
+    ) async -> Bool {
+        do {
+            if try await !DeviceLegExperimentExposureReporter(
+                journal: journal,
+                events: events
+            ).flushPending(admission: admission) {
+                scheduleExperimentExposureRetry(for: journal)
+            }
             try await DeviceLegReporter(journal: journal, events: events)
                 .flushPending()
         } catch {
-            LogWarning("DeviceLegService: failed to complete device leg: \(error)")
+            LogWarning("DeviceLegService: failed to settle device leg completion: \(error)")
+            await scheduleNextWake()
+            return false
+        }
+        pendingPresentationDismissalContinuations.removeValue(forKey: run.id)
+        pendingPresentationPurchasePlacements.removeValue(forKey: run.id)
+        if dismissPresentation, let presenter {
+            await presenter.finishDeviceLegPresentation(
+                journeyId: run.journeyId,
+                ownerDistinctId: journal.distinctId
+            )
         }
         await scheduleNextWake()
+        return true
+    }
+
+    private func finishAfterAuthorityLoss(
+        _ run: DeviceLegRun,
+        leg: DeviceLeg,
+        journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async {
+        // Execution revocation owns teardown and abandonment. A bare identity
+        // fence loss can also occur inside a host callback before the queued
+        // identity transition reaches this actor; finish the departing
+        // customer's run while still refusing to cross execution revocation.
+        guard executionFence.isCurrent(executionFenceToken) else { return }
+        _ = await finish(
+            run,
+            outcome: "abandoned",
+            leg: leg,
+            journal: journal,
+            executionFenceToken: executionFenceToken,
+            requireCurrentIdentity: false
+        )
+    }
+
+    private func journalCommitAdmission(
+        journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken,
+        requireCurrentIdentity: Bool = true
+    ) -> DeviceLegCommitAdmission? {
+        guard requireCurrentIdentity else {
+            return .executionOnly(
+                identity: identity,
+                executionFence: executionFence,
+                executionFenceToken: executionFenceToken
+            )
+        }
+        guard let identityFence = identity.performWithCurrentIdentityFence(
+            journal.distinctId,
+            { _ in () }
+        ) else { return nil }
+        return DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFence.token,
+            executionFence: executionFence,
+            executionFenceToken: executionFenceToken
+        )
     }
 
     private func isCurrentIdentity(journal: DeviceLegRunJournal) -> Bool {
@@ -1121,6 +2879,63 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             occurredAtMillis: occurredAt,
             properties: properties
         ))
+    }
+
+    private static let rendererOwnedActionTypes: Set<String> = [
+        "back",
+        "purchase",
+        "restore",
+        "request_notifications",
+        "request_permission",
+        "request_tracking",
+        "open_link",
+        "dismiss",
+    ]
+
+    private func isAwaitingPresentationCommerceOutcome(
+        _ run: DeviceLegRun,
+        in leg: DeviceLeg
+    ) -> Bool {
+        guard run.effectReceipts[run.stepId] != nil,
+              let action = leg.steps.first(where: { $0.id == run.stepId })?.action,
+              case .string(let type)? = action["type"] else {
+            return false
+        }
+        return type == "purchase" || type == "restore"
+    }
+
+    private func resolvedPresentationAction(
+        _ action: [String: ExperienceReleaseJSONValue],
+        context: ArmedDeviceLeg.Context
+    ) -> [String: ExperienceReleaseJSONValue]? {
+        guard case .string(let type)? = action["type"] else { return nil }
+        guard type == "open_link" else { return action }
+        guard let encoded = action["url"].flatMap({
+            try? ExactJSONCodec.encode($0)
+        }), let value = try? ExactJSONCodec.decode(
+            JourneyValue.self,
+            from: encoded
+        ), case .string(let url)? = DeviceLegValues.resolve(
+            value,
+            context: context
+        ) else {
+            return nil
+        }
+        var resolved = action
+        resolved["url"] = .string(url)
+        return resolved
+    }
+
+    private func presentationDidBecomeAvailable() async {
+        guard initialized,
+              foreground,
+              let state = currentProfileState() else { return }
+        await resumeParkedRuns(state: state, event: nil)
+        guard isCurrent(state) else { return }
+        // Event-triggered arms deliberately wait for the next matching event.
+        // State arms can be re-evaluated when capacity returns without storing
+        // or replaying a presentation request.
+        await evaluateStateArms(state: state, kinds: nil)
     }
 
     private func scheduleNextWake() async {
@@ -1175,6 +2990,60 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         wakeGeneration &+= 1
         wakeTask?.cancel()
         wakeTask = nil
+    }
+
+    private func scheduleExperimentExposureRetry(
+        for journal: DeviceLegRunJournal
+    ) {
+        let key = journal.distinctId
+        guard experimentExposureRetryTasks[key] == nil else { return }
+        experimentExposureRetryTasks[key] = Task { [weak self] in
+            await self?.retryExperimentExposures(
+                in: journal,
+                key: key
+            )
+        }
+    }
+
+    private func cancelAndAwaitExperimentExposureRetries() async {
+        let retries = Array(experimentExposureRetryTasks.values)
+        retries.forEach { $0.cancel() }
+        for retry in retries {
+            await retry.value
+        }
+        experimentExposureRetryTasks.removeAll()
+    }
+
+    private func retryExperimentExposures(
+        in journal: DeviceLegRunJournal,
+        key: String
+    ) async {
+        defer { experimentExposureRetryTasks.removeValue(forKey: key) }
+        var delay: UInt64 = 250_000_000
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+            do {
+                let settled = try await DeviceLegExperimentExposureReporter(
+                    journal: journal,
+                    events: events
+                ).flushPending()
+                try await DeviceLegReporter(journal: journal, events: events)
+                    .flushPending()
+                if settled {
+                    _ = try await journal.finalizeRevocation()
+                    return
+                }
+            } catch {
+                LogWarning(
+                    "DeviceLegService: experiment exposure retry remains pending: \(error)"
+                )
+            }
+            delay = min(delay &* 2, 2_000_000_000)
+        }
     }
 
     private func milliseconds(_ date: Date) -> Int64? {

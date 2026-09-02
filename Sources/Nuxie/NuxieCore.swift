@@ -122,6 +122,7 @@ final class NuxieCore: @unchecked Sendable {
     let builtTriggerService = LateBound<TriggerServiceProtocol>()
     let builtFeatureService = LateBound<FeatureServiceProtocol>()
     let systemEvents = overrides.systemEvents ?? TriggerSystemEventSink(
+      routedEvents: eventLog,
       triggerProvider: { builtTriggerService.get() }
     )
     let localeProvider = overrides.localeProvider ?? runtimeSettings
@@ -182,6 +183,29 @@ final class NuxieCore: @unchecked Sendable {
       apiKey: configuration.apiKey,
       environment: configuration.environment
     )
+    let experiences = overrides.experiences ?? ExperienceService(
+      productService: productService,
+      introEligibilityTokenProvider: introEligibilityTokenProvider,
+      introEligibilityOverrideHealth: introEligibilityOverrideHealth,
+      eventLog: eventLog,
+      transactionServiceProvider: { builtTransactionService.get() },
+      systemEventSink: systemEvents,
+      releaseStore: releaseStore,
+      presentationDiagnosticsEnabled:
+        internalConfiguration.presentationDiagnosticsEnabled
+          || (overrides.presentationDiagnosticsEnabled
+            ?? (overrides.presentationTrace != nil)),
+      warmLoadsInitiallySuspended: overrides.experienceWarmLoadsInitiallySuspended,
+      testStoreEnabled: configuration.testStoreEnabled
+    )
+    let triggerBroker = overrides.triggerBroker ?? TriggerBroker()
+    let experiencePresentation = overrides.experiencePresentation ?? ExperiencePresentationService(
+      windowProvider: nil,
+      experiences: experiences,
+      eventLog: eventLog,
+      triggerBroker: triggerBroker,
+      dateProvider: dateProvider
+    )
     let deviceLegs: (any DeviceLegServiceProtocol)?
     if let timezones = SignedTimezoneBundle.installed {
       deviceLegs = DeviceLegService(
@@ -204,6 +228,7 @@ final class NuxieCore: @unchecked Sendable {
           events: eventLog,
           appActionHandler: appActionHandler
         ),
+        presenter: experiencePresentation,
         pinnedReleaseAuthenticator: { entry, reference in
           try await deviceLegProfiles.authenticatePinnedRelease(
             entry,
@@ -216,21 +241,6 @@ final class NuxieCore: @unchecked Sendable {
       LogError("Device-leg runtime unavailable: signed timezone bundle missing")
       deviceLegs = nil
     }
-    let experiences = overrides.experiences ?? ExperienceService(
-      productService: productService,
-      introEligibilityTokenProvider: introEligibilityTokenProvider,
-      introEligibilityOverrideHealth: introEligibilityOverrideHealth,
-      eventLog: eventLog,
-      transactionServiceProvider: { builtTransactionService.get() },
-      systemEventSink: systemEvents,
-      releaseStore: releaseStore,
-      presentationDiagnosticsEnabled:
-        internalConfiguration.presentationDiagnosticsEnabled
-          || (overrides.presentationDiagnosticsEnabled
-            ?? (overrides.presentationTrace != nil)),
-      warmLoadsInitiallySuspended: overrides.experienceWarmLoadsInitiallySuspended,
-      testStoreEnabled: configuration.testStoreEnabled
-    )
     let profile = overrides.profile ?? ProfileService(
       identity: identity,
       api: api,
@@ -295,14 +305,6 @@ final class NuxieCore: @unchecked Sendable {
       identity: identity, eventLog: eventLog,
       segments: segments, features: features)
 
-    let triggerBroker = overrides.triggerBroker ?? TriggerBroker()
-    let experiencePresentation = overrides.experiencePresentation ?? ExperiencePresentationService(
-      windowProvider: nil,
-      experiences: experiences,
-      eventLog: eventLog,
-      triggerBroker: triggerBroker,
-      dateProvider: dateProvider
-    )
     let goalEvaluator = overrides.goalEvaluator ?? GoalEvaluator(
       eventLog: eventLog,
       features: features,

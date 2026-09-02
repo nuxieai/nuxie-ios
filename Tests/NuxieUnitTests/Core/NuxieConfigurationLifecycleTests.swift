@@ -181,6 +181,69 @@ private actor LifecycleTransitionGate {
     }
 }
 
+private actor ForegroundPresentationAdmissionProbe: DeviceLegServiceProtocol {
+    private let presenter: any DeviceLegPresenting
+    private var observedOpenAdmission: Bool?
+    private var observationWaiters: [CheckedContinuation<Bool, Never>] = []
+
+    init(presenter: any DeviceLegPresenting) {
+        self.presenter = presenter
+    }
+
+    func initialize() async {}
+    func handleEvent(_ event: NuxieEvent) async { _ = event }
+    func handleEvent(
+        _ event: NuxieEvent,
+        admittedProfileGeneration: UInt64?
+    ) async {
+        _ = event
+        _ = admittedProfileGeneration
+    }
+    nonisolated func eventAdmissionGeneration() -> UInt64 { 0 }
+    func onAppDidEnterBackground() async {}
+    func onAppWillEnterForeground() async {}
+
+    func onAppBecameActive() async {
+        let reservation = await presenter.reserveDeviceLegPresentation(
+            ownerDistinctId: "lifecycle-customer"
+        )
+        let observedOpenAdmission = reservation != nil
+        await reservation?.release()
+        self.observedOpenAdmission = observedOpenAdmission
+        let waiters = observationWaiters
+        observationWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: observedOpenAdmission) }
+    }
+
+    func handleUserChange(
+        from oldDistinctId: String,
+        to newDistinctId: String
+    ) async {
+        _ = oldDistinctId
+        _ = newDistinctId
+    }
+
+    func profileDidCommit(
+        _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        authority: ProfileDeliveryAuthority,
+        distinctId: String
+    ) async {
+        _ = snapshot
+        _ = authority
+        _ = distinctId
+    }
+
+    func profileDidClear(distinctId: String) async { _ = distinctId }
+    func profileDidClearAll() async {}
+
+    func waitForObservation() async -> Bool {
+        if let observedOpenAdmission { return observedOpenAdmission }
+        return await withCheckedContinuation { continuation in
+            observationWaiters.append(continuation)
+        }
+    }
+}
+
 private func waitForShutdownCompletion(
     _ probe: ShutdownCompletionProbe,
     attempts: Int = 200
@@ -313,6 +376,70 @@ private actor PendingJourneyFacadeTrigger: TriggerServiceProtocol {
 }
 
 final class NuxieConfigurationLifecycleTests: XCTestCase {
+    func testForegroundPresentationAuthorityOpensBeforeRuntimesResume() async {
+        await NuxieSDK.shared.shutdown()
+
+        let identity = MockIdentityService()
+        identity.setDistinctId("lifecycle-customer")
+        let profile = MockProfileService()
+        let experiences = MockExperienceService()
+        let eventLog = MockEventLog()
+        eventLog.identity = identity
+        let dateProvider = MockDateProvider()
+        let windowProvider = MockWindowProvider()
+        let presenter = await MainActor.run {
+            ExperiencePresentationService(
+                windowProvider: windowProvider,
+                experiences: experiences,
+                eventLog: eventLog,
+                triggerBroker: TriggerBroker(),
+                dateProvider: dateProvider
+            )
+        }
+        let deviceLegs = ForegroundPresentationAdmissionProbe(
+            presenter: presenter
+        )
+        let features = FeatureService(
+            api: MockNuxieApi(),
+            identity: identity,
+            profile: profile,
+            dateProvider: dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: 60
+        )
+        let suiteName = "com.nuxie.test.lifecycle-order.\(UUID().uuidString)"
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        let lifecycle = NuxieLifecycleCoordinator(
+            lifecycleTracker: AppLifecycleTracker(
+                userDefaults: userDefaults,
+                eventSink: DiscardingSystemEventSink()
+            ),
+            journeys: MockJourneyService(),
+            deviceLegs: deviceLegs,
+            eventLog: eventLog,
+            profile: profile,
+            experiences: experiences,
+            experiencePresentation: presenter,
+            features: features
+        )
+        lifecycle.start()
+
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: NuxieSystemNotifications.appDidBecomeActive,
+                object: nil
+            )
+        }
+        let observedOpenAdmission = await deviceLegs.waitForObservation()
+
+        await lifecycle.stop()
+        userDefaults.removePersistentDomain(forName: suiteName)
+        XCTAssertTrue(
+            observedOpenAdmission,
+            "foreground runtime resume must not wait on its own lifecycle worker"
+        )
+    }
+
     func testSetupRejectsInvalidDeliveryCounts() async {
         await assertSetupRejects(
             { $0.testingOverrides.eventBatchSize = 0 },

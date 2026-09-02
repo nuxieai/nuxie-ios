@@ -39,6 +39,13 @@ struct StableEventCaptureCommit: Sendable {
   let commitSequence: UInt64?
 }
 
+struct StableEventCaptureRecord: Sendable {
+  let eventId: String
+  let event: StoredEvent?
+  let recordedAt: Date
+  let ownership: JourneyEventOwnership?
+}
+
 enum StableEventCaptureCommitAdmissionError: Error {
   case rejected
 }
@@ -50,6 +57,17 @@ protocol StableEventCaptureCommitAdmission: Sendable {
   func commitIfCurrent(
     _ commit: () throws -> StableEventCaptureCommit
   ) rethrows -> StableEventCaptureCommit?
+}
+
+/// The same terminal fence applied once around a complete stable-event batch.
+/// The storage implementation must commit every returned outcome or none of
+/// them so callers never publish a prefix and then reuse the batch identity.
+protocol StableEventCaptureBatchCommitAdmission:
+  StableEventCaptureCommitAdmission
+{
+  func commitBatchIfCurrent(
+    _ commit: () throws -> [StableEventCaptureCommit]
+  ) rethrows -> [StableEventCaptureCommit]?
 }
 
 /// Persistence surface the event log writes through. One implementation
@@ -80,6 +98,11 @@ protocol EventStoreProtocol: Sendable {
     assigningCommitSequence: Bool,
     admission: (any StableEventCaptureCommitAdmission)?
   ) async throws -> StableEventCaptureCommit
+  func commitStableCaptureBatch(
+    _ records: [StableEventCaptureRecord],
+    assigningCommitSequence: Bool,
+    admission: (any StableEventCaptureBatchCommitAdmission)?
+  ) async throws -> [StableEventCaptureCommit]
   /// Persist authoritative server evidence that this device no longer owns
   /// `journeyId` at `authoritativeEpoch` or any earlier epoch.
   func recordJourneyOwnershipLoss(
@@ -1154,6 +1177,66 @@ actor SQLiteEventStore: EventStoreProtocol {
       ownership: ownership,
       assigningCommitSequence: assigningCommitSequence
     )
+  }
+
+  public func commitStableCaptureBatch(
+    _ records: [StableEventCaptureRecord],
+    assigningCommitSequence: Bool,
+    admission: (any StableEventCaptureBatchCommitAdmission)?
+  ) throws -> [StableEventCaptureCommit] {
+    let operation = {
+      try self.commitStableCaptureBatchUnfenced(
+        records,
+        assigningCommitSequence: assigningCommitSequence
+      )
+    }
+    if let admission {
+      guard let committed = try admission.commitBatchIfCurrent(operation) else {
+        throw StableEventCaptureCommitAdmissionError.rejected
+      }
+      return committed
+    }
+    return try operation()
+  }
+
+  private func commitStableCaptureBatchUnfenced(
+    _ records: [StableEventCaptureRecord],
+    assigningCommitSequence: Bool
+  ) throws -> [StableEventCaptureCommit] {
+    guard !records.isEmpty else { return [] }
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    let sequenceBeforeTransaction = nextCommitSequence
+    guard sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION;", nil, nil, nil)
+      == SQLITE_OK else {
+      throw EventStorageError.insertFailed(NSError(
+        domain: "SQLite",
+        code: 50,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+      ))
+    }
+    do {
+      let commits = try records.map { record in
+        try commitStableCaptureUnfenced(
+          eventId: record.eventId,
+          event: record.event,
+          recordedAt: record.recordedAt,
+          ownership: record.ownership,
+          assigningCommitSequence: assigningCommitSequence
+        )
+      }
+      guard sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK else {
+        throw EventStorageError.insertFailed(NSError(
+          domain: "SQLite",
+          code: 51,
+          userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+        ))
+      }
+      return commits
+    } catch {
+      _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+      nextCommitSequence = sequenceBeforeTransaction
+      throw error
+    }
   }
 
   private func commitStableCaptureUnfenced(

@@ -10,6 +10,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     private var _fetchedExperienceVersionIds: [String] = []
     private var _releaseProfiles: [ExperienceReleaseProfile?] = []
     private var _committedReleaseProfiles: [ExperienceReleaseProfile?] = []
+    private var _committedDeviceLegReleaseCounts: [Int?] = []
     private var _latestProfileGeneration: UInt64 = 0
     private var _authenticatedReleaseReferences: [ExperienceReference]?
     private var _releaseProfileFailuresRemaining = 0
@@ -62,6 +63,10 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
 
     public var committedReleaseProfiles: [ExperienceReleaseProfile?] {
         withLock { _committedReleaseProfiles }
+    }
+
+    var committedDeviceLegReleaseCounts: [Int?] {
+        withLock { _committedDeviceLegReleaseCounts }
     }
 
     var authenticatedReleaseReferences: [ExperienceReference]? {
@@ -293,6 +298,9 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             guard generation >= _latestProfileGeneration else { return nil }
             _latestProfileGeneration = generation
             _committedReleaseProfiles.append(prepared.profile)
+            _committedDeviceLegReleaseCounts.append(
+                prepared.deviceLegSnapshot?.releasesByDigest.count
+            )
             return (
                 prepared.references ?? [],
                 _mockExperiences,
@@ -437,6 +445,21 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
         )
         controller.runtimeDelegate = runtimeDelegate
         return controller
+    }
+
+    @MainActor
+    func viewController(
+        forDeviceLeg release: AuthenticatedDeviceLegRelease,
+        delivery: ExperienceReleaseDelivery,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode
+    ) async throws -> ExperienceViewController {
+        _ = delivery
+        return try await viewController(
+            for: release.descriptor.identity.experienceVersionId,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode
+        )
     }
     
     public func clearCache() async {

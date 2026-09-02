@@ -808,8 +808,15 @@ final class HostDismissalTests: AsyncSpec {
                 let journey = try await harness.startJourney(
                     originEventId: "host-retry-before-identity-change"
                 )
+                let saveAttemptCount = harness.store.saveAttemptCount
                 harness.store.shouldThrowOnSave = true
-                await harness.experiencePresentation.dismissCurrentExperienceFromHost()
+                let hostDismissal = Task { @MainActor in
+                    await harness.experiencePresentation.dismissCurrentExperienceFromHost()
+                }
+                try await waitForHostJourneySaveAttempt(
+                    in: harness.store,
+                    after: saveAttemptCount
+                )
                 harness.store.shouldThrowOnSave = false
                 let retryable = await journey.snapshot()
                 expect(retryable.status.isLive).to(beTrue())
@@ -819,6 +826,7 @@ final class HostDismissalTests: AsyncSpec {
                     from: harness.distinctId,
                     to: "replacement-user"
                 )
+                await hostDismissal.value
 
                 let retained = await harness.service.getActiveJourneys(
                     for: harness.distinctId
@@ -875,8 +883,15 @@ final class HostDismissalTests: AsyncSpec {
                 let journey = try await harness.startJourney(
                     originEventId: "host-retry-converted-fact"
                 )
+                let saveAttemptCount = harness.store.saveAttemptCount
                 harness.store.shouldThrowOnSave = true
-                await harness.experiencePresentation.dismissCurrentExperienceFromHost()
+                let hostDismissal = Task { @MainActor in
+                    await harness.experiencePresentation.dismissCurrentExperienceFromHost()
+                }
+                try await waitForHostJourneySaveAttempt(
+                    in: harness.store,
+                    after: saveAttemptCount
+                )
                 harness.store.shouldThrowOnSave = false
                 let liveRetry = await journey.snapshot()
                 expect(liveRetry.status.isLive).to(beTrue())
@@ -886,6 +901,7 @@ final class HostDismissalTests: AsyncSpec {
                     from: harness.distinctId,
                     to: "replacement-user"
                 )
+                await hostDismissal.value
                 await harness.service.handleEvent(NuxieEvent(
                     name: JourneyEvents.journeyConverted,
                     distinctId: harness.distinctId,
@@ -1803,6 +1819,17 @@ private func waitForHostTriggerResult(
     return nil
 }
 
+private func waitForHostJourneySaveAttempt(
+    in store: HostDismissalJourneyStore,
+    after previousCount: Int
+) async throws {
+    for _ in 0..<200 {
+        if store.saveAttemptCount > previousCount { return }
+        try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    throw HostDismissalTestError.timedOut("journey save attempt")
+}
+
 private actor HostDismissalAsyncGate {
     private var entered = false
     private var released = false
@@ -1992,6 +2019,22 @@ private final class ShutdownObservingExperiencePresentationService {
 extension ShutdownObservingExperiencePresentationService:
     ExperiencePresentationServiceProtocol {}
 
+private final class HostDismissalJourneyStore: MockJourneyStore, @unchecked Sendable {
+    private let saveAttemptLock = NSLock()
+    private var _saveAttemptCount = 0
+
+    var saveAttemptCount: Int {
+        saveAttemptLock.withLock { _saveAttemptCount }
+    }
+
+    override func saveJourney(_ journey: JourneySnapshot) throws {
+        saveAttemptLock.withLock {
+            _saveAttemptCount += 1
+        }
+        try super.saveJourney(journey)
+    }
+}
+
 private struct HostJourneyHarness {
     static let screenId = "screen-1"
     static let distinctId = "host-dismiss-user"
@@ -1999,7 +2042,7 @@ private struct HostJourneyHarness {
     static let versionId = "host-dismiss-version"
 
     let mocks: MockFactory
-    let store: MockJourneyStore
+    let store: HostDismissalJourneyStore
     let service: JourneyService
     let experiencePresentation: ExperiencePresentationServiceProtocol
     let controller: MockExperienceViewController
@@ -2027,7 +2070,7 @@ private struct HostJourneyHarness {
                 mockExperience: experience
             )
         }
-        let store = MockJourneyStore()
+        let store = HostDismissalJourneyStore()
         let experiencePresentation: ExperiencePresentationServiceProtocol
         if usesCoordinatedPresentation {
             let coordinatedPresentation = await MainActor.run {

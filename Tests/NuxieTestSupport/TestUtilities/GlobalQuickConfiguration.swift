@@ -6,8 +6,11 @@ import XCTest
 
 /// Global Quick configuration to centralize test setup/teardown.
 final class GlobalQuickConfiguration: QuickConfiguration {
+  @TaskLocal private static var isRunningAsyncExample = false
+
   override class func configure(_ configuration: QCKConfiguration) {
     configuration.beforeEach {
+      guard !isRunningAsyncExample else { return }
       MockFactory.resetUsageFlag()
 
       if NuxieSDK.shared.configuration != nil {
@@ -18,6 +21,7 @@ final class GlobalQuickConfiguration: QuickConfiguration {
     }
 
     configuration.afterEach {
+      guard !isRunningAsyncExample else { return }
       // Clear any registered network stubs between examples.
       TestURLSessionProvider.reset()
 
@@ -34,6 +38,36 @@ final class GlobalQuickConfiguration: QuickConfiguration {
           await MockFactory.shared.resetAll()
         }
       }
+    }
+
+    // QCKConfiguration bridges synchronous before/after hooks onto the main
+    // actor for AsyncSpec. Blocking that actor while a detached teardown waits
+    // for UIKit cleanup leaves shutdown running into the next example. Wrap
+    // async examples with a native async hook instead; the task-local marker
+    // makes the bridged synchronous hooks no-ops inside this wrapper.
+    configuration.aroundEach { runExample in
+      await $isRunningAsyncExample.withValue(true) {
+        await prepareAsyncExample()
+        await runExample()
+        await cleanUpAsyncExample()
+      }
+    }
+  }
+
+  private class func prepareAsyncExample() async {
+    MockFactory.resetUsageFlag()
+    if NuxieSDK.shared.configuration != nil {
+      await NuxieSDK.shared.shutdown()
+    }
+  }
+
+  private class func cleanUpAsyncExample() async {
+    TestURLSessionProvider.reset()
+    if NuxieSDK.shared.configuration != nil {
+      await NuxieSDK.shared.shutdown()
+    }
+    if MockFactory.wasUsed {
+      await MockFactory.shared.resetAll()
     }
   }
 
@@ -79,8 +113,9 @@ final class GlobalQuickConfiguration: QuickConfiguration {
       RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
     }
 
-	    print("WARN: Timed out waiting for \(description)")
-	  }
+
+    print("WARN: Timed out waiting for \(description)")
+  }
 }
 
 

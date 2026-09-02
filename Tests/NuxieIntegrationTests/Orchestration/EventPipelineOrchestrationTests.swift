@@ -17,6 +17,16 @@ private actor OrchestrationForwardingRecorder {
     func idSnapshot() -> [String] { events.map(\.event.id) }
 }
 
+private actor OrchestrationCommittedRecorder {
+    private var events: [NuxieEvent] = []
+
+    func record(_ event: NuxieEvent) {
+        events.append(event)
+    }
+
+    func names() -> [String] { events.map(\.name) }
+}
+
 /// Orchestration harness (cleanup plan, Phase 1).
 ///
 /// Unlike the unit suites — which mock EventLog itself and therefore can
@@ -270,6 +280,99 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 await relaunchService.drain()
                 await expect { await replayRecorder.snapshot() }.to(beEmpty())
                 await relaunchService.close()
+            }
+
+            it("orders a real stable batch and deduplicates it across relaunch") {
+                identity.setDistinctId("customer-a")
+                guard let identityFence = identity.performWithCurrentIdentityFence(
+                    "customer-a",
+                    { _ in () }
+                ) else {
+                    return fail("Expected current identity fence")
+                }
+                let executionFence = DeviceLegProfileFence()
+                let generation = executionFence.advance()
+                guard let executionToken = executionFence.token(ifCurrent: generation) else {
+                    return fail("Expected current execution fence")
+                }
+                let admission = DeviceLegCommitAdmission(
+                    identity: identity,
+                    identityFenceToken: identityFence.token,
+                    executionFence: executionFence,
+                    executionFenceToken: executionToken
+                )
+                let initialRoutes = OrchestrationCommittedRecorder()
+                await eventLog.subscribeCommitted { event in
+                    await initialRoutes.record(event)
+                }
+                let batch = [
+                    RoutedStableSystemEventBatchItem(
+                        name: "renderer-first",
+                        properties: [:],
+                        eventId: "orchestration-renderer:first",
+                        distinctId: "customer-a",
+                        occurredAt: Date(timeIntervalSince1970: 1_000)
+                    ),
+                    RoutedStableSystemEventBatchItem(
+                        name: "renderer-second",
+                        properties: [:],
+                        eventId: "orchestration-renderer:second",
+                        distinctId: "customer-a",
+                        occurredAt: Date(timeIntervalSince1970: 1_001)
+                    ),
+                ]
+
+                eventLog.track(
+                    "ordinary-before-renderer-batch",
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                let firstCapture = await eventLog.captureAndRouteSystemEventBatch(
+                    batch,
+                    admission: admission
+                )
+                expect(firstCapture?["orchestration-renderer:first"]?.isNewlyCommitted)
+                    .to(beTrue())
+                expect(firstCapture?["orchestration-renderer:second"]?.isNewlyCommitted)
+                    .to(beTrue())
+                await eventLog.drain()
+                await expect { await initialRoutes.names() }.to(equal([
+                    "ordinary-before-renderer-batch",
+                    "renderer-first",
+                    "renderer-second",
+                ]))
+                await eventLog.close()
+
+                let replayRoutes = OrchestrationCommittedRecorder()
+                let relaunched = EventLog(
+                    identity: identity,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                eventLog = relaunched
+                await relaunched.subscribeCommitted { event in
+                    await replayRoutes.record(event)
+                }
+                try await relaunched.configure(configuration: config)
+                let replayCapture = await relaunched.captureAndRouteSystemEventBatch(
+                    batch,
+                    admission: admission
+                )
+                expect(replayCapture?["orchestration-renderer:first"]?.isNewlyCommitted)
+                    .to(beFalse())
+                expect(replayCapture?["orchestration-renderer:second"]?.isNewlyCommitted)
+                    .to(beFalse())
+                await relaunched.drain()
+                await expect { await replayRoutes.names() }.to(beEmpty())
+
+                let stored = await relaunched.getRecentEvents(limit: 20)
+                expect(stored.filter {
+                    $0.id == "orchestration-renderer:first"
+                }.count).to(equal(1))
+                expect(stored.filter {
+                    $0.id == "orchestration-renderer:second"
+                }.count).to(equal(1))
             }
         }
     }
