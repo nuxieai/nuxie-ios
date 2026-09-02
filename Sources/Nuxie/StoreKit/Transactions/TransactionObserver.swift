@@ -273,6 +273,10 @@ protocol TransactionObserverProtocol: Actor {
     func syncCurrentEntitlements(distinctId: String) async
     func retryStoredEvidence() async
     func retryAfterProfileReady() async
+    /// Returns the current App Store account's verified, active product IDs.
+    /// Enumeration completion is the readiness barrier for an offline Journey
+    /// entitlement gate; no profile or backend response is required.
+    func currentEntitledStoreProductIds() async -> Set<String>
     /// Atomically reconciles a matching unsynchronized StoreKit purchase and
     /// the caller's first authoritative Feature use. Returns `nil` when no
     /// protected purchase evidence applies, so the ordinary usage command can
@@ -297,6 +301,7 @@ extension TransactionObserverProtocol {
     }
     func retryStoredEvidence() async {}
     func retryAfterProfileReady() async { await retryStoredEvidence() }
+    func currentEntitledStoreProductIds() async -> Set<String> { [] }
     func useFeatureWithPendingPurchase(
         distinctId: String,
         featureId: String,
@@ -1922,6 +1927,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 allowsDurableCheckoutAuthority: false
             )
         }
+    }
+
+    func currentEntitledStoreProductIds() async -> Set<String> {
+        Set(await currentEntitlementRecoveryTransactions().compactMap { item in
+            let update = item.update
+            return !update.isRevoked && !update.isUpgraded
+                ? update.productId
+                : nil
+        })
     }
 
     func recordVerifiedPurchase(

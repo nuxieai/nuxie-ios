@@ -1606,7 +1606,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1499",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -1677,7 +1677,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1499",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -1749,7 +1749,7 @@
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Journey/JourneyService.swift:3466",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1499",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -1825,7 +1825,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1499",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -2012,7 +2012,7 @@
     "constant": "SystemEventNames.purchaseCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1572"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1577"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -2189,8 +2189,8 @@
     "constant": "SystemEventNames.purchaseSynced",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1879",
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:2073"
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1884",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:2087"
     ],
     "endpoint": [
       "batch",
@@ -2317,7 +2317,7 @@
     "constant": "SystemEventNames.restoreCompleted",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1129",
+      "Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1134",
       "Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:983"
     ],
     "endpoint": [
@@ -2592,7 +2592,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1499",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -2663,7 +2663,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1499",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
