@@ -822,7 +822,7 @@ final class DeviceLegServiceTests: XCTestCase {
 
         let request = await MainActor.run { presenter.request }
         XCTAssertEqual(request?.screenId, "screen_welcome")
-        XCTAssertEqual(request?.ownerDistinctId, "customer")
+        XCTAssertEqual(request?.owner.distinctId, "customer")
         XCTAssertEqual(events.routedEvents.map(\.name), [
             JourneyEvents.journeyLegStarted,
         ])
@@ -866,7 +866,7 @@ final class DeviceLegServiceTests: XCTestCase {
             presenter.onFinish = { presentationFinished.fulfill() }
         }
         let accepted = await request.onEmissionBatch(ScreenEmissionBatch(
-            journeyId: request.journeyId,
+            journeyId: request.owner.journeyId,
             executionOwnershipEpoch: 0,
             lifecycleGeneration: 0,
             presentationEpoch: 1,
@@ -901,10 +901,10 @@ final class DeviceLegServiceTests: XCTestCase {
         let emitted = try XCTUnwrap(events.routedEvents.first { $0.name == "continue" })
         XCTAssertEqual(emitted.properties["source"] as? String, "button")
         XCTAssertEqual(emitted.properties["screen_id"] as? String, "screen_welcome")
-        XCTAssertEqual(emitted.properties["journey_id"] as? String, request.journeyId)
+        XCTAssertEqual(emitted.properties["journey_id"] as? String, request.owner.journeyId)
         let finished = await MainActor.run { presenter.finishedOwners }
         XCTAssertEqual(finished.count, 1)
-        XCTAssertEqual(finished.first?.journeyId, request.journeyId)
+        XCTAssertEqual(finished.first?.journeyId, request.owner.journeyId)
         XCTAssertEqual(finished.first?.ownerDistinctId, "customer")
     }
 
@@ -953,7 +953,7 @@ final class DeviceLegServiceTests: XCTestCase {
         let initialRuns = try await journal.runs()
         let initialStep = try XCTUnwrap(initialRuns.first?.stepId)
         let batch = ScreenEmissionBatch(
-            journeyId: request.journeyId,
+            journeyId: request.owner.journeyId,
             executionOwnershipEpoch: 0,
             lifecycleGeneration: 0,
             presentationEpoch: 1,
@@ -1590,7 +1590,7 @@ final class DeviceLegServiceTests: XCTestCase {
         }
 
         let accepted = await request.onEmissionBatch(ScreenEmissionBatch(
-            journeyId: request.journeyId,
+            journeyId: request.owner.journeyId,
             executionOwnershipEpoch: 0,
             lifecycleGeneration: 0,
             presentationEpoch: 1,
@@ -1717,7 +1717,7 @@ final class DeviceLegServiceTests: XCTestCase {
             $0.name == SystemEventNames.screenShown
         })
         XCTAssertEqual(shown.properties["screen_id"] as? String, "screen_welcome")
-        XCTAssertEqual(shown.properties["journey_id"] as? String, request.journeyId)
+        XCTAssertEqual(shown.properties["journey_id"] as? String, request.owner.journeyId)
         XCTAssertEqual(shown.properties["experience_version"] as? String, "version_golden")
         XCTAssertNil(shown.properties["experience_version_id"])
         XCTAssertEqual(shown.properties["leg_generation"] as? Int, 0)
@@ -1730,7 +1730,7 @@ final class DeviceLegServiceTests: XCTestCase {
             dismissed.properties["revealing_screen_id"] as? String,
             "screen_details"
         )
-        XCTAssertEqual(dismissed.properties["journey_id"] as? String, request.journeyId)
+        XCTAssertEqual(dismissed.properties["journey_id"] as? String, request.owner.journeyId)
         XCTAssertEqual(
             dismissed.properties["experience_version"] as? String,
             "version_golden"
@@ -2016,8 +2016,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey-authority",
-            ownerDistinctId: "customer-authority",
+            owner: .init(
+                journeyId: "journey-authority",
+                distinctId: "customer-authority"
+            ),
             reservation: nil,
             onEmissionBatch: { _ in true },
             onOutcome: { _, _ in true }
@@ -2048,8 +2050,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey-reveal",
-            ownerDistinctId: "customer-reveal",
+            owner: .init(
+                journeyId: "journey-reveal",
+                distinctId: "customer-reveal"
+            ),
             reservation: nil,
             onScreenChanged: { _ in true },
             onEmissionBatch: { _ in true },
@@ -2118,8 +2122,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey-reveal-join",
-            ownerDistinctId: "customer-reveal-join",
+            owner: .init(
+                journeyId: "journey-reveal-join",
+                distinctId: "customer-reveal-join"
+            ),
             reservation: nil,
             onEmissionBatch: { _ in true },
             onPresentationRevealed: {
@@ -2178,8 +2184,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onEmissionBatch: { _ in true },
             onOutcome: { _, _ in true }
@@ -2244,8 +2252,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onEmissionBatch: { _ in true },
             onOutcome: { _, _ in true }
@@ -2337,26 +2347,26 @@ final class DeviceLegServiceTests: XCTestCase {
                 didResolveNotificationPermissionEvent:
                     SystemEventNames.notificationsEnabled,
                 properties: ["journey_id": "spoofed"],
-                journeyId: request.journeyId
+                journeyId: request.owner.journeyId
             )
             delegate.experienceViewController(
                 controller,
                 didResolveRequestPermissionEvent:
                     SystemEventNames.permissionGranted,
                 properties: ["type": "camera"],
-                journeyId: request.journeyId
+                journeyId: request.owner.journeyId
             )
             delegate.experienceViewController(
                 controller,
                 didResolveTrackingPermissionEvent:
                     SystemEventNames.trackingAuthorized,
                 properties: [:],
-                journeyId: request.journeyId
+                journeyId: request.owner.journeyId
             )
             delegate.experienceViewController(
                 controller,
                 didIgnoreUnsupportedRequestPermissionType: "unsupported-sensor",
-                journeyId: request.journeyId
+                journeyId: request.owner.journeyId
             )
         }
         await fulfillment(of: [captured], timeout: 2)
@@ -2367,7 +2377,7 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(permissionEvents.count, 4)
         for event in permissionEvents {
             XCTAssertEqual(event.distinctId, "customer")
-            XCTAssertEqual(event.properties["journey_id"] as? String, request.journeyId)
+            XCTAssertEqual(event.properties["journey_id"] as? String, request.owner.journeyId)
             XCTAssertEqual(event.properties["experience_id"] as? String, "experience_golden")
             XCTAssertEqual(event.properties["experience_version"] as? String, "version_golden")
         }
@@ -2391,7 +2401,7 @@ final class DeviceLegServiceTests: XCTestCase {
                 didResolveTrackingPermissionEvent:
                     SystemEventNames.trackingDenied,
                 properties: [:],
-                journeyId: request.journeyId
+                journeyId: request.owner.journeyId
             )
         }
         await fulfillment(of: [misattributed], timeout: 0.2)
@@ -2408,8 +2418,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onEmissionBatch: { _ in true },
             onOutcome: { _, _ in true }
@@ -2455,8 +2467,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onScreenDismissed: { screenId, _, _ in
                 await screenDismissals.record(
@@ -2513,8 +2527,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onEmissionBatch: { _ in true },
             onOutcome: { outcome, screenId in
@@ -2566,8 +2582,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onScreenDismissed: { screenId, _, _ in
                 await screenDismissals.record(
@@ -2623,8 +2641,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onScreenChanged: { _ in
                 await gate.suspend()
@@ -2674,8 +2694,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onScreenChanged: { _ in true },
             onEmissionBatch: { batch in
@@ -2740,8 +2762,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onScreenChanged: { _ in false },
             onEmissionBatch: { _ in true },
@@ -2777,8 +2801,10 @@ final class DeviceLegServiceTests: XCTestCase {
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
-            journeyId: "journey",
-            ownerDistinctId: "customer",
+            owner: .init(
+                journeyId: "journey",
+                distinctId: "customer"
+            ),
             reservation: nil,
             onProductsUnavailable: { _ in .rejected },
             onEmissionBatch: { _ in true },
@@ -2948,7 +2974,9 @@ final class DeviceLegServiceTests: XCTestCase {
         let fixture = try DeviceLegPlaneProfileTestFixture.load(
             entryKey: "renderedEntry"
         )
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
+        let snapshot = try replacingWithHeadlessArtifacts(
+            try await authenticatedRenderedSnapshot(fixture)
+        )
         let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
@@ -2966,12 +2994,12 @@ final class DeviceLegServiceTests: XCTestCase {
             warmLoadsInitiallySuspended: true
         )
 
+        let preparedProfile = try await loader.prepareReleaseProfile(
+            nil,
+            deviceLegSnapshot: snapshot
+        )
         let admitted = try await loader.commitReleaseProfile(
-            PreparedExperienceReleaseProfile(
-                profile: nil,
-                catalog: nil,
-                deviceLegSnapshot: snapshot
-            ),
+            preparedProfile,
             generation: 1
         )
         XCTAssertNotNil(admitted)
@@ -3017,7 +3045,9 @@ final class DeviceLegServiceTests: XCTestCase {
         let fixture = try DeviceLegPlaneProfileTestFixture.load(
             entryKey: "renderedEntry"
         )
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
+        let snapshot = try replacingWithHeadlessArtifacts(
+            try await authenticatedRenderedSnapshot(fixture)
+        )
         let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
@@ -3036,12 +3066,12 @@ final class DeviceLegServiceTests: XCTestCase {
         )
         let admission = SupersedingProfileAdmission()
 
+        let preparedProfile = try await loader.prepareReleaseProfile(
+            nil,
+            deviceLegSnapshot: snapshot
+        )
         let committed = try await loader.commitReleaseProfile(
-            PreparedExperienceReleaseProfile(
-                profile: nil,
-                catalog: nil,
-                deviceLegSnapshot: snapshot
-            ),
+            preparedProfile,
             generation: 1,
             admission: ProfileSideEffectAdmission {
                 admission.isCurrent()
@@ -3175,18 +3205,19 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(products.map(\.placementId), ["golden:monthly"])
     }
 
-    func testRenderedPresentationDefersArtifactAcquisitionToItsLoader() async throws {
+    func testCanonicalProfileAcquiresRenderedArtifactsBeforePublishingAuthority() async throws {
         let directory = temporaryDirectory()
         defer {
             StubURLProtocol.reset()
             removeTemporaryDirectoryIfPresent(directory)
         }
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
+        let sceneBytes = Data("offline-ready-device-leg-scene".utf8)
+        let snapshot = try replacingRenderedArtifact(
+            try await authenticatedRenderedSnapshot(fixture),
+            sceneBytes: sceneBytes
+        )
+        let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
         let requests = DeviceLegArtifactRequestCounter()
         StubURLProtocol.register(matcher: { _ in true }) { request in
             requests.increment()
@@ -3196,11 +3227,11 @@ final class DeviceLegServiceTests: XCTestCase {
                     statusCode: 200,
                     httpVersion: nil,
                     headerFields: [
-                        "Content-Length": "0",
+                        "Content-Length": String(sceneBytes.count),
                         "Content-Type": "application/vnd.rive",
                     ]
                 )!,
-                Data()
+                sceneBytes
             )
         }
         let configuration = URLSessionConfiguration.ephemeral
@@ -3214,24 +3245,41 @@ final class DeviceLegServiceTests: XCTestCase {
                 store: InMemoryExperienceReleaseHighWaterStore()
             )
         )
+        let loader = ExperienceLoader(
+            productService: ProductService(),
+            releaseStore: store,
+            warmLoadsInitiallySuspended: true
+        )
 
-        let prepared = try await store.preparePresentation(
+        let preparedProfile = try await loader.prepareReleaseProfile(
+            nil,
+            deviceLegSnapshot: snapshot
+        )
+        XCTAssertEqual(requests.value, 1)
+        let committed = try await loader.commitReleaseProfile(
+            preparedProfile,
+            generation: 1
+        )
+        XCTAssertNotNil(committed)
+
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: { _ in true }) { _ in
+            requests.increment()
+            throw URLError(.notConnectedToInternet)
+        }
+        let preparedPresentation = try await store.preparePresentation(
             release: release,
             delivery: snapshot.profile.delivery,
             productResolver: { _ in [] }
         )
+        let artifact = try await preparedPresentation.artifactLoader(
+            preparedPresentation.experience,
+            nil,
+            "screen_welcome"
+        )
 
-        XCTAssertEqual(requests.value, 0)
-        do {
-            _ = try await prepared.artifactLoader(
-                prepared.experience,
-                nil,
-                "screen_welcome"
-            )
-            XCTFail("Expected the deliberately invalid artifact response to fail")
-        } catch {
-            XCTAssertGreaterThan(requests.value, 0)
-        }
+        XCTAssertEqual(requests.value, 1)
+        XCTAssertEqual(artifact.sceneBytes, sceneBytes)
     }
 
     func testRenderedRouteNavigatesWithinTheOwnedSurfaceWithoutPresentingAgain() async throws {
@@ -3266,7 +3314,7 @@ final class DeviceLegServiceTests: XCTestCase {
             }
         }
         let accepted = await request.onEmissionBatch(ScreenEmissionBatch(
-            journeyId: request.journeyId,
+            journeyId: request.owner.journeyId,
             executionOwnershipEpoch: 0,
             lifecycleGeneration: 0,
             presentationEpoch: 1,
@@ -3434,7 +3482,7 @@ final class DeviceLegServiceTests: XCTestCase {
         let presentedRequest = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(presentedRequest)
         let accepted = await request.onEmissionBatch(ScreenEmissionBatch(
-            journeyId: request.journeyId,
+            journeyId: request.owner.journeyId,
             executionOwnershipEpoch: 0,
             lifecycleGeneration: 0,
             presentationEpoch: 1,
@@ -3816,7 +3864,7 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(permissionEvent.properties["type"] as? String, "camera")
         XCTAssertEqual(
             permissionEvent.properties["journey_id"] as? String,
-            request.journeyId
+            request.owner.journeyId
         )
         XCTAssertEqual(
             permissionEvent.properties["experience_version"] as? String,
@@ -4616,7 +4664,7 @@ final class DeviceLegServiceTests: XCTestCase {
         let presentedRequest = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(presentedRequest)
         let accepted = await request.onEmissionBatch(ScreenEmissionBatch(
-            journeyId: request.journeyId,
+            journeyId: request.owner.journeyId,
             executionOwnershipEpoch: 0,
             lifecycleGeneration: 0,
             presentationEpoch: 1,
@@ -6794,7 +6842,7 @@ final class DeviceLegServiceTests: XCTestCase {
         emissions: [ScreenEmission]
     ) -> ScreenEmissionBatch {
         ScreenEmissionBatch(
-            journeyId: request.journeyId,
+            journeyId: request.owner.journeyId,
             executionOwnershipEpoch: 0,
             lifecycleGeneration: 0,
             presentationEpoch: presentationEpoch,
@@ -7022,6 +7070,146 @@ final class DeviceLegServiceTests: XCTestCase {
             releases: snapshot.profile.releases
         )
         return .init(profile: profile, releasesByDigest: releases)
+    }
+
+    private func replacingRenderedArtifact(
+        _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        sceneBytes: Data
+    ) throws -> DeviceLegProfileCatalog.Snapshot {
+        let originalArm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let originalRelease = try XCTUnwrap(snapshot.releasesByDigest[
+            originalArm.reference.descriptorSha256
+        ])
+        let originalDescriptor = originalRelease.descriptor
+        var render = try XCTUnwrap(originalDescriptor.render)
+        let sceneSHA256 = SHA256Provider.hexDigest(sceneBytes)
+        render["riv"] = .object([
+            "contentType": .string("application/vnd.rive"),
+            "key": .string("renders/sha256/\(sceneSHA256).riv"),
+            "sha256": .string(sceneSHA256),
+            "sizeBytes": .number(Double(sceneBytes.count)),
+        ])
+        render["assets"] = .array([])
+        let descriptor = DeviceLegReleaseDescriptor(
+            schemaVersion: originalDescriptor.schemaVersion,
+            identity: originalDescriptor.identity,
+            metadata: originalDescriptor.metadata,
+            presentation: originalDescriptor.presentation,
+            leg: originalDescriptor.leg,
+            products: originalDescriptor.products,
+            placements: originalDescriptor.placements,
+            viewModelValues: originalDescriptor.viewModelValues,
+            screenBehaviors: originalDescriptor.screenBehaviors,
+            render: render,
+            requirements: originalDescriptor.requirements,
+            provenance: originalDescriptor.provenance
+        )
+        let exactDescriptorBytes = try JSONEncoder().encode(descriptor)
+        let descriptorSHA256 = SHA256Provider.hexDigest(exactDescriptorBytes)
+        let release = AuthenticatedDeviceLegRelease(
+            authenticatedKeyID: originalRelease.authenticatedKeyID,
+            exactDescriptorBytes: exactDescriptorBytes,
+            descriptorSHA256: descriptorSHA256,
+            descriptor: descriptor,
+            publishedAtSeqToPromote: originalRelease.publishedAtSeqToPromote
+        )
+        let arm = ArmedDeviceLeg(
+            reference: .init(
+                experienceId: originalArm.reference.experienceId,
+                versionId: originalArm.reference.versionId,
+                legId: originalArm.reference.legId,
+                descriptorSha256: descriptorSHA256
+            ),
+            binding: originalArm.binding,
+            entryCondition: originalArm.entryCondition,
+            context: originalArm.context
+        )
+        let profile = JourneyPlaneProfile(
+            schemaVersion: snapshot.profile.schemaVersion,
+            status: snapshot.profile.status,
+            delivery: snapshot.profile.delivery,
+            features: snapshot.profile.features,
+            facts: snapshot.profile.facts,
+            armedLegs: [arm],
+            releases: snapshot.profile.releases
+        )
+        return .init(
+            profile: profile,
+            releasesByDigest: [descriptorSHA256: release]
+        )
+    }
+
+    private func replacingWithHeadlessArtifacts(
+        _ snapshot: DeviceLegProfileCatalog.Snapshot
+    ) throws -> DeviceLegProfileCatalog.Snapshot {
+        let originalArm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let originalRelease = try XCTUnwrap(snapshot.releasesByDigest[
+            originalArm.reference.descriptorSha256
+        ])
+        let originalDescriptor = originalRelease.descriptor
+        let originalLeg = originalDescriptor.leg
+        let leg = DeviceLeg(
+            schemaVersion: originalLeg.schemaVersion,
+            id: originalLeg.id,
+            entryCondition: originalLeg.entryCondition,
+            entryStepId: originalLeg.entryStepId,
+            steps: originalLeg.steps,
+            routes: originalLeg.routes,
+            screens: [],
+            reentry: originalLeg.reentry,
+            entitlementGate: originalLeg.entitlementGate,
+            facts: originalLeg.facts,
+            inputs: originalLeg.inputs,
+            outputs: originalLeg.outputs,
+            completionOutputs: originalLeg.completionOutputs
+        )
+        let descriptor = DeviceLegReleaseDescriptor(
+            schemaVersion: originalDescriptor.schemaVersion,
+            identity: originalDescriptor.identity,
+            metadata: originalDescriptor.metadata,
+            presentation: originalDescriptor.presentation,
+            leg: leg,
+            products: originalDescriptor.products,
+            placements: originalDescriptor.placements,
+            viewModelValues: originalDescriptor.viewModelValues,
+            screenBehaviors: [],
+            render: nil,
+            requirements: originalDescriptor.requirements,
+            provenance: originalDescriptor.provenance
+        )
+        let exactDescriptorBytes = try JSONEncoder().encode(descriptor)
+        let descriptorSHA256 = SHA256Provider.hexDigest(exactDescriptorBytes)
+        let release = AuthenticatedDeviceLegRelease(
+            authenticatedKeyID: originalRelease.authenticatedKeyID,
+            exactDescriptorBytes: exactDescriptorBytes,
+            descriptorSHA256: descriptorSHA256,
+            descriptor: descriptor,
+            publishedAtSeqToPromote: originalRelease.publishedAtSeqToPromote
+        )
+        let arm = ArmedDeviceLeg(
+            reference: .init(
+                experienceId: originalArm.reference.experienceId,
+                versionId: originalArm.reference.versionId,
+                legId: originalArm.reference.legId,
+                descriptorSha256: descriptorSHA256
+            ),
+            binding: originalArm.binding,
+            entryCondition: originalArm.entryCondition,
+            context: originalArm.context
+        )
+        let profile = JourneyPlaneProfile(
+            schemaVersion: snapshot.profile.schemaVersion,
+            status: snapshot.profile.status,
+            delivery: snapshot.profile.delivery,
+            features: snapshot.profile.features,
+            facts: snapshot.profile.facts,
+            armedLegs: [arm],
+            releases: snapshot.profile.releases
+        )
+        return .init(
+            profile: profile,
+            releasesByDigest: [descriptorSHA256: release]
+        )
     }
 
     private func temporaryDirectory() -> URL {
@@ -7391,8 +7579,7 @@ private final class RecordingDeviceLegPresenter: DeviceLegPresenting {
     private(set) var shutdownOwners: [String] = []
     var onFinish: (() -> Void)?
     var onNavigate: ((String) -> Void)?
-    private var activeJourneyId: String?
-    private var activeOwnerDistinctId: String?
+    private var activeOwner: DeviceLegPresentationOwner?
     private var reservationPending = false
     private var availabilityWasOpen = true
     private var availabilityHandler: (@MainActor @Sendable () -> Void)?
@@ -7415,11 +7602,9 @@ private final class RecordingDeviceLegPresenter: DeviceLegPresenting {
     }
 
     func ownsDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) -> Bool {
-        activeJourneyId == journeyId
-            && activeOwnerDistinctId == ownerDistinctId
+        activeOwner == owner
     }
 
     func presentDeviceLeg(
@@ -7433,8 +7618,7 @@ private final class RecordingDeviceLegPresenter: DeviceLegPresenting {
             result
         }
         if resolvedResult == .shown {
-            activeJourneyId = request.journeyId
-            activeOwnerDistinctId = request.ownerDistinctId
+            activeOwner = request.owner
             if automaticallyRevealsShownPresentation {
                 await request.onPresentationRevealed()
             }
@@ -7443,33 +7627,29 @@ private final class RecordingDeviceLegPresenter: DeviceLegPresenting {
     }
 
     func navigateDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         screenId: String,
         transition: ExperienceReleaseJSONValue?
     ) async -> DeviceLegPresentationNavigationResult {
         _ = transition
         navigationScreenIds.append(screenId)
         onNavigate?(screenId)
-        guard let activeJourneyId, let activeOwnerDistinctId else {
+        guard let activeOwner else {
             return .noPresentation
         }
-        guard activeJourneyId == journeyId,
-              activeOwnerDistinctId == ownerDistinctId else {
+        guard activeOwner == owner else {
             return .declined
         }
         return navigationResult
     }
 
     func resolveDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         source: ScreenEmissionSource?
     ) -> [String: ExperienceReleaseJSONValue]? {
         resolvedActionSources.append(source)
-        guard activeJourneyId == journeyId,
-              activeOwnerDistinctId == ownerDistinctId else {
+        guard activeOwner == owner else {
             return nil
         }
         guard case .string("purchase")? = action["type"] else {
@@ -7484,58 +7664,51 @@ private final class RecordingDeviceLegPresenter: DeviceLegPresenting {
     }
 
     func dispatchDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         effectId: String
     ) async -> DeviceLegPresentationActionResult {
         presentationActions.append((
-            journeyId: journeyId,
-            ownerDistinctId: ownerDistinctId,
+            journeyId: owner.journeyId,
+            ownerDistinctId: owner.distinctId,
             action: action,
             effectId: effectId
         ))
-        guard let activeJourneyId, let activeOwnerDistinctId else {
+        guard let activeOwner else {
             return .noPresentation
         }
-        guard activeJourneyId == journeyId,
-              activeOwnerDistinctId == ownerDistinctId else {
+        guard activeOwner == owner else {
             return .declined
         }
         return actionResult
     }
 
     func finishDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) async {
-        finishedOwners.append((journeyId, ownerDistinctId))
+        finishedOwners.append((owner.journeyId, owner.distinctId))
         onFinish?()
-        guard activeJourneyId == journeyId,
-              activeOwnerDistinctId == ownerDistinctId else { return }
-        activeJourneyId = nil
-        activeOwnerDistinctId = nil
+        guard activeOwner == owner else { return }
+        activeOwner = nil
         refreshAvailability()
     }
 
     func shutdownDeviceLegPresentation(ownerDistinctId: String) async {
         shutdownOwners.append(ownerDistinctId)
-        if activeOwnerDistinctId == ownerDistinctId {
-            activeJourneyId = nil
-            activeOwnerDistinctId = nil
+        if activeOwner?.distinctId == ownerDistinctId {
+            activeOwner = nil
             refreshAvailability()
         }
     }
 
     func dropPresentationOwnershipForRelaunch() {
-        activeJourneyId = nil
-        activeOwnerDistinctId = nil
+        activeOwner = nil
         reservationPending = false
         availabilityWasOpen = capacityIsOpen
     }
 
     private var capacityIsOpen: Bool {
-        available && !reservationPending && activeJourneyId == nil
+        available && !reservationPending && activeOwner == nil
     }
 
     private func releaseReservation() {

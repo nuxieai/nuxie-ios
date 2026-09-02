@@ -4,6 +4,13 @@ protocol DeviceLegPresentationReservation: AnyObject, Sendable {
     @MainActor func release()
 }
 
+/// Stable identity for the journey presentation slot. A journey identifier is
+/// only meaningful within the customer authority that owns its durable run.
+struct DeviceLegPresentationOwner: Equatable, Hashable, Sendable {
+    let journeyId: String
+    let distinctId: String
+}
+
 enum DeviceLegSurfaceOutcome: Equatable, Sendable {
     case dismissed
     case abandoned
@@ -46,8 +53,7 @@ struct DeviceLegPresentationRequest: Sendable {
     let release: AuthenticatedDeviceLegRelease
     let delivery: ExperienceReleaseDelivery
     let screenId: String
-    let journeyId: String
-    let ownerDistinctId: String
+    let owner: DeviceLegPresentationOwner
     let reservation: (any DeviceLegPresentationReservation)?
     let onScreenChanged:
         @MainActor @Sendable (String) async -> Bool
@@ -74,8 +80,7 @@ struct DeviceLegPresentationRequest: Sendable {
         release: AuthenticatedDeviceLegRelease,
         delivery: ExperienceReleaseDelivery,
         screenId: String,
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         reservation: (any DeviceLegPresentationReservation)?,
         onScreenChanged:
             @escaping @MainActor @Sendable (String) async -> Bool = { _ in true },
@@ -105,8 +110,7 @@ struct DeviceLegPresentationRequest: Sendable {
         self.release = release
         self.delivery = delivery
         self.screenId = screenId
-        self.journeyId = journeyId
-        self.ownerDistinctId = ownerDistinctId
+        self.owner = owner
         self.reservation = reservation
         self.onScreenChanged = onScreenChanged
         self.onScreenDismissed = onScreenDismissed
@@ -166,8 +170,7 @@ protocol DeviceLegPresenting: AnyObject, Sendable {
 
     @MainActor
     func ownsDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) -> Bool
 
     @MainActor
@@ -177,32 +180,28 @@ protocol DeviceLegPresenting: AnyObject, Sendable {
 
     @MainActor
     func navigateDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         screenId: String,
         transition: ExperienceReleaseJSONValue?
     ) async -> DeviceLegPresentationNavigationResult
 
     @MainActor
     func resolveDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         source: ScreenEmissionSource?
     ) -> [String: ExperienceReleaseJSONValue]?
 
     @MainActor
     func dispatchDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         effectId: String
     ) async -> DeviceLegPresentationActionResult
 
     @MainActor
     func finishDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) async
 
     @MainActor
@@ -249,10 +248,10 @@ final class DeviceLegRuntimeDelegate {
 
     init(request: DeviceLegPresentationRequest) {
         introEligibilityAuthorizationContext = .init(
-            distinctId: request.ownerDistinctId,
-            journeyId: request.journeyId
+            distinctId: request.owner.distinctId,
+            journeyId: request.owner.journeyId
         )
-        journeyId = request.journeyId
+        journeyId = request.owner.journeyId
         onScreenChanged = request.onScreenChanged
         onScreenDismissed = request.onScreenDismissed
         onProductsUnavailable = request.onProductsUnavailable

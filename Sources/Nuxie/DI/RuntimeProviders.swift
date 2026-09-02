@@ -140,8 +140,7 @@ private actor StableSystemEventCaptureRetryQueue {
 
     private let routedEvents: (any RoutedStableSystemEventCapturing)?
     private let triggerProvider: @Sendable () -> TriggerServiceProtocol
-    private let baseDelayNanoseconds: UInt64
-    private let maximumDelayNanoseconds: UInt64
+    private let retryLoop: CancellationAwareExponentialRetryLoop
     private var pendingByEventId: [String: PendingCapture] = [:]
     private var pendingOrder: [String] = []
     private var retryTask: Task<Void, Never>?
@@ -153,8 +152,10 @@ private actor StableSystemEventCaptureRetryQueue {
     ) {
         self.routedEvents = routedEvents
         self.triggerProvider = triggerProvider
-        self.baseDelayNanoseconds = max(baseDelayNanoseconds, 1)
-        maximumDelayNanoseconds = max(baseDelayNanoseconds, 2_000_000_000)
+        retryLoop = CancellationAwareExponentialRetryLoop(
+            initialDelayNanoseconds: baseDelayNanoseconds,
+            maximumDelayNanoseconds: 2_000_000_000
+        )
     }
 
     /// Reserves retry ownership before the first suspension. A queued retry is
@@ -230,26 +231,14 @@ private actor StableSystemEventCaptureRetryQueue {
 
     private func startRetryTaskIfNeeded() {
         guard retryTask == nil, !pendingOrder.isEmpty else { return }
-        let baseDelayNanoseconds = baseDelayNanoseconds
-        let maximumDelayNanoseconds = maximumDelayNanoseconds
-        retryTask = Task { [weak self] in
-            var delay = baseDelayNanoseconds
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(nanoseconds: delay)
-                } catch {
-                    return
+        let retryLoop = retryLoop
+        retryTask = Task { [weak self, retryLoop] in
+            await retryLoop.run {
+                guard let result = await self?.retryPending() else {
+                    return .finished
                 }
-                guard let result = await self?.retryPending() else { return }
-                if result.isEmpty { return }
-                if result.madeProgress {
-                    delay = baseDelayNanoseconds
-                } else {
-                    let (doubled, overflowed) = delay.multipliedReportingOverflow(by: 2)
-                    delay = overflowed
-                        ? maximumDelayNanoseconds
-                        : min(doubled, maximumDelayNanoseconds)
-                }
+                if result.isEmpty { return .finished }
+                return result.madeProgress ? .madeProgress : .pending
             }
         }
     }
