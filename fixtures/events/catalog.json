@@ -569,7 +569,7 @@
     "docs": true,
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3298",
-      "Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:84"
+      "Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:137"
     ],
     "endpoint": [
       "batch",
@@ -640,7 +640,7 @@
     "docs": false,
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3257",
-      "Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:98"
+      "Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:144"
     ],
     "endpoint": [
       "batch",
@@ -704,7 +704,7 @@
     "docs": false,
     "emitters": [
       "Sources/Nuxie/Journey/Execution/JourneyRunner.swift:3314",
-      "Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:91"
+      "Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:141"
     ],
     "endpoint": [
       "batch",

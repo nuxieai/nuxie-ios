@@ -569,7 +569,7 @@ actor DeviceLegService {
         guard !foregroundReceiptResetCustomers.contains(distinctId) else {
             return
         }
-        let entryKind = DeviceLegEntryCondition.Kind.appForegrounded.rawValue
+        let entryKind = DeviceLegEntryCondition.Kind.appForegrounded
         stateArmReceipts.remove { $0.entryKind == entryKind }
         guard let journal, journal.distinctId == distinctId else { return }
         do {

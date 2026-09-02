@@ -26,7 +26,11 @@ struct DeviceLegFactTable {
 }
 
 struct DeviceLegEntryCondition {
-    enum Kind: String { case event, segment; case appForegrounded = "app_foregrounded" }
+    enum Kind: String {
+        case event
+        case segment
+        case appForegrounded = "app_foregrounded"
+    }
     let type: Kind
     let eventName: String?
     let segmentId: String?
@@ -167,7 +171,7 @@ extension DeviceLegFactReferences: Codable, Sendable {}
 extension DeviceLegFactTable: Codable, Sendable {}
 extension DeviceLegFactTable.Assignment: Codable, Sendable {}
 extension DeviceLegEntryCondition: Codable, Sendable {}
-extension DeviceLegEntryCondition.Kind: Codable, Sendable {}
+extension DeviceLegEntryCondition.Kind: Codable, Hashable, Sendable {}
 extension DeviceLegFactTable.Property: Codable, Sendable {
     private enum CodingKeys: String, CodingKey { case present, value }
 

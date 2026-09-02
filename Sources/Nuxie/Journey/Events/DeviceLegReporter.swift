@@ -67,6 +67,11 @@ extension DeviceLegReporter: Sendable {}
 /// surface. The journal keeps the stable event ID until EventLog accepts it,
 /// so a crash or transient storage failure cannot duplicate an exposure.
 struct DeviceLegExperimentExposureReporter: Sendable {
+    private struct Projection {
+        let eventName: String
+        let properties: [String: Any]
+    }
+
     let journal: DeviceLegRunJournal
     let events: any RoutedStableSystemEventCapturing
 
@@ -76,31 +81,13 @@ struct DeviceLegExperimentExposureReporter: Sendable {
         for run in try await journal.runs() {
             for exposure in run.experimentExposures
             where exposure.shownAt != nil && !exposure.queued {
-                let properties = properties(exposure, run: run)
-                let capture: DurableTriggerCapture?
-                switch exposure.kind {
-                case .assigned:
-                    capture = await captureStableSystemEvent(
-                        JourneyEvents.experimentExposure,
-                        properties: properties,
-                        eventId: exposure.eventId,
-                        admission: admission
-                    )
-                case .fallback:
-                    capture = await captureStableSystemEvent(
-                        JourneyEvents.experimentExposureFallback,
-                        properties: properties,
-                        eventId: exposure.eventId,
-                        admission: admission
-                    )
-                case .invalidAssignment:
-                    capture = await captureStableSystemEvent(
-                        JourneyEvents.experimentExposureError,
-                        properties: properties,
-                        eventId: exposure.eventId,
-                        admission: admission
-                    )
-                }
+                let projection = projection(exposure, run: run)
+                let capture = await captureStableSystemEvent(
+                    projection.eventName,
+                    properties: projection.properties,
+                    eventId: exposure.eventId,
+                    admission: admission
+                )
                 guard capture != nil else { return false }
                 await events.drainCommittedRouting()
                 try await journal.markExperimentExposureQueued(
@@ -133,10 +120,10 @@ struct DeviceLegExperimentExposureReporter: Sendable {
         return await events.captureAndRouteSystemEvent(request)
     }
 
-    private func properties(
+    private func projection(
         _ exposure: DeviceLegRun.ExperimentExposure,
         run: DeviceLegRun
-    ) -> [String: Any] {
+    ) -> Projection {
         var properties: [String: Any] = [
             "journey_id": run.journeyId,
             "experience_id": run.reference.experienceId,
@@ -144,17 +131,21 @@ struct DeviceLegExperimentExposureReporter: Sendable {
             "experiment_key": exposure.experimentId,
             "variant_key": exposure.variantId,
         ]
+        let eventName: String
         switch exposure.kind {
         case .assigned:
+            eventName = JourneyEvents.experimentExposure
             properties["assignment_source"] = "profile"
             properties["is_holdout"] = exposure.isHoldout
         case .fallback:
+            eventName = JourneyEvents.experimentExposureFallback
             properties["assignment_source"] = "no_assignment"
         case .invalidAssignment:
+            eventName = JourneyEvents.experimentExposureError
             properties["variant_key"] = exposure.assignedVariantId
                 ?? exposure.variantId
             properties["reason"] = "variant_not_found"
         }
-        return properties
+        return Projection(eventName: eventName, properties: properties)
     }
 }
