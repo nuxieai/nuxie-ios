@@ -39,18 +39,45 @@ actor DeviceLegPresentationPublicationCoordinator {
         in journal: DeviceLegRunJournal,
         executionFenceToken: DeviceLegProfileFenceToken
     ) async -> BatchPublication? {
-        guard let identityFence = identity.performWithCurrentIdentityFence(
-            journal.distinctId,
-            { _ in () }
-        ) else { return nil }
+        await publish(
+            items,
+            forRunId: runId,
+            in: journal,
+            identityFenceToken: nil,
+            executionFenceToken: executionFenceToken
+        )
+    }
+
+    private func publish(
+        _ items: [RoutedStableSystemEventBatchItem],
+        forRunId runId: String,
+        in journal: DeviceLegRunJournal,
+        identityFenceToken suppliedIdentityFenceToken: IdentityFenceToken?,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> BatchPublication? {
+        let identityFenceToken: IdentityFenceToken
+        if let suppliedIdentityFenceToken {
+            guard executionFence.isCurrent(executionFenceToken),
+                  await isCurrentIdentity(
+                    suppliedIdentityFenceToken,
+                    journal: journal
+                  ) else { return nil }
+            identityFenceToken = suppliedIdentityFenceToken
+        } else {
+            guard let identityFence = identity.performWithCurrentIdentityFence(
+                journal.distinctId,
+                { _ in () }
+            ) else { return nil }
+            identityFenceToken = identityFence.token
+        }
         let admission = DeviceLegCommitAdmission(
             identity: identity,
-            identityFenceToken: identityFence.token,
+            identityFenceToken: identityFenceToken,
             executionFence: executionFence,
             executionFenceToken: executionFenceToken
         )
         for item in items {
-            directlyRoutedRunByEventId[item.eventId] = runId
+            directlyRoutedRunByEventId[item.request.eventId] = runId
         }
         guard let captures = await events.captureAndRouteSystemEventBatch(
             items,
@@ -64,24 +91,27 @@ actor DeviceLegPresentationPublicationCoordinator {
         // subscriber work. Newly routed markers remain until either the route
         // worker drains or its nested callback consumes the marker.
         for item in items {
-            guard let capture = captures[item.eventId],
+            guard let capture = captures[item.request.eventId],
                   capture.routesLocally,
                   capture.isNewlyCommitted else {
-                removeDirectRoute(eventId: item.eventId, runId: runId)
+                removeDirectRoute(
+                    eventId: item.request.eventId,
+                    runId: runId
+                )
                 continue
             }
         }
         if await events.drainCommittedRouting() {
             removeDirectRoutes(items, runId: runId)
         }
-        guard items.allSatisfy({ captures[$0.eventId] != nil }) else {
+        guard items.allSatisfy({ captures[$0.request.eventId] != nil }) else {
             return nil
         }
         let executionRemainsAuthorized = executionFence.isCurrent(
             executionFenceToken
         )
         let identityRemainsAuthorized = await isCurrentIdentity(
-            identityFence.token,
+            identityFenceToken,
             journal: journal
         )
         let remainsAuthorized = executionRemainsAuthorized
@@ -103,41 +133,23 @@ actor DeviceLegPresentationPublicationCoordinator {
         identityFenceToken: IdentityFenceToken,
         executionFenceToken: DeviceLegProfileFenceToken
     ) async -> DurableTriggerCapture? {
-        guard executionFence.isCurrent(executionFenceToken),
-              await isCurrentIdentity(
-                identityFenceToken,
-                journal: journal
-              ) else { return nil }
-        let admission = DeviceLegCommitAdmission(
-            identity: identity,
+        let item = RoutedStableSystemEventBatchItem(
+            request: StableSystemEventCaptureRequest(
+                name: name,
+                properties: properties.value,
+                eventId: eventId,
+                distinctId: journal.distinctId
+            ),
+            occurredAt: occurredAt
+        )
+        guard let publication = await publish(
+            [item],
+            forRunId: runId,
+            in: journal,
             identityFenceToken: identityFenceToken,
-            executionFence: executionFence,
             executionFenceToken: executionFenceToken
-        )
-        directlyRoutedRunByEventId[eventId] = runId
-        let capture = await events.captureAndRouteSystemEvent(
-            name,
-            properties: properties.value,
-            eventId: eventId,
-            distinctId: journal.distinctId,
-            occurredAt: occurredAt,
-            admission: admission
-        )
-        let routingDrained = await events.drainCommittedRouting()
-        let routeWillReachSubscribers = capture?.routesLocally == true
-            && capture?.isNewlyCommitted == true
-        if !routeWillReachSubscribers || routingDrained {
-            removeDirectRoute(eventId: eventId, runId: runId)
-        }
-        guard let capture,
-              executionFence.isCurrent(executionFenceToken),
-              await isCurrentIdentity(
-                identityFenceToken,
-                journal: journal
-              ) else {
-            return nil
-        }
-        return capture
+        ), publication.remainsAuthorized else { return nil }
+        return publication.captures[eventId]
     }
 
     func flushPending(
@@ -195,7 +207,10 @@ actor DeviceLegPresentationPublicationCoordinator {
         runId: String
     ) {
         for item in items {
-            removeDirectRoute(eventId: item.eventId, runId: runId)
+            removeDirectRoute(
+                eventId: item.request.eventId,
+                runId: runId
+            )
         }
     }
 
@@ -256,10 +271,12 @@ enum DeviceLegPresentationEventProjector {
                 return nil
             }
             routed.append(.init(
-                name: item.name,
-                properties: properties,
-                eventId: item.eventId,
-                distinctId: distinctId,
+                request: .init(
+                    name: item.name,
+                    properties: properties,
+                    eventId: item.eventId,
+                    distinctId: distinctId
+                ),
                 occurredAt: item.occurredAt
             ))
         }

@@ -412,6 +412,8 @@ actor TransactionService {
     
     /// Purchase a product
     /// - Parameter product: The exact StoreProduct retained after presentation.
+    /// - Parameter outcomeCorrelation: Stable Journey event ownership for the
+    ///   resulting purchase outcome, when checkout began in a Journey.
     /// - Throws: StoreKitError when checkout does not complete.
     @discardableResult
     public func purchase(
@@ -881,6 +883,8 @@ actor TransactionService {
     }
     
     /// Restore previous purchases
+    /// - Parameter outcomeCorrelation: Stable Journey event ownership for the
+    ///   resulting restore outcome, when restore began in a Journey.
     /// - Throws: StoreKitError when restore fails.
     public func restore(
         outcomeCorrelation: CommerceOutcomeCorrelation? = nil
@@ -1020,12 +1024,12 @@ actor TransactionService {
             return
         }
         let properties = UncheckedSendable(properties)
-        guard await eventSink.capture(
-            name,
+        guard await eventSink.capture(.init(
+            name: name,
             properties: properties.value,
             eventId: correlation.eventId,
             distinctId: correlation.distinctId
-        ) else {
+        )) else {
             LogError(
                 "TransactionService: correlated commerce outcome has no capture retry owner"
             )

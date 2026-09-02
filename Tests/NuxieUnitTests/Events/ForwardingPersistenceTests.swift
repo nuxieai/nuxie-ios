@@ -241,24 +241,28 @@ final class ForwardingPersistenceTests: XCTestCase {
     await core.eventLog.drain()
 
     let purchaseCompletedCaptured = await core.systemEvents.captureOnly(
-      SystemEventNames.purchaseCompleted,
-      properties: [
-        "product_id": "product-1", "store_product_id": "com.example.product",
-        "experience_id": "experience-1", "test_store": false,
-      ],
-      eventId: "scripted-purchase-completed",
-      distinctId: "customer-1"
+      .init(
+        name: SystemEventNames.purchaseCompleted,
+        properties: [
+          "product_id": "product-1", "store_product_id": "com.example.product",
+          "experience_id": "experience-1", "test_store": false,
+        ],
+        eventId: "scripted-purchase-completed",
+        distinctId: "customer-1"
+      )
     )
     XCTAssertTrue(purchaseCompletedCaptured)
     let purchaseSyncedCaptured = await core.systemEvents.capture(
-      SystemEventNames.purchaseSynced,
-      properties: [
-        "transaction_id": "transaction-1", "original_transaction_id": "original-1",
-        "product_id": "product-1", "experience_id": "experience-1",
-        "journey_id": "journey-1",
-      ],
-      eventId: "scripted-purchase-synced",
-      distinctId: "customer-1"
+      .init(
+        name: SystemEventNames.purchaseSynced,
+        properties: [
+          "transaction_id": "transaction-1", "original_transaction_id": "original-1",
+          "product_id": "product-1", "experience_id": "experience-1",
+          "journey_id": "journey-1",
+        ],
+        eventId: "scripted-purchase-synced",
+        distinctId: "customer-1"
+      )
     )
     // captureSystemEvent's Bool also reflects journey routing, which this
     // minimal core cannot satisfy; durable capture and forwarding are what

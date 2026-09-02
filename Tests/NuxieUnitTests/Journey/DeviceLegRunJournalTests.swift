@@ -693,6 +693,198 @@ final class DeviceLegRunJournalTests: XCTestCase {
         XCTAssertNil(retainedAfterSecond)
     }
 
+    func testAdmissionPinsArtifactsUntilTheLastReferencingRunRetires() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheDirectory = directory.appendingPathComponent(
+            "release-cache",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: cacheDirectory,
+            withIntermediateDirectories: true
+        )
+        let artifactBytes = Data("durable-render-artifact".utf8)
+        let artifactSHA256 = SHA256Provider.hexDigest(artifactBytes)
+        try artifactBytes.write(
+            to: cacheDirectory.appendingPathComponent(artifactSHA256)
+        )
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let enrollmentArm = arm()
+        let source = DeviceLegReleaseArtifactSource(
+            descriptorSHA256: enrollmentArm.reference.descriptorSha256,
+            objects: [.init(
+                sha256: artifactSHA256,
+                sizeBytes: artifactBytes.count,
+                required: true
+            )],
+            cacheRoot: cacheDirectory
+        )
+        let admittedFirst = try await journal.admit(
+            arm: enrollmentArm,
+            release: release(for: enrollmentArm.reference),
+            artifactSource: source,
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "step",
+            at: date(100)
+        )
+        let first = try XCTUnwrap(admittedFirst)
+        let firstPins = try await journal.pinnedArtifacts(forRunId: first.id)
+        let artifactPin = try XCTUnwrap(
+            firstPins?.objectURLsBySHA256[artifactSHA256]
+        )
+        try FileManager.default.removeItem(
+            at: cacheDirectory.appendingPathComponent(artifactSHA256)
+        )
+        XCTAssertEqual(try Data(contentsOf: artifactPin), artifactBytes)
+
+        let continuationArm = arm(binding: .init(
+            type: .continuation,
+            journeyId: first.journeyId,
+            generation: 1
+        ))
+        let admittedSecond = try await journal.admit(
+            arm: continuationArm,
+            release: release(for: continuationArm.reference),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "step",
+            at: date(110)
+        )
+        let second = try XCTUnwrap(admittedSecond)
+        let secondPins = try await journal.pinnedArtifacts(forRunId: second.id)
+        XCTAssertEqual(
+            secondPins?.objectURLsBySHA256[artifactSHA256],
+            artifactPin
+        )
+
+        try await finish(journal, run: first, at: 120)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactPin.path))
+
+        try await finish(journal, run: second, at: 130)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artifactPin.path))
+    }
+
+    func testRequiredArtifactPinFailureRollsBackAdmission() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheDirectory = directory.appendingPathComponent(
+            "empty-release-cache",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: cacheDirectory,
+            withIntermediateDirectories: true
+        )
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let candidate = arm()
+        let source = DeviceLegReleaseArtifactSource(
+            descriptorSHA256: candidate.reference.descriptorSha256,
+            objects: [.init(
+                sha256: String(repeating: "c", count: 64),
+                sizeBytes: 16,
+                required: true
+            )],
+            cacheRoot: cacheDirectory
+        )
+
+        do {
+            _ = try await journal.admit(
+                arm: candidate,
+                release: release(for: candidate.reference),
+                artifactSource: source,
+                reentry: .init(type: .everyTime, windowSeconds: nil),
+                entryStepId: "step",
+                at: date(100)
+            )
+            XCTFail("Expected missing required artifact rejection")
+        } catch DeviceLegJournalError.invalidState {
+        } catch {
+            XCTFail("Unexpected artifact pin error: \(error)")
+        }
+
+        let runs = try await journal.runs()
+        let retainedRelease = try await journal.releasePin(
+            descriptorSHA256: candidate.reference.descriptorSha256
+        )
+        XCTAssertTrue(runs.isEmpty)
+        XCTAssertNil(retainedRelease)
+        let pinDirectory = directory
+            .appendingPathComponent("device-leg-journal-v1/release-pins")
+            .appendingPathComponent(
+                DeviceLegStorageScope.testFixture.customerDigest(
+                    distinctId: "customer"
+                )
+            )
+        XCTAssertTrue(
+            try FileManager.default.contentsOfDirectory(
+                at: pinDirectory,
+                includingPropertiesForKeys: nil
+            ).isEmpty
+        )
+    }
+
+    func testArtifactManifestAggregateLimitRollsBackAdmission() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let candidate = arm()
+        let source = DeviceLegReleaseArtifactSource(
+            descriptorSHA256: candidate.reference.descriptorSha256,
+            objects: [
+                .init(
+                    sha256: String(repeating: "c", count: 64),
+                    sizeBytes: 64 * 1_024 * 1_024,
+                    required: false
+                ),
+                .init(
+                    sha256: String(repeating: "d", count: 64),
+                    sizeBytes: 64 * 1_024 * 1_024,
+                    required: false
+                ),
+                .init(
+                    sha256: String(repeating: "e", count: 64),
+                    sizeBytes: 1,
+                    required: false
+                ),
+            ],
+            cacheRoot: directory
+        )
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+
+        do {
+            _ = try await journal.admit(
+                arm: candidate,
+                release: release(for: candidate.reference),
+                artifactSource: source,
+                reentry: .init(type: .everyTime, windowSeconds: nil),
+                entryStepId: "step",
+                at: date(100)
+            )
+            XCTFail("Expected artifact aggregate limit rejection")
+        } catch DeviceLegJournalError.storageLimit {
+        } catch {
+            XCTFail("Unexpected artifact aggregate error: \(error)")
+        }
+
+        let runs = try await journal.runs()
+        let retainedRelease = try await journal.releasePin(
+            descriptorSHA256: candidate.reference.descriptorSha256
+        )
+        XCTAssertTrue(runs.isEmpty)
+        XCTAssertNil(retainedRelease)
+    }
+
     func testAdmissionRetainsTheMaximumProfileDescriptorBudget() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -1390,10 +1582,12 @@ final class DeviceLegRunJournalTests: XCTestCase {
         // Simulate termination after the stable event reached subscribers but
         // before the journal acknowledged that capture.
         let startedAttempt = await log.captureAndRouteSystemEvent(
-            JourneyEvents.journeyLegStarted,
-            properties: ["journey_id": run.journeyId],
-            eventId: run.startedEventId,
-            distinctId: "customer"
+            .init(
+                name: JourneyEvents.journeyLegStarted,
+                properties: ["journey_id": run.journeyId],
+                eventId: run.startedEventId,
+                distinctId: "customer"
+            )
         )
         _ = try XCTUnwrap(startedAttempt)
         await log.drain()
@@ -1405,10 +1599,12 @@ final class DeviceLegRunJournalTests: XCTestCase {
 
         try await journal.complete(run.id, outcome: "done", at: date(200))
         let completedAttempt = await log.captureAndRouteSystemEvent(
-            JourneyEvents.journeyLegCompleted,
-            properties: ["journey_id": run.journeyId],
-            eventId: run.completedEventId,
-            distinctId: "customer"
+            .init(
+                name: JourneyEvents.journeyLegCompleted,
+                properties: ["journey_id": run.journeyId],
+                eventId: run.completedEventId,
+                distinctId: "customer"
+            )
         )
         _ = try XCTUnwrap(completedAttempt)
         await log.drain()
@@ -1565,35 +1761,21 @@ private actor LostCompletionAcknowledgement: RoutedStableSystemEventCapturing {
     }
 
     func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> DurableTriggerCapture? {
-        let captured = await events.captureAndRouteSystemEvent(
-            event,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId
-        )
-        return event == JourneyEvents.journeyLegCompleted ? nil : captured
+        let captured = await events.captureAndRouteSystemEvent(request)
+        return request.name == JourneyEvents.journeyLegCompleted ? nil : captured
     }
 
     func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String,
+        _ request: StableSystemEventCaptureRequest,
         admission: any StableEventCaptureCommitAdmission
     ) async -> DurableTriggerCapture? {
         let captured = await events.captureAndRouteSystemEvent(
-            event,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId,
+            request,
             admission: admission
         )
-        return event == JourneyEvents.journeyLegCompleted ? nil : captured
+        return request.name == JourneyEvents.journeyLegCompleted ? nil : captured
     }
 
     func captureAndRouteSystemEventBatch(

@@ -160,6 +160,27 @@ struct PreparedDeviceLegPresentation: Sendable {
     let artifactLoader: ExperienceArtifactLoader
 }
 
+/// Immutable source metadata used to copy one authenticated release's
+/// renderer objects into the durable run journal before execution begins.
+struct DeviceLegReleaseArtifactSource: Sendable {
+    struct Object: Sendable {
+        let sha256: String
+        let sizeBytes: Int
+        let required: Bool
+    }
+
+    let descriptorSHA256: String
+    let objects: [Object]
+    let cacheRoot: URL
+}
+
+/// Durable renderer objects owned by one live run. Presentation checks these
+/// files before the evictable shared cache or network, so a parked run remains
+/// resumable after profile replacement and process restart.
+struct DeviceLegPinnedReleaseArtifacts: Sendable {
+    let objectURLsBySHA256: [String: URL]
+}
+
 /// Keeps every required object for one authenticated device-profile generation
 /// protected from cache-budget eviction. The marker is installed before
 /// acquisition begins and remains live while ExperienceLoader owns this value.
@@ -167,14 +188,22 @@ final class PreparedDeviceLegArtifacts: @unchecked Sendable {
     let releaseDescriptorSHA256s: Set<String>
 
     private let cacheRoot: URL
+    private let objectsByReleaseDescriptorSHA256: [
+        String: [DeviceLegReleaseArtifactSource.Object]
+    ]
     private let protectionID: UUID?
 
     fileprivate init(
         releaseDescriptorSHA256s: Set<String>,
+        objectsByReleaseDescriptorSHA256: [
+            String: [DeviceLegReleaseArtifactSource.Object]
+        ],
         protectedObjectSHA256s: Set<String>,
         cacheRoot: URL
     ) throws {
         self.releaseDescriptorSHA256s = releaseDescriptorSHA256s
+        self.objectsByReleaseDescriptorSHA256 =
+            objectsByReleaseDescriptorSHA256
         self.cacheRoot = cacheRoot
         protectionID = protectedObjectSHA256s.isEmpty
             ? nil
@@ -191,6 +220,19 @@ final class PreparedDeviceLegArtifacts: @unchecked Sendable {
                 root: cacheRoot
             )
         }
+    }
+
+    func source(
+        for descriptorSHA256: String
+    ) -> DeviceLegReleaseArtifactSource? {
+        guard let objects = objectsByReleaseDescriptorSHA256[
+            descriptorSHA256
+        ] else { return nil }
+        return DeviceLegReleaseArtifactSource(
+            descriptorSHA256: descriptorSHA256,
+            objects: objects,
+            cacheRoot: cacheRoot
+        )
     }
 }
 
@@ -808,6 +850,9 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     ) async throws -> PreparedDeviceLegArtifacts {
         let releaseDescriptorSHA256s = Set(snapshot.releasesByDigest.keys)
         var authorities: [RuntimeReleaseAuthority] = []
+        var objectsByReleaseDescriptorSHA256: [
+            String: [DeviceLegReleaseArtifactSource.Object]
+        ] = [:]
         var protectedObjectSHA256s: Set<String> = []
 
         for descriptorSHA256 in releaseDescriptorSHA256s.sorted() {
@@ -816,12 +861,20 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 throw ExperienceReleaseAcquisitionError.invalidProfileEntry
             }
             guard let authority = try Self.deviceLegRuntimeAuthority(release) else {
+                objectsByReleaseDescriptorSHA256[descriptorSHA256] = []
                 continue
             }
+            let manifest = try Self.runtimeReleaseManifest(authority)
             authorities.append(authority)
-            protectedObjectSHA256s.formUnion(
-                try Self.runtimeReleaseManifest(authority).protectedDigests
-            )
+            let objects = manifest.requirements.map {
+                DeviceLegReleaseArtifactSource.Object(
+                    sha256: $0.artifact.sha256,
+                    sizeBytes: $0.artifact.sizeBytes,
+                    required: $0.required
+                )
+            }
+            objectsByReleaseDescriptorSHA256[descriptorSHA256] = objects
+            protectedObjectSHA256s.formUnion(objects.map(\.sha256))
         }
 
         // Register the complete profile set before the first object is read or
@@ -829,6 +882,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         // an earlier leg while a later leg in the same generation is prepared.
         let prepared = try PreparedDeviceLegArtifacts(
             releaseDescriptorSHA256s: releaseDescriptorSHA256s,
+            objectsByReleaseDescriptorSHA256:
+                objectsByReleaseDescriptorSHA256,
             protectedObjectSHA256s: protectedObjectSHA256s,
             cacheRoot: cacheDirectory
         )
@@ -1269,7 +1324,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     private func prepareRuntimeRelease(
         _ authority: RuntimeReleaseAuthority,
         delivery: ExperienceReleaseDelivery,
-        intent: ExperienceReleasePreparationIntent
+        intent: ExperienceReleasePreparationIntent,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts? = nil
     ) async throws -> PreparedRuntimeRelease {
         let renderOrigin = try Self.validatedOrigin(delivery.renderBaseUrl)
         let assetOrigin = try Self.validatedOrigin(delivery.assetBaseUrl)
@@ -1309,7 +1365,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                     artifact,
                     origin: origin,
                     intent: intent,
-                    protectedDigests: protectedDigests
+                    protectedDigests: protectedDigests,
+                    pinnedArtifacts: pinnedArtifacts
                 )
                 objectsByDigest[artifact.sha256] = result
                 downloadedAny = downloadedAny || result.downloaded
@@ -1447,6 +1504,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     func preparePresentation(
         release: AuthenticatedDeviceLegRelease,
         delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts? = nil,
         productResolver:
             @escaping @Sendable (String) async throws -> [StoreProduct]
     ) async throws -> PreparedDeviceLegPresentation {
@@ -1489,7 +1547,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 let prepared = try await self.prepareRuntimeRelease(
                     authority,
                     delivery: delivery,
-                    intent: .presentation
+                    intent: .presentation,
+                    pinnedArtifacts: pinnedArtifacts
                 )
                 return try prepared.presentationArtifact(
                     identity: identity,
@@ -1505,7 +1564,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         _ artifact: ExperienceReleaseRenderDocument.Artifact,
         origin: URL,
         intent: ExperienceReleasePreparationIntent,
-        protectedDigests: Set<String>
+        protectedDigests: Set<String>,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?
     ) async throws -> ObjectResult {
         let destination = cacheDirectory.appendingPathComponent(artifact.sha256)
         let result = try await SharedCachePathCoordinator.shared.withExclusiveAccess(
@@ -1550,6 +1610,25 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 } catch {
                     try? FileManager.default.removeItem(at: destination)
                 }
+            }
+
+            if let pinnedURL = pinnedArtifacts?.objectURLsBySHA256[
+                artifact.sha256
+            ] {
+                let read = try BoundedFileIO.read(
+                    at: pinnedURL,
+                    maximumBytes: Self.limit(for: artifact)
+                )
+                try Self.verify(read.digest, artifact: artifact)
+                return ObjectResult(
+                    url: pinnedURL,
+                    bytes: read.data,
+                    downloaded: false,
+                    resourceMetrics: Self.objectResourceMetrics(
+                        byteCount: read.data.count,
+                        passCount: 1
+                    )
+                )
             }
 
             var resourceMetrics = rejectedCacheMetrics

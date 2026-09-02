@@ -211,31 +211,21 @@ final class RecoveryEventSink: SystemEventSink, @unchecked Sendable {
     }
 
     func capture(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        _ = eventId
-        _ = distinctId
         lock.withLock {
             routedCaptures += 1
-            storage.append((name, properties))
+            storage.append((request.name, request.properties))
         }
         return true
     }
 
     func captureOnly(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        _ = eventId
-        _ = distinctId
         lock.withLock {
             captureOnlyCaptures += 1
-            storage.append((name, properties))
+            storage.append((request.name, request.properties))
         }
         return true
     }
@@ -266,33 +256,25 @@ private final class ControlledRecoveryEventSink:
     func emit(_ name: String, properties: [String: Any]?) {}
 
     func capture(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
         lock.withLock {
             routedAttempts += 1
-            attemptedEventIds.append(eventId)
+            attemptedEventIds.append(request.eventId)
             guard captureSucceeds else { return false }
-            captured.append((name, eventId))
+            captured.append((request.name, request.eventId))
             return true
         }
     }
 
     func captureOnly(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        _ = properties
-        _ = distinctId
         return lock.withLock {
             captureOnlyAttempts += 1
-            attemptedEventIds.append(eventId)
+            attemptedEventIds.append(request.eventId)
             guard captureSucceeds else { return false }
-            capturedOnly.append((name, eventId))
+            capturedOnly.append((request.name, request.eventId))
             return true
         }
     }
@@ -322,30 +304,19 @@ private final class DurableEventLogSink: SystemEventSink, Sendable {
     func emit(_ name: String, properties: [String: Any]?) {}
 
     func capture(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        await captureOnly(
-            name,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId
-        )
+        await captureOnly(request)
     }
 
     func captureOnly(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
         await eventLog.captureSystemEvent(
-            name,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId
+            request.name,
+            properties: request.properties,
+            eventId: request.eventId,
+            distinctId: request.distinctId
         ) != nil
     }
 }

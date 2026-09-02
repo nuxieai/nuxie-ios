@@ -157,38 +157,40 @@ private final class PurchaseOutcomeEventSink {
     }
 
     func capture(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        _ = distinctId
-        await captureGate.pauseIfArmed(eventName: name)
+        await captureGate.pauseIfArmed(eventName: request.name)
         let routes = lock.withLock {
             routedCaptureAttempts += 1
             return routedCaptureResult
         }
         if routes {
-            append(name: name, properties: properties, eventId: eventId, routed: true)
+            append(
+                name: request.name,
+                properties: request.properties,
+                eventId: request.eventId,
+                routed: true
+            )
         }
         return routes
     }
 
     func captureOnly(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        _ = distinctId
-        await captureGate.pauseIfArmed(eventName: name)
+        await captureGate.pauseIfArmed(eventName: request.name)
         let captures = lock.withLock {
             captureOnlyAttempts += 1
-            captureOnlyEventIds.append(eventId)
+            captureOnlyEventIds.append(request.eventId)
             return carrierCaptureResult
         }
         guard captures else { return false }
-        if append(name: name, properties: properties, eventId: eventId, routed: false) {
+        if append(
+            name: request.name,
+            properties: request.properties,
+            eventId: request.eventId,
+            routed: false
+        ) {
             lock.withLock { successfulCarrierCaptures += 1 }
         }
         return true

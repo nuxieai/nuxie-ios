@@ -79,7 +79,7 @@ extension DeviceLegReservation: DeviceLegPresentationReservation {}
 
 /// Service for presenting experiences in dedicated windows over the entire app
 @MainActor
-final class ExperiencePresentationService: ExperiencePresentationServiceProtocol {
+final class ExperiencePresentationService {
 
     private struct DeviceLegPresentationContext {
         let owner: DeviceLegPresentationOwner
@@ -628,6 +628,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                     try await experienceService.viewController(
                         forDeviceLeg: request.release,
                         delivery: request.delivery,
+                        pinnedArtifacts: request.pinnedArtifacts,
                         runtimeDelegate: runtimeDelegate,
                         colorSchemeMode: .system
                     )
@@ -1577,6 +1578,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         )
     }
 }
+
+extension ExperiencePresentationService: ExperiencePresentationServiceProtocol {}
 
 // MARK: - Errors
 
