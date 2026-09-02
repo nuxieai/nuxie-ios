@@ -54,6 +54,15 @@ private final class DeviceLegBeforeSendCallRecorder: @unchecked Sendable {
     }
 }
 
+private struct RenderedDeviceLegHarness {
+    let directory: URL
+    let events: MockEventLog
+    let presenter: RecordingDeviceLegPresenter
+    let service: DeviceLegService
+    let request: DeviceLegPresentationRequest
+    let journal: DeviceLegRunJournal
+}
+
 private actor DeviceLegNthRoutedCaptureGate {
     private let eventName: String
     private let suspendedCall: Int
@@ -1265,38 +1274,15 @@ final class DeviceLegServiceTests: XCTestCase {
     }
 
     func testBeforeSendDroppedRenderedEventDoesNotAdvanceItsScreenRoute() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        events.preparedTriggerBeforeSend = { event in
+        let harness = try await makeRenderedDeviceLegHarness { event in
             event.name == "continue" ? nil : event
         }
-        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter
-        )
-
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
-        let journal = try DeviceLegRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        let initialRuns = try await journal.runs()
+        defer { removeTemporaryDirectoryIfPresent(harness.directory) }
+        let initialRuns = try await harness.journal.runs()
         let initialRun = try XCTUnwrap(initialRuns.first)
 
-        let accepted = await request.onEmissionBatch(presentationBatch(
-            request: request,
+        let accepted = await harness.request.onEmissionBatch(presentationBatch(
+            request: harness.request,
             invocationId: "dropped-screen-route",
             emissions: [.init(
                 id: "00000000-0000-7000-8000-000000000323",
@@ -1308,28 +1294,24 @@ final class DeviceLegServiceTests: XCTestCase {
         ))
 
         XCTAssertTrue(accepted)
-        XCTAssertFalse(events.routedEvents.contains { $0.name == "continue" })
-        XCTAssertFalse(events.routedEvents.contains {
+        XCTAssertFalse(harness.events.routedEvents.contains {
+            $0.name == "continue"
+        })
+        XCTAssertFalse(harness.events.routedEvents.contains {
             $0.name == JourneyEvents.journeyLegCompleted
         })
-        let currentRuns = try await journal.runs()
+        let currentRuns = try await harness.journal.runs()
         let currentRun = try XCTUnwrap(currentRuns.first)
         XCTAssertEqual(currentRun.stepId, initialRun.stepId)
         XCTAssertNil(currentRun.completion)
-        let finishedOwners = await MainActor.run { presenter.finishedOwners }
+        let finishedOwners = await MainActor.run {
+            harness.presenter.finishedOwners
+        }
         XCTAssertTrue(finishedOwners.isEmpty)
     }
 
     func testBeforeSendRenameAwayFromRenderedRouteDoesNotAdvance() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        events.preparedTriggerBeforeSend = { event in
+        let harness = try await makeRenderedDeviceLegHarness { event in
             guard event.name == "continue" else { return event }
             return NuxieEvent(
                 id: event.id,
@@ -1339,20 +1321,9 @@ final class DeviceLegServiceTests: XCTestCase {
                 timestamp: event.timestamp
             )
         }
-        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter
-        )
-
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
-        let accepted = await request.onEmissionBatch(presentationBatch(
-            request: request,
+        defer { removeTemporaryDirectoryIfPresent(harness.directory) }
+        let accepted = await harness.request.onEmissionBatch(presentationBatch(
+            request: harness.request,
             invocationId: "renamed-away-screen-route",
             emissions: [.init(
                 id: "00000000-0000-7000-8000-000000000324",
@@ -1364,31 +1335,19 @@ final class DeviceLegServiceTests: XCTestCase {
         ))
 
         XCTAssertTrue(accepted)
-        XCTAssertTrue(events.routedEvents.contains {
+        XCTAssertTrue(harness.events.routedEvents.contains {
             $0.name == "continue_redacted"
         })
-        XCTAssertFalse(events.routedEvents.contains {
+        XCTAssertFalse(harness.events.routedEvents.contains {
             $0.name == JourneyEvents.journeyLegCompleted
         })
-        let journal = try DeviceLegRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        let runs = try await journal.runs()
+        let runs = try await harness.journal.runs()
         let run = try XCTUnwrap(runs.first)
         XCTAssertNil(run.completion)
     }
 
     func testBeforeSendRenameIntoRenderedRouteAdvances() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        events.preparedTriggerBeforeSend = { event in
+        let harness = try await makeRenderedDeviceLegHarness { event in
             guard event.name == "primary_tapped" else { return event }
             return NuxieEvent(
                 id: event.id,
@@ -1398,24 +1357,15 @@ final class DeviceLegServiceTests: XCTestCase {
                 timestamp: event.timestamp
             )
         }
-        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter
-        )
-
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
+        defer { removeTemporaryDirectoryIfPresent(harness.directory) }
         let completed = expectation(description: "renamed route completed")
-        events.addEventHandler(pattern: JourneyEvents.journeyLegCompleted) { _ in
+        harness.events.addEventHandler(
+            pattern: JourneyEvents.journeyLegCompleted
+        ) { _ in
             completed.fulfill()
         }
-        let accepted = await request.onEmissionBatch(presentationBatch(
-            request: request,
+        let accepted = await harness.request.onEmissionBatch(presentationBatch(
+            request: harness.request,
             invocationId: "renamed-into-screen-route",
             emissions: [.init(
                 id: "00000000-0000-7000-8000-000000000325",
@@ -1428,7 +1378,9 @@ final class DeviceLegServiceTests: XCTestCase {
 
         XCTAssertTrue(accepted)
         await fulfillment(of: [completed], timeout: 2)
-        XCTAssertTrue(events.routedEvents.contains { $0.name == "continue" })
+        XCTAssertTrue(harness.events.routedEvents.contains {
+            $0.name == "continue"
+        })
     }
 
     func testBeforeSendRenderedPropertyRewriteDrivesRoutedControl() async throws {
@@ -6611,6 +6563,52 @@ final class DeviceLegServiceTests: XCTestCase {
             fixture,
             supportedRuntime: supportedRuntime
         )
+    }
+
+    private func makeRenderedDeviceLegHarness(
+        _ preparedTriggerBeforeSend:
+            (@Sendable (NuxieEvent) -> NuxieEvent?)? = nil
+    ) async throws -> RenderedDeviceLegHarness {
+        let directory = temporaryDirectory()
+        do {
+            let fixture = try DeviceLegPlaneProfileTestFixture.load(
+                entryKey: "renderedEntry"
+            )
+            let snapshot = try await authenticatedRenderedSnapshot(fixture)
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer")
+            let events = MockEventLog()
+            events.identity = identity
+            events.preparedTriggerBeforeSend = preparedTriggerBeforeSend
+            let presenter = await MainActor.run {
+                RecordingDeviceLegPresenter()
+            }
+            let service = makeService(
+                identity: identity,
+                events: events,
+                directory: directory,
+                presenter: presenter
+            )
+            await service.initialize()
+            await service.profileDidCommit(snapshot, distinctId: "customer")
+            let presentedRequest = await MainActor.run { presenter.request }
+            let request = try XCTUnwrap(presentedRequest)
+            let journal = try DeviceLegRunJournal(
+                directory: directory,
+                distinctId: "customer"
+            )
+            return RenderedDeviceLegHarness(
+                directory: directory,
+                events: events,
+                presenter: presenter,
+                service: service,
+                request: request,
+                journal: journal
+            )
+        } catch {
+            removeTemporaryDirectoryIfPresent(directory)
+            throw error
+        }
     }
 
     private func renderedNavigationSnapshot(
