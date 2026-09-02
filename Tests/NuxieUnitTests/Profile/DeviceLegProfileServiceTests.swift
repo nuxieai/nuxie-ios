@@ -68,6 +68,7 @@ private actor DeviceLegProfileSequenceAPI: ProfileFetching {
 private actor RecordingDeviceLegProfileConsumer: DeviceLegProfileConsuming {
     private(set) var commits: [DeviceLegProfileCatalog.Snapshot] = []
     private(set) var authorities: [ProfileDeliveryAuthority] = []
+    private(set) var withdrawnDistinctIds: [String] = []
     private(set) var clearedDistinctIds: [String] = []
     private(set) var clearAllCount = 0
 
@@ -81,6 +82,14 @@ private actor RecordingDeviceLegProfileConsumer: DeviceLegProfileConsuming {
         _ = artifacts
         commits.append(snapshot)
         authorities.append(authority)
+    }
+
+    func profileDidWithdraw(
+        authority: ProfileDeliveryAuthority?,
+        distinctId: String
+    ) {
+        _ = authority
+        withdrawnDistinctIds.append(distinctId)
     }
 
     func profileDidClear(distinctId: String) {
@@ -328,8 +337,8 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         let cleared = await catalog.snapshot(distinctId: "customer")
         XCTAssertNil(cleared)
         XCTAssertEqual(experiences.committedDeviceLegReleaseCounts, [1, nil])
-        let runtimeClears = await runtime.clearedDistinctIds
-        XCTAssertEqual(runtimeClears, ["customer"])
+        let runtimeWithdrawals = await runtime.withdrawnDistinctIds
+        XCTAssertEqual(runtimeWithdrawals, ["customer"])
     }
 
     func testHighWaterCommitFailureDoesNotPublishDeviceProductAuthority() async throws {
@@ -545,12 +554,12 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         await service.onAppBecameActive()
 
         let retainedSnapshot = await catalog.snapshot(distinctId: "customer")
-        let clearedDistinctIds = await runtime.clearedDistinctIds
+        let withdrawnDistinctIds = await runtime.withdrawnDistinctIds
         let retainedProfile = await service.getCachedProfile(
             distinctId: "customer"
         )
         XCTAssertNotNil(retainedSnapshot)
-        XCTAssertTrue(clearedDistinctIds.isEmpty)
+        XCTAssertTrue(withdrawnDistinctIds.isEmpty)
         XCTAssertNotNil(retainedProfile?.planeProfile)
     }
 
