@@ -35,6 +35,13 @@ case "$NUXIE_TEST_SCENARIO" in
     fi
     exit 0
     ;;
+  requires_user_domain)
+    if [[ "${NUXIE_TEST_IN_USER_DOMAIN:-0}" != "1" ]]; then
+      echo "The connection to service named com.apple.testmanagerd.control was invalidated: Connection init failed at lookup with error 3 - No such process" >&2
+      exit 65
+    fi
+    exit 0
+    ;;
 esac
 echo "unknown test scenario" >&2
 exit 64
@@ -45,9 +52,13 @@ fake_launchctl="$temporary_dir/launchctl"
 cat >"$fake_launchctl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >>"$NUXIE_TEST_LAUNCHCTL_CALLS_FILE"
 case "$1" in
+  asuser)
+    shift 2
+    NUXIE_TEST_IN_USER_DOMAIN=1 exec "$@"
+    ;;
   kickstart)
+    printf '%s\n' "$*" >>"$NUXIE_TEST_LAUNCHCTL_CALLS_FILE"
     if [[ "$NUXIE_TEST_RECOVERY_SCENARIO" == "kickstart_failure" ]]; then
       exit 1
     fi
@@ -55,6 +66,7 @@ case "$1" in
     exit 0
     ;;
   print)
+    printf '%s\n' "$*" >>"$NUXIE_TEST_LAUNCHCTL_CALLS_FILE"
     state="$(cat "$NUXIE_TEST_LAUNCHCTL_STATE_FILE")"
     print_count="$(grep -c '^print ' "$NUXIE_TEST_LAUNCHCTL_CALLS_FILE")"
     if [[ "$NUXIE_TEST_RECOVERY_SCENARIO" == "missing_initial_snapshot" && "$print_count" == "1" ]]; then
@@ -149,6 +161,12 @@ run_case ordinary_failure
 ordinary_status="$?"
 set -e
 [[ "$ordinary_status" == "42" ]]
+[[ "$(cat "$calls_file")" == "test" ]]
+[[ ! -s "$launchctl_calls_file" ]]
+[[ ! -s "$kill_calls_file" ]]
+[[ ! -s "$ps_calls_file" ]]
+
+run_case requires_user_domain
 [[ "$(cat "$calls_file")" == "test" ]]
 [[ ! -s "$launchctl_calls_file" ]]
 [[ ! -s "$kill_calls_file" ]]

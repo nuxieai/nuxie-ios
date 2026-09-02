@@ -24,7 +24,8 @@ run_xcodebuild() {
   shift 2
 
   set +e
-  "$xcodebuild_bin" "$action" "$@" 2>&1 | tee "$log_path"
+  "$launchctl_bin" asuser "$testmanagerd_uid" \
+    "$xcodebuild_bin" "$action" "$@" 2>&1 | tee "$log_path"
   local status="${PIPESTATUS[0]}"
   set -e
   return "$status"
