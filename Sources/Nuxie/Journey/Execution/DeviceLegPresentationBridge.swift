@@ -209,83 +209,6 @@ protocol DeviceLegPresenting: AnyObject, Sendable {
     func shutdownDeviceLegPresentation(ownerDistinctId: String) async
 }
 
-extension DeviceLegPresenting {
-    @MainActor
-    func setDeviceLegPresentationAvailabilityHandler(
-        _ handler: (@MainActor @Sendable () -> Void)?
-    ) {
-        _ = handler
-    }
-
-    @MainActor
-    func ownsDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
-    ) -> Bool {
-        _ = journeyId
-        _ = ownerDistinctId
-        return false
-    }
-
-    @MainActor
-    func navigateDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String,
-        screenId: String,
-        transition: ExperienceReleaseJSONValue?
-    ) async -> DeviceLegPresentationNavigationResult {
-        _ = journeyId
-        _ = ownerDistinctId
-        _ = screenId
-        _ = transition
-        return .noPresentation
-    }
-
-    @MainActor
-    func resolveDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
-        action: [String: ExperienceReleaseJSONValue],
-        source: ScreenEmissionSource?
-    ) -> [String: ExperienceReleaseJSONValue]? {
-        _ = journeyId
-        _ = ownerDistinctId
-        _ = source
-        guard case .string("purchase")? = action["type"],
-              let placementId = deviceLegPresentationLiteralString(
-                action["placementId"]
-              ) else {
-            return action
-        }
-        var resolved = action
-        resolved["placementId"] = .string(placementId)
-        return resolved
-    }
-
-    @MainActor
-    func dispatchDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
-        action: [String: ExperienceReleaseJSONValue],
-        effectId: String
-    ) async -> DeviceLegPresentationActionResult {
-        _ = journeyId
-        _ = ownerDistinctId
-        _ = action
-        _ = effectId
-        return .noPresentation
-    }
-
-    @MainActor
-    func finishDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
-    ) async {
-        _ = journeyId
-        _ = ownerDistinctId
-    }
-}
-
 @MainActor
 final class DeviceLegRuntimeDelegate {
     nonisolated let introEligibilityAuthorizationContext:
@@ -431,7 +354,10 @@ final class DeviceLegRuntimeDelegate {
             }
         }
         pendingBackNavigation = nil
-        activeScreenId = revealingScreenId
+        // The transition coordinator reports the destination as active in a
+        // separate callback. Keep this interval ownerless so that callback is
+        // the sole visibility edge for exposure and emission admission.
+        activeScreenId = nil
         if revealingScreenId != nil {
             presentationEpoch &+= 1
         }
@@ -600,13 +526,11 @@ final class DeviceLegRuntimeDelegate {
 
     func experienceViewControllerDidReveal(
         _ controller: ExperienceViewController
-    ) {
+    ) async {
         _ = controller
         guard !presentationIsRevealed else { return }
         presentationIsRevealed = true
-        Task { @MainActor [onPresentationRevealed] in
-            await onPresentationRevealed()
-        }
+        await onPresentationRevealed()
     }
 
     func experienceViewControllerDidRequestHostDismiss(

@@ -29,7 +29,7 @@ enum ExperienceScreenNavigationResult: Equatable, Sendable {
     case productsUnavailable
     case failed
 
-    var didNavigate: Bool {
+    var reachedTarget: Bool {
         self == .navigated || self == .alreadyActive
     }
 }
@@ -72,7 +72,9 @@ protocol ExperienceRuntimeDelegate: AnyObject {
 
     func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController)
 
-    func experienceViewControllerDidReveal(_ controller: ExperienceViewController)
+    func experienceViewControllerDidReveal(
+        _ controller: ExperienceViewController
+    ) async
 
     func experienceViewControllerDidFinishPresentation(_ controller: ExperienceViewController)
 
@@ -184,7 +186,9 @@ extension ExperienceRuntimeDelegate {
 
     func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController) {}
 
-    func experienceViewControllerDidReveal(_ controller: ExperienceViewController) {}
+    func experienceViewControllerDidReveal(
+        _ controller: ExperienceViewController
+    ) async {}
 
     func experienceViewControllerDidFinishPresentation(_ controller: ExperienceViewController) {}
 
@@ -422,6 +426,7 @@ class ExperienceViewController: NuxiePlatformViewController {
     private var didInvokeClose = false
     private var closeGeneration: UInt64 = 0
     private var dismissalTask: Task<Void, Never>?
+    private var presentationRevealTask: Task<Void, Never>?
     private var runtimePreparationGeneration: UInt64 = 0
     private var runtimeShutdownTask: Task<Void, Never>?
     private var runtimeShutdownID: UUID?
@@ -632,6 +637,8 @@ class ExperienceViewController: NuxiePlatformViewController {
         closeGeneration &+= 1
         dismissalTask?.cancel()
         dismissalTask = nil
+        presentationRevealTask?.cancel()
+        presentationRevealTask = nil
         didInvokeClose = false
         presentationShellIsPresented = false
         contentIsRevealed = false
@@ -734,6 +741,7 @@ class ExperienceViewController: NuxiePlatformViewController {
 
     func prepareForDismissal(reason: CloseReason? = nil) async {
         failPendingDisplayPresentationTrace(error: CancellationError())
+        await joinPresentationRevealNotification()
         #if canImport(UIKit)
         await screenTransitionCoordinator?.exitActiveScreenForTeardown(reason: reason)
         #endif
@@ -981,24 +989,11 @@ class ExperienceViewController: NuxiePlatformViewController {
         let dismissalDelegate = runtimeDelegate
         dismissalTask = Task { @MainActor [weak self] in
             guard let self, !self.hostDismissalRequested else { return }
-            await self.prepareForDismissal(reason: reason)
-            guard self.closeGeneration == generation,
-                  !self.hostDismissalRequested,
-                  !Task.isCancelled else { return }
-            while self.closeGeneration == generation,
-                  !self.hostDismissalRequested,
-                  !Task.isCancelled {
-                if await dismissalDelegate?.experienceViewControllerDidRequestDismiss(
-                    self,
-                    reason: reason
-                ) ?? true {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-            guard self.closeGeneration == generation,
-                  !self.hostDismissalRequested,
-                  !Task.isCancelled else { return }
+            guard await self.prepareAndAuthorizeDismissal(
+                reason: reason,
+                generation: generation,
+                delegate: dismissalDelegate
+            ) else { return }
 
             #if canImport(UIKit)
             self.dismiss(animated: true) { [weak self] in
@@ -1025,26 +1020,35 @@ class ExperienceViewController: NuxiePlatformViewController {
         didInvokeClose = true
         dismissalTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.prepareForDismissal(reason: reason)
-            guard self.closeGeneration == generation,
-                  !self.hostDismissalRequested,
-                  !Task.isCancelled else { return }
-            while self.closeGeneration == generation,
-                  !self.hostDismissalRequested,
-                  !Task.isCancelled {
-                if await dismissalDelegate?.experienceViewControllerDidRequestDismiss(
-                    self,
-                    reason: reason
-                ) ?? true {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-            guard self.closeGeneration == generation,
-                  !self.hostDismissalRequested,
-                  !Task.isCancelled else { return }
+            guard await self.prepareAndAuthorizeDismissal(
+                reason: reason,
+                generation: generation,
+                delegate: dismissalDelegate
+            ) else { return }
             close?(reason)
         }
+    }
+
+    private func prepareAndAuthorizeDismissal(
+        reason: CloseReason,
+        generation: UInt64,
+        delegate: ExperienceRuntimeDelegate?
+    ) async -> Bool {
+        await prepareForDismissal(reason: reason)
+        while closeGeneration == generation,
+              !hostDismissalRequested,
+              !Task.isCancelled {
+            if await delegate?.experienceViewControllerDidRequestDismiss(
+                self,
+                reason: reason
+            ) ?? true {
+                return closeGeneration == generation
+                    && !hostDismissalRequested
+                    && !Task.isCancelled
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return false
     }
 
     func performOpenLink(urlString: String, target: String? = nil) {
@@ -1132,7 +1136,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         (await navigateAndWaitResult(
             to: screenId,
             transition: transition
-        )).didNavigate
+        )).reachedTarget
     }
 
     @MainActor
@@ -1591,14 +1595,25 @@ class ExperienceViewController: NuxiePlatformViewController {
             return
         }
         didNotifyPresentationReveal = true
-        if let scopedDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
-            scopedDelegate.experienceViewControllerDidReveal(
-                self,
-                traceToken: runtimePresentationTraceToken
-            )
-        } else {
-            runtimeDelegate?.experienceViewControllerDidReveal(self)
+        let delegate = runtimeDelegate
+        let traceToken = runtimePresentationTraceToken
+        presentationRevealTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let scopedDelegate = delegate as? any ExperiencePresentationScopedTraceDelegate {
+                scopedDelegate.experienceViewControllerDidReveal(
+                    self,
+                    traceToken: traceToken
+                )
+            } else {
+                await delegate?.experienceViewControllerDidReveal(self)
+            }
         }
+    }
+
+    private func joinPresentationRevealNotification() async {
+        guard let presentationRevealTask else { return }
+        await presentationRevealTask.value
+        self.presentationRevealTask = nil
     }
 
     func retryFromErrorView() {
@@ -1906,7 +1921,7 @@ private extension ExperienceViewController {
         ) { [weak self] result, completedScreenId in
             self?.completeNativeRuntimeNavigation(
                 navigation,
-                didNavigate: result.didNavigate,
+                didNavigate: result.reachedTarget,
                 completedScreenId: completedScreenId
             )
         }
@@ -2138,6 +2153,7 @@ extension ExperienceViewController {
             LogWarning("ExperienceViewController: screen emission dispatch failed: \(error)")
             disposition = .rejected
         case .success(let batch):
+            await joinPresentationRevealNotification()
             let published = await runtimeDelegate?.experienceViewController(
                 self,
                 didEmitScreenEmissionBatch: batch

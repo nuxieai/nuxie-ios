@@ -148,7 +148,7 @@ class MockExperienceViewController: ExperienceViewController {
         (await navigateAndWaitResult(
             to: screenId,
             transition: transition
-        )).didNavigate
+        )).reachedTarget
     }
 
     override func navigateAndWaitResult(

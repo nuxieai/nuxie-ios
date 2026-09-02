@@ -1001,8 +1001,17 @@ final class DeviceLegServiceTests: XCTestCase {
             JourneyEvents.journeyLegStarted,
         ])
         let runsAfterFailure = try await journal.runs()
-        XCTAssertEqual(runsAfterFailure.first?.stepId, initialStep)
-        XCTAssertNil(runsAfterFailure.first?.context.responses["plan"])
+        let runAfterFailure = try XCTUnwrap(runsAfterFailure.first)
+        XCTAssertEqual(runAfterFailure.stepId, initialStep)
+        guard case .string(let stagedResponse)? =
+            runAfterFailure.context.responses["plan"] else {
+            return XCTFail("Expected the response to be staged before event publication")
+        }
+        XCTAssertEqual(stagedResponse, "yearly")
+        XCTAssertEqual(
+            runAfterFailure.pendingPresentationPublication?.invocationId,
+            batch.invocationId
+        )
 
         events.stableCaptureBatchFailureIndex = nil
         let completionCommitted = expectation(description: "completion committed")
@@ -1020,7 +1029,7 @@ final class DeviceLegServiceTests: XCTestCase {
         ])
     }
 
-    func testPublishedRendererBatchAcknowledgesOnlyAfterDurableResponseAbandonment() async throws {
+    func testPendingRendererPublicationReplaysAfterRestartBeforeAbandonment() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -1042,79 +1051,111 @@ final class DeviceLegServiceTests: XCTestCase {
                 responseCaptures: ["plan"]
             )]
         )
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
-        let persistenceFailures = DeviceLegJournalPersistenceFailures()
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter,
-            journalBeforePersist: { try persistenceFailures.beforePersist() }
+        do {
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer")
+            let events = MockEventLog()
+            events.identity = identity
+            let presenter = await MainActor.run {
+                RecordingDeviceLegPresenter()
+            }
+            let service = makeService(
+                identity: identity,
+                events: events,
+                directory: directory,
+                presenter: presenter
+            )
+
+            await service.initialize()
+            await service.profileDidCommit(snapshot, distinctId: "customer")
+            let presentedRequest = await MainActor.run { presenter.request }
+            let request = try XCTUnwrap(presentedRequest)
+            events.stableCaptureBatchFailureIndex = 0
+
+            let accepted = await request.onEmissionBatch(presentationBatch(
+                request: request,
+                invocationId: "restart-publication",
+                emissions: [
+                    .init(
+                        id: "00000000-0000-7000-8000-000000000337",
+                        sequence: 0,
+                        occurredAt: "2026-08-29T12:00:00.120Z",
+                        name: SystemEventNames.responseSet,
+                        payload: [
+                            "field": .string("plan"),
+                            "value": .string("yearly"),
+                        ]
+                    ),
+                    .init(
+                        id: "00000000-0000-7000-8000-000000000338",
+                        sequence: 1,
+                        occurredAt: "2026-08-29T12:00:00.121Z",
+                        name: "button_tapped",
+                        payload: [:]
+                    ),
+                ]
+            ))
+
+            XCTAssertFalse(accepted)
+            let journal = try DeviceLegRunJournal(
+                directory: directory,
+                distinctId: "customer"
+            )
+            let persistedRuns = try await journal.runs()
+            let run = try XCTUnwrap(persistedRuns.first)
+            XCTAssertEqual(
+                run.pendingPresentationPublication?.invocationId,
+                "restart-publication"
+            )
+            guard case .string(let response)? =
+                run.context.responses["plan"] else {
+                return XCTFail("Expected the staged response to survive capture failure")
+            }
+            XCTAssertEqual(response, "yearly")
+            XCTAssertFalse(events.routedEvents.contains {
+                $0.name == "button_tapped"
+            })
+        }
+
+        let recoveryIdentity = MockIdentityService()
+        recoveryIdentity.setDistinctId("customer")
+        let recoveryEvents = MockEventLog()
+        recoveryEvents.identity = recoveryIdentity
+        let recoveryService = makeService(
+            identity: recoveryIdentity,
+            events: recoveryEvents,
+            directory: directory
         )
 
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
+        await recoveryService.initialize()
+
+        let replayed = recoveryEvents.routedEvents.filter {
+            $0.name == "button_tapped"
+        }
+        XCTAssertEqual(replayed.count, 1)
+        XCTAssertEqual(
+            replayed.first?.id,
+            "00000000-0000-7000-8000-000000000338"
+        )
+        let completion = try XCTUnwrap(recoveryEvents.routedEvents.first {
+            $0.name == JourneyEvents.journeyLegCompleted
+        })
+        XCTAssertEqual(completion.properties["outcome"] as? String, "abandoned")
+        let outputs = try XCTUnwrap(
+            completion.properties["outputs"] as? [String: Any]
+        )
+        let responses = try XCTUnwrap(outputs["responses"] as? [String: Any])
+        XCTAssertEqual(responses["plan"] as? String, "yearly")
         let journal = try DeviceLegRunJournal(
             directory: directory,
             distinctId: "customer"
         )
-        let presentationFinished = expectation(description: "presentation finished")
-        await MainActor.run {
-            presenter.onFinish = { presentationFinished.fulfill() }
-        }
-        // The response-context write fails. The next journal write, which
-        // records abandonment with that response, must finish before the
-        // renderer may retire the already-published ordinary event batch.
-        persistenceFailures.failNext(1)
-        events.routedCaptureFailuresRemaining = 1
-
-        let accepted = await request.onEmissionBatch(presentationBatch(
-            request: request,
-            invocationId: "response-abandonment-durable",
-            emissions: [
-                .init(
-                    id: "00000000-0000-7000-8000-000000000337",
-                    sequence: 0,
-                    occurredAt: "2026-08-29T12:00:00.120Z",
-                    name: SystemEventNames.responseSet,
-                    payload: [
-                        "field": .string("plan"),
-                        "value": .string("yearly"),
-                    ]
-                ),
-                .init(
-                    id: "00000000-0000-7000-8000-000000000338",
-                    sequence: 1,
-                    occurredAt: "2026-08-29T12:00:00.121Z",
-                    name: "button_tapped",
-                    payload: [:]
-                ),
-            ]
-        ))
-
-        XCTAssertTrue(accepted)
-        await fulfillment(of: [presentationFinished], timeout: 2)
-        let persistedRuns = try await journal.runs()
-        let run = try XCTUnwrap(persistedRuns.first)
-        XCTAssertEqual(run.completion?.outcome, "abandoned")
-        guard case .string(let response)? = run.outputs.responses["plan"] else {
-            return XCTFail("Expected the abandoned run to retain the response")
-        }
-        XCTAssertEqual(response, "yearly")
-        XCTAssertNil(run.context.responses["plan"])
-        XCTAssertEqual(events.routedEvents.map(\.name), [
-            JourneyEvents.journeyLegStarted,
-            "button_tapped",
-        ])
+        let remainingRuns = try await journal.runs()
+        XCTAssertTrue(remainingRuns.isEmpty)
+        await recoveryService.shutdown()
     }
 
-    func testPublishedRendererBatchRemainsRejectedWhenResponseAbandonmentCannotPersist() async throws {
+    func testRendererBatchRemainsRejectedWhenPublicationCannotStage() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -1165,10 +1206,10 @@ final class DeviceLegServiceTests: XCTestCase {
             directory: directory,
             distinctId: "customer"
         )
-        // Fail both the response-context write and the fallback abandonment
-        // write. The ordinary event is already durable, but the renderer must
-        // keep this batch because its response has no durable owner yet.
-        persistenceFailures.failNext(2)
+        // The outbox record owns the response and stable event IDs together.
+        // If that write fails, the renderer keeps the batch and no event may
+        // become visible.
+        persistenceFailures.failNext(1)
 
         let batch = presentationBatch(
             request: request,
@@ -1202,7 +1243,6 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertNil(run.context.responses["plan"])
         XCTAssertEqual(events.routedEvents.map(\.name), [
             JourneyEvents.journeyLegStarted,
-            "button_tapped",
         ])
         let finishedOwners = await MainActor.run { presenter.finishedOwners }
         XCTAssertTrue(finishedOwners.isEmpty)
@@ -1212,8 +1252,16 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(
             beforeSendCalls.callCount,
             1,
-            "A stable-ID renderer replay must not rerun beforeSend"
+            "beforeSend must run only after the outbox owns the batch"
         )
+        let runsAfterRetry = try await journal.runs()
+        let persistedAfterRetry = try XCTUnwrap(runsAfterRetry.first)
+        guard case .string(let response)? =
+            persistedAfterRetry.context.responses["plan"] else {
+            return XCTFail("Expected the retried response to be durable")
+        }
+        XCTAssertEqual(response, "yearly")
+        XCTAssertNil(persistedAfterRetry.pendingPresentationPublication)
     }
 
     func testBeforeSendDroppedRenderedEventDoesNotAdvanceItsScreenRoute() async throws {
@@ -1383,7 +1431,77 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertTrue(events.routedEvents.contains { $0.name == "continue" })
     }
 
-    func testRenderedBatchStagesResponsesUntilPublishingAllEventsAndUsesFirstRoute() async throws {
+    func testBeforeSendRenderedPropertyRewriteDrivesRoutedControl() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load(
+            entryKey: "renderedEntry"
+        )
+        let snapshot = renderedEventPropertyBranchSnapshot(
+            try await authenticatedRenderedSnapshot(fixture),
+            eventName: "continue"
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        events.preparedTriggerBeforeSend = { event in
+            guard event.name == "continue" else { return event }
+            var properties = event.properties
+            properties["allow"] = true
+            return NuxieEvent(
+                id: event.id,
+                name: event.name,
+                distinctId: event.distinctId,
+                properties: properties,
+                timestamp: event.timestamp
+            )
+        }
+        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            presenter: presenter
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presentedRequest = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presentedRequest)
+        let completed = expectation(description: "transformed event completed")
+        events.addEventHandler(pattern: JourneyEvents.journeyLegCompleted) { _ in
+            completed.fulfill()
+        }
+
+        let accepted = await request.onEmissionBatch(presentationBatch(
+            request: request,
+            invocationId: "transformed-event-properties",
+            emissions: [.init(
+                id: "00000000-0000-7000-8000-000000000326",
+                sequence: 0,
+                occurredAt: "2026-08-29T12:00:00.123Z",
+                name: "continue",
+                payload: ["allow": .bool(false)]
+            )]
+        ))
+
+        XCTAssertTrue(accepted)
+        await fulfillment(of: [completed], timeout: 2)
+        let routed = try XCTUnwrap(events.routedEvents.first {
+            $0.name == "continue"
+        })
+        XCTAssertEqual(routed.properties["allow"] as? Bool, true)
+        let completion = try XCTUnwrap(events.routedEvents.first {
+            $0.name == JourneyEvents.journeyLegCompleted
+        })
+        XCTAssertEqual(
+            completion.properties["outcome"] as? String,
+            "transformed"
+        )
+    }
+
+    func testRenderedBatchDurablyStagesResponsesBeforePublishingAllEventsAndUsesFirstRoute() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -1541,10 +1659,10 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertTrue(accepted)
         let persistenceObservations = await persistence.observations()
         XCTAssertEqual(persistenceObservations, [
-            nil,
-            nil,
-            nil,
-            nil,
+            "monthly",
+            "monthly",
+            "monthly",
+            "monthly",
         ])
         XCTAssertEqual(events.routedEvents.map(\.name), [
             JourneyEvents.journeyLegStarted,
@@ -1826,6 +1944,67 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
+    func testBeforeSendLifecyclePropertyRewriteDrivesRoutedControl() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load(
+            entryKey: "renderedEntry"
+        )
+        let snapshot = renderedEventPropertyBranchSnapshot(
+            try await authenticatedRenderedSnapshot(fixture),
+            eventName: SystemEventNames.screenDismissed
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        events.preparedTriggerBeforeSend = { event in
+            guard event.name == SystemEventNames.screenDismissed else {
+                return event
+            }
+            var properties = event.properties
+            properties["allow"] = true
+            return NuxieEvent(
+                id: event.id,
+                name: event.name,
+                distinctId: event.distinctId,
+                properties: properties,
+                timestamp: event.timestamp
+            )
+        }
+        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            presenter: presenter
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presentedRequest = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presentedRequest)
+
+        let result = await request.onScreenDismissed(
+            "screen_welcome",
+            nil,
+            "user"
+        )
+
+        XCTAssertEqual(result, .completed)
+        let routed = try XCTUnwrap(events.routedEvents.first {
+            $0.name == SystemEventNames.screenDismissed
+        })
+        XCTAssertEqual(routed.properties["allow"] as? Bool, true)
+        let completion = try XCTUnwrap(events.routedEvents.first {
+            $0.name == JourneyEvents.journeyLegCompleted
+        })
+        XCTAssertEqual(
+            completion.properties["outcome"] as? String,
+            "transformed"
+        )
+    }
+
     func testRuntimeDelegateProvidesIntroEligibilityAuthorizationForItsOwner() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = try await authenticatedRenderedSnapshot(fixture)
@@ -1903,6 +2082,15 @@ final class DeviceLegServiceTests: XCTestCase {
 
         await delegate.experienceViewController(
             controller,
+            didDismissScreen: "screen_welcome",
+            revealingScreenId: "screen_details",
+            method: "navigate"
+        )
+        let revealsAfterSourceDismissal = await reveals.count()
+        XCTAssertEqual(revealsAfterSourceDismissal, 1)
+
+        await delegate.experienceViewController(
+            controller,
             didChangeScreen: "screen_details"
         )
         let revealsAfterNavigation = await reveals.count()
@@ -1914,6 +2102,49 @@ final class DeviceLegServiceTests: XCTestCase {
         )
         let revealsAfterRepeatedCallback = await reveals.count()
         XCTAssertEqual(revealsAfterRepeatedCallback, 2)
+    }
+
+    func testRuntimeDelegateJoinsInitialRevealCallback() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load(
+            entryKey: "renderedEntry"
+        )
+        let snapshot = try await authenticatedRenderedSnapshot(fixture)
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[
+            arm.reference.descriptorSha256
+        ])
+        let gate = DeviceLegScreenCommitGate()
+        let request = DeviceLegPresentationRequest(
+            release: release,
+            delivery: snapshot.profile.delivery,
+            screenId: "screen_welcome",
+            journeyId: "journey-reveal-join",
+            ownerDistinctId: "customer-reveal-join",
+            reservation: nil,
+            onEmissionBatch: { _ in true },
+            onPresentationRevealed: {
+                await gate.suspend()
+            },
+            onOutcome: { _, _ in true }
+        )
+        let delegate = await MainActor.run {
+            DeviceLegRuntimeDelegate(request: request)
+        }
+        let controller = await MainActor.run {
+            MockExperienceViewController(mockExperienceVersionId: "version_golden")
+        }
+        let completion = DeviceLegCompletionFlag()
+
+        let reveal = Task {
+            await delegate.experienceViewControllerDidReveal(controller)
+            completion.finish()
+        }
+        await gate.waitUntilEntered()
+
+        XCTAssertFalse(completion.isCompleted)
+        await gate.release()
+        await reveal.value
+        XCTAssertTrue(completion.isCompleted)
     }
 
     func testRuntimeDelegateResolvesDynamicPurchasePlacementFromActiveScreenState() async throws {
@@ -6384,6 +6615,74 @@ final class DeviceLegServiceTests: XCTestCase {
                 host: .init(kind: .screen, screenId: "screen_welcome"),
                 eventName: eventName,
                 entryStepId: "dismissed"
+            )],
+            screens: [.init(
+                id: "screen_welcome",
+                defaultViewModelName: "WelcomeModel",
+                defaultInstanceId: "welcome",
+                responseCaptures: []
+            )]
+        )
+    }
+
+    private func renderedEventPropertyBranchSnapshot(
+        _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        eventName: String
+    ) -> DeviceLegProfileCatalog.Snapshot {
+        replacing(
+            snapshot,
+            steps: [
+                .init(
+                    kind: .action,
+                    id: "present",
+                    action: [
+                        "type": .string("navigate"),
+                        "screenId": .string("screen_welcome"),
+                    ],
+                    outlets: [:],
+                    outcome: nil
+                ),
+                .init(
+                    kind: .action,
+                    id: "branch_on_event",
+                    action: [
+                        "type": .string("condition"),
+                        "branches": .array([.object([
+                            "id": .string("allowed"),
+                            "condition": .object([
+                                "type": .string("Truthy"),
+                                "value": .object([
+                                    "type": .string("Event.Field"),
+                                    "key": .string("allow"),
+                                ]),
+                            ]),
+                        ])]),
+                    ],
+                    outlets: [
+                        "allowed": "accepted",
+                        "default": "rejected",
+                    ],
+                    outcome: nil
+                ),
+                .init(
+                    kind: .complete,
+                    id: "accepted",
+                    action: nil,
+                    outlets: nil,
+                    outcome: "transformed"
+                ),
+                .init(
+                    kind: .complete,
+                    id: "rejected",
+                    action: nil,
+                    outlets: nil,
+                    outcome: "original"
+                ),
+            ],
+            routes: [.init(
+                host: .init(kind: .screen, screenId: "screen_welcome"),
+                eventName: eventName,
+                entryStepId: "branch_on_event"
             )],
             screens: [.init(
                 id: "screen_welcome",

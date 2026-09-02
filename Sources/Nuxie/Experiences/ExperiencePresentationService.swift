@@ -54,55 +54,6 @@ protocol ExperiencePresentationServiceProtocol: DeviceLegPresenting {
     @MainActor func onAppDidEnterBackground()
 }
 
-extension ExperiencePresentationServiceProtocol {
-    @MainActor
-    func deviceLegProfileRefreshDidComplete() {}
-
-    @MainActor
-    func reserveDeviceLegPresentation(
-        ownerDistinctId: String
-    ) -> (any DeviceLegPresentationReservation)? {
-        _ = ownerDistinctId
-        return nil
-    }
-
-    @MainActor
-    func presentDeviceLeg(
-        _ request: DeviceLegPresentationRequest
-    ) async -> DeviceLegPresentationResult {
-        _ = request
-        return .declined
-    }
-
-    @MainActor
-    func navigateDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String,
-        screenId: String,
-        transition: ExperienceReleaseJSONValue?
-    ) async -> DeviceLegPresentationNavigationResult {
-        _ = journeyId
-        _ = ownerDistinctId
-        _ = screenId
-        _ = transition
-        return .noPresentation
-    }
-
-    @MainActor
-    func finishDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
-    ) async {
-        _ = journeyId
-        _ = ownerDistinctId
-    }
-
-    @MainActor
-    func shutdownDeviceLegPresentation(ownerDistinctId: String) async {
-        _ = ownerDistinctId
-    }
-}
-
 /// Service for presenting experiences in dedicated windows over the entire app
 @MainActor
 final class ExperiencePresentationService: ExperiencePresentationServiceProtocol {
@@ -749,10 +700,10 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         guard currentDeviceLegContext?.journeyId == journeyId,
               currentDeviceLegContext?.distinctId == ownerDistinctId,
               presentationOwner == .journey(journeyId),
-              case .string(let type)? = action["type"] else {
+              let type = DeviceLegActionType(action: action) else {
             return nil
         }
-        guard type == "purchase" else { return action }
+        guard type == .purchase else { return action }
         guard let placementValue = action["placementId"],
               let delegate = currentRuntimeDelegate as? DeviceLegRuntimeDelegate,
               let placementId = delegate.resolvePresentationString(
@@ -782,7 +733,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
               presentationOwner == .journey(journeyId) else {
             return .declined
         }
-        guard case .string(let type)? = action["type"] else {
+        guard let type = DeviceLegActionType(action: action),
+              type.isPresentationOwned else {
             return .failed
         }
         guard await waitForDeviceLegForegroundAuthority(
@@ -798,7 +750,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         }
         let result: DeviceLegPresentationActionResult
         switch type {
-        case "back":
+        case .back:
             let steps: Int
             if case .number(let value)? = action["steps"],
                value.isFinite,
@@ -829,7 +781,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 result = .failed
             }
 
-        case "purchase":
+        case .purchase:
             guard let placementValue = action["placementId"],
                   let delegate = currentRuntimeDelegate as? DeviceLegRuntimeDelegate,
                   let placementId = delegate.resolvePresentationString(
@@ -847,14 +799,14 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             )
             result = .awaitingOutcome
 
-        case "restore":
+        case .restore:
             controller.performRestore(outcomeCorrelation: CommerceOutcomeCorrelation(
                 eventId: effectId,
                 distinctId: ownerDistinctId
             ))
             result = .awaitingOutcome
 
-        case "request_notifications":
+        case .requestNotifications:
             result = .permissionResolved(
                 outlet: "next",
                 event: await controller.resolveDeviceLegNotificationPermissionEvent(
@@ -862,7 +814,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 )
             )
 
-        case "request_permission":
+        case .requestPermission:
             guard case .string(let permissionType)? = action["permissionType"],
                   !permissionType.isEmpty else {
                 return .failed
@@ -875,7 +827,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 )
             )
 
-        case "request_tracking":
+        case .requestTracking:
             result = .permissionResolved(
                 outlet: "next",
                 event: await controller.resolveDeviceLegTrackingPermissionEvent(
@@ -883,7 +835,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 )
             )
 
-        case "open_link":
+        case .openLink:
             guard case .string(let url)? = action["url"],
                   !url.isEmpty,
                   case .string(let target)? = action["target"] else {
@@ -892,7 +844,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             controller.performOpenLink(urlString: url, target: target)
             result = .advanced(outlet: "next")
 
-        case "dismiss":
+        case .dismiss:
             controller.performDismiss(reason: .userDismissed)
             result = .handled
 
