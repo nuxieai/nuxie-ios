@@ -287,13 +287,7 @@ extension DeviceLegPresenting {
 }
 
 @MainActor
-final class DeviceLegRuntimeDelegate:
-    ExperienceRuntimeDelegate,
-    IntroEligibilityAuthorizationContextProviding,
-    NotificationPermissionEventReceiver,
-    RequestPermissionEventReceiver,
-    TrackingPermissionEventReceiver
-{
+final class DeviceLegRuntimeDelegate {
     nonisolated let introEligibilityAuthorizationContext:
         IntroEligibilityAuthorizationContext
     nonisolated private let journeyId: String
@@ -325,6 +319,7 @@ final class DeviceLegRuntimeDelegate:
     private var screenDismissalWasRejected = false
     private var topLevelScreenDismissalWasProcessed = false
     private var hostDismissalRequested = false
+    private var presentationIsRevealed = false
     private var presentationEpoch: UInt64 = 0
     private var resolved = false
     private var resolutionWaiters: [CheckedContinuation<Bool, Never>]?
@@ -358,6 +353,7 @@ final class DeviceLegRuntimeDelegate:
         _ controller: ExperienceViewController,
         didChangeScreen screenId: String
     ) async {
+        let becameVisible = activeScreenId != screenId
         presentationEpoch &+= 1
         dismissedSurfaceScreenId = nil
         screenDismissalWasRejected = false
@@ -370,6 +366,12 @@ final class DeviceLegRuntimeDelegate:
                   activeScreenId != screenId {
             navigationHistory.append(activeScreenId)
             pendingBackNavigation = nil
+        }
+        if presentationIsRevealed, becameVisible {
+            // Once the outer surface is revealed, screen activation is the
+            // visibility boundary for later variants. The navigation request
+            // result alone is only control-flow acknowledgement.
+            await onPresentationRevealed()
         }
         let committed = await onScreenChanged(screenId)
         guard !resolved, committed else {
@@ -600,6 +602,8 @@ final class DeviceLegRuntimeDelegate:
         _ controller: ExperienceViewController
     ) {
         _ = controller
+        guard !presentationIsRevealed else { return }
+        presentationIsRevealed = true
         Task { @MainActor [onPresentationRevealed] in
             await onPresentationRevealed()
         }
@@ -707,6 +711,17 @@ final class DeviceLegRuntimeDelegate:
         pendingBackNavigation = nil
     }
 }
+
+extension DeviceLegRuntimeDelegate: ExperienceRuntimeDelegate {}
+
+extension DeviceLegRuntimeDelegate:
+    IntroEligibilityAuthorizationContextProviding {}
+
+extension DeviceLegRuntimeDelegate: NotificationPermissionEventReceiver {}
+
+extension DeviceLegRuntimeDelegate: RequestPermissionEventReceiver {}
+
+extension DeviceLegRuntimeDelegate: TrackingPermissionEventReceiver {}
 
 func deviceLegFoundationValue(
     _ value: ExperienceReleaseJSONValue?

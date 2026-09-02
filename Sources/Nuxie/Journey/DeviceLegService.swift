@@ -376,8 +376,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         event: NuxieEvent,
         excludingRunId: String? = nil
     ) async {
-        guard let expectedType = Self.presentationOutcomeActionType[event.name],
-              let outlet = Self.presentationOutcomeOutlets[event.name],
+        guard let route = Self.presentationOutcomeRoutes[event.name],
               let journal,
               isCurrent(state),
               isCurrentIdentity(journal: journal) else { return }
@@ -405,7 +404,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 $0.id == candidate.stepId
             }), let action = step.action,
                   case .string(let actionType)? = action["type"],
-                  actionType == expectedType,
+                  actionType == route.actionType,
                   let effectId = candidate.effectReceipts[step.id],
                   presentationOutcomeMatches(
                     event,
@@ -414,7 +413,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     action: action,
                     release: release
                   ),
-                  let nextStepId = step.outlets?[outlet] else {
+                  let nextStepId = step.outlets?[route.outlet] else {
                 continue
             }
             do {
@@ -474,22 +473,36 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         return true
     }
 
-    private static let presentationOutcomeActionType: [String: String] = [
-        SystemEventNames.purchaseCompleted: "purchase",
-        SystemEventNames.purchaseFailed: "purchase",
-        SystemEventNames.purchaseCancelled: "purchase",
-        SystemEventNames.restoreCompleted: "restore",
-        SystemEventNames.restoreFailed: "restore",
-        SystemEventNames.restoreNoPurchases: "restore",
-    ]
+    private struct PresentationOutcomeRoute: Sendable {
+        let actionType: String
+        let outlet: String
+    }
 
-    private static let presentationOutcomeOutlets: [String: String] = [
-        SystemEventNames.purchaseCompleted: "completed",
-        SystemEventNames.purchaseFailed: "failed",
-        SystemEventNames.purchaseCancelled: "cancelled",
-        SystemEventNames.restoreCompleted: "restored",
-        SystemEventNames.restoreFailed: "failed",
-        SystemEventNames.restoreNoPurchases: "noPurchases",
+    private static let presentationOutcomeRoutes: [String: PresentationOutcomeRoute] = [
+        SystemEventNames.purchaseCompleted: .init(
+            actionType: "purchase",
+            outlet: "completed"
+        ),
+        SystemEventNames.purchaseFailed: .init(
+            actionType: "purchase",
+            outlet: "failed"
+        ),
+        SystemEventNames.purchaseCancelled: .init(
+            actionType: "purchase",
+            outlet: "cancelled"
+        ),
+        SystemEventNames.restoreCompleted: .init(
+            actionType: "restore",
+            outlet: "restored"
+        ),
+        SystemEventNames.restoreFailed: .init(
+            actionType: "restore",
+            outlet: "failed"
+        ),
+        SystemEventNames.restoreNoPurchases: .init(
+            actionType: "restore",
+            outlet: "noPurchases"
+        ),
     ]
 
     func onAppDidEnterBackground() async {
@@ -677,7 +690,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         if finalized {
             revokingCustomers.remove(journal.distinctId)
         }
-        return true
+        return finalized
     }
 
     private func evaluateStateArms(
@@ -1518,8 +1531,11 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             occurredAt: dateProvider.now(),
             admission: admission
         )
-        await events.drainCommittedRouting()
-        if directlyRoutedPresentationRunByEventId[eventId] == run.id {
+        let routingDrained = await events.drainCommittedRouting()
+        let routeWillReachSubscribers = capture?.routesLocally == true
+            && capture?.isNewlyCommitted == true
+        if (!routeWillReachSubscribers || routingDrained),
+           directlyRoutedPresentationRunByEventId[eventId] == run.id {
             directlyRoutedPresentationRunByEventId.removeValue(forKey: eventId)
         }
         guard let capture,
@@ -1935,8 +1951,11 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 occurredAt: occurredAt,
                 admission: admission
               )
-        await events.drainCommittedRouting()
-        if directlyRoutedPresentationRunByEventId[eventId] == run.id {
+        let routingDrained = await events.drainCommittedRouting()
+        let routeWillReachSubscribers = capture?.routesLocally == true
+            && capture?.isNewlyCommitted == true
+        if (!routeWillReachSubscribers || routingDrained),
+           directlyRoutedPresentationRunByEventId[eventId] == run.id {
             directlyRoutedPresentationRunByEventId.removeValue(forKey: eventId)
         }
         guard capture != nil,
@@ -2267,18 +2286,16 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                         transition: action["transition"]
                     ) {
                     case .navigated:
-                        await markExperimentExposuresShown(
-                            for: run,
-                            journal: journal,
-                            executionFenceToken: executionFenceToken
-                        )
+                        // The runtime's visible-screen callback owns exposure.
+                        // A navigation request completing is not itself proof
+                        // that the selected variant reached the surface.
                         return
                     case .alreadyActive:
                         // A no-op navigation does not reactivate the renderer's
                         // current screen, so synthesize the lifecycle input the
                         // control graph would receive after a real transition.
                         await markExperimentExposuresShown(
-                            for: run,
+                            forRunId: run.id,
                             journal: journal,
                             executionFenceToken: executionFenceToken
                         )
@@ -2378,7 +2395,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                         onPresentationRevealed: { [weak self] in
                             guard let self else { return }
                             await self.markExperimentExposuresShown(
-                                for: presentedRun,
+                                forRunId: presentedRun.id,
                                 journal: journal,
                                 executionFenceToken: executionFenceToken
                             )
@@ -2662,11 +2679,21 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     }
 
     private func markExperimentExposuresShown(
-        for run: DeviceLegRun,
+        forRunId runId: String,
         journal: DeviceLegRunJournal,
         executionFenceToken: DeviceLegProfileFenceToken
     ) async {
-        guard run.experimentExposures.contains(where: {
+        let runs: [DeviceLegRun]
+        do {
+            runs = try await journal.runs()
+        } catch {
+            LogWarning(
+                "DeviceLegService: failed to read pending experiment exposure: \(error)"
+            )
+            return
+        }
+        guard let run = runs.first(where: { $0.id == runId }),
+              run.experimentExposures.contains(where: {
             $0.shownAt == nil && !$0.queued
         }), let admission = journalCommitAdmission(
             journal: journal,
@@ -2674,7 +2701,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         ) else { return }
         do {
             guard try await journal.markExperimentExposuresShown(
-                run.id,
+                runId,
                 at: dateProvider.now(),
                 admission: admission
             ) else { return }
