@@ -1017,8 +1017,12 @@ private extension DeviceLegService {
                 }
                 let checkpoint = parked.park.flatMap { park -> DeviceLegControlExecutor.Checkpoint? in
                     guard let wakeAt = park.wakeAt,
-                          let wakeMillis = milliseconds(wakeAt) else { return nil }
-                    let anchor = park.anchorAt.flatMap(milliseconds) ?? wakeMillis
+                          let wakeMillis = DeviceLegTime.milliseconds(wakeAt) else {
+                        return nil
+                    }
+                    let anchor = park.anchorAt.flatMap(
+                        DeviceLegTime.milliseconds
+                    ) ?? wakeMillis
                     return .init(
                         anchorAtMillis: anchor,
                         wakeAtMillis: wakeMillis
@@ -1493,7 +1497,7 @@ private extension DeviceLegService {
               isCurrentIdentity(journal: journal) else {
             return true
         }
-        let now = milliseconds(dateProvider.now()) ?? 0
+        let now = DeviceLegTime.milliseconds(dateProvider.now()) ?? 0
         pendingPresentationDismissalContinuations[run.id] = .init(
             run: run,
             release: release,
@@ -1979,7 +1983,15 @@ private extension DeviceLegService {
                         return
                     case .noPresentation:
                         break
-                    case .declined, .failed:
+                    case .declined:
+                        await parkPresentationRetry(
+                            run,
+                            stepId: command.step.id,
+                            journal: journal,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    case .failed:
                         await finish(
                             run,
                             outcome: "abandoned",
@@ -2107,11 +2119,21 @@ private extension DeviceLegService {
                             }
                         }
                     ))
-                    await reserved?.release()
                     switch result {
                     case .shown:
+                        await reserved?.release()
                         return
-                    case .declined, .failed:
+                    case .declined:
+                        await parkPresentationRetry(
+                            run,
+                            stepId: command.step.id,
+                            journal: journal,
+                            executionFenceToken: executionFenceToken
+                        )
+                        await reserved?.release()
+                        return
+                    case .failed:
+                        await reserved?.release()
                         await finish(
                             run,
                             outcome: "abandoned",
@@ -2570,7 +2592,9 @@ private extension DeviceLegService {
     private func controlEvent(
         _ event: NuxieEvent
     ) -> DeviceLegControlExecutor.Event? {
-        guard let occurredAt = milliseconds(event.timestamp) else { return nil }
+        guard let occurredAt = DeviceLegTime.milliseconds(event.timestamp) else {
+            return nil
+        }
         var properties = ExactJSONObject<ExperienceReleaseJSONValue>()
         for (key, value) in event.properties {
             if let converted = DeviceLegBoundaryProjector.jsonValue(value) {
@@ -2622,6 +2646,31 @@ private extension DeviceLegService {
 // MARK: - Presentation availability and wake scheduling
 
 private extension DeviceLegService {
+    private func parkPresentationRetry(
+        _ run: DeviceLegRun,
+        stepId: String,
+        journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async {
+        guard let admission = journalCommitAdmission(
+            journal: journal,
+            executionFenceToken: executionFenceToken
+        ) else { return }
+        do {
+            guard try await journal.park(
+                run.id,
+                stepId: stepId,
+                until: dateProvider.now(),
+                admission: admission
+            ) else { return }
+        } catch {
+            LogWarning(
+                "DeviceLegService: failed to preserve declined presentation: \(error)"
+            )
+        }
+        await scheduleNextWake()
+    }
+
     private func presentationDidBecomeAvailable() async {
         guard initialized, foreground else { return }
         await resumeParkedRuns(event: nil)
@@ -2686,13 +2735,6 @@ private extension DeviceLegService {
         wakeTask = nil
     }
 
-    private func milliseconds(_ date: Date) -> Int64? {
-        let value = date.timeIntervalSince1970 * 1_000
-        guard value.isFinite,
-              value >= Double(Int64.min),
-              value <= Double(Int64.max) else { return nil }
-        return Int64(value.rounded(.towardZero))
-    }
 }
 
 extension DeviceLegService: DeviceLegServiceProtocol {}

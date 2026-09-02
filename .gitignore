@@ -48,7 +48,7 @@ playground.xcworkspace
 .swiftpm/
 
 .build/
-.artifacts
+.artifacts/
 __pycache__/
 *.xcresult/
 macos-unit-crash-reports/
