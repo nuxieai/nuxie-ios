@@ -318,10 +318,11 @@ is_allowlisted_indirect_emission_site() {
       # cataloged at their JourneyEvents constant sites.
       return 0
       ;;
-    'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:128' \
-      | 'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:133')
+    'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:85' \
+      | 'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:115' \
+      | 'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:120')
       # The exposure reporter's stable-capture helper forwards one of the
-      # three constants cataloged at its typed call sites.
+      # three constants cataloged at its typed projection sites.
       return 0
       ;;
     'Sources/Nuxie/Events/EventLog.swift:4147' \
@@ -408,9 +409,9 @@ $experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePrese
 $experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1576
 $experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1607
 $experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:547
-$experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3298\n$experiment_exposure\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:84
-$experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3257\n$experiment_exposure_error\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:98
-$experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3314\n$experiment_exposure_fallback\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:91
+$experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3298\n$experiment_exposure\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:137
+$experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3257\n$experiment_exposure_error\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:144
+$experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3314\n$experiment_exposure_fallback\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:141
 $feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:550
 $feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:705
 $feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1217
@@ -579,6 +580,10 @@ while IFS=$'\t' read -r event_name production_lane emitter; do
     source_radius=8
   elif [[ "$emitter" == Sources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:* ]]; then
     source_radius=10
+  elif [[ "$emitter" == Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:* ]]; then
+    # Exposure kind projection selects the finite event name before the
+    # reporter enters its single stable-capture path.
+    source_radius=64
   fi
   first_line=$((source_line > source_radius ? source_line - source_radius : 1))
   last_line=$((source_line + source_radius))
