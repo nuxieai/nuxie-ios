@@ -880,11 +880,14 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 let flowId = "host-dismiss-during-window-presentation"
                 let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
                 let recorder = ExperiencePresentationLifecycleRecorder()
+                let presentationGate = ExperiencePresentationTestGate()
+                let hostDismissalStarted = ExperiencePresentationTestSignal()
                 mockExperienceService.mockViewControllers[flowId] = mockVC
-                mockWindowProvider.onWindowLifecycleEvent = { event in
-                    if event == "window-present" {
-                        mockWindowProvider.createdWindows.first?.presentDelay = 0.05
-                    }
+                mockWindowProvider.presentHandler = {
+                    await presentationGate.wait()
+                }
+                recorder.hostDismissalWillHandler = {
+                    hostDismissalStarted.signal()
                 }
 
                 let presentation = Task { @MainActor in
@@ -894,11 +897,14 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         runtimeDelegate: recorder
                     ))
                 }
-                await polling(expect {
-                    mockWindowProvider.createdWindows.first?.presentCalled == true
-                }).value.toEventually(beTrue(), timeout: .seconds(1))
+                await presentationGate.waitUntilSuspended()
 
-                await service.dismissCurrentExperienceFromHost()
+                let dismissal = Task { @MainActor in
+                    await service.dismissCurrentExperienceFromHost()
+                }
+                await hostDismissalStarted.wait()
+                presentationGate.resume()
+                await dismissal.value
 
                 do {
                     _ = try await presentation.value.value
