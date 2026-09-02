@@ -83,7 +83,7 @@ actor DeviceLegProfileCatalog {
     }
 
     struct Prepared: Sendable {
-        fileprivate let snapshot: Snapshot
+        let snapshot: Snapshot
         fileprivate let promotions:
             [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
         let authority: ProfileDeliveryAuthority

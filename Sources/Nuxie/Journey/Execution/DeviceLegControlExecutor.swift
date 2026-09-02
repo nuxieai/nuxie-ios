@@ -22,8 +22,25 @@ struct DeviceLegControlExecutor {
         }
     }
 
+    struct ExperimentSelection: Equatable, Sendable {
+        enum Source: Equatable, Sendable {
+            case profile
+            case noAssignment
+            case invalidAssignment(variantId: String)
+        }
+
+        let experimentId: String
+        let variantId: String
+        let isHoldout: Bool
+        let source: Source
+    }
+
     enum Result {
-        case advance(stepId: String, context: ArmedDeviceLeg.Context)
+        case advance(
+            stepId: String,
+            context: ArmedDeviceLeg.Context,
+            experimentSelection: ExperimentSelection?
+        )
         case park(stepId: String, checkpoint: Checkpoint)
         case complete(outcome: String)
         case dispatch(stepId: String, action: [String: ExperienceReleaseJSONValue])
@@ -76,11 +93,36 @@ struct DeviceLegControlExecutor {
         case "experiment":
             let control = try decode(CompiledExperiment.self, action)
             guard let first = control.variants.first?.id else { return .invalid }
-            let assigned: String?
-            if let stored = assignments[control.experimentId], let assignment = stored { assigned = assignment.variantId }
-            else { assigned = nil }
-            let selected = control.variants.contains { $0.id == assigned } ? assigned! : first
-            return advance(outlets, outlet: selected, context: context)
+            let assignment: DeviceLegFactTable.Assignment?
+            if let stored = assignments[control.experimentId], let stored {
+                assignment = stored
+            } else {
+                assignment = nil
+            }
+            let assignedVariantId = assignment?.variantId
+            let hasAssignedVariant = control.variants.contains {
+                $0.id == assignedVariantId
+            }
+            let selected = hasAssignedVariant ? assignedVariantId! : first
+            let source: ExperimentSelection.Source
+            if hasAssignedVariant {
+                source = .profile
+            } else if let assignedVariantId {
+                source = .invalidAssignment(variantId: assignedVariantId)
+            } else {
+                source = .noAssignment
+            }
+            return advance(
+                outlets,
+                outlet: selected,
+                context: context,
+                experimentSelection: .init(
+                    experimentId: control.experimentId,
+                    variantId: selected,
+                    isHoldout: assignment?.isHoldout ?? false,
+                    source: source
+                )
+            )
         case "time_window":
             let control = try decode(CompiledTimeWindow.self, action)
             guard let timezone = TimeWindowMath.resolveTimezone(control.timezone, current: currentDeviceTimezone,
@@ -137,8 +179,19 @@ struct DeviceLegControlExecutor {
         }
     }
 
-    private func advance(_ outlets: [String: String], outlet: String, context: ArmedDeviceLeg.Context) -> Result {
-        outlets[outlet].map { .advance(stepId: $0, context: context) } ?? .invalid
+    private func advance(
+        _ outlets: [String: String],
+        outlet: String,
+        context: ArmedDeviceLeg.Context,
+        experimentSelection: ExperimentSelection? = nil
+    ) -> Result {
+        outlets[outlet].map {
+            .advance(
+                stepId: $0,
+                context: context,
+                experimentSelection: experimentSelection
+            )
+        } ?? .invalid
     }
 
     private func decode<T: Decodable>(_ type: T.Type, _ action: [String: ExperienceReleaseJSONValue]) throws -> T {

@@ -721,7 +721,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         }
         guard isCurrentAdmission(admission) else { return false }
 
-        let prepared = try await experienceService.prepareReleaseProfile(
+        let preparedReleaseProfile = try await experienceService.prepareReleaseProfile(
             profile.planeProfile == nil ? profile.releases : nil
         )
         guard isCurrentAdmission(admission) else { return false }
@@ -740,23 +740,6 @@ internal actor ProfileService: ProfileServiceProtocol {
             }
             guard isCurrentAdmission(admission) else { return false }
         }
-
-        guard let routingCatalog = try await experienceService.commitReleaseProfile(
-            prepared,
-            generation: admission.generation,
-            admission: cacheStoreAdmission(for: admission)
-        ) else { return false }
-        guard isCurrentAdmission(admission) else { return false }
-
-        let installedMembership = await segmentService.replaceSnapshot(
-            profile.segmentMemberships,
-            definitions: profile.segments,
-            for: distinctId,
-            profileGeneration: admission.generation,
-            admission: cacheStoreAdmission(for: admission)
-        )
-        guard installedMembership,
-              isCurrentAdmission(admission) else { return false }
 
         let committedDeviceSnapshot: DeviceLegProfileCatalog.Snapshot?
         if let preparedDeviceProfile {
@@ -777,6 +760,29 @@ internal actor ProfileService: ProfileServiceProtocol {
             committedDeviceSnapshot = nil
         }
         guard isCurrentAdmission(admission) else { return false }
+
+        // StoreKit and optimistic-entitlement authority must derive only from
+        // a canonical profile whose replay high-water has committed. Attaching
+        // the prepared snapshot earlier would publish commerce authority even
+        // when the durable high-water write subsequently rejected the profile.
+        guard let routingCatalog = try await experienceService.commitReleaseProfile(
+            preparedReleaseProfile.includingDeviceLegSnapshot(
+                committedDeviceSnapshot
+            ),
+            generation: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
+        ) else { return false }
+        guard isCurrentAdmission(admission) else { return false }
+
+        let installedMembership = await segmentService.replaceSnapshot(
+            profile.segmentMemberships,
+            definitions: profile.segments,
+            for: distinctId,
+            profileGeneration: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
+        )
+        guard installedMembership,
+              isCurrentAdmission(admission) else { return false }
 
         // Advance the customer-commit tracker before the first customer-
         // scoped write so a stale reduced fallback cannot interleave with

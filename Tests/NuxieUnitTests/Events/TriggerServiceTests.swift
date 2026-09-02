@@ -69,6 +69,18 @@ private actor FlowShownBeforeJourneyDecisionService: JourneyServiceProtocol {
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
 }
 
+private actor CommittedSystemEventRecorder {
+    private var eventIds: [String] = []
+
+    func append(_ event: NuxieEvent) {
+        eventIds.append(event.id)
+    }
+
+    func values() -> [String] {
+        eventIds
+    }
+}
+
 final class TriggerServiceTests: AsyncSpec {
     override class func spec() {
         var mockEventLog: MockEventLog!
@@ -92,6 +104,70 @@ final class TriggerServiceTests: AsyncSpec {
         }
 
         describe("trigger") {
+            it("routes durable-carrier system events in the committing capture") {
+                let eventLog = MockEventLog()
+                let recorder = CommittedSystemEventRecorder()
+                await eventLog.subscribeCommitted { event in
+                    await recorder.append(event)
+                }
+                let fallbackTrigger = MockTriggerService()
+                let sink = TriggerSystemEventSink(
+                    routedEvents: eventLog,
+                    triggerProvider: { fallbackTrigger }
+                )
+
+                let captured = await sink.captureStableSystemEvent(
+                    SystemEventNames.purchaseCompleted,
+                    properties: ["transaction_id": "transaction-committed"],
+                    eventId: "purchase-completed:committed-subscriber",
+                    distinctId: "customer-a",
+                    routeToJourneys: true,
+                    ensureDurableCarrier: true
+                )
+
+                expect(captured).to(beTrue())
+                let recordedEventIds = await recorder.values()
+                expect(recordedEventIds).to(equal([
+                    "purchase-completed:committed-subscriber",
+                ]))
+                expect(eventLog.committedRoutingDrainCallCount).to(equal(1))
+            }
+
+            it("retains failed live stable captures for ordered retry") {
+                let eventLog = MockEventLog()
+                eventLog.routedCaptureFailuresRemaining = 1
+                let recorder = CommittedSystemEventRecorder()
+                await eventLog.subscribeCommitted { event in
+                    await recorder.append(event)
+                }
+                let sink = TriggerSystemEventSink(
+                    routedEvents: eventLog,
+                    stableCaptureRetryBaseDelayNanoseconds: 1_000_000,
+                    triggerProvider: { MockTriggerService() }
+                )
+                let eventId = "purchase-failed:queued-capture"
+
+                let accepted = await sink.capture(
+                    SystemEventNames.purchaseFailed,
+                    properties: ["reason": "store_unavailable"],
+                    eventId: eventId,
+                    distinctId: "customer-a"
+                )
+                let duplicateWhilePending = await sink.capture(
+                    SystemEventNames.purchaseFailed,
+                    properties: ["reason": "store_unavailable"],
+                    eventId: eventId,
+                    distinctId: "customer-a"
+                )
+
+                expect(accepted).to(beFalse())
+                expect(duplicateWhilePending).to(beFalse())
+                await expect { await recorder.values() }.toEventually(
+                    equal([eventId]),
+                    timeout: .seconds(1)
+                )
+            }
+
             it("keeps cold captured-event recovery pending until Journey routing is available") {
                 await mockJourneyService.setCapturedEventRoutingAvailable(false)
 

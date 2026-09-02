@@ -4,6 +4,10 @@ import Foundation
 /// this capability instead of reaching through the public singleton facade.
 protocol SystemEventSink: AnyObject, Sendable {
     func emit(_ name: String, properties: [String: Any]?)
+    /// Returns true only after the stable capture is durable and its required
+    /// local routing has settled. Production may keep retrying after a false
+    /// result, but durable callers must retain their own recovery evidence until
+    /// a later attempt is acknowledged.
     func capture(
         _ name: String,
         properties: [String: Any]?,
@@ -15,6 +19,16 @@ protocol SystemEventSink: AnyObject, Sendable {
         properties: [String: Any]?,
         eventId: String,
         distinctId: String
+    ) async -> Bool
+    /// Durably captures one stable event and routes it to local Journey
+    /// subscribers. Generic sinks preserve the explicit carrier-first contract;
+    /// the production sink overrides this with EventLog's atomic commit lane.
+    func captureAndRoute(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String,
+        ensureDurableCarrier: Bool
     ) async -> Bool
 }
 
@@ -43,6 +57,29 @@ extension SystemEventSink {
         )
     }
 
+    func captureAndRoute(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String,
+        ensureDurableCarrier: Bool
+    ) async -> Bool {
+        if ensureDurableCarrier {
+            guard await captureOnly(
+                name,
+                properties: properties,
+                eventId: eventId,
+                distinctId: distinctId
+            ) else { return false }
+        }
+        return await capture(
+            name,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId
+        )
+    }
+
     /// Captures one stable event identity with an explicit local-routing
     /// policy. External commercial declarations can require the durable
     /// carrier before Journey routing; cold recovery remains capture-only.
@@ -54,23 +91,15 @@ extension SystemEventSink {
         routeToJourneys: Bool,
         ensureDurableCarrier: Bool = false
     ) async -> Bool {
-        if ensureDurableCarrier {
-            guard await captureOnly(
-                name,
-                properties: properties,
-                eventId: eventId,
-                distinctId: distinctId
-            ) else { return false }
-        }
         if routeToJourneys {
-            return await capture(
+            return await captureAndRoute(
                 name,
                 properties: properties,
                 eventId: eventId,
-                distinctId: distinctId
+                distinctId: distinctId,
+                ensureDurableCarrier: ensureDurableCarrier
             )
         }
-        if ensureDurableCarrier { return true }
         return await captureOnly(
             name,
             properties: properties,
@@ -93,12 +122,167 @@ final class DiscardingSystemEventSink: SystemEventSink, Sendable {
     }
 }
 
+/// Keeps a live correlated commerce outcome owned after a transient EventLog
+/// failure. Stable IDs make every attempt idempotent; retries remain ordered by
+/// first admission so two outcomes cannot overtake each other locally.
+private actor StableSystemEventCaptureRetryQueue {
+    private struct PendingCapture: @unchecked Sendable {
+        let name: String
+        let properties: [String: Any]?
+        let eventId: String
+        let distinctId: String
+    }
+
+    private struct RetryResult: Sendable {
+        let isEmpty: Bool
+        let madeProgress: Bool
+    }
+
+    private let routedEvents: (any RoutedStableSystemEventCapturing)?
+    private let triggerProvider: @Sendable () -> TriggerServiceProtocol
+    private let baseDelayNanoseconds: UInt64
+    private let maximumDelayNanoseconds: UInt64
+    private var pendingByEventId: [String: PendingCapture] = [:]
+    private var pendingOrder: [String] = []
+    private var retryTask: Task<Void, Never>?
+
+    init(
+        routedEvents: (any RoutedStableSystemEventCapturing)?,
+        triggerProvider: @escaping @Sendable () -> TriggerServiceProtocol,
+        baseDelayNanoseconds: UInt64
+    ) {
+        self.routedEvents = routedEvents
+        self.triggerProvider = triggerProvider
+        self.baseDelayNanoseconds = max(baseDelayNanoseconds, 1)
+        maximumDelayNanoseconds = max(baseDelayNanoseconds, 2_000_000_000)
+    }
+
+    /// Reserves retry ownership before the first suspension. A queued retry is
+    /// deliberately reported as unacknowledged until EventLog commits it, so a
+    /// durable caller keeps its own recovery evidence across process death.
+    func captureOrQueue(
+        _ name: String,
+        properties: UncheckedSendable<[String: Any]?>,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        if let pending = pendingByEventId[eventId] {
+            guard pending.name == name,
+                  pending.distinctId == distinctId else {
+                LogError("Stable system event retry rejected an event-id collision: \(eventId)")
+                return false
+            }
+            return false
+        }
+
+        let pending = PendingCapture(
+            name: name,
+            properties: properties.value,
+            eventId: eventId,
+            distinctId: distinctId
+        )
+        pendingByEventId[eventId] = pending
+        pendingOrder.append(eventId)
+
+        if await attempt(pending) {
+            remove(eventId)
+            return true
+        }
+
+        LogWarning("Stable system event capture queued for retry: \(eventId)")
+        startRetryTaskIfNeeded()
+        return false
+    }
+
+    private func attempt(_ pending: PendingCapture) async -> Bool {
+        let properties = UncheckedSendable(pending.properties)
+        if let routedEvents {
+            guard await routedEvents.captureAndRouteSystemEvent(
+                pending.name,
+                properties: properties.value,
+                eventId: pending.eventId,
+                distinctId: pending.distinctId
+            ) != nil else { return false }
+            // EventLog commits before enqueueing its route. Keep retry
+            // ownership until every subscriber admitted with that commit has
+            // returned; DeviceLeg persists its correlated transition before
+            // returning from the subscriber callback.
+            await routedEvents.drainCommittedRouting()
+            return true
+        }
+        return await triggerProvider().captureSystemEvent(
+            pending.name,
+            properties: properties.value,
+            eventId: pending.eventId,
+            distinctId: pending.distinctId
+        )
+    }
+
+    private func remove(_ eventId: String) {
+        pendingByEventId.removeValue(forKey: eventId)
+        pendingOrder.removeAll { $0 == eventId }
+    }
+
+    private func startRetryTaskIfNeeded() {
+        guard retryTask == nil, !pendingOrder.isEmpty else { return }
+        let baseDelayNanoseconds = baseDelayNanoseconds
+        let maximumDelayNanoseconds = maximumDelayNanoseconds
+        retryTask = Task { [weak self] in
+            var delay = baseDelayNanoseconds
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    return
+                }
+                guard let result = await self?.retryPending() else { return }
+                if result.isEmpty { return }
+                if result.madeProgress {
+                    delay = baseDelayNanoseconds
+                } else {
+                    let (doubled, overflowed) = delay.multipliedReportingOverflow(by: 2)
+                    delay = overflowed
+                        ? maximumDelayNanoseconds
+                        : min(doubled, maximumDelayNanoseconds)
+                }
+            }
+        }
+    }
+
+    private func retryPending() async -> RetryResult {
+        let eventIds = pendingOrder
+        var madeProgress = false
+        for eventId in eventIds {
+            guard let pending = pendingByEventId[eventId] else { continue }
+            if await attempt(pending) {
+                remove(eventId)
+                madeProgress = true
+            }
+        }
+        let isEmpty = pendingOrder.isEmpty
+        if isEmpty {
+            retryTask = nil
+        }
+        return RetryResult(isEmpty: isEmpty, madeProgress: madeProgress)
+    }
+}
+
 /// Routes internal events through the same trigger pipeline as `NuxieSDK.trigger`.
 final class TriggerSystemEventSink: SystemEventSink, @unchecked Sendable {
     private let triggerProvider: @Sendable () -> TriggerServiceProtocol
+    private let stableCaptureRetries: StableSystemEventCaptureRetryQueue
 
-    init(triggerProvider: @escaping @Sendable () -> TriggerServiceProtocol) {
+    init(
+        routedEvents: (any RoutedStableSystemEventCapturing)? = nil,
+        stableCaptureRetryBaseDelayNanoseconds: UInt64 = 50_000_000,
+        triggerProvider: @escaping @Sendable () -> TriggerServiceProtocol
+    ) {
         self.triggerProvider = triggerProvider
+        stableCaptureRetries = StableSystemEventCaptureRetryQueue(
+            routedEvents: routedEvents,
+            triggerProvider: triggerProvider,
+            baseDelayNanoseconds: stableCaptureRetryBaseDelayNanoseconds
+        )
     }
 
     func emit(_ name: String, properties: [String: Any]?) {
@@ -119,9 +303,28 @@ final class TriggerSystemEventSink: SystemEventSink, @unchecked Sendable {
         distinctId: String
     ) async -> Bool {
         let properties = UncheckedSendable(properties)
-        return await triggerProvider().captureSystemEvent(
+        return await stableCaptureRetries.captureOrQueue(
             name,
-            properties: properties.value,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId
+        )
+    }
+
+    func captureAndRoute(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String,
+        ensureDurableCarrier _: Bool
+    ) async -> Bool {
+        // EventLog atomically commits the durable carrier and enqueues local
+        // routing for a newly committed stable ID. A separate carrier-first
+        // call here would make the later same-ID route look like a replay and
+        // correctly suppress it.
+        await capture(
+            name,
+            properties: properties,
             eventId: eventId,
             distinctId: distinctId
         )

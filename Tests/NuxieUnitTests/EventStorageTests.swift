@@ -667,6 +667,60 @@ final class EventStorageTests: AsyncSpec {
                 expect(cleared).to(beFalse())
             }
 
+            it("rolls back every stable capture when a later batch item fails") {
+                let ownership = JourneyEventOwnership(
+                    journeyId: "journey-with-unresolved-ownership",
+                    epoch: 4
+                )
+                try await internalEventStore.recordUnresolvedJourneyOwnershipResponse(
+                    sourceEventId: "unresolved-source",
+                    ownership: ownership,
+                    recordedAt: Date(timeIntervalSince1970: 1_000)
+                )
+                let first = try StoredEvent(
+                    id: "screen-batch:first",
+                    name: "first",
+                    distinctId: "customer-a"
+                )
+                let blocked = try StoredEvent(
+                    id: "screen-batch:blocked",
+                    name: "blocked",
+                    distinctId: "customer-a"
+                )
+
+                await expect {
+                    try await internalEventStore.commitStableCaptureBatch(
+                        [
+                            StableEventCaptureRecord(
+                                eventId: first.id,
+                                event: first,
+                                recordedAt: Date(timeIntervalSince1970: 2_000),
+                                ownership: nil
+                            ),
+                            StableEventCaptureRecord(
+                                eventId: blocked.id,
+                                event: blocked,
+                                recordedAt: Date(timeIntervalSince1970: 2_001),
+                                ownership: ownership
+                            ),
+                        ],
+                        assigningCommitSequence: true,
+                        admission: nil
+                    )
+                }.to(throwError())
+
+                let firstOutcome = try await internalEventStore.queryStableCapture(
+                    id: first.id
+                )
+                let blockedOutcome = try await internalEventStore.queryStableCapture(
+                    id: blocked.id
+                )
+                let pending = try await internalEventStore.queryPendingDelivery(limit: 10)
+                expect(firstOutcome).to(beNil())
+                expect(blockedOutcome).to(beNil())
+                expect(pending).to(beEmpty())
+            }
+
             it("inserts a stable pending event exactly once") {
                 let event = try StoredEvent(
                     id: "purchase-completed:transaction-1",

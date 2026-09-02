@@ -472,8 +472,21 @@ final class ForwardingPersistenceTests: XCTestCase {
       stableLane.components(separatedBy: "store.commitStableCapture(").count - 1,
       1
     )
+    let stableBatchLane = try functionBody(
+      in: source,
+      startingWith: "  func captureAndRouteSystemEventBatch(\n    _ items: [RoutedStableSystemEventBatchItem],\n    admission: any StableEventCaptureBatchCommitAdmission\n  ) async -> [String: DurableTriggerCapture]? {"
+    )
+    XCTAssertEqual(
+      stableBatchLane.components(separatedBy: "store.commitStableCaptureBatch(").count - 1,
+      1
+    )
+    XCTAssertEqual(
+      stableBatchLane.components(separatedBy: "store.queryStableCapture(").count - 1,
+      1
+    )
     XCTAssertEqual(source.components(separatedBy: "store.insert(").count - 1, 1)
     XCTAssertEqual(source.components(separatedBy: "store.commitStableCapture(").count - 1, 1)
+    XCTAssertEqual(source.components(separatedBy: "store.commitStableCaptureBatch(").count - 1, 1)
     let persistBody = try functionBody(in: source, startingWith: "  private func persist(")
     XCTAssertEqual(persistBody.components(separatedBy: "store.insert(").count - 1, 1)
 
@@ -492,6 +505,7 @@ final class ForwardingPersistenceTests: XCTestCase {
       "clearUnresolvedJourneyOwnershipResponse": 1,
       "close": 1,
       "commitStableCapture": 1,
+      "commitStableCaptureBatch": 1,
       "countEvents": 2,
       "deleteStableDropsOlderThan": 1,
       "getEventCount": 1,
@@ -509,7 +523,7 @@ final class ForwardingPersistenceTests: XCTestCase {
       "queryEventsForUser": 4,
       "queryPendingDelivery": 1,
       "queryRecentEvents": 1,
-      "queryStableCapture": 1,
+      "queryStableCapture": 2,
       "queryUnresolvedJourneyOwnershipResponse": 2,
       "readOrInitializeHistoryCoverage": 1,
       "reassignEvents": 1,

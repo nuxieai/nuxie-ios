@@ -437,8 +437,15 @@ final class TransactionServiceTests: AsyncSpec {
                         featureService: featureService
                     )
 
+                    let correlation = CommerceOutcomeCorrelation(
+                        eventId: "00000000-0000-7000-8000-000000000701",
+                        distinctId: "test-user"
+                    )
                     let purchase = Task {
-                        try await transactionService.purchase(mockProduct)
+                        try await transactionService.purchase(
+                            mockProduct,
+                            outcomeCorrelation: correlation
+                        )
                     }
                     var receivedProduct: StoreProduct?
                     for _ in 0..<100 where receivedProduct == nil {
@@ -469,6 +476,7 @@ final class TransactionServiceTests: AsyncSpec {
                     expect(record?.appAccountToken) == purchaseStorageScope.appAccountToken(
                         distinctId: "test-user"
                     )
+                    expect(record?.checkoutCompletionEventId) == correlation.eventId
                     expect(receivedProduct?.nativeCheckoutAppAccountToken) == record?.appAccountToken
 
                     await suspended.complete(.cancelled)
@@ -484,9 +492,16 @@ final class TransactionServiceTests: AsyncSpec {
                 it("uses the isolated Test Store without invoking StoreKit or the delegate") {
                     mockTestStore = MockNuxieTestStore()
                     transactionService = makeTransactionService()
+                    let correlation = CommerceOutcomeCorrelation(
+                        eventId: "00000000-0000-7000-8000-000000000702",
+                        distinctId: "test-user"
+                    )
 
                     await expect {
-                        try await transactionService.purchase(mockProduct)
+                        try await transactionService.purchase(
+                            mockProduct,
+                            outcomeCorrelation: correlation
+                        )
                     }.toNot(throwError())
 
                     let purchaseCalls = await mockTestStore.purchaseCalls
@@ -505,6 +520,7 @@ final class TransactionServiceTests: AsyncSpec {
                     expect(outcomes.first?.placementId) == "placement"
                     expect(outcomes.first?.storeProductId) == "com.test.product"
                     expect(outcomes.first?.testStore) == true
+                    expect(outcomes.first?.outcomeEventId) == correlation.eventId
                 }
 
                 it("marks a failed Test Store outcome with its checkout environment") {
@@ -516,9 +532,16 @@ final class TransactionServiceTests: AsyncSpec {
                     )
                     transactionService = makeTransactionService()
                     settings.setPurchaseDelegate(nil)
+                    let correlation = CommerceOutcomeCorrelation(
+                        eventId: "00000000-0000-7000-8000-000000000703",
+                        distinctId: "test-user"
+                    )
 
                     await expect {
-                        try await transactionService.purchase(mockProduct)
+                        try await transactionService.purchase(
+                            mockProduct,
+                            outcomeCorrelation: correlation
+                        )
                     }.to(throwError { error in
                         guard let storeKitError = error as? Nuxie.StoreKitError,
                               case .purchaseFailed = storeKitError else {
@@ -530,6 +553,7 @@ final class TransactionServiceTests: AsyncSpec {
                         $0.name == SystemEventNames.purchaseFailed
                     })?.properties
                     expect(failed?["test_store"] as? Bool) == true
+                    expect(eventSink.routedEventIds) == [correlation.eventId]
                 }
 
                 context("with purchase delegate configured") {
@@ -1015,6 +1039,47 @@ final class TransactionServiceTests: AsyncSpec {
                                 }.count
                             }
                         }.toEventually(equal(1), timeout: .seconds(2))
+                    }
+
+                    it("routes a correlated cancellation under the claimed effect id") {
+                        mockPurchaseDelegate.simulatedDelay = 0
+                        mockPurchaseDelegate.configureForCancellation()
+                        let activeTransactionService = transactionService!
+                        let activeEventSink = eventSink!
+                        let retainedProduct = mockProduct!
+                        let correlation = CommerceOutcomeCorrelation(
+                            eventId: "00000000-0000-7000-8000-000000000705",
+                            distinctId: "test-user"
+                        )
+                        let controller = await MainActor.run {
+                            RecordingPurchaseExperienceViewController(
+                                mockExperienceVersionId: "correlated-purchase-cancelled",
+                                products: [retainedProduct],
+                                transactionService: activeTransactionService,
+                                systemEventSink: activeEventSink
+                            )
+                        }
+
+                        await MainActor.run {
+                            controller.performPurchase(
+                                placementId: retainedProduct.placementId,
+                                outcomeCorrelation: correlation
+                            )
+                        }
+
+                        await expect(eventSink.routedEventIds).toEventually(
+                            equal([correlation.eventId]),
+                            timeout: .seconds(2)
+                        )
+                        expect(eventSink.events.map(\.name).filter {
+                            $0 == SystemEventNames.purchaseCancelled
+                        }.count) == 1
+                        let legacyEmissions = await MainActor.run {
+                            controller.emittedSystemEvents.filter {
+                                $0.name == SystemEventNames.purchaseCancelled
+                            }
+                        }
+                        expect(legacyEmissions).to(beEmpty())
                     }
 
                     it("purchases a product resolved after navigating to a later screen") {
@@ -1871,9 +1936,15 @@ final class TransactionServiceTests: AsyncSpec {
                     await mockTestStore.setRestoreResponse(
                         NuxieTestStoreRestoreResponse(result: .restored)
                     )
+                    let correlation = CommerceOutcomeCorrelation(
+                        eventId: "00000000-0000-7000-8000-000000000704",
+                        distinctId: "test-user"
+                    )
 
                     await expect {
-                        try await transactionService.restore()
+                        try await transactionService.restore(
+                            outcomeCorrelation: correlation
+                        )
                     }.toNot(throwError())
 
                     let restoreCalls = await mockTestStore.restoreCalls
@@ -1881,6 +1952,7 @@ final class TransactionServiceTests: AsyncSpec {
                     let restoreDistinctIds = await mockTestStore.restoreDistinctIds
                     expect(restoreDistinctIds) == ["test-user"]
                     expect(mockNativePurchaseAdapter.restoreCallCount) == 0
+                    expect(eventSink.routedEventIds) == [correlation.eventId]
                 }
 
                 it("gives Test Store restore precedence over a purchase delegate") {

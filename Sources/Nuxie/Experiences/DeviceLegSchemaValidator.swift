@@ -119,7 +119,7 @@ enum DeviceLegSchemaValidator {
             if route["eventName"] as? String == "host_dismissed",
                let entry = steps.compactMap({ $0 as? [String: Any] }).first(where: { $0["id"] as? String == route["entryStepId"] as? String }),
                let action = entry["action"] as? [String: Any], let type = action["type"] as? String,
-               ["navigate", "back", "purchase", "restore", "request_notifications", "request_permission", "request_tracking", "open_link"].contains(type) {
+               ["navigate", "back", "purchase", "restore", "request_notifications", "request_permission", "request_tracking", "open_link", "dismiss"].contains(type) {
                 throw invalid
             }
             guard ids.contains(try identifier(route["entryStepId"])),
