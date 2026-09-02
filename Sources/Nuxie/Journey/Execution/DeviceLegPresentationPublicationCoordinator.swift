@@ -10,6 +10,25 @@ actor DeviceLegPresentationPublicationCoordinator {
         let admission: DeviceLegCommitAdmission
     }
 
+    struct BatchContinuation: Sendable {
+        let run: DeviceLegRun
+        let signal: DeviceLegControlExecutor.Signal
+        let checkpoint: DeviceLegControlExecutor.Checkpoint?
+    }
+
+    struct BatchFailure: Sendable {
+        let publishedOrdinaryEvents: Bool
+        let run: DeviceLegRun
+        let context: ArmedDeviceLeg.Context
+    }
+
+    enum BatchDisposition: Sendable {
+        case rejected
+        case accepted
+        case continueExecution(BatchContinuation)
+        case publicationFailed(BatchFailure)
+    }
+
     private let identity: IdentityServiceProtocol
     private let events: any RoutedStableSystemEventCapturing
     private let executionFence: DeviceLegProfileFence
@@ -31,6 +50,247 @@ actor DeviceLegPresentationPublicationCoordinator {
 
     func clearDirectRoutes() {
         directlyRoutedRunByEventId.removeAll()
+    }
+
+    /// Commits one renderer invocation as a durable unit. Response mutations
+    /// enter the run journal before ordinary events become visible, and the
+    /// pending marker is cleared by the same transition that consumes a routed
+    /// event. The service only owns presentation validation and the resulting
+    /// run continuation or terminal recovery.
+    func process(
+        _ batch: ScreenEmissionBatch,
+        for run: DeviceLegRun,
+        leg: DeviceLeg,
+        in journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> BatchDisposition {
+        let expectedStepId = run.stepId
+        let expectedCheckpoint = Self.controlCheckpoint(from: run.park)
+        let screenId = batch.source.screenId
+        let responseCaptures = Set(
+            leg.screens.first(where: { $0.id == screenId })?.responseCaptures
+                ?? []
+        )
+        var stagedRun = run
+        var responses = run.context.responses
+        var responsesChanged = false
+        var publicationItems: [
+            DeviceLegRun.PendingPresentationPublication.Item
+        ] = []
+        publicationItems.reserveCapacity(batch.emissions.count)
+
+        for emission in batch.emissions {
+            if emission.name == SystemEventNames.responseSet {
+                guard case .string(let field)? = emission.payload["field"],
+                      let value = emission.payload["value"],
+                      responseCaptures.contains(field) else {
+                    return .rejected
+                }
+                responses[field] = value.releaseJSONValue
+                responsesChanged = true
+                continue
+            }
+            if emission.name == SystemEventNames.responseUnset {
+                guard case .string(let field)? = emission.payload["field"],
+                      responseCaptures.contains(field) else {
+                    return .rejected
+                }
+                responses[field] = nil
+                responsesChanged = true
+                continue
+            }
+            guard let occurredAt = DeviceLegPresentationEventProjector.date(
+                emission.occurredAt
+            ), Self.milliseconds(occurredAt) != nil else {
+                return .rejected
+            }
+            let properties = DeviceLegPresentationEventProjector.values(
+                payload: ExactJSONObject(
+                    emission.payload.mapValues(\.releaseJSONValue)
+                ),
+                screenId: screenId,
+                run: run
+            )
+            publicationItems.append(.init(
+                name: emission.name,
+                properties: properties,
+                eventId: emission.id,
+                occurredAt: occurredAt
+            ))
+        }
+
+        var context = ArmedDeviceLeg.Context(
+            event: run.context.event,
+            responses: responses
+        )
+        let publication = DeviceLegRun.PendingPresentationPublication(
+            invocationId: batch.invocationId,
+            context: context,
+            items: publicationItems
+        )
+        do {
+            guard let admission = commitAdmission(
+                in: journal,
+                executionFenceToken: executionFenceToken
+            ), try await journal.stagePresentationPublication(
+                run.id,
+                expectedStepId: expectedStepId,
+                expectedCheckpoint: expectedCheckpoint,
+                publication: publication,
+                admission: admission
+            ) else { return .rejected }
+        } catch {
+            LogWarning(
+                "DeviceLegPresentationPublicationCoordinator: failed to stage renderer publication: \(error)"
+            )
+            return .rejected
+        }
+        stagedRun.context = context
+
+        guard let ordinaryItems = DeviceLegPresentationEventProjector
+            .routedItems(
+                publication.items,
+                distinctId: journal.distinctId
+            ) else { return .rejected }
+
+        var publishedOrdinaryEvents = false
+        var routedEvent: NuxieEvent?
+        var routeStepId: String?
+        if !ordinaryItems.isEmpty {
+            guard let published = await publish(
+                ordinaryItems,
+                forRunId: run.id,
+                in: journal,
+                executionFenceToken: executionFenceToken
+            ) else { return .rejected }
+            publishedOrdinaryEvents = true
+            guard published.remainsAuthorized else { return .accepted }
+            for item in ordinaryItems {
+                guard let capture = published.captures[item.request.eventId],
+                      capture.routesLocally,
+                      let candidate = DeviceLegPresentationEventProjector.route(
+                        in: leg,
+                        eventName: capture.event.name,
+                        screenId: screenId
+                      ) else {
+                    continue
+                }
+                routedEvent = capture.event
+                routeStepId = candidate
+                break
+            }
+        }
+
+        do {
+            guard let current = try await journal.runs().first(where: {
+                $0.id == run.id
+                    && $0.completion == nil
+                    && $0.stepId == expectedStepId
+            }) else {
+                return .publicationFailed(.init(
+                    publishedOrdinaryEvents: publishedOrdinaryEvents,
+                    run: stagedRun,
+                    context: context
+                ))
+            }
+            stagedRun = current
+        } catch {
+            return .publicationFailed(.init(
+                publishedOrdinaryEvents: publishedOrdinaryEvents,
+                run: stagedRun,
+                context: context
+            ))
+        }
+
+        if let routedEvent, let routeStepId {
+            guard let controlEvent = DeviceLegPresentationEventProjector
+                .controlEvent(routedEvent) else {
+                return .publicationFailed(.init(
+                    publishedOrdinaryEvents: publishedOrdinaryEvents,
+                    run: stagedRun,
+                    context: context
+                ))
+            }
+            context = ArmedDeviceLeg.Context(
+                event: controlEvent.properties,
+                responses: responses
+            )
+            do {
+                guard let admission = commitAdmission(
+                    in: journal,
+                    executionFenceToken: executionFenceToken
+                ), try await journal.transition(
+                    run.id,
+                    stepId: routeStepId,
+                    context: context,
+                    clearingPresentationPublication: batch.invocationId,
+                    admission: admission
+                ) else {
+                    return .publicationFailed(.init(
+                        publishedOrdinaryEvents: publishedOrdinaryEvents,
+                        run: stagedRun,
+                        context: context
+                    ))
+                }
+            } catch {
+                LogWarning(
+                    "DeviceLegPresentationPublicationCoordinator: failed to persist screen route: \(error)"
+                )
+                return .publicationFailed(.init(
+                    publishedOrdinaryEvents: publishedOrdinaryEvents,
+                    run: stagedRun,
+                    context: context
+                ))
+            }
+            stagedRun.stepId = routeStepId
+            stagedRun.context = context
+            stagedRun.park = nil
+            stagedRun.pendingPresentationPublication = nil
+            return .continueExecution(.init(
+                run: stagedRun,
+                signal: .init(
+                    event: controlEvent,
+                    responsesChanged: responsesChanged
+                ),
+                checkpoint: nil
+            ))
+        }
+
+        do {
+            guard let admission = commitAdmission(
+                in: journal,
+                executionFenceToken: executionFenceToken
+            ), try await journal.clearPresentationPublication(
+                run.id,
+                invocationId: batch.invocationId,
+                admission: admission
+            ) else {
+                return .publicationFailed(.init(
+                    publishedOrdinaryEvents: publishedOrdinaryEvents,
+                    run: stagedRun,
+                    context: context
+                ))
+            }
+        } catch {
+            LogWarning(
+                "DeviceLegPresentationPublicationCoordinator: failed to clear renderer publication: \(error)"
+            )
+            return .publicationFailed(.init(
+                publishedOrdinaryEvents: publishedOrdinaryEvents,
+                run: stagedRun,
+                context: context
+            ))
+        }
+        stagedRun.pendingPresentationPublication = nil
+        guard responsesChanged,
+              Self.stepAcceptsResponseChange(stagedRun.stepId, in: leg) else {
+            return .accepted
+        }
+        return .continueExecution(.init(
+            run: stagedRun,
+            signal: .init(responsesChanged: true),
+            checkpoint: Self.controlCheckpoint(from: stagedRun.park)
+        ))
     }
 
     func publish(
@@ -230,6 +490,54 @@ actor DeviceLegPresentationPublicationCoordinator {
             identity.publishIfCurrentIdentityFenceToken(token) {}
         }
     }
+
+    private func commitAdmission(
+        in journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) -> DeviceLegCommitAdmission? {
+        guard executionFence.isCurrent(executionFenceToken),
+              let identityFence = identity.performWithCurrentIdentityFence(
+                journal.distinctId,
+                { _ in () }
+              ) else { return nil }
+        return DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFence.token,
+            executionFence: executionFence,
+            executionFenceToken: executionFenceToken
+        )
+    }
+
+    private static func stepAcceptsResponseChange(
+        _ stepId: String,
+        in leg: DeviceLeg
+    ) -> Bool {
+        guard let action = leg.steps.first(where: { $0.id == stepId })?.action,
+              DeviceLegActionType(action: action) == .waitUntil,
+              case .object(let trigger)? = action["trigger"],
+              case .string(let kind)? = trigger["kind"] else {
+            return false
+        }
+        return kind == "response_change"
+            || kind == "event_or_response_change"
+    }
+
+    private static func controlCheckpoint(
+        from park: DeviceLegRun.Park?
+    ) -> DeviceLegControlExecutor.Checkpoint? {
+        guard let wakeAt = park?.wakeAt,
+              let wakeMillis = milliseconds(wakeAt) else { return nil }
+        let anchor = park?.anchorAt.flatMap(milliseconds) ?? wakeMillis
+        return .init(anchorAtMillis: anchor, wakeAtMillis: wakeMillis)
+    }
+
+    private static func milliseconds(_ date: Date) -> Int64? {
+        let value = date.timeIntervalSince1970 * 1_000
+        guard value.isFinite,
+              value >= Double(Int64.min),
+              value <= Double(Int64.max) else { return nil }
+        return Int64(value.rounded(.towardZero))
+    }
 }
 
 private struct DeviceLegPresentationEventAttribution {
@@ -330,6 +638,38 @@ enum DeviceLegPresentationEventProjector {
         return routed
     }
 
+    static func route(
+        in leg: DeviceLeg,
+        eventName: String,
+        screenId: String?
+    ) -> String? {
+        screenId.flatMap { screenId in
+            leg.routes.first(where: {
+                $0.eventName == eventName
+                    && $0.host.kind == .screen
+                    && $0.host.screenId == screenId
+            })?.entryStepId
+        } ?? leg.routes.first(where: {
+            $0.eventName == eventName && $0.host.kind == .journey
+        })?.entryStepId
+    }
+
+    static func controlEvent(
+        _ event: NuxieEvent
+    ) -> DeviceLegControlExecutor.Event? {
+        guard let occurredAt = milliseconds(event.timestamp) else { return nil }
+        var properties = ExactJSONObject<ExperienceReleaseJSONValue>()
+        for (key, value) in event.properties {
+            guard let converted = jsonValue(value) else { continue }
+            properties[key] = converted
+        }
+        return .init(
+            name: event.name,
+            occurredAtMillis: occurredAt,
+            properties: properties
+        )
+    }
+
     static func date(_ value: String) -> Date? {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [
@@ -347,5 +687,43 @@ enum DeviceLegPresentationEventProjector {
             return nil
         }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func jsonValue(_ value: Any) -> ExperienceReleaseJSONValue? {
+        if value is NSNull { return .null }
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                return .bool(number.boolValue)
+            }
+            guard number.doubleValue.isFinite else { return nil }
+            return .number(number.doubleValue)
+        }
+        if let value = value as? String { return .string(value) }
+        if let values = value as? [Any] {
+            var result: [ExperienceReleaseJSONValue] = []
+            result.reserveCapacity(values.count)
+            for value in values {
+                guard let converted = jsonValue(value) else { return nil }
+                result.append(converted)
+            }
+            return .array(result)
+        }
+        if let values = value as? [String: Any] {
+            var result = ExactJSONObject<ExperienceReleaseJSONValue>()
+            for (key, value) in values {
+                guard let converted = jsonValue(value) else { return nil }
+                result[key] = converted
+            }
+            return .object(result)
+        }
+        return nil
+    }
+
+    private static func milliseconds(_ date: Date) -> Int64? {
+        let value = date.timeIntervalSince1970 * 1_000
+        guard value.isFinite,
+              value >= Double(Int64.min),
+              value <= Double(Int64.max) else { return nil }
+        return Int64(value.rounded(.towardZero))
     }
 }

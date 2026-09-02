@@ -2,6 +2,14 @@ import CryptoKit
 import Foundation
 
 struct DeviceLegRun {
+    /// Profile values that an admitted run still needs after delivery changes
+    /// or disappears. Execution ownership is positional and cannot depend on
+    /// the server continuing to advertise an already-started leg.
+    struct ExecutionSnapshot: Codable, Sendable {
+        let delivery: ExperienceReleaseDelivery
+        let assignments: ExactJSONObject<DeviceLegFactTable.Assignment?>
+    }
+
     struct Park {
         let wakeAt: Date?
         let anchorAt: Date?
@@ -55,6 +63,7 @@ struct DeviceLegRun {
     let journeyId: String
     let generation: Int
     let reference: ArmedDeviceLeg.Reference
+    let executionSnapshot: ExecutionSnapshot?
     let artifactSHA256s: [String]
     let reentry: DeviceLeg.Reentry?
     let startedAt: Date
@@ -144,44 +153,35 @@ struct DeviceLegRunJournal {
     let distinctId: String
     private let root: URL
     private let file: URL
-    private let releasePinRoot: URL
-    private let releasePinDirectory: URL
+    private let releasePins: DeviceLegReleasePinStore
     private let revocationFile: URL
     private let lockScope: CacheFilesystemLockScope
-    private let releasePinBudgetBytes: Int
-    private let releasePinCountLimit: Int
     private let beforePersist: (@Sendable () throws -> Void)?
     /// A canonical profile may carry up to 24 MiB of admitted context. Keep
     /// the previous 16 MiB journal allowance as headroom for cursors,
     /// responses, receipts, and the reentry checklist.
     private static let maximumBytes = 40 * 1_024 * 1_024
-    private static let maximumReleasePinBytes =
-        ExperienceReleaseDescriptorLimits.profileBytes
-    private static let defaultReleasePinBudgetBytes = 256 * 1_024 * 1_024
-    private static let defaultReleasePinCountLimit = 1_024
 
     init(
         directory: URL,
         distinctId: String,
         storageScope: DeviceLegStorageScope = .testFixture,
-        releasePinBudgetBytes: Int = Self.defaultReleasePinBudgetBytes,
-        releasePinCountLimit: Int = Self.defaultReleasePinCountLimit,
+        releasePinBudgetBytes: Int = DeviceLegReleasePinStore.defaultBudgetBytes,
+        releasePinCountLimit: Int = DeviceLegReleasePinStore.defaultCountLimit,
         beforePersist: (@Sendable () throws -> Void)? = nil
     ) throws {
         self.distinctId = distinctId
-        self.releasePinBudgetBytes = max(0, releasePinBudgetBytes)
-        self.releasePinCountLimit = max(0, releasePinCountLimit)
         self.beforePersist = beforePersist
         let root = directory.appendingPathComponent("device-leg-journal-v1", isDirectory: true)
         self.root = root
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let digest = storageScope.customerDigest(distinctId: distinctId)
-        releasePinRoot = root.appendingPathComponent(
-            "release-pins",
-            isDirectory: true
+        releasePins = DeviceLegReleasePinStore(
+            journalRoot: root,
+            customerDigest: digest,
+            budgetBytes: releasePinBudgetBytes,
+            countLimit: releasePinCountLimit
         )
-        releasePinDirectory = releasePinRoot
-            .appendingPathComponent(digest, isDirectory: true)
         file = root.appendingPathComponent("\(digest).json")
         revocationFile = root.appendingPathComponent(
             "\(digest).revoked",
@@ -196,6 +196,7 @@ struct DeviceLegRunJournal {
         arm: ArmedDeviceLeg,
         release: DeviceLegReleaseProfileEntry,
         artifactSource: DeviceLegReleaseArtifactSource? = nil,
+        executionSnapshot: DeviceLegRun.ExecutionSnapshot,
         reentry: DeviceLeg.Reentry,
         entryStepId: String,
         at: Date,
@@ -215,16 +216,9 @@ struct DeviceLegRunJournal {
                 || artifactSource == nil else {
             throw DeviceLegJournalError.invalidState
         }
-        let releaseBytes = try ExactJSONCodec.encode(release)
-        guard releaseBytes.count <= Self.maximumReleasePinBytes else {
-            throw DeviceLegJournalError.storageLimit
-        }
         let file = file
         let root = root
-        let releasePinRoot = releasePinRoot
-        let releasePinDirectory = releasePinDirectory
-        let releasePinBudgetBytes = releasePinBudgetBytes
-        let releasePinCountLimit = releasePinCountLimit
+        let releasePins = releasePins
         let revocationFile = revocationFile
         let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
@@ -234,10 +228,7 @@ struct DeviceLegRunJournal {
             // Another customer instance may have removed this still-empty
             // directory as an orphan before this journal's first admission.
             // Recreate it inside the root transaction before cleanup/write.
-            try FileManager.default.createDirectory(
-                at: releasePinDirectory,
-                withIntermediateDirectories: true
-            )
+            try releasePins.ensureCustomerDirectory()
             guard !FileManager.default.fileExists(atPath: revocationFile.path) else {
                 return nil
             }
@@ -246,15 +237,10 @@ struct DeviceLegRunJournal {
                state.stateArmReceipts?.contains(stateArmReceipt) == true {
                 return nil
             }
-            try Self.removeUnreferencedReleasePins(
-                from: releasePinDirectory,
-                state: state
-            )
-            try Self.removeGlobalOrphanReleasePins(
-                from: releasePinRoot,
-                journalRoot: root,
-                excludingCustomerDirectory: releasePinDirectory
-            )
+            try releasePins.removeUnreferenced(Self.pinReferences(state))
+            try releasePins.removeGlobalOrphans(journalRoot: root) {
+                Self.pinReferences(try Self.load($0))
+            }
             let previous = state.checklist[arm.reference.experienceId]
             let journeyId: String
             let generation: Int
@@ -286,75 +272,22 @@ struct DeviceLegRunJournal {
             let runId = "\(journeyId):\(generation)"
             guard state.runs[runId] == nil else { return nil }
             guard state.runs.count < 1024 else { throw DeviceLegJournalError.storageLimit }
-            let pinFile = try Self.releasePinFile(
-                descriptorSHA256: arm.reference.descriptorSha256,
-                directory: releasePinDirectory
-            )
-            let pinExisted = FileManager.default.fileExists(
-                atPath: pinFile.path
-            )
-            let inventory = try Self.releasePinInventory(
-                in: releasePinRoot
-            )
-            guard inventory.count <= releasePinCountLimit,
-                  inventory.totalBytes <= releasePinBudgetBytes else {
-                throw DeviceLegJournalError.storageLimit
-            }
-            var createdPinFiles: [URL] = []
-            func removeCreatedPinFiles() {
-                for file in createdPinFiles {
-                    try? FileManager.default.removeItem(at: file)
-                }
-            }
-            var projectedPinBytes = inventory.totalBytes
-            if pinExisted {
-                guard try Self.loadReleasePinBytes(pinFile) == releaseBytes else {
-                    throw DeviceLegJournalError.invalidState
-                }
-            } else {
-                let (nextBytes, overflowed) = projectedPinBytes
-                    .addingReportingOverflow(releaseBytes.count)
-                guard inventory.count < releasePinCountLimit,
-                      !overflowed,
-                      nextBytes <= releasePinBudgetBytes else {
-                    throw DeviceLegJournalError.storageLimit
-                }
-                try releaseBytes.write(
-                    to: pinFile,
-                    options: [
-                        .atomic,
-                        .completeFileProtectionUntilFirstUserAuthentication,
-                    ]
-                )
-                createdPinFiles.append(pinFile)
-                projectedPinBytes = nextBytes
-            }
             let inheritedArtifactSHA256s = state.runs.values.first(where: {
                 $0.reference.descriptorSha256
                     == arm.reference.descriptorSha256
             })?.artifactSHA256s ?? []
-            let artifactSHA256s: [String]
-            do {
-                if let artifactSource {
-                    artifactSHA256s = try Self.pinReleaseArtifacts(
-                        artifactSource,
-                        in: releasePinDirectory,
-                        projectedBytes: &projectedPinBytes,
-                        byteLimit: releasePinBudgetBytes,
-                        createdFiles: &createdPinFiles
-                    )
-                } else {
-                    artifactSHA256s = inheritedArtifactSHA256s
-                }
-            } catch {
-                removeCreatedPinFiles()
-                throw error
-            }
+            let preparedPins = try releasePins.prepareAdmission(
+                release: release,
+                descriptorSHA256: arm.reference.descriptorSha256,
+                artifactSource: artifactSource,
+                inheritedArtifactSHA256s: inheritedArtifactSHA256s
+            )
             let run = DeviceLegRun(
                 journeyId: journeyId,
                 generation: generation,
                 reference: arm.reference,
-                artifactSHA256s: artifactSHA256s,
+                executionSnapshot: executionSnapshot,
+                artifactSHA256s: preparedPins.artifactSHA256s,
                 reentry: reentry,
                 startedAt: at,
                 isEnrollment: arm.binding.type == .new,
@@ -367,7 +300,7 @@ struct DeviceLegRunJournal {
             if let stateArmReceipt {
                 var receipts = state.stateArmReceipts ?? []
                 guard receipts.insert(stateArmReceipt).inserted else {
-                    removeCreatedPinFiles()
+                    preparedPins.rollback()
                     return nil
                 }
                 state.stateArmReceipts = receipts
@@ -382,7 +315,7 @@ struct DeviceLegRunJournal {
                             onAdmitted()
                         }
                     ) != nil else {
-                        removeCreatedPinFiles()
+                        preparedPins.rollback()
                         return nil
                     }
                 } else {
@@ -392,7 +325,7 @@ struct DeviceLegRunJournal {
                 }
                 return run
             } catch {
-                removeCreatedPinFiles()
+                preparedPins.rollback()
                 throw error
             }
         }
@@ -406,7 +339,7 @@ struct DeviceLegRunJournal {
         descriptorSHA256: String
     ) async throws -> DeviceLegReleaseProfileEntry? {
         let file = file
-        let releasePinDirectory = releasePinDirectory
+        let releasePins = releasePins
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
             to: file,
             lockScope: lockScope
@@ -417,16 +350,8 @@ struct DeviceLegRunJournal {
             }) else {
                 return nil
             }
-            let pinFile = try Self.releasePinFile(
-                descriptorSHA256: descriptorSHA256,
-                directory: releasePinDirectory
-            )
-            guard FileManager.default.fileExists(atPath: pinFile.path) else {
-                return nil
-            }
-            return try ExactJSONCodec.decode(
-                DeviceLegReleaseProfileEntry.self,
-                from: Self.loadReleasePinBytes(pinFile)
+            return try releasePins.release(
+                descriptorSHA256: descriptorSHA256
             )
         }
     }
@@ -435,28 +360,15 @@ struct DeviceLegRunJournal {
         forRunId runId: String
     ) async throws -> DeviceLegPinnedReleaseArtifacts? {
         let file = file
-        let releasePinDirectory = releasePinDirectory
+        let releasePins = releasePins
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
             to: file,
             lockScope: lockScope
         ) {
             let state = try Self.load(file)
             guard let run = state.runs[runId] else { return nil }
-            var objectURLsBySHA256: [String: URL] = [:]
-            for sha256 in run.artifactSHA256s {
-                let artifactFile = try Self.artifactPinFile(
-                    sha256: sha256,
-                    directory: releasePinDirectory
-                )
-                guard FileManager.default.fileExists(
-                    atPath: artifactFile.path
-                ) else {
-                    throw DeviceLegJournalError.invalidState
-                }
-                objectURLsBySHA256[sha256] = artifactFile
-            }
-            return DeviceLegPinnedReleaseArtifacts(
-                objectURLsBySHA256: objectURLsBySHA256
+            return try releasePins.pinnedArtifacts(
+                sha256s: run.artifactSHA256s
             )
         }
     }
@@ -752,17 +664,14 @@ struct DeviceLegRunJournal {
     func recover(at: Date) async throws -> [DeviceLegRun] {
         let root = root
         let file = file
-        let releasePinDirectory = releasePinDirectory
+        let releasePins = releasePins
         let revocationFile = revocationFile
         let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
             to: root,
             lockScope: lockScope
         ) {
-            try FileManager.default.createDirectory(
-                at: releasePinDirectory,
-                withIntermediateDirectories: true
-            )
+            try releasePins.ensureCustomerDirectory()
             var state = try Self.load(file)
             let revoked = FileManager.default.fileExists(
                 atPath: revocationFile.path
@@ -776,9 +685,8 @@ struct DeviceLegRunJournal {
                     pin = nil
                 } else if let cached = pinsByDigest[digest] {
                     pin = cached
-                } else if let loaded = try? Self.loadReleasePin(
-                    descriptorSHA256: digest,
-                    directory: releasePinDirectory
+                } else if let loaded = try? releasePins.release(
+                    descriptorSHA256: digest
                 ) {
                     pinsByDigest[digest] = loaded
                     pin = loaded
@@ -801,10 +709,7 @@ struct DeviceLegRunJournal {
             }
             try beforePersist?()
             try Self.persist(state, to: file)
-            try Self.removeUnreferencedReleasePins(
-                from: releasePinDirectory,
-                state: state
-            )
+            try releasePins.removeUnreferenced(Self.pinReferences(state))
             return state.runs.values.filter {
                 $0.park != nil && $0.completion == nil
             }
@@ -875,8 +780,7 @@ struct DeviceLegRunJournal {
     /// The caller must first establish that this wait should wake now.
     func resumeParked(
         _ id: String,
-        profileFence: DeviceLegProfileFence,
-        profileFenceToken: DeviceLegProfileFenceToken
+        admission: DeviceLegCommitAdmission
     ) async throws -> DeviceLegRun? {
         let file = file
         let beforePersist = beforePersist
@@ -890,13 +794,10 @@ struct DeviceLegRunJournal {
             }
             run.park = nil
             state.runs[id] = run
-            guard try profileFence.performIfCurrent(
-                profileFenceToken,
-                { () -> Void in
-                    try beforePersist?()
-                    try Self.persist(state, to: file)
-                }
-            ) != nil else { return nil }
+            guard try admission.commitJournalIfCurrent({ () -> Void in
+                try beforePersist?()
+                try Self.persist(state, to: file)
+            }) != nil else { return nil }
             return run
         }
     }
@@ -999,7 +900,7 @@ struct DeviceLegRunJournal {
         _ operation: @escaping @Sendable (inout Snapshot) throws -> Value
     ) async throws -> Value {
         let file = file
-        let releasePinDirectory = releasePinDirectory
+        let releasePins = releasePins
         let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(to: file, lockScope: lockScope) {
             var state = try Self.load(file)
@@ -1007,10 +908,7 @@ struct DeviceLegRunJournal {
             try beforePersist?()
             try Self.persist(state, to: file)
             if cleanupReleasePins {
-                try Self.removeUnreferencedReleasePins(
-                    from: releasePinDirectory,
-                    state: state
-                )
+                try releasePins.removeUnreferenced(Self.pinReferences(state))
             }
             return value
         }
@@ -1050,301 +948,15 @@ struct DeviceLegRunJournal {
         )
     }
 
-    private static func releasePinFile(
-        descriptorSHA256: String,
-        directory: URL
-    ) throws -> URL {
-        guard isLowercaseSHA256(descriptorSHA256) else {
-            throw DeviceLegJournalError.invalidState
-        }
-        return directory.appendingPathComponent(
-            "\(descriptorSHA256).json",
-            isDirectory: false
+    private static func pinReferences(
+        _ state: Snapshot
+    ) -> DeviceLegReleasePinReferences {
+        DeviceLegReleasePinReferences(
+            descriptorSHA256s: Set(state.runs.values.map {
+                $0.reference.descriptorSha256
+            }),
+            artifactSHA256s: Set(state.runs.values.flatMap(\.artifactSHA256s))
         )
-    }
-
-    private static func artifactPinFile(
-        sha256: String,
-        directory: URL
-    ) throws -> URL {
-        guard isLowercaseSHA256(sha256) else {
-            throw DeviceLegJournalError.invalidState
-        }
-        return directory.appendingPathComponent(
-            "\(sha256).artifact",
-            isDirectory: false
-        )
-    }
-
-    private static func pinReleaseArtifacts(
-        _ source: DeviceLegReleaseArtifactSource,
-        in directory: URL,
-        projectedBytes: inout Int,
-        byteLimit: Int,
-        createdFiles: inout [URL]
-    ) throws -> [String] {
-        guard source.objects.count
-                <= ExperienceReleaseDescriptorLimits.assetCount
-                    + ExperienceReleaseDescriptorLimits.screenCount
-                    + 1,
-              Set(source.objects.map(\.sha256)).count == source.objects.count else {
-            throw DeviceLegJournalError.invalidState
-        }
-        var declaredBytes = 0
-        for object in source.objects {
-            guard isLowercaseSHA256(object.sha256),
-                  object.sizeBytes > 0,
-                  object.sizeBytes
-                    <= ExperienceReleaseDescriptorLimits.rivArtifactBytes else {
-                throw DeviceLegJournalError.invalidState
-            }
-            let (nextBytes, overflowed) = declaredBytes.addingReportingOverflow(
-                object.sizeBytes
-            )
-            guard !overflowed,
-                  nextBytes
-                    <= ExperienceReleaseDescriptorLimits.artifactAggregateBytes else {
-                throw DeviceLegJournalError.storageLimit
-            }
-            declaredBytes = nextBytes
-        }
-        var pinned: [String] = []
-        pinned.reserveCapacity(source.objects.count)
-        for object in source.objects.sorted(by: { $0.sha256 < $1.sha256 }) {
-            let destination = try artifactPinFile(
-                sha256: object.sha256,
-                directory: directory
-            )
-            if FileManager.default.fileExists(atPath: destination.path) {
-                let retained = try BoundedFileIO.read(
-                    at: destination,
-                    maximumBytes: object.sizeBytes
-                )
-                guard retained.digest.byteCount == object.sizeBytes,
-                      retained.digest.sha256 == object.sha256 else {
-                    throw DeviceLegJournalError.invalidState
-                }
-                pinned.append(object.sha256)
-                continue
-            }
-
-            let sourceFile = source.cacheRoot.appendingPathComponent(
-                object.sha256,
-                isDirectory: false
-            )
-            guard FileManager.default.fileExists(atPath: sourceFile.path) else {
-                if object.required {
-                    throw DeviceLegJournalError.invalidState
-                }
-                continue
-            }
-            let acquired = try BoundedFileIO.read(
-                at: sourceFile,
-                maximumBytes: object.sizeBytes
-            )
-            guard acquired.digest.byteCount == object.sizeBytes,
-                  acquired.digest.sha256 == object.sha256 else {
-                throw DeviceLegJournalError.invalidState
-            }
-            let (nextBytes, overflowed) = projectedBytes
-                .addingReportingOverflow(acquired.data.count)
-            guard !overflowed, nextBytes <= byteLimit else {
-                throw DeviceLegJournalError.storageLimit
-            }
-            try acquired.data.write(
-                to: destination,
-                options: [
-                    .atomic,
-                    .completeFileProtectionUntilFirstUserAuthentication,
-                ]
-            )
-            createdFiles.append(destination)
-            projectedBytes = nextBytes
-            pinned.append(object.sha256)
-        }
-        return pinned
-    }
-
-    private static func loadReleasePinBytes(_ file: URL) throws -> Data {
-        try BoundedFileIO.read(
-            at: file,
-            maximumBytes: maximumReleasePinBytes
-        ).data
-    }
-
-    private static func loadReleasePin(
-        descriptorSHA256: String,
-        directory: URL
-    ) throws -> DeviceLegReleaseProfileEntry? {
-        let file = try releasePinFile(
-            descriptorSHA256: descriptorSHA256,
-            directory: directory
-        )
-        guard FileManager.default.fileExists(atPath: file.path) else {
-            return nil
-        }
-        return try ExactJSONCodec.decode(
-            DeviceLegReleaseProfileEntry.self,
-            from: loadReleasePinBytes(file)
-        )
-    }
-
-    private static func removeUnreferencedReleasePins(
-        from directory: URL,
-        state: Snapshot
-    ) throws {
-        let fileManager = FileManager.default
-        let referenced = Set(state.runs.values.map {
-            $0.reference.descriptorSha256
-        })
-        let referencedArtifacts = Set(
-            state.runs.values.flatMap(\.artifactSHA256s)
-        )
-        for file in try fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        ) {
-            let sha256 = file.deletingPathExtension().lastPathComponent
-            let isReferencedDescriptor = file.pathExtension == "json"
-                && (try? releasePinFile(
-                    descriptorSHA256: sha256,
-                    directory: directory
-                )) != nil
-                && referenced.contains(sha256)
-            let isReferencedArtifact = file.pathExtension == "artifact"
-                && (try? artifactPinFile(
-                    sha256: sha256,
-                    directory: directory
-                )) != nil
-                && referencedArtifacts.contains(sha256)
-            if !isReferencedDescriptor && !isReferencedArtifact {
-                try fileManager.removeItem(at: file)
-            }
-        }
-    }
-
-    private static func removeGlobalOrphanReleasePins(
-        from releasePinRoot: URL,
-        journalRoot: URL,
-        excludingCustomerDirectory: URL
-    ) throws {
-        let fileManager = FileManager.default
-        let excluded = excludingCustomerDirectory.lastPathComponent
-        for customerDirectory in try fileManager.contentsOfDirectory(
-            at: releasePinRoot,
-            includingPropertiesForKeys: nil
-        ) {
-            let customerDigest = customerDirectory.lastPathComponent
-            let attributes = try fileManager.attributesOfItem(
-                atPath: customerDirectory.path
-            )
-            guard isLowercaseSHA256(customerDigest),
-                  attributes[.type] as? FileAttributeType == .typeDirectory else {
-                try fileManager.removeItem(at: customerDirectory)
-                continue
-            }
-            guard customerDigest != excluded else { continue }
-            let journalFile = journalRoot.appendingPathComponent(
-                "\(customerDigest).json",
-                isDirectory: false
-            )
-            guard fileManager.fileExists(atPath: journalFile.path) else {
-                try fileManager.removeItem(at: customerDirectory)
-                continue
-            }
-            guard let state = try? load(journalFile) else {
-                // A transiently unreadable journal may still be recoverable;
-                // count its pins against the global budget without deleting
-                // its only retained execution authority.
-                continue
-            }
-            try removeUnreferencedReleasePins(
-                from: customerDirectory,
-                state: state
-            )
-        }
-    }
-
-    private static func releasePinInventory(
-        in releasePinRoot: URL
-    ) throws -> (count: Int, totalBytes: Int) {
-        let fileManager = FileManager.default
-        var count = 0
-        var totalBytes = 0
-        for customerDirectory in try fileManager.contentsOfDirectory(
-            at: releasePinRoot,
-            includingPropertiesForKeys: nil
-        ) {
-            let customerDigest = customerDirectory.lastPathComponent
-            let directoryAttributes = try fileManager.attributesOfItem(
-                atPath: customerDirectory.path
-            )
-            guard isLowercaseSHA256(customerDigest),
-                  directoryAttributes[.type] as? FileAttributeType
-                    == .typeDirectory else {
-                throw DeviceLegJournalError.invalidState
-            }
-            for file in try fileManager.contentsOfDirectory(
-                at: customerDirectory,
-                includingPropertiesForKeys: nil
-            ) {
-                let sha256 = file.deletingPathExtension()
-                    .lastPathComponent
-                let isDescriptor = file.pathExtension == "json"
-                    && (try? releasePinFile(
-                        descriptorSHA256: sha256,
-                        directory: customerDirectory
-                    )) != nil
-                let isArtifact = file.pathExtension == "artifact"
-                    && (try? artifactPinFile(
-                        sha256: sha256,
-                        directory: customerDirectory
-                    )) != nil
-                guard isDescriptor || isArtifact else {
-                    throw DeviceLegJournalError.invalidState
-                }
-                let bytes = try regularFileSize(
-                    file,
-                    maximumBytes: isDescriptor
-                        ? maximumReleasePinBytes
-                        : ExperienceReleaseDescriptorLimits.rivArtifactBytes
-                )
-                let (nextTotal, overflowed) = totalBytes
-                    .addingReportingOverflow(bytes)
-                guard !overflowed else {
-                    throw DeviceLegJournalError.storageLimit
-                }
-                totalBytes = nextTotal
-                if isDescriptor { count += 1 }
-            }
-        }
-        return (count, totalBytes)
-    }
-
-    private static func regularFileSize(
-        _ file: URL,
-        maximumBytes: Int
-    ) throws -> Int {
-        let attributes = try FileManager.default.attributesOfItem(
-            atPath: file.path
-        )
-        guard attributes[.type] as? FileAttributeType == .typeRegular,
-              let size = attributes[.size] as? NSNumber else {
-            throw DeviceLegJournalError.invalidState
-        }
-        let value = size.int64Value
-        guard value >= 0,
-              value <= Int64(maximumBytes) else {
-            throw DeviceLegJournalError.storageLimit
-        }
-        return Int(value)
-    }
-
-    fileprivate static func isLowercaseSHA256(_ value: String) -> Bool {
-        value.utf8.count == 64
-            && value.utf8.allSatisfy { byte in
-                (48...57).contains(byte) || (97...102).contains(byte)
-            }
     }
 
     private static func load(_ file: URL) throws -> Snapshot {
@@ -1365,6 +977,7 @@ extension DeviceLegRun: Codable, Sendable {
         case journeyId
         case generation
         case reference
+        case executionSnapshot
         case artifactSHA256s
         case reentry
         case startedAt
@@ -1387,13 +1000,19 @@ extension DeviceLegRun: Codable, Sendable {
         journeyId = try container.decode(String.self, forKey: .journeyId)
         generation = try container.decode(Int.self, forKey: .generation)
         reference = try container.decode(ArmedDeviceLeg.Reference.self, forKey: .reference)
+        executionSnapshot = try container.decodeIfPresent(
+            ExecutionSnapshot.self,
+            forKey: .executionSnapshot
+        )
         artifactSHA256s = try container.decodeIfPresent(
             [String].self,
             forKey: .artifactSHA256s
         ) ?? []
         guard artifactSHA256s == artifactSHA256s.sorted(),
               Set(artifactSHA256s).count == artifactSHA256s.count,
-              artifactSHA256s.allSatisfy(DeviceLegRunJournal.isLowercaseSHA256) else {
+              artifactSHA256s.allSatisfy(
+                DeviceLegReleasePinStore.isLowercaseSHA256
+              ) else {
             throw DeviceLegJournalError.invalidState
         }
         reentry = try container.decodeIfPresent(
@@ -1432,6 +1051,10 @@ extension DeviceLegRun: Codable, Sendable {
         try container.encode(journeyId, forKey: .journeyId)
         try container.encode(generation, forKey: .generation)
         try container.encode(reference, forKey: .reference)
+        try container.encodeIfPresent(
+            executionSnapshot,
+            forKey: .executionSnapshot
+        )
         try container.encode(artifactSHA256s, forKey: .artifactSHA256s)
         try container.encodeIfPresent(reentry, forKey: .reentry)
         try container.encode(startedAt, forKey: .startedAt)
