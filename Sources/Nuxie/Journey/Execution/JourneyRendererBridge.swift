@@ -121,7 +121,9 @@ final class JourneyRendererBridge:
   func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController) {}
 
   @MainActor
-  func experienceViewControllerDidReveal(_ controller: ExperienceViewController) {}
+  func experienceViewControllerDidReveal(
+    _ controller: ExperienceViewController
+  ) async {}
 
   @MainActor
   func experienceViewController(

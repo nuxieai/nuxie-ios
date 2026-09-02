@@ -178,21 +178,26 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
 
     func dispatch(_ request: DeviceLegDispatchRequest) async -> DeviceLegDispatchResult {
         guard await requestIsCurrent(request),
-              case .string(let type)? = request.action["type"] else {
+              let rawType = DeviceLegActionType.rawValue(
+                in: request.action
+              ) else {
             return .failed
         }
+        guard let type = DeviceLegActionType(rawValue: rawType) else {
+            return .unsupported
+        }
         switch type {
-        case "send_event":
+        case .sendEvent:
             return await sendEvent(request)
-        case "update_customer":
+        case .updateCustomer:
             return await updateCustomer(request)
-        case "milestone":
+        case .milestone:
             return await milestone(request)
-        case "submit_response":
+        case .submitResponse:
             return .outlet("next")
-        case "app_action":
+        case .appAction:
             return await appAction(request)
-        case "exit":
+        case .exit:
             guard let action = decode(Exit.self, request.action) else { return .failed }
             if let reason = action.reason, !reason.isEmpty {
                 return .complete(reason)

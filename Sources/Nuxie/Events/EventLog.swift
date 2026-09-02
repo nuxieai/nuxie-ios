@@ -1570,6 +1570,91 @@ actor EventLog: EventLogProtocol {
     }
   }
 
+  private func prepareStableSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String,
+    occurredAt: Date,
+    preparation: RoutedStableSystemEventPreparation = .unprepared,
+    preservesJourneyLegOutputs: Bool = false
+  ) async throws -> NuxieEvent? {
+    if case .prepared(let prepared) = preparation {
+      return prepared
+    }
+
+    // Declared leg outputs are already JSON, not arbitrary analytics values.
+    // Preserve their exact values through generic sanitization; the host's
+    // beforeSend privacy hook still runs below.
+    let legOutputs = preservesJourneyLegOutputs
+      ? try properties?["outputs"].map {
+        try JSONSerialization.data(withJSONObject: $0)
+      }
+      : nil
+    var scopedProperties = await buildTriggerProperties(properties)
+    if let legOutputs {
+      scopedProperties["outputs"] = try JSONSerialization.jsonObject(
+        with: legOutputs
+      )
+    }
+    scopedProperties["$distinct_id"] = distinctId
+    let originalEvent = NuxieEvent(
+      id: eventId,
+      name: event,
+      distinctId: distinctId,
+      properties: scopedProperties,
+      timestamp: occurredAt
+    )
+    guard let beforeSend = configuration?.beforeSend else {
+      return originalEvent
+    }
+    return beforeSend(originalEvent).map { transformed in
+      // Stable capture owns identity and idempotency. Hosts may redact
+      // properties or rename the event without changing either authority.
+      var transformedProperties = transformed.properties
+      transformedProperties["$distinct_id"] = distinctId
+      return NuxieEvent(
+        id: eventId,
+        name: transformed.name,
+        forwardingName: originalEvent.forwardingName,
+        distinctId: distinctId,
+        properties: transformedProperties,
+        timestamp: occurredAt
+      )
+    }
+  }
+
+  private func publishStableCapture(
+    _ capture: DurableTriggerCapture?,
+    outcome: StableEventCaptureOutcome,
+    commitSequence: UInt64,
+    forwardingAdmission: ForwardingAdmission?,
+    routeToSubscribers: Bool,
+    subscriberAdmissions: [UInt64: UInt64]
+  ) {
+    let newlyDurableEvent: NuxieEvent?
+    if case .captured(_, isNew: true) = outcome {
+      newlyDurableEvent = capture?.event
+    } else {
+      newlyDurableEvent = nil
+    }
+    resolveForwarding(
+      commitSequence,
+      admission: forwardingAdmission,
+      event: newlyDurableEvent
+    )
+    if let newlyDurableEvent {
+      stagePersistedForDelivery(newlyDurableEvent)
+    }
+    resolveRoute(
+      commitSequence,
+      event: routeToSubscribers && capture?.routesLocally == true
+        ? newlyDurableEvent
+        : nil,
+      subscriberAdmissions: subscriberAdmissions
+    )
+  }
+
   private func captureStableSystemEvent(
     _ event: String,
     properties: sending [String: Any]?,
@@ -1636,44 +1721,15 @@ actor EventLog: EventLogProtocol {
         }
       }
 
-      // Declared leg outputs are already JSON, not arbitrary analytics
-      // values. Preserve their exact values through generic sanitization;
-      // the host's beforeSend privacy hook still runs below.
-      let legOutputs = event == JourneyEvents.journeyLegCompleted
-        ? try properties?["outputs"].map { try JSONSerialization.data(withJSONObject: $0) }
-        : nil
-      var scopedProperties = await buildTriggerProperties(properties)
-      if let legOutputs {
-        scopedProperties["outputs"] = try JSONSerialization.jsonObject(with: legOutputs)
-      }
-      scopedProperties["$distinct_id"] = distinctId
-      let finalProperties = UncheckedSendable(scopedProperties)
-      let originalEvent = NuxieEvent(
-        id: eventId,
-        name: event,
+      let transformedEvent = try await prepareStableSystemEvent(
+        event,
+        properties: properties,
+        eventId: eventId,
         distinctId: distinctId,
-        properties: finalProperties.value,
-        timestamp: occurredAt ?? attemptedTimestamp
+        occurredAt: occurredAt ?? attemptedTimestamp,
+        preservesJourneyLegOutputs:
+          event == JourneyEvents.journeyLegCompleted
       )
-      let transformedEvent: NuxieEvent?
-      if let beforeSend = configuration?.beforeSend {
-        transformedEvent = beforeSend(originalEvent).map { transformed in
-          // Recovery owns identity. Hosts may redact properties or rename the
-          // event without changing its scoped replay key or attribution.
-          var transformedProperties = transformed.properties
-          transformedProperties["$distinct_id"] = distinctId
-          return NuxieEvent(
-            id: eventId,
-            name: transformed.name,
-            forwardingName: originalEvent.forwardingName,
-            distinctId: distinctId,
-            properties: transformedProperties,
-            timestamp: originalEvent.timestamp
-          )
-        }
-      } else {
-        transformedEvent = originalEvent
-      }
       guard !closeFlag.isClosed else { return .failed }
       if let ownership,
          hasVolatileJourneyOwnershipLoss(ownership) {
@@ -1688,7 +1744,6 @@ actor EventLog: EventLogProtocol {
         assigningCommitSequence: true,
         admission: admission
       )
-      let outcome = commit.outcome
       guard let commitSequence = commit.commitSequence else {
         throw EventStorageError.insertFailed(NSError(
           domain: "Nuxie.EventLog",
@@ -1696,45 +1751,31 @@ actor EventLog: EventLogProtocol {
           userInfo: [NSLocalizedDescriptionKey: "Stable event commit omitted its sequence"]
         ))
       }
-      if case .ownershipLost = outcome {
-        resolveForwarding(commitSequence, admission: forwardingAdmission, event: nil)
-        resolveRoute(commitSequence, event: nil)
-        return .ownershipLost
-      }
       if transformedEvent == nil {
         LogDebug("Event '\(event)' terminally dropped by beforeSend hook")
       }
-      let newlyDurableEvent: NuxieEvent?
-      if case .captured(let stored, isNew: true) = outcome {
-        newlyDurableEvent = NuxieEvent(
-            id: stored.id,
-            name: stored.name,
-            forwardingName: event,
-            distinctId: stored.distinctId,
-            properties: stored.getPropertiesDict(),
-            timestamp: stored.timestamp
-        )
-      } else {
-        newlyDurableEvent = nil
-      }
-      resolveForwarding(
-        commitSequence,
-        admission: forwardingAdmission,
-        event: newlyDurableEvent
-      )
       guard let capture = durableCapture(
-        from: outcome,
+        from: commit.outcome,
         fallbackEvent: event,
         eventId: eventId,
         distinctId: distinctId
-      ) else { return .ownershipLost }
-      if newlyDurableEvent != nil {
-        stagePersistedForDelivery(capture.event)
+      ) else {
+        publishStableCapture(
+          nil,
+          outcome: commit.outcome,
+          commitSequence: commitSequence,
+          forwardingAdmission: forwardingAdmission,
+          routeToSubscribers: routeToSubscribers,
+          subscriberAdmissions: subscriberAdmissions
+        )
+        return .ownershipLost
       }
-      resolveRoute(
-        commitSequence,
-        event: routeToSubscribers && newlyDurableEvent != nil
-          && capture.routesLocally ? capture.event : nil,
+      publishStableCapture(
+        capture,
+        outcome: commit.outcome,
+        commitSequence: commitSequence,
+        forwardingAdmission: forwardingAdmission,
+        routeToSubscribers: routeToSubscribers,
         subscriberAdmissions: subscriberAdmissions
       )
       do {
@@ -1768,6 +1809,7 @@ actor EventLog: EventLogProtocol {
       return DurableTriggerCapture(event: NuxieEvent(
         id: storedEvent.id,
         name: storedEvent.name,
+        forwardingName: fallbackEvent,
         distinctId: storedEvent.distinctId,
         properties: storedEvent.getPropertiesDict(),
         timestamp: storedEvent.timestamp
@@ -4270,37 +4312,14 @@ extension EventLog {
           continue
         }
 
-        let transformedEvent: NuxieEvent?
-        switch item.preparation {
-        case .prepared(let event):
-          transformedEvent = event
-        case .unprepared:
-          var scopedProperties = await buildTriggerProperties(item.properties)
-          scopedProperties["$distinct_id"] = item.distinctId
-          let originalEvent = NuxieEvent(
-            id: item.eventId,
-            name: item.name,
-            distinctId: item.distinctId,
-            properties: scopedProperties,
-            timestamp: item.occurredAt
-          )
-          if let beforeSend = configuration?.beforeSend {
-            transformedEvent = beforeSend(originalEvent).map { transformed in
-              var transformedProperties = transformed.properties
-              transformedProperties["$distinct_id"] = item.distinctId
-              return NuxieEvent(
-                id: item.eventId,
-                name: transformed.name,
-                forwardingName: originalEvent.forwardingName,
-                distinctId: item.distinctId,
-                properties: transformedProperties,
-                timestamp: item.occurredAt
-              )
-            }
-          } else {
-            transformedEvent = originalEvent
-          }
-        }
+        let transformedEvent = try await prepareStableSystemEvent(
+          item.name,
+          properties: item.properties,
+          eventId: item.eventId,
+          distinctId: item.distinctId,
+          occurredAt: item.occurredAt,
+          preparation: item.preparation
+        )
         pending.append((item: item, transformed: transformedEvent))
       }
 
@@ -4328,6 +4347,8 @@ extension EventLog {
         // is safe and will observe every item as terminal.
         return nil
       }
+      var captures: [DurableTriggerCapture] = []
+      captures.reserveCapacity(commits.count)
       for (value, commit) in zip(pending, commits) {
         guard let capture = durableCapture(
           from: commit.outcome,
@@ -4337,6 +4358,7 @@ extension EventLog {
         ) else {
           return nil
         }
+        captures.append(capture)
         capturesByEventId[value.item.eventId] = capture
       }
       guard commits.allSatisfy({ $0.commitSequence != nil }) else {
@@ -4345,32 +4367,14 @@ extension EventLog {
         return capturesByEventId
       }
 
-      for (value, commit) in zip(pending, commits) {
+      for ((_, commit), capture) in zip(zip(pending, commits), captures) {
         guard let commitSequence = commit.commitSequence else { continue }
-        let newlyDurableEvent: NuxieEvent?
-        if case .captured(let stored, isNew: true) = commit.outcome {
-          newlyDurableEvent = NuxieEvent(
-            id: stored.id,
-            name: stored.name,
-            forwardingName: value.item.name,
-            distinctId: stored.distinctId,
-            properties: stored.getPropertiesDict(),
-            timestamp: stored.timestamp
-          )
-        } else {
-          newlyDurableEvent = nil
-        }
-        resolveForwarding(
-          commitSequence,
-          admission: forwardingAdmission,
-          event: newlyDurableEvent
-        )
-        if let newlyDurableEvent {
-          stagePersistedForDelivery(newlyDurableEvent)
-        }
-        resolveRoute(
-          commitSequence,
-          event: newlyDurableEvent,
+        publishStableCapture(
+          capture,
+          outcome: commit.outcome,
+          commitSequence: commitSequence,
+          forwardingAdmission: forwardingAdmission,
+          routeToSubscribers: true,
           subscriberAdmissions: subscriberAdmissions
         )
       }

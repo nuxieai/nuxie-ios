@@ -315,6 +315,97 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
         // Mock implementation - no-op for tests
     }
 
+    @MainActor
+    func deviceLegProfileRefreshDidComplete() {}
+
+    @MainActor
+    func setDeviceLegPresentationAvailabilityHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) {
+        _ = handler
+    }
+
+    @MainActor
+    func reserveDeviceLegPresentation(
+        ownerDistinctId: String
+    ) -> (any DeviceLegPresentationReservation)? {
+        _ = ownerDistinctId
+        return nil
+    }
+
+    @MainActor
+    func ownsDeviceLegPresentation(
+        journeyId: String,
+        ownerDistinctId: String
+    ) -> Bool {
+        _ = journeyId
+        _ = ownerDistinctId
+        return false
+    }
+
+    @MainActor
+    func presentDeviceLeg(
+        _ request: DeviceLegPresentationRequest
+    ) async -> DeviceLegPresentationResult {
+        _ = request
+        return .declined
+    }
+
+    @MainActor
+    func navigateDeviceLegPresentation(
+        journeyId: String,
+        ownerDistinctId: String,
+        screenId: String,
+        transition: ExperienceReleaseJSONValue?
+    ) async -> DeviceLegPresentationNavigationResult {
+        _ = journeyId
+        _ = ownerDistinctId
+        _ = screenId
+        _ = transition
+        return .noPresentation
+    }
+
+    @MainActor
+    func resolveDeviceLegPresentationAction(
+        journeyId: String,
+        ownerDistinctId: String,
+        action: [String: ExperienceReleaseJSONValue],
+        source: ScreenEmissionSource?
+    ) -> [String: ExperienceReleaseJSONValue]? {
+        _ = journeyId
+        _ = ownerDistinctId
+        _ = source
+        return action
+    }
+
+    @MainActor
+    func dispatchDeviceLegPresentationAction(
+        journeyId: String,
+        ownerDistinctId: String,
+        action: [String: ExperienceReleaseJSONValue],
+        effectId: String
+    ) async -> DeviceLegPresentationActionResult {
+        _ = journeyId
+        _ = ownerDistinctId
+        _ = action
+        _ = effectId
+        return .noPresentation
+    }
+
+    @MainActor
+    func finishDeviceLegPresentation(
+        journeyId: String,
+        ownerDistinctId: String
+    ) async {
+        _ = journeyId
+        _ = ownerDistinctId
+    }
+
+    @MainActor
+    func shutdownDeviceLegPresentation(ownerDistinctId: String) async {
+        _ = ownerDistinctId
+    }
+
     // MARK: - Test Helper Methods
 
     /// Simulate successful flow presentation

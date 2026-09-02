@@ -82,15 +82,22 @@ struct DeviceLegControlExecutor {
             return .complete(outcome: outcome)
         }
         guard let action = step.action, let outlets = step.outlets,
-              case .string(let type)? = action["type"] else { return .invalid }
+              let rawType = DeviceLegActionType.rawValue(in: action) else {
+            return .invalid
+        }
+        guard let type = DeviceLegActionType(rawValue: rawType) else {
+            // A release already admitted under an older SDK must remain
+            // resumable when a future operation reaches this executor.
+            return .dispatch(stepId: step.id, action: action)
+        }
         switch type {
-        case "condition":
+        case .condition:
             let control = try decode(CompiledCondition.self, action)
             let selected = control.branches.first {
                 DeviceLegValues.evaluate($0.condition, context: context) == true
             }?.id ?? "default"
             return advance(outlets, outlet: selected, context: context)
-        case "experiment":
+        case .experiment:
             let control = try decode(CompiledExperiment.self, action)
             guard let first = control.variants.first?.id else { return .invalid }
             let assignment: DeviceLegFactTable.Assignment?
@@ -123,7 +130,7 @@ struct DeviceLegControlExecutor {
                     source: source
                 )
             )
-        case "time_window":
+        case .timeWindow:
             let control = try decode(CompiledTimeWindow.self, action)
             guard let timezone = TimeWindowMath.resolveTimezone(control.timezone, current: currentDeviceTimezone,
                                                                  appDefault: appDefaultTimezone, bundle: timezones) else { return .invalid }
@@ -136,7 +143,7 @@ struct DeviceLegControlExecutor {
                                                                 wakeAtMillis: wake))
             case .malformed, .unavailable: return .invalid
             }
-        case "delay":
+        case .delay:
             let control = try decode(CompiledDelay.self, action)
             let current: Checkpoint
             if let checkpoint { current = checkpoint }
@@ -147,7 +154,7 @@ struct DeviceLegControlExecutor {
             }
             return nowMillis < current.wakeAtMillis ? .park(stepId: step.id, checkpoint: current)
                 : advance(outlets, outlet: "next", context: context)
-        case "wait_until":
+        case .waitUntil:
             let control = try decode(CompiledWait.self, action)
             let current: Checkpoint
             if let checkpoint { current = checkpoint }
@@ -174,6 +181,8 @@ struct DeviceLegControlExecutor {
             }
             if nowMillis >= current.wakeAtMillis { return advance(outlets, outlet: "timeout", context: context) }
             return .park(stepId: step.id, checkpoint: current)
+        case .connectorAction, .grantEntitlement, .deviceAvailable:
+            return .invalid
         default:
             return .dispatch(stepId: step.id, action: action)
         }
