@@ -578,7 +578,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                             transition: rawTransition,
                             reduceMotion: reduceMotion
                         ) { result, _ in
-                            continuation.resume(returning: result.didNavigate)
+                            continuation.resume(returning: result.reachedTarget)
                         }
                     } catch {
                         continuation.resume(throwing: error)
@@ -700,7 +700,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 self.finalizeLiveReplacementSurface(surface, controller: targetController)
                 return await withCheckedContinuation { continuation in
                     self.completeNavigation(to: targetController.screenId) { result, _ in
-                        continuation.resume(returning: result.didNavigate)
+                        continuation.resume(returning: result.reachedTarget)
                     }
                 }
             }

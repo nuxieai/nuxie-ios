@@ -33,6 +33,19 @@ struct DeviceLegRun {
         var queued: Bool
     }
 
+    struct PendingPresentationPublication: Codable, Equatable, Sendable {
+        struct Item: Codable, Equatable, Sendable {
+            let name: String
+            let properties: ExactJSONObject<ExperienceReleaseJSONValue>
+            let eventId: String
+            let occurredAt: Date
+        }
+
+        let invocationId: String
+        let context: ArmedDeviceLeg.Context
+        let items: [Item]
+    }
+
     let journeyId: String
     let generation: Int
     let reference: ArmedDeviceLeg.Reference
@@ -54,6 +67,10 @@ struct DeviceLegRun {
     /// presentation. A stable event identity makes post-show reporting
     /// idempotent across retries and process recovery.
     var experimentExposures: [ExperimentExposure] = []
+    /// A renderer invocation first records its answers and ordinary stable
+    /// events here in one file replacement. EventLog then consumes these IDs;
+    /// a crash can replay them without replaying the screen action.
+    var pendingPresentationPublication: PendingPresentationPublication?
     var completion: Completion?
 
     var id: String { "\(journeyId):\(generation)" }
@@ -447,6 +464,63 @@ struct DeviceLegRunJournal {
         }
     }
 
+    @discardableResult
+    func stagePresentationPublication(
+        _ id: String,
+        expectedStepId: String,
+        expectedCheckpoint: DeviceLegControlExecutor.Checkpoint?,
+        publication: DeviceLegRun.PendingPresentationPublication,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        let expectedPark = expectedCheckpoint.map {
+            DeviceLegRun.Park(
+                wakeAt: Self.date($0.wakeAtMillis),
+                anchorAt: Self.date($0.anchorAtMillis)
+            )
+        }
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
+            guard var run = state.runs[id],
+                  run.startedQueued,
+                  run.completion == nil,
+                  run.stepId == expectedStepId,
+                  run.park == expectedPark else {
+                throw DeviceLegJournalError.invalidState
+            }
+            if let pending = run.pendingPresentationPublication {
+                guard pending == publication else {
+                    throw DeviceLegJournalError.invalidState
+                }
+                return
+            }
+            run.context = publication.context
+            run.pendingPresentationPublication = publication
+            state.runs[id] = run
+        }
+        return try await updateIfCurrent(admission, mutation) != nil
+    }
+
+    @discardableResult
+    func clearPresentationPublication(
+        _ id: String,
+        invocationId: String,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
+            guard var run = state.runs[id], run.completion == nil else {
+                throw DeviceLegJournalError.invalidState
+            }
+            guard let pending = run.pendingPresentationPublication else {
+                return
+            }
+            guard pending.invocationId == invocationId else {
+                throw DeviceLegJournalError.invalidState
+            }
+            run.pendingPresentationPublication = nil
+            state.runs[id] = run
+        }
+        return try await updateIfCurrent(admission, mutation) != nil
+    }
+
     /// Persist one executor transition before another step or effect runs.
     @discardableResult
     func transition(
@@ -455,6 +529,7 @@ struct DeviceLegRunJournal {
         context: ArmedDeviceLeg.Context,
         checkpoint: DeviceLegControlExecutor.Checkpoint? = nil,
         experimentExposure: DeviceLegRun.ExperimentExposure? = nil,
+        clearingPresentationPublication invocationId: String? = nil,
         admission: DeviceLegCommitAdmission? = nil
     ) async throws -> Bool {
         let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
@@ -471,6 +546,13 @@ struct DeviceLegRunJournal {
                    $0.experimentId == experimentExposure.experimentId
                }) {
                 run.experimentExposures.append(experimentExposure)
+            }
+            if let invocationId {
+                guard run.pendingPresentationPublication?.invocationId
+                    == invocationId else {
+                    throw DeviceLegJournalError.invalidState
+                }
+                run.pendingPresentationPublication = nil
             }
             run.park = checkpoint.map {
                 .init(wakeAt: Self.date($0.wakeAtMillis), anchorAt: Self.date($0.anchorAtMillis))
@@ -701,7 +783,7 @@ struct DeviceLegRunJournal {
             state.runs[id] = run
             guard try profileFence.performIfCurrent(
                 profileFenceToken,
-                {
+                { () -> Void in
                     try beforePersist?()
                     try Self.persist(state, to: file)
                 }
@@ -792,6 +874,7 @@ struct DeviceLegRunJournal {
         // its selected outputs. Moving rather than copying keeps a
         // maximum-size canonical context within the journal budget.
         run.context = .init(event: [:], responses: [:])
+        run.pendingPresentationPublication = nil
         run.completion = .init(outcome: outcome, at: at)
     }
 
@@ -1059,6 +1142,7 @@ extension DeviceLegRun: Codable, Sendable {
         case outputs
         case effectReceipts
         case experimentExposures
+        case pendingPresentationPublication
         case completion
     }
 
@@ -1091,6 +1175,10 @@ extension DeviceLegRun: Codable, Sendable {
             [ExperimentExposure].self,
             forKey: .experimentExposures
         ) ?? []
+        pendingPresentationPublication = try container.decodeIfPresent(
+            PendingPresentationPublication.self,
+            forKey: .pendingPresentationPublication
+        )
         completion = try container.decodeIfPresent(Completion.self, forKey: .completion)
     }
 
@@ -1111,10 +1199,14 @@ extension DeviceLegRun: Codable, Sendable {
         try container.encode(outputs, forKey: .outputs)
         try container.encode(effectReceipts, forKey: .effectReceipts)
         try container.encode(experimentExposures, forKey: .experimentExposures)
+        try container.encodeIfPresent(
+            pendingPresentationPublication,
+            forKey: .pendingPresentationPublication
+        )
         try container.encodeIfPresent(completion, forKey: .completion)
     }
 }
-extension DeviceLegRun.Park: Codable, Sendable {}
+extension DeviceLegRun.Park: Codable, Equatable, Sendable {}
 extension DeviceLegRun.Completion: Codable, Sendable {}
 extension DeviceLegCheckmark: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {

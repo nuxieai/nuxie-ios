@@ -98,6 +98,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
 
     private let identity: IdentityServiceProtocol
     private let events: EventLogProtocol
+    private let experimentExposures: DeviceLegExperimentExposureCoordinator
+    private let presentationPublications:
+        DeviceLegPresentationPublicationCoordinator
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
     private let journalDirectory: URL?
@@ -122,7 +125,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     /// Advances for every profile publication and linearizes entry admission.
     private let profileFence = DeviceLegProfileFence()
     /// Advances only when admitted execution authority is explicitly revoked.
-    private let executionFence = DeviceLegProfileFence()
+    private let executionFence: DeviceLegProfileFence
     private var journal: DeviceLegRunJournal?
     private var retainedReleasesByDigest: [String: AuthenticatedDeviceLegRelease] = [:]
     private var retainedReleaseOrder: [String] = []
@@ -145,14 +148,8 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     /// instance before starting commerce. Keep that exact value with the
     /// claimed run so only its matching SDK outcome can advance the cursor.
     private var pendingPresentationPurchasePlacements: [String: String] = [:]
-    /// Presentation emissions are both routed through EventLog subscribers
-    /// and applied directly to their owning run. While a stable emission is
-    /// in that direct lane, exclude its owner from generic parked/action
-    /// resumption so the subscriber cannot advance the journal first.
-    private var directlyRoutedPresentationRunByEventId: [String: String] = [:]
     private var wakeTask: Task<Void, Never>?
     private var wakeGeneration: UInt64 = 0
-    private var experimentExposureRetryTasks: [String: Task<Void, Never>] = [:]
 
     init(
         identity: IdentityServiceProtocol,
@@ -171,6 +168,17 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     ) {
         self.identity = identity
         self.events = events
+        let executionFence = DeviceLegProfileFence()
+        self.executionFence = executionFence
+        experimentExposures = DeviceLegExperimentExposureCoordinator(
+            events: events
+        )
+        presentationPublications =
+            DeviceLegPresentationPublicationCoordinator(
+                identity: identity,
+                events: events,
+                executionFence: executionFence
+            )
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
         self.journalDirectory = journalDirectory
@@ -187,7 +195,6 @@ actor DeviceLegService: DeviceLegServiceProtocol {
 
     deinit {
         wakeTask?.cancel()
-        experimentExposureRetryTasks.values.forEach { $0.cancel() }
     }
 
     func initialize() async {
@@ -216,7 +223,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         cancelWake()
         await presenter?.setDeviceLegPresentationAvailabilityHandler(nil)
         await profileDidClearAll()
-        await cancelAndAwaitExperimentExposureRetries()
+        await experimentExposures.cancelAndAwaitRetries()
     }
 
     func profileDidCommit(
@@ -291,7 +298,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         inFlightAttempts.removeAll()
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
-        directlyRoutedPresentationRunByEventId.removeAll()
+        await presentationPublications.clearDirectRoutes()
         await presenter?.shutdownDeviceLegPresentation(
             ownerDistinctId: distinctId
         )
@@ -313,7 +320,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         inFlightAttempts.removeAll()
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
-        directlyRoutedPresentationRunByEventId.removeAll()
+        await presentationPublications.clearDirectRoutes()
         if let presentationOwner {
             await presenter?.shutdownDeviceLegPresentation(
                 ownerDistinctId: presentationOwner
@@ -339,8 +346,8 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         _ event: NuxieEvent,
         admittedProfileGeneration: UInt64?
     ) async {
-        let directlyRoutedRunId = directlyRoutedPresentationRunByEventId
-            .removeValue(forKey: event.id)
+        let directlyRoutedRunId = await presentationPublications
+            .consumeDirectRoute(eventId: event.id)
         guard initialized,
               event.distinctId == identity.getDistinctId(),
               event.name != JourneyEvents.journeyLegStarted,
@@ -376,7 +383,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         event: NuxieEvent,
         excludingRunId: String? = nil
     ) async {
-        guard let route = Self.presentationOutcomeRoutes[event.name],
+        guard let route = DeviceLegActionType.presentationOutcomeRoute(
+            eventName: event.name
+        ),
               let journal,
               isCurrent(state),
               isCurrentIdentity(journal: journal) else { return }
@@ -403,8 +412,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             guard let step = leg.steps.first(where: {
                 $0.id == candidate.stepId
             }), let action = step.action,
-                  case .string(let actionType)? = action["type"],
-                  actionType == route.actionType,
+                  DeviceLegActionType(action: action) == route.actionType,
                   let effectId = candidate.effectReceipts[step.id],
                   presentationOutcomeMatches(
                     event,
@@ -457,8 +465,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         release: AuthenticatedDeviceLegRelease
     ) -> Bool {
         guard event.id == effectId else { return false }
-        guard case .string(let type)? = action["type"] else { return false }
-        guard type == "purchase" else { return type == "restore" }
+        guard let type = DeviceLegActionType(action: action),
+              type.isCommerce else { return false }
+        guard type == .purchase else { return type == .restore }
         if let eventExperienceId = event.properties["experience_id"] as? String,
            eventExperienceId != release.descriptor.identity.experienceId {
             return false
@@ -472,38 +481,6 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         }
         return true
     }
-
-    private struct PresentationOutcomeRoute: Sendable {
-        let actionType: String
-        let outlet: String
-    }
-
-    private static let presentationOutcomeRoutes: [String: PresentationOutcomeRoute] = [
-        SystemEventNames.purchaseCompleted: .init(
-            actionType: "purchase",
-            outlet: "completed"
-        ),
-        SystemEventNames.purchaseFailed: .init(
-            actionType: "purchase",
-            outlet: "failed"
-        ),
-        SystemEventNames.purchaseCancelled: .init(
-            actionType: "purchase",
-            outlet: "cancelled"
-        ),
-        SystemEventNames.restoreCompleted: .init(
-            actionType: "restore",
-            outlet: "restored"
-        ),
-        SystemEventNames.restoreFailed: .init(
-            actionType: "restore",
-            outlet: "failed"
-        ),
-        SystemEventNames.restoreNoPurchases: .init(
-            actionType: "restore",
-            outlet: "noPurchases"
-        ),
-    ]
 
     func onAppDidEnterBackground() async {
         foreground = false
@@ -623,13 +600,12 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             )
             clearRetainedReleaseCache()
             journal = opened
+            try await presentationPublications.flushPending(
+                in: opened,
+                executionFenceToken: executionFence.token()
+            )
             _ = try await opened.recover(at: dateProvider.now())
-            if try await !DeviceLegExperimentExposureReporter(
-                journal: opened,
-                events: events
-            ).flushPending() {
-                scheduleExperimentExposureRetry(for: opened)
-            }
+            _ = try await experimentExposures.flushPending(in: opened)
             try await DeviceLegReporter(journal: opened, events: events)
                 .flushPending()
             _ = try await opened.finalizeRevocation()
@@ -673,12 +649,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         }
         var finalized = false
         do {
-            if try await !DeviceLegExperimentExposureReporter(
-                journal: journal,
-                events: events
-            ).flushPending() {
-                scheduleExperimentExposureRetry(for: journal)
-            }
+            _ = try await experimentExposures.flushPending(in: journal)
             try await DeviceLegReporter(journal: journal, events: events)
                 .flushPending()
             finalized = try await journal.finalizeRevocation()
@@ -1117,12 +1088,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 at: dateProvider.now(),
                 responseOutputs: run.context.responses
             )
-            if try await !DeviceLegExperimentExposureReporter(
-                journal: journal,
-                events: events
-            ).flushPending() {
-                scheduleExperimentExposureRetry(for: journal)
-            }
+            _ = try await experimentExposures.flushPending(in: journal)
             try await DeviceLegReporter(journal: journal, events: events)
                 .flushPending()
         } catch {
@@ -1174,16 +1140,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         var context = run.context
         var responses = context.responses
         var batchResponsesChanged = false
-        var routedEmission: ScreenEmission?
+        var routedEvent: NuxieEvent?
         var routeStepId: String?
-        var routedEventName: String?
-        var routedOccurredAtMillis: Int64?
-        var ordinaryItems: [RoutedStableSystemEventBatchItem] = []
-        var ordinaryEmissionsById: [String: ScreenEmission] = [:]
-        var ordinaryOccurredAtMillisById: [String: Int64] = [:]
-        ordinaryItems.reserveCapacity(batch.emissions.count)
-        ordinaryEmissionsById.reserveCapacity(batch.emissions.count)
-        ordinaryOccurredAtMillisById.reserveCapacity(batch.emissions.count)
+        var publicationItems: [DeviceLegRun.PendingPresentationPublication.Item] = []
+        publicationItems.reserveCapacity(batch.emissions.count)
 
         for emission in batch.emissions {
             if emission.name == SystemEventNames.responseSet {
@@ -1205,26 +1165,25 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 batchResponsesChanged = true
                 continue
             }
-            guard let occurredAt = presentationDate(emission.occurredAt),
-                  let occurredAtMillis = milliseconds(occurredAt),
-                  let properties = presentationEventProperties(
-                    payload: ExactJSONObject(
-                        emission.payload.mapValues(\.releaseJSONValue)
-                    ),
-                    screenId: screenId,
-                    run: run
-                  ) else {
+            guard let occurredAt = DeviceLegPresentationEventProjector.date(
+                emission.occurredAt
+            ),
+                  milliseconds(occurredAt) != nil else {
                 return false
             }
-            ordinaryItems.append(RoutedStableSystemEventBatchItem(
+            let properties = DeviceLegPresentationEventProjector.values(
+                payload: ExactJSONObject(
+                    emission.payload.mapValues(\.releaseJSONValue)
+                ),
+                screenId: screenId,
+                run: run
+            )
+            publicationItems.append(.init(
                 name: emission.name,
                 properties: properties,
                 eventId: emission.id,
-                distinctId: journal.distinctId,
                 occurredAt: occurredAt
             ))
-            ordinaryEmissionsById[emission.id] = emission
-            ordinaryOccurredAtMillisById[emission.id] = occurredAtMillis
         }
 
         context = ArmedDeviceLeg.Context(
@@ -1232,110 +1191,62 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             responses: responses
         )
 
-        let publishedOrdinaryEvents = !ordinaryItems.isEmpty
-        if publishedOrdinaryEvents {
-            guard let identityFence = identity.performWithCurrentIdentityFence(
-                journal.distinctId,
-                { _ in () }
-            ) else { return false }
-            let admission = DeviceLegCommitAdmission(
-                identity: identity,
-                identityFenceToken: identityFence.token,
-                executionFence: executionFence,
+        let publication = DeviceLegRun.PendingPresentationPublication(
+            invocationId: batch.invocationId,
+            context: context,
+            items: publicationItems
+        )
+        do {
+            guard let admission = journalCommitAdmission(
+                journal: journal,
                 executionFenceToken: executionFenceToken
-            )
-            for item in ordinaryItems {
-                directlyRoutedPresentationRunByEventId[item.eventId] = run.id
-            }
-            guard let captures = await events.captureAndRouteSystemEventBatch(
-                ordinaryItems,
+            ), try await journal.stagePresentationPublication(
+                run.id,
+                expectedStepId: expectedStepId,
+                expectedCheckpoint: expectedCheckpoint,
+                publication: publication,
                 admission: admission
-            ) else {
-                for item in ordinaryItems
-                where directlyRoutedPresentationRunByEventId[item.eventId] == run.id {
-                    directlyRoutedPresentationRunByEventId.removeValue(
-                        forKey: item.eventId
-                    )
-                }
-                return false
-            }
-            // Existing captures and terminal beforeSend drops do not enqueue
-            // subscriber work. Retain only newly routed events while a nested
-            // route-worker callback unwinds; its later subscriber delivery
-            // consumes the marker and excludes this run from generic routing.
-            for item in ordinaryItems {
-                guard let capture = captures[item.eventId],
-                      capture.routesLocally,
-                      capture.isNewlyCommitted else {
-                    if directlyRoutedPresentationRunByEventId[item.eventId]
-                        == run.id {
-                        directlyRoutedPresentationRunByEventId.removeValue(
-                            forKey: item.eventId
-                        )
-                    }
-                    continue
-                }
-            }
-            let routingDrained = await events.drainCommittedRouting()
-            if routingDrained {
-                for item in ordinaryItems
-                where directlyRoutedPresentationRunByEventId[item.eventId] == run.id {
-                    directlyRoutedPresentationRunByEventId.removeValue(
-                        forKey: item.eventId
-                    )
-                }
-            }
-            guard ordinaryItems.allSatisfy({ captures[$0.eventId] != nil }) else {
-                return false
-            }
-            guard executionFence.isCurrent(executionFenceToken),
-                  await isCurrentIdentity(identityFence.token, journal: journal) else {
+            ) else { return false }
+        } catch {
+            LogWarning(
+                "DeviceLegService: failed to stage renderer publication: \(error)"
+            )
+            return false
+        }
+        run.context = context
+
+        guard let ordinaryItems = DeviceLegPresentationEventProjector
+            .routedItems(
+            publication.items,
+            distinctId: journal.distinctId
+        ) else { return false }
+
+        var publishedOrdinaryEvents = false
+        if !ordinaryItems.isEmpty {
+            guard let published = await presentationPublications.publish(
+                ordinaryItems,
+                forRunId: run.id,
+                in: journal,
+                executionFenceToken: executionFenceToken
+            ) else { return false }
+            publishedOrdinaryEvents = true
+            guard published.remainsAuthorized else {
                 return true
             }
             for item in ordinaryItems {
-                guard let capture = captures[item.eventId],
+                guard let capture = published.captures[item.eventId],
                       capture.routesLocally,
                       let candidate = presentationRoute(
                         in: leg,
                         eventName: capture.event.name,
                         screenId: screenId
-                      ), let emission = ordinaryEmissionsById[item.eventId],
-                      let occurredAtMillis = ordinaryOccurredAtMillisById[
-                        item.eventId
-                      ] else {
+                      ) else {
                     continue
                 }
-                routedEmission = emission
+                routedEvent = capture.event
                 routeStepId = candidate
-                routedEventName = capture.event.name
-                routedOccurredAtMillis = occurredAtMillis
                 break
             }
-        }
-
-        // A renderer invocation is one publication unit. Keep response
-        // mutations in memory until every ordinary event in the same batch is
-        // durably accepted; a rejected invocation must leave no response tail
-        // behind for the renderer to unknowingly roll back.
-        if batchResponsesChanged {
-            guard await persistPresentationResponseContext(
-                context,
-                runId: run.id,
-                expectedStepId: expectedStepId,
-                expectedCheckpoint: expectedCheckpoint,
-                journal: journal,
-                executionFenceToken: executionFenceToken
-            ) else {
-                return await acknowledgePublishedPresentationBatchFailure(
-                    publishedOrdinaryEvents,
-                    run: run,
-                    context: context,
-                    leg: leg,
-                    journal: journal,
-                    executionFenceToken: executionFenceToken
-                )
-            }
-            run.context = context
         }
 
         do {
@@ -1371,8 +1282,8 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             )
         }
 
-        if let routedEmission, let routeStepId {
-            guard let routedOccurredAtMillis else {
+        if let routedEvent, let routeStepId {
+            guard let controlEvent = controlEvent(routedEvent) else {
                 return await acknowledgePublishedPresentationBatchFailure(
                     publishedOrdinaryEvents,
                     run: run,
@@ -1386,9 +1297,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 )
             }
             context = ArmedDeviceLeg.Context(
-                event: ExactJSONObject(
-                    routedEmission.payload.mapValues(\.releaseJSONValue)
-                ),
+                event: controlEvent.properties,
                 responses: responses
             )
             do {
@@ -1399,6 +1308,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     run.id,
                     stepId: routeStepId,
                     context: context,
+                    clearingPresentationPublication: batch.invocationId,
                     admission: admission
                 ) else {
                     return await acknowledgePublishedPresentationBatchFailure(
@@ -1424,11 +1334,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             run.stepId = routeStepId
             run.context = context
             run.park = nil
-            let signal = DeviceLegControlExecutor.Signal(event: .init(
-                name: routedEventName ?? routedEmission.name,
-                occurredAtMillis: routedOccurredAtMillis,
-                properties: context.event
-            ), responsesChanged: batchResponsesChanged)
+            let signal = DeviceLegControlExecutor.Signal(
+                event: controlEvent,
+                responsesChanged: batchResponsesChanged
+            )
             let continuedRun = run
             Task { [weak self] in
                 await self?.continuePresentedRun(
@@ -1442,6 +1351,22 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             }
             return true
         }
+        guard await clearPresentationPublication(
+            runId: run.id,
+            invocationId: batch.invocationId,
+            journal: journal,
+            executionFenceToken: executionFenceToken
+        ) else {
+            return await acknowledgePublishedPresentationBatchFailure(
+                publishedOrdinaryEvents,
+                run: run,
+                context: context,
+                leg: leg,
+                journal: journal,
+                executionFenceToken: executionFenceToken
+            )
+        }
+        run.pendingPresentationPublication = nil
         if batchResponsesChanged,
            stepAcceptsResponseChange(run.stepId, in: leg) {
             let continuedRun = run
@@ -1516,34 +1441,16 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         scopedProperties["leg_id"] = run.reference.legId
         scopedProperties["leg_generation"] = run.generation
         let scopedPropertiesBox = UncheckedSendable(scopedProperties)
-        let admission = DeviceLegCommitAdmission(
-            identity: identity,
+        return await presentationPublications.capture(
+            name: event.name,
+            properties: scopedPropertiesBox,
+            eventId: eventId,
+            occurredAt: dateProvider.now(),
+            forRunId: run.id,
+            in: journal,
             identityFenceToken: identityFenceToken,
-            executionFence: executionFence,
             executionFenceToken: executionFenceToken
         )
-        directlyRoutedPresentationRunByEventId[eventId] = run.id
-        let capture = await events.captureAndRouteSystemEvent(
-            event.name,
-            properties: scopedPropertiesBox.value,
-            eventId: eventId,
-            distinctId: journal.distinctId,
-            occurredAt: dateProvider.now(),
-            admission: admission
-        )
-        let routingDrained = await events.drainCommittedRouting()
-        let routeWillReachSubscribers = capture?.routesLocally == true
-            && capture?.isNewlyCommitted == true
-        if (!routeWillReachSubscribers || routingDrained),
-           directlyRoutedPresentationRunByEventId[eventId] == run.id {
-            directlyRoutedPresentationRunByEventId.removeValue(forKey: eventId)
-        }
-        guard let capture,
-              executionFence.isCurrent(executionFenceToken),
-              await isCurrentIdentity(identityFenceToken, journal: journal) else {
-            return nil
-        }
-        return capture
     }
 
     private func acknowledgePublishedPresentationBatchFailure(
@@ -1843,7 +1750,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             }
             return .accepted
         }
-        let routedEventName = capture.event.name
+        guard let controlEvent = controlEvent(capture.event) else {
+            return .rejected
+        }
+        let routedEventName = controlEvent.name
         guard let routeStepId = presentationRoute(
             in: release.descriptor.leg,
             eventName: routedEventName,
@@ -1863,7 +1773,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             return .accepted
         }
         let context = ArmedDeviceLeg.Context(
-            event: payload,
+            event: controlEvent.properties,
             responses: run.context.responses
         )
         do {
@@ -1883,7 +1793,6 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         run.stepId = routeStepId
         run.context = context
         run.park = nil
-        let occurredAtMillis = milliseconds(occurredAt) ?? 0
         let dismissPresentationOnCompletion = !awaitContinuation
         let continueRun = { [weak self] in
             await self?.continuePresentedRun(
@@ -1891,9 +1800,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 release: release,
                 executionFenceToken: executionFenceToken,
                 signal: .init(event: .init(
-                    name: routedEventName,
-                    occurredAtMillis: occurredAtMillis,
-                    properties: payload
+                    name: controlEvent.name,
+                    occurredAtMillis: controlEvent.occurredAtMillis,
+                    properties: controlEvent.properties
                 )),
                 dismissPresentationOnCompletion: dismissPresentationOnCompletion,
                 journal: journal
@@ -1928,68 +1837,21 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         guard let identityFence = identity.performWithCurrentIdentityFence(
             journal.distinctId,
             { _ in () }
-        ), let properties = presentationEventProperties(
+        ), let properties = DeviceLegPresentationEventProjector.properties(
             payload: payload,
             screenId: screenId,
             run: run
-        ) else {
-            return nil
-        }
-        let propertiesBox = UncheckedSendable(properties)
-        let admission = DeviceLegCommitAdmission(
-            identity: identity,
+        ) else { return nil }
+        return await presentationPublications.capture(
+            name: name,
+            properties: UncheckedSendable(properties),
+            eventId: eventId,
+            occurredAt: occurredAt,
+            forRunId: run.id,
+            in: journal,
             identityFenceToken: identityFence.token,
-            executionFence: executionFence,
             executionFenceToken: executionFenceToken
         )
-        directlyRoutedPresentationRunByEventId[eventId] = run.id
-        let capture = await events.captureAndRouteSystemEvent(
-                name,
-                properties: propertiesBox.value,
-                eventId: eventId,
-                distinctId: journal.distinctId,
-                occurredAt: occurredAt,
-                admission: admission
-              )
-        let routingDrained = await events.drainCommittedRouting()
-        let routeWillReachSubscribers = capture?.routesLocally == true
-            && capture?.isNewlyCommitted == true
-        if (!routeWillReachSubscribers || routingDrained),
-           directlyRoutedPresentationRunByEventId[eventId] == run.id {
-            directlyRoutedPresentationRunByEventId.removeValue(forKey: eventId)
-        }
-        guard capture != nil,
-              executionFence.isCurrent(executionFenceToken),
-              await isCurrentIdentity(identityFence.token, journal: journal) else {
-            return nil
-        }
-        return capture
-    }
-
-    private func presentationEventProperties(
-        payload: ExactJSONObject<ExperienceReleaseJSONValue>,
-        screenId: String,
-        run: DeviceLegRun
-    ) -> [String: Any]? {
-        guard let data = try? ExactJSONCodec.encode(payload),
-              var properties = try? JSONSerialization.jsonObject(with: data)
-                as? [String: Any] else {
-            return nil
-        }
-        properties["screen_id"] = screenId
-        properties["journey_id"] = run.journeyId
-        properties["experience_id"] = run.reference.experienceId
-        properties["experience_version"] = run.reference.versionId
-        properties["leg_id"] = run.reference.legId
-        properties["leg_generation"] = run.generation
-        return properties
-    }
-
-    private func presentationDate(_ value: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: value)
-            ?? ISO8601DateFormatter().date(from: value)
     }
 
     private func stepAcceptsResponseChange(
@@ -1997,7 +1859,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         in leg: DeviceLeg
     ) -> Bool {
         guard let action = leg.steps.first(where: { $0.id == stepId })?.action,
-              case .string("wait_until")? = action["type"],
+              DeviceLegActionType(action: action) == .waitUntil,
               case .object(let trigger)? = action["trigger"],
               case .string(let kind)? = trigger["kind"] else {
             return false
@@ -2065,11 +1927,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         })?.entryStepId
     }
 
-    private func persistPresentationResponseContext(
-        _ context: ArmedDeviceLeg.Context,
+    private func clearPresentationPublication(
         runId: String,
-        expectedStepId: String,
-        expectedCheckpoint: DeviceLegControlExecutor.Checkpoint?,
+        invocationId: String,
         journal: DeviceLegRunJournal,
         executionFenceToken: DeviceLegProfileFenceToken
     ) async -> Bool {
@@ -2077,11 +1937,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             guard let admission = journalCommitAdmission(
                 journal: journal,
                 executionFenceToken: executionFenceToken
-            ), try await journal.transition(
+            ), try await journal.clearPresentationPublication(
                 runId,
-                stepId: expectedStepId,
-                context: context,
-                checkpoint: expectedCheckpoint,
+                invocationId: invocationId,
                 admission: admission
             ) else {
                 return false
@@ -2089,7 +1947,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             return true
         } catch {
             LogWarning(
-                "DeviceLegService: failed to persist screen response: \(error)"
+                "DeviceLegService: failed to clear renderer publication: \(error)"
             )
             return false
         }
@@ -2267,7 +2125,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     return
                 }
                 if let presenter,
-                   case .string("navigate")? = action["type"] {
+                   DeviceLegActionType(action: action) == .navigate {
                     guard case .string(let screenId)? = action["screenId"] else {
                         await finish(
                             run,
@@ -2437,8 +2295,8 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 let result: DeviceLegDispatchResult
                 var presentationSignal: DeviceLegControlExecutor.Signal?
                 if let presenter,
-                   case .string(let type)? = action["type"],
-                   Self.rendererOwnedActionTypes.contains(type),
+                   let actionType = DeviceLegActionType(action: action),
+                   actionType.isPresentationOwned,
                    await presenter.ownsDeviceLegPresentation(
                     journeyId: run.journeyId,
                     ownerDistinctId: journal.distinctId
@@ -2464,7 +2322,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                         )
                         return
                     }
-                    if type == "purchase" {
+                    if actionType == .purchase {
                         guard case .string(let placementId)? = resolvedAction[
                             "placementId"
                         ], !placementId.isEmpty else {
@@ -2683,41 +2541,16 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         journal: DeviceLegRunJournal,
         executionFenceToken: DeviceLegProfileFenceToken
     ) async {
-        let runs: [DeviceLegRun]
-        do {
-            runs = try await journal.runs()
-        } catch {
-            LogWarning(
-                "DeviceLegService: failed to read pending experiment exposure: \(error)"
-            )
-            return
-        }
-        guard let run = runs.first(where: { $0.id == runId }),
-              run.experimentExposures.contains(where: {
-            $0.shownAt == nil && !$0.queued
-        }), let admission = journalCommitAdmission(
+        guard let admission = journalCommitAdmission(
             journal: journal,
             executionFenceToken: executionFenceToken
         ) else { return }
-        do {
-            guard try await journal.markExperimentExposuresShown(
-                runId,
-                at: dateProvider.now(),
-                admission: admission
-            ) else { return }
-            let settled = try await DeviceLegExperimentExposureReporter(
-                journal: journal,
-                events: events
-            ).flushPending(admission: admission)
-            if !settled {
-                scheduleExperimentExposureRetry(for: journal)
-            }
-        } catch {
-            LogWarning(
-                "DeviceLegService: failed to queue shown experiment exposure: \(error)"
-            )
-            scheduleExperimentExposureRetry(for: journal)
-        }
+        await experimentExposures.markShown(
+            forRunId: runId,
+            in: journal,
+            at: dateProvider.now(),
+            admission: admission
+        )
     }
 
     @discardableResult
@@ -2804,12 +2637,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         dismissPresentation: Bool
     ) async -> Bool {
         do {
-            if try await !DeviceLegExperimentExposureReporter(
-                journal: journal,
-                events: events
-            ).flushPending(admission: admission) {
-                scheduleExperimentExposureRetry(for: journal)
-            }
+            _ = try await experimentExposures.flushPending(
+                in: journal,
+                admission: admission
+            )
             try await DeviceLegReporter(journal: journal, events: events)
                 .flushPending()
         } catch {
@@ -2893,31 +2724,28 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     private func executorSignal(
         _ event: NuxieEvent?
     ) -> DeviceLegControlExecutor.Signal {
-        guard let event,
-              let occurredAt = milliseconds(event.timestamp) else { return .init() }
+        guard let event, let controlEvent = controlEvent(event) else {
+            return .init()
+        }
+        return .init(event: controlEvent)
+    }
+
+    private func controlEvent(
+        _ event: NuxieEvent
+    ) -> DeviceLegControlExecutor.Event? {
+        guard let occurredAt = milliseconds(event.timestamp) else { return nil }
         var properties = ExactJSONObject<ExperienceReleaseJSONValue>()
         for (key, value) in event.properties {
             if let converted = DeviceLegBoundaryProjector.jsonValue(value) {
                 properties[key] = converted
             }
         }
-        return .init(event: .init(
+        return .init(
             name: event.name,
             occurredAtMillis: occurredAt,
             properties: properties
-        ))
+        )
     }
-
-    private static let rendererOwnedActionTypes: Set<String> = [
-        "back",
-        "purchase",
-        "restore",
-        "request_notifications",
-        "request_permission",
-        "request_tracking",
-        "open_link",
-        "dismiss",
-    ]
 
     private func isAwaitingPresentationCommerceOutcome(
         _ run: DeviceLegRun,
@@ -2925,18 +2753,18 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     ) -> Bool {
         guard run.effectReceipts[run.stepId] != nil,
               let action = leg.steps.first(where: { $0.id == run.stepId })?.action,
-              case .string(let type)? = action["type"] else {
+              let type = DeviceLegActionType(action: action) else {
             return false
         }
-        return type == "purchase" || type == "restore"
+        return type.isCommerce
     }
 
     private func resolvedPresentationAction(
         _ action: [String: ExperienceReleaseJSONValue],
         context: ArmedDeviceLeg.Context
     ) -> [String: ExperienceReleaseJSONValue]? {
-        guard case .string(let type)? = action["type"] else { return nil }
-        guard type == "open_link" else { return action }
+        guard let type = DeviceLegActionType(action: action) else { return nil }
+        guard type == .openLink else { return action }
         guard let encoded = action["url"].flatMap({
             try? ExactJSONCodec.encode($0)
         }), let value = try? ExactJSONCodec.decode(
@@ -3017,60 +2845,6 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         wakeGeneration &+= 1
         wakeTask?.cancel()
         wakeTask = nil
-    }
-
-    private func scheduleExperimentExposureRetry(
-        for journal: DeviceLegRunJournal
-    ) {
-        let key = journal.distinctId
-        guard experimentExposureRetryTasks[key] == nil else { return }
-        experimentExposureRetryTasks[key] = Task { [weak self] in
-            await self?.retryExperimentExposures(
-                in: journal,
-                key: key
-            )
-        }
-    }
-
-    private func cancelAndAwaitExperimentExposureRetries() async {
-        let retries = Array(experimentExposureRetryTasks.values)
-        retries.forEach { $0.cancel() }
-        for retry in retries {
-            await retry.value
-        }
-        experimentExposureRetryTasks.removeAll()
-    }
-
-    private func retryExperimentExposures(
-        in journal: DeviceLegRunJournal,
-        key: String
-    ) async {
-        defer { experimentExposureRetryTasks.removeValue(forKey: key) }
-        var delay: UInt64 = 250_000_000
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(nanoseconds: delay)
-            } catch {
-                return
-            }
-            do {
-                let settled = try await DeviceLegExperimentExposureReporter(
-                    journal: journal,
-                    events: events
-                ).flushPending()
-                try await DeviceLegReporter(journal: journal, events: events)
-                    .flushPending()
-                if settled {
-                    _ = try await journal.finalizeRevocation()
-                    return
-                }
-            } catch {
-                LogWarning(
-                    "DeviceLegService: experiment exposure retry remains pending: \(error)"
-                )
-            }
-            delay = min(delay &* 2, 2_000_000_000)
-        }
     }
 
     private func milliseconds(_ date: Date) -> Int64? {

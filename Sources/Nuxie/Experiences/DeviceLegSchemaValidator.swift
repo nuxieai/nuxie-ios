@@ -118,8 +118,9 @@ enum DeviceLegSchemaValidator {
             }
             if route["eventName"] as? String == "host_dismissed",
                let entry = steps.compactMap({ $0 as? [String: Any] }).first(where: { $0["id"] as? String == route["entryStepId"] as? String }),
-               let action = entry["action"] as? [String: Any], let type = action["type"] as? String,
-               ["navigate", "back", "purchase", "restore", "request_notifications", "request_permission", "request_tracking", "open_link", "dismiss"].contains(type) {
+               let action = entry["action"] as? [String: Any],
+               let rawType = action["type"] as? String,
+               DeviceLegActionType(rawValue: rawType)?.isPresentationOwned == true {
                 throw invalid
             }
             guard ids.contains(try identifier(route["entryStepId"])),
@@ -144,16 +145,21 @@ enum DeviceLegSchemaValidator {
 
     private static func operation(_ value: Any?, screens: Set<String>, placements: Set<String>) throws {
         let action = try dictionary(value)
-        switch action["type"] as? String {
-        case "connector_action", "grant_entitlement", "device_available": throw invalid
-        case "condition":
+        guard let rawType = action["type"] as? String,
+              let type = DeviceLegActionType(rawValue: rawType) else {
+            throw invalid
+        }
+        switch type {
+        case .connectorAction, .grantEntitlement, .deviceAvailable:
+            throw invalid
+        case .condition:
             _ = try object(action, required: ["type", "branches"])
             for item in try array(action["branches"]) {
                 let branch = try object(item, required: ["id", "condition"])
                 _ = try identifier(branch["id"])
                 try Common.validateJourneyCondition(branch["condition"], path: "leg.condition")
             }
-        case "experiment":
+        case .experiment:
             _ = try object(action, required: ["type", "experimentId", "variants"])
             _ = try identifier(action["experimentId"])
             for item in try array(action["variants"]) {
@@ -161,12 +167,12 @@ enum DeviceLegSchemaValidator {
                 _ = try identifier(variant["id"])
                 try boolean(variant["isHoldout"])
             }
-        case "time_window":
+        case .timeWindow:
             _ = try object(action, required: ["type", "startTime", "endTime", "timezone", "daysOfWeek"])
             guard action["startTime"] is String, action["endTime"] is String else { throw invalid }
             try Common.validateJourneyTimezone(action["timezone"], path: "leg.timezone")
             for day in try array(action["daysOfWeek"]) { try integer(day, minimum: 0, maximum: 6) }
-        case "wait_until":
+        case .waitUntil:
             _ = try object(action, required: ["type", "trigger", "condition", "maxTimeMs"])
             try Common.validateJourneyWaitTrigger(action["trigger"], path: "leg.trigger")
             if let payload = try dictionary(action["trigger"])["payloadSchema"] {
@@ -181,11 +187,12 @@ enum DeviceLegSchemaValidator {
             }
             try Common.validateJourneyCondition(action["condition"], path: "leg.condition")
             try integer(action["maxTimeMs"], minimum: 0)
-        case "purchase":
+        case .purchase:
             _ = try object(action, required: ["type", "placementId"])
             try Common.validateJourneyPurchasePlacementId(action["placementId"], path: "leg.placementId", placementIDs: placements)
-        case "restore": _ = try object(action, required: ["type"])
-        case "send_event":
+        case .restore:
+            _ = try object(action, required: ["type"])
+        case .sendEvent:
             try Common.validateCanonicalJourneyAction(
                 action,
                 path: "leg.action",
@@ -196,7 +203,9 @@ enum DeviceLegSchemaValidator {
                   !eventName.hasPrefix("$") else {
                 throw invalid
             }
-        default:
+        case .delay, .navigate, .back, .requestNotifications,
+             .requestPermission, .requestTracking, .openLink, .dismiss,
+             .updateCustomer, .milestone, .submitResponse, .appAction, .exit:
             try Common.validateCanonicalJourneyAction(action, path: "leg.action", screenIDs: screens, placementIDs: placements)
         }
     }

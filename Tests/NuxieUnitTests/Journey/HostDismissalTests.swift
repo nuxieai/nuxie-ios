@@ -2007,6 +2007,96 @@ private final class ShutdownObservingExperiencePresentationService {
         await base.shutdownCurrentExperience()
     }
 
+    func setDeviceLegPresentationAvailabilityHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) {
+        base.setDeviceLegPresentationAvailabilityHandler(handler)
+    }
+
+    func reserveDeviceLegPresentation(
+        ownerDistinctId: String
+    ) -> (any DeviceLegPresentationReservation)? {
+        base.reserveDeviceLegPresentation(ownerDistinctId: ownerDistinctId)
+    }
+
+    func ownsDeviceLegPresentation(
+        journeyId: String,
+        ownerDistinctId: String
+    ) -> Bool {
+        base.ownsDeviceLegPresentation(
+            journeyId: journeyId,
+            ownerDistinctId: ownerDistinctId
+        )
+    }
+
+    func presentDeviceLeg(
+        _ request: DeviceLegPresentationRequest
+    ) async -> DeviceLegPresentationResult {
+        await base.presentDeviceLeg(request)
+    }
+
+    func navigateDeviceLegPresentation(
+        journeyId: String,
+        ownerDistinctId: String,
+        screenId: String,
+        transition: ExperienceReleaseJSONValue?
+    ) async -> DeviceLegPresentationNavigationResult {
+        await base.navigateDeviceLegPresentation(
+            journeyId: journeyId,
+            ownerDistinctId: ownerDistinctId,
+            screenId: screenId,
+            transition: transition
+        )
+    }
+
+    func resolveDeviceLegPresentationAction(
+        journeyId: String,
+        ownerDistinctId: String,
+        action: [String: ExperienceReleaseJSONValue],
+        source: ScreenEmissionSource?
+    ) -> [String: ExperienceReleaseJSONValue]? {
+        base.resolveDeviceLegPresentationAction(
+            journeyId: journeyId,
+            ownerDistinctId: ownerDistinctId,
+            action: action,
+            source: source
+        )
+    }
+
+    func dispatchDeviceLegPresentationAction(
+        journeyId: String,
+        ownerDistinctId: String,
+        action: [String: ExperienceReleaseJSONValue],
+        effectId: String
+    ) async -> DeviceLegPresentationActionResult {
+        await base.dispatchDeviceLegPresentationAction(
+            journeyId: journeyId,
+            ownerDistinctId: ownerDistinctId,
+            action: action,
+            effectId: effectId
+        )
+    }
+
+    func finishDeviceLegPresentation(
+        journeyId: String,
+        ownerDistinctId: String
+    ) async {
+        await base.finishDeviceLegPresentation(
+            journeyId: journeyId,
+            ownerDistinctId: ownerDistinctId
+        )
+    }
+
+    func shutdownDeviceLegPresentation(ownerDistinctId: String) async {
+        await base.shutdownDeviceLegPresentation(
+            ownerDistinctId: ownerDistinctId
+        )
+    }
+
+    func deviceLegProfileRefreshDidComplete() {
+        base.deviceLegProfileRefreshDidComplete()
+    }
+
     func onAppBecameActive() {
         base.onAppBecameActive()
     }
