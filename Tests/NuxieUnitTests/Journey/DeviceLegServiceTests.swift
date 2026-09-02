@@ -6346,6 +6346,77 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(completion.properties["outcome"] as? String, "continue")
     }
 
+    func testDueRenderedRunCompletesWithoutPresentationCapacity() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entryStepId: "wait",
+            steps: [
+                .init(
+                    kind: .action,
+                    id: "wait",
+                    action: [
+                        "type": .string("delay"),
+                        "durationMs": .number(1_000),
+                    ],
+                    outlets: ["next": "report"],
+                    outcome: nil
+                ),
+                .init(
+                    kind: .complete,
+                    id: "report",
+                    action: nil,
+                    outlets: nil,
+                    outcome: "continue"
+                ),
+            ],
+            screens: [.init(
+                id: "screen_welcome",
+                defaultViewModelName: "WelcomeModel",
+                defaultInstanceId: "welcome",
+                responseCaptures: []
+            )]
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let now = MockDateProvider(
+            initialDate: Date(timeIntervalSince1970: 1_000)
+        )
+        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            dateProvider: now,
+            presenter: presenter
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let parkedRuns = try await journal.runs()
+        XCTAssertNotNil(parkedRuns.first?.park)
+
+        await MainActor.run { presenter.available = false }
+        now.advance(by: 2)
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+
+        let completedRuns = try await journal.runs()
+        XCTAssertTrue(completedRuns.isEmpty)
+        let completion = try XCTUnwrap(events.routedEvents.last)
+        XCTAssertEqual(completion.name, JourneyEvents.journeyLegCompleted)
+        XCTAssertEqual(completion.properties["outcome"] as? String, "continue")
+        let requests = await MainActor.run { presenter.presentationRequests }
+        XCTAssertTrue(requests.isEmpty)
+    }
+
     func testUnsupportedInjectedEffectAbandonsInsteadOfCreatingResumePoint() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

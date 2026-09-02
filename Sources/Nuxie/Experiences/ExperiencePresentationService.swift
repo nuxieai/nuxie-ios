@@ -514,11 +514,10 @@ final class ExperiencePresentationService {
             }
         } else if let deviceLegContext {
             trackExperienceShown(
-                properties: [
-                    "journey_id": deviceLegContext.owner.journeyId,
-                    "experience_id": deviceLegContext.experienceId,
-                    "experience_version": experienceVersionId,
-                ],
+                properties: deviceLegExperienceProperties(
+                    experienceVersionId: experienceVersionId,
+                    context: deviceLegContext
+                ),
                 distinctId: deviceLegContext.owner.distinctId
             )
         }
@@ -1546,11 +1545,10 @@ final class ExperiencePresentationService {
         experienceVersionId: String,
         context: DeviceLegPresentationContext
     ) {
-        var properties: [String: Any] = [
-            "journey_id": context.owner.journeyId,
-            "experience_id": context.experienceId,
-            "experience_version": experienceVersionId,
-        ]
+        var properties = deviceLegExperienceProperties(
+            experienceVersionId: experienceVersionId,
+            context: context
+        )
         switch reason {
         case .userDismissed:
             properties["reason"] = "user"
@@ -1576,6 +1574,17 @@ final class ExperiencePresentationService {
             userPropertiesSetOnce: nil,
             distinctIdOverride: context.owner.distinctId
         )
+    }
+
+    private func deviceLegExperienceProperties(
+        experienceVersionId: String,
+        context: DeviceLegPresentationContext
+    ) -> [String: Any] {
+        [
+            "journey_id": context.owner.journeyId,
+            "experience_id": context.experienceId,
+            "experience_version": experienceVersionId,
+        ]
     }
 }
 

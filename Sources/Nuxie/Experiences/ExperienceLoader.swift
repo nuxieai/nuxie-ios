@@ -1,5 +1,15 @@
 import Foundation
 
+private func decodeDeviceLegDocuments<Document: Decodable>(
+    _ type: Document.Type,
+    from values: [ExperienceReleaseJSONValue]
+) throws -> [Document] {
+    try ExactJSONCodec.decode(
+        [Document].self,
+        from: ExactJSONCodec.encode(values)
+    )
+}
+
 enum ActiveProductEvidenceAuthorityResolution: Equatable, Sendable {
     case unavailable
     case readyNoMatch
@@ -448,12 +458,10 @@ actor ExperienceLoader {
         let activeDigests = Set(deviceLegSnapshot.profile.armedLegs.compactMap {
             $0.binding.type == .new ? $0.reference.descriptorSha256 : nil
         })
-        let encoder = JSONEncoder()
-        let decoder = JSONDecoder()
         for release in deviceLegSnapshot.releasesByDigest.values {
-            let products = try decoder.decode(
-                [ExperienceReleaseProductDocument].self,
-                from: encoder.encode(release.descriptor.products)
+            let products = try decodeDeviceLegDocuments(
+                ExperienceReleaseProductDocument.self,
+                from: release.descriptor.products
             )
             releases.append(ProductCatalogRelease(
                 releaseID: .init(
@@ -906,15 +914,13 @@ actor ExperienceLoader {
         _ release: AuthenticatedDeviceLegRelease,
         screenID: String
     ) throws -> ProductReleaseAuthority {
-        let encoder = JSONEncoder()
-        let decoder = JSONDecoder()
-        let products = try decoder.decode(
-            [ExperienceReleaseProductDocument].self,
-            from: encoder.encode(release.descriptor.products)
+        let products = try decodeDeviceLegDocuments(
+            ExperienceReleaseProductDocument.self,
+            from: release.descriptor.products
         )
-        let placements = try decoder.decode(
-            [ExperienceReleasePlacementDocument].self,
-            from: encoder.encode(release.descriptor.placements)
+        let placements = try decodeDeviceLegDocuments(
+            ExperienceReleasePlacementDocument.self,
+            from: release.descriptor.placements
         )
         let flatRequirements = flatProductRequirements(
             for: screenID,
