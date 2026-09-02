@@ -1202,7 +1202,9 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(availability.availabilitySignals).to(equal(1))
                 }
 
-                it("waits for the serialized foreground profile refresh before advertising device-leg capacity") { @MainActor in
+                it(
+                    "waits for foreground profile refresh before advertising device-leg capacity"
+                ) { @MainActor in
                     let availability = DeviceLegPresentationOutcomeRecorder()
                     service.setDeviceLegPresentationAvailabilityHandler {
                         availability.recordAvailability()
