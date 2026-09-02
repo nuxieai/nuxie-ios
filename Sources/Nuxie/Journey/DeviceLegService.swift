@@ -931,40 +931,23 @@ actor DeviceLegService {
                         wakeAtMillis: wakeMillis
                     )
                 }
-                let presentationReservation = await presentationReservation(
-                    for: release,
-                    distinctId: state.distinctId
+                guard let resumed = try await journal.resumeParked(
+                    parked.id,
+                    profileFence: profileFence,
+                    profileFenceToken: profileFenceToken
+                ) else { continue }
+                // A rendered leg can wake into a branch that never presents.
+                // Reserve only if execution reaches navigate; execute also
+                // recognizes an already-owned presentation before reserving.
+                await execute(
+                    resumed,
+                    release: release,
+                    state: state,
+                    executionFenceToken: executionFenceToken,
+                    signal: executorSignal(event),
+                    checkpoint: checkpoint,
+                    journal: journal
                 )
-                let ownsExistingPresentation = await presenter?
-                    .ownsDeviceLegPresentation(
-                        owner: .init(
-                            journeyId: parked.journeyId,
-                            distinctId: state.distinctId
-                        )
-                    ) ?? false
-                if presenter != nil,
-                   !release.descriptor.leg.screens.isEmpty,
-                   presentationReservation == nil,
-                   !ownsExistingPresentation {
-                    continue
-                }
-                try await withPresentationReservation(presentationReservation) {
-                    guard let resumed = try await journal.resumeParked(
-                        parked.id,
-                        profileFence: profileFence,
-                        profileFenceToken: profileFenceToken
-                    ) else { return }
-                    await execute(
-                        resumed,
-                        release: release,
-                        state: state,
-                        executionFenceToken: executionFenceToken,
-                        signal: executorSignal(event),
-                        checkpoint: checkpoint,
-                        journal: journal,
-                        presentationReservation: presentationReservation
-                    )
-                }
             }
         } catch {
             LogWarning("DeviceLegService: failed to resume parked device leg: \(error)")
@@ -1416,12 +1399,10 @@ actor DeviceLegService {
               await isCurrentIdentity(identityFenceToken, journal: journal) else {
             return
         }
-        var scopedProperties = properties.value
-        scopedProperties["journey_id"] = run.journeyId
-        scopedProperties["experience_id"] = run.reference.experienceId
-        scopedProperties["experience_version"] = run.reference.versionId
-        scopedProperties["leg_id"] = run.reference.legId
-        scopedProperties["leg_generation"] = run.generation
+        let scopedProperties = presentationEventProperties(
+            properties.value,
+            run: run
+        )
         let scopedPropertiesBox = UncheckedSendable(scopedProperties)
         let admission = DeviceLegCommitAdmission(
             identity: identity,
@@ -1452,14 +1433,14 @@ actor DeviceLegService {
               await isCurrentIdentity(identityFenceToken, journal: journal) else {
             return nil
         }
-        var scopedProperties = Dictionary(
-            uniqueKeysWithValues: event.properties.map { ($0.key, $0.value as Any) }
+        let scopedProperties = presentationEventProperties(
+            Dictionary(
+                uniqueKeysWithValues: event.properties.map {
+                    ($0.key, $0.value as Any)
+                }
+            ),
+            run: run
         )
-        scopedProperties["journey_id"] = run.journeyId
-        scopedProperties["experience_id"] = run.reference.experienceId
-        scopedProperties["experience_version"] = run.reference.versionId
-        scopedProperties["leg_id"] = run.reference.legId
-        scopedProperties["leg_generation"] = run.generation
         let scopedPropertiesBox = UncheckedSendable(scopedProperties)
         return await presentationPublications.capture(
             name: event.name,
@@ -1471,6 +1452,19 @@ actor DeviceLegService {
             identityFenceToken: identityFenceToken,
             executionFenceToken: executionFenceToken
         )
+    }
+
+    private func presentationEventProperties(
+        _ properties: [String: Any],
+        run: DeviceLegRun
+    ) -> [String: Any] {
+        var scoped = properties
+        scoped["journey_id"] = run.journeyId
+        scoped["experience_id"] = run.reference.experienceId
+        scoped["experience_version"] = run.reference.versionId
+        scoped["leg_id"] = run.reference.legId
+        scoped["leg_generation"] = run.generation
+        return scoped
     }
 
     private func acknowledgePublishedPresentationBatchFailure(

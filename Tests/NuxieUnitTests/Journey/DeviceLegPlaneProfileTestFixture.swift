@@ -39,7 +39,7 @@ struct DeviceLegPlaneProfileTestFixture {
             ],
             "features": [],
             "facts": [
-                "properties": ["ready": ["present": true, "value": true]],
+                "properties": [:],
                 "memberships": [:],
                 "assignments": [:],
             ],

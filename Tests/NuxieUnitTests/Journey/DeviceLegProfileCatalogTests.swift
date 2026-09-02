@@ -391,6 +391,111 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         }
     }
 
+    func testPrepareRequiresTheExactAuthenticatedFactReferenceUnion() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let updated = try updatedRelease(
+            fixture: fixture,
+            reentry: ["type": "one_time"],
+            factReferences: [
+                "propertyKeys": ["plan"],
+                "segmentIds": [],
+                "experimentIds": [],
+            ],
+            entryCondition: [
+                "type": "app_foregrounded",
+                "condition": [
+                    "ir_version": 1,
+                    "expr": [
+                        "type": "User",
+                        "op": "is_set",
+                        "key": "plan",
+                    ],
+                ],
+            ]
+        )
+        let originalArm = try XCTUnwrap(fixture.profile.armedLegs.first)
+        let entryCondition = DeviceLegEntryCondition(
+            type: .appForegrounded,
+            eventName: nil,
+            segmentId: nil,
+            member: nil,
+            condition: IREnvelope(
+                ir_version: 1,
+                engine_min: nil,
+                compiled_at: nil,
+                expr: .user(op: "is_set", key: "plan", value: nil)
+            )
+        )
+        let arm = ArmedDeviceLeg(
+            reference: updated.reference,
+            binding: originalArm.binding,
+            entryCondition: entryCondition,
+            context: originalArm.context
+        )
+        func profile(facts: DeviceLegFactTable) -> JourneyPlaneProfile {
+            JourneyPlaneProfile(
+                schemaVersion: fixture.profile.schemaVersion,
+                status: fixture.profile.status,
+                delivery: fixture.profile.delivery,
+                features: fixture.profile.features,
+                facts: facts,
+                armedLegs: [arm],
+                releases: [updated.entry]
+            )
+        }
+        let matchingFacts = DeviceLegFactTable(
+            properties: [
+                "plan": .init(present: true, value: AnyCodable("pro"))
+            ],
+            memberships: [:],
+            assignments: [:]
+        )
+        let catalog = try makeCatalog(
+            fixture,
+            store: InMemoryExperienceReleaseHighWaterStore()
+        )
+        _ = try await catalog.prepare(
+            profile(facts: matchingFacts),
+            authority: fixture.deliveryAuthority
+        )
+
+        let invalidFacts = [
+            DeviceLegFactTable(
+                properties: [:],
+                memberships: matchingFacts.memberships,
+                assignments: matchingFacts.assignments
+            ),
+            DeviceLegFactTable(
+                properties: [
+                    "plan": .init(
+                        present: true,
+                        value: AnyCodable("pro")
+                    ),
+                    "unreferenced": .init(
+                        present: true,
+                        value: AnyCodable(true)
+                    ),
+                ],
+                memberships: matchingFacts.memberships,
+                assignments: matchingFacts.assignments
+            ),
+        ]
+        for facts in invalidFacts {
+            do {
+                _ = try await catalog.prepare(
+                    profile(facts: facts),
+                    authority: fixture.deliveryAuthority
+                )
+                XCTFail("Expected non-exact fact projection rejection")
+            } catch {
+                XCTAssertEqual(
+                    error as? ExperienceReleaseDescriptorAuthenticationError,
+                    .invalidDescriptor
+                )
+            }
+        }
+    }
+
     func testCachedProfileRoundTripsCanonicalPlaneValues() throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
         let cached = CachedProfile(
@@ -408,7 +513,7 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
             from: JSONEncoder().encode(cached)
         )
         XCTAssertEqual(decoded.response.planeProfile?.armedLegs.count, 1)
-        XCTAssertEqual(decoded.response.planeProfile?.facts.properties["ready"]?.present, true)
+        XCTAssertEqual(decoded.response.planeProfile?.facts.properties.count, 0)
         XCTAssertNil(decoded.response.releases)
         XCTAssertEqual(decoded.validator?.authority, fixture.deliveryAuthority)
     }
@@ -546,7 +651,9 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
 
     private func updatedRelease(
         fixture: DeviceLegPlaneProfileTestFixture,
-        reentry: [String: Any]
+        reentry: [String: Any],
+        factReferences: [String: Any]? = nil,
+        entryCondition: [String: Any]? = nil
     ) throws -> (
         entry: DeviceLegReleaseProfileEntry,
         reference: ArmedDeviceLeg.Reference
@@ -570,6 +677,12 @@ final class DeviceLegProfileCatalogTests: XCTestCase {
         descriptor["identity"] = identity
         var leg = try XCTUnwrap(descriptor["leg"] as? [String: Any])
         leg["reentry"] = reentry
+        if let factReferences {
+            leg["facts"] = factReferences
+        }
+        if let entryCondition {
+            leg["entryCondition"] = entryCondition
+        }
         descriptor["leg"] = leg
         let resignedBytes = try JSONSerialization.data(
             withJSONObject: descriptor
