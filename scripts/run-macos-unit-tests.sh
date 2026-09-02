@@ -5,9 +5,12 @@ set -euo pipefail
 xcodebuild_bin="${NUXIE_XCODEBUILD_BIN:-xcodebuild}"
 launchctl_bin="${NUXIE_LAUNCHCTL_BIN:-launchctl}"
 kill_bin="${NUXIE_KILL_BIN:-kill}"
+ps_bin="${NUXIE_PS_BIN:-ps}"
 diagnostics_dir="${NUXIE_MACOS_TEST_DIAGNOSTICS_DIR:-macos-unit-crash-reports}"
 retry_delay_seconds="${NUXIE_MACOS_TEST_RETRY_DELAY_SECONDS:-10}"
-testmanagerd_service="${NUXIE_TESTMANAGERD_SERVICE:-gui/$(id -u)/com.apple.testmanagerd}"
+testmanagerd_uid="${NUXIE_TESTMANAGERD_UID:-$(id -u)}"
+testmanagerd_service="${NUXIE_TESTMANAGERD_SERVICE:-gui/$testmanagerd_uid/com.apple.testmanagerd}"
+testmanagerd_process_path="${NUXIE_TESTMANAGERD_PROCESS_PATH:-/usr/libexec/testmanagerd}"
 testmanagerd_restore_timeout_seconds="${NUXIE_TESTMANAGERD_RESTORE_TIMEOUT_SECONDS:-30}"
 testmanagerd_restore_poll_seconds="${NUXIE_TESTMANAGERD_RESTORE_POLL_SECONDS:-1}"
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/nuxie-macos-unit.XXXXXX")"
@@ -31,6 +34,13 @@ testmanagerd_pid_from_snapshot() {
   sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' | head -n 1
 }
 
+testmanagerd_pid_from_process_table() {
+  "$ps_bin" -axo uid=,pid=,command= | awk \
+    -v uid="$testmanagerd_uid" \
+    -v process_path="$testmanagerd_process_path" \
+    '$1 == uid && $3 == process_path && NF == 3 { print $2; exit }'
+}
+
 testmanagerd_snapshot_is_ready() {
   local snapshot="$1"
   grep -Fq 'state = running' <<<"$snapshot" \
@@ -47,6 +57,11 @@ restore_testmanagerd() {
   service_snapshot="$("$launchctl_bin" print "$testmanagerd_service" 2>/dev/null || true)"
   local current_pid
   current_pid="$(testmanagerd_pid_from_snapshot <<<"$service_snapshot")"
+  if [[ -z "$current_pid" ]]; then
+    # A broken control channel can make the per-service launchctl snapshot
+    # transiently empty while its stale user-owned process is still alive.
+    current_pid="$(testmanagerd_pid_from_process_table)"
+  fi
 
   if [[ -n "$current_pid" ]]; then
     if ! "$kill_bin" -TERM "$current_pid"; then
