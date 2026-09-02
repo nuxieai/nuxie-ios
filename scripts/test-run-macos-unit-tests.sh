@@ -13,6 +13,7 @@ diagnostics_dir="$temporary_dir/diagnostics"
 launchctl_calls_file="$temporary_dir/launchctl-calls"
 launchctl_state_file="$temporary_dir/launchctl-state"
 kill_calls_file="$temporary_dir/kill-calls"
+ps_calls_file="$temporary_dir/ps-calls"
 
 cat >"$fake_xcodebuild" <<'SH'
 #!/usr/bin/env bash
@@ -55,7 +56,10 @@ case "$1" in
     ;;
   print)
     state="$(cat "$NUXIE_TEST_LAUNCHCTL_STATE_FILE")"
-    if [[ "$state" == "running-old" ]]; then
+    print_count="$(grep -c '^print ' "$NUXIE_TEST_LAUNCHCTL_CALLS_FILE")"
+    if [[ "$NUXIE_TEST_RECOVERY_SCENARIO" == "missing_initial_snapshot" && "$print_count" == "1" ]]; then
+      echo "state = not running"
+    elif [[ "$state" == "running-old" ]]; then
       echo "state = running"
       echo "pid = 4242"
       echo '"com.apple.testmanagerd.control" = {'
@@ -89,27 +93,45 @@ printf 'stopped\n' >"$NUXIE_TEST_LAUNCHCTL_STATE_FILE"
 SH
 chmod +x "$fake_kill"
 
+fake_ps="$temporary_dir/ps"
+cat >"$fake_ps" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$NUXIE_TEST_PS_CALLS_FILE"
+state="$(cat "$NUXIE_TEST_LAUNCHCTL_STATE_FILE")"
+if [[ "$state" == "running-old" ]]; then
+  echo "501 4242 /usr/libexec/testmanagerd"
+elif [[ "$state" == "running-new" ]]; then
+  echo "501 4343 /usr/libexec/testmanagerd"
+fi
+SH
+chmod +x "$fake_ps"
+
 run_case() {
   local scenario="$1"
   local recovery_scenario="${2:-success}"
   : >"$calls_file"
   : >"$launchctl_calls_file"
   : >"$kill_calls_file"
+  : >"$ps_calls_file"
   printf 'running-old\n' >"$launchctl_state_file"
   rm -f "$state_file"
   rm -rf "$diagnostics_dir"
   NUXIE_XCODEBUILD_BIN="$fake_xcodebuild" \
     NUXIE_LAUNCHCTL_BIN="$fake_launchctl" \
     NUXIE_KILL_BIN="$fake_kill" \
+    NUXIE_PS_BIN="$fake_ps" \
     NUXIE_MACOS_TEST_DIAGNOSTICS_DIR="$diagnostics_dir" \
     NUXIE_MACOS_TEST_RETRY_DELAY_SECONDS=0 \
     NUXIE_TESTMANAGERD_SERVICE="gui/501/com.apple.testmanagerd" \
+    NUXIE_TESTMANAGERD_UID=501 \
     NUXIE_TESTMANAGERD_RESTORE_TIMEOUT_SECONDS=0 \
     NUXIE_TESTMANAGERD_RESTORE_POLL_SECONDS=0 \
     NUXIE_TEST_CALLS_FILE="$calls_file" \
     NUXIE_TEST_LAUNCHCTL_CALLS_FILE="$launchctl_calls_file" \
     NUXIE_TEST_LAUNCHCTL_STATE_FILE="$launchctl_state_file" \
     NUXIE_TEST_KILL_CALLS_FILE="$kill_calls_file" \
+    NUXIE_TEST_PS_CALLS_FILE="$ps_calls_file" \
     NUXIE_TEST_RECOVERY_SCENARIO="$recovery_scenario" \
     NUXIE_TEST_STATE_FILE="$state_file" \
     NUXIE_TEST_SCENARIO="$scenario" \
@@ -120,6 +142,7 @@ run_case success
 [[ "$(cat "$calls_file")" == "test" ]]
 [[ ! -s "$launchctl_calls_file" ]]
 [[ ! -s "$kill_calls_file" ]]
+[[ ! -s "$ps_calls_file" ]]
 
 set +e
 run_case ordinary_failure
@@ -129,6 +152,7 @@ set -e
 [[ "$(cat "$calls_file")" == "test" ]]
 [[ ! -s "$launchctl_calls_file" ]]
 [[ ! -s "$kill_calls_file" ]]
+[[ ! -s "$ps_calls_file" ]]
 
 set +e
 run_case testmanagerd_then_success kill_failure
@@ -138,6 +162,7 @@ set -e
 [[ "$(cat "$calls_file")" == "test" ]]
 [[ "$(cat "$launchctl_calls_file")" == "print gui/501/com.apple.testmanagerd" ]]
 [[ "$(cat "$kill_calls_file")" == "-TERM 4242" ]]
+[[ ! -s "$ps_calls_file" ]]
 
 set +e
 run_case testmanagerd_then_success kickstart_failure
@@ -147,11 +172,20 @@ set -e
 [[ "$(cat "$calls_file")" == "test" ]]
 [[ "$(cat "$launchctl_calls_file")" == $'print gui/501/com.apple.testmanagerd\nprint gui/501/com.apple.testmanagerd\nkickstart gui/501/com.apple.testmanagerd' ]]
 [[ "$(cat "$kill_calls_file")" == "-TERM 4242" ]]
+[[ ! -s "$ps_calls_file" ]]
 
 run_case testmanagerd_then_success
 [[ "$(cat "$calls_file")" == $'test\ntest-without-building' ]]
 [[ "$(cat "$launchctl_calls_file")" == $'print gui/501/com.apple.testmanagerd\nprint gui/501/com.apple.testmanagerd\nkickstart gui/501/com.apple.testmanagerd\nprint gui/501/com.apple.testmanagerd' ]]
 [[ "$(cat "$kill_calls_file")" == "-TERM 4242" ]]
+[[ ! -s "$ps_calls_file" ]]
+[[ -f "$diagnostics_dir/testmanagerd-first-attempt.log" ]]
+
+run_case testmanagerd_then_success missing_initial_snapshot
+[[ "$(cat "$calls_file")" == $'test\ntest-without-building' ]]
+[[ "$(cat "$launchctl_calls_file")" == $'print gui/501/com.apple.testmanagerd\nprint gui/501/com.apple.testmanagerd\nkickstart gui/501/com.apple.testmanagerd\nprint gui/501/com.apple.testmanagerd' ]]
+[[ "$(cat "$kill_calls_file")" == "-TERM 4242" ]]
+[[ "$(cat "$ps_calls_file")" == "-axo uid=,pid=,command=" ]]
 [[ -f "$diagnostics_dir/testmanagerd-first-attempt.log" ]]
 
 echo "macOS unit-test runner recovery checks passed"
