@@ -448,8 +448,8 @@
     "constant": "JourneyEvents.experienceDismissed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1515",
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1567"
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1564",
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1616"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -489,8 +489,8 @@
     "constant": "JourneyEvents.experienceErrored",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1527",
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1558"
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1576",
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1607"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -530,7 +530,7 @@
     "constant": "JourneyEvents.experienceShown",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:536"
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:547"
     ],
     "endpoint": "batch",
     "fixtures": [

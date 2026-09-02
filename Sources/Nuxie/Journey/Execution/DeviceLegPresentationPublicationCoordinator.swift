@@ -232,31 +232,57 @@ actor DeviceLegPresentationPublicationCoordinator {
     }
 }
 
+private struct DeviceLegPresentationEventAttribution {
+    let journeyId: String
+    let experienceId: String
+    let experienceVersionId: String
+    let legId: String
+    let legGeneration: Int
+
+    init(run: DeviceLegRun) {
+        journeyId = run.journeyId
+        experienceId = run.reference.experienceId
+        experienceVersionId = run.reference.versionId
+        legId = run.reference.legId
+        legGeneration = run.generation
+    }
+
+    func adding(to properties: [String: Any]) -> [String: Any] {
+        var attributed = properties
+        attributed["journey_id"] = journeyId
+        attributed["experience_id"] = experienceId
+        attributed["experience_version"] = experienceVersionId
+        attributed["leg_id"] = legId
+        attributed["leg_generation"] = legGeneration
+        return attributed
+    }
+
+    func adding(
+        to values: ExactJSONObject<ExperienceReleaseJSONValue>
+    ) -> ExactJSONObject<ExperienceReleaseJSONValue> {
+        var attributed = values
+        attributed["journey_id"] = .string(journeyId)
+        attributed["experience_id"] = .string(experienceId)
+        attributed["experience_version"] = .string(experienceVersionId)
+        attributed["leg_id"] = .string(legId)
+        attributed["leg_generation"] = .number(Double(legGeneration))
+        return attributed
+    }
+}
+
 enum DeviceLegPresentationEventProjector {
     static func attributedProperties(
         _ properties: [String: Any],
         run: DeviceLegRun
     ) -> [String: Any] {
-        var attributed = properties
-        attributed["journey_id"] = run.journeyId
-        attributed["experience_id"] = run.reference.experienceId
-        attributed["experience_version"] = run.reference.versionId
-        attributed["leg_id"] = run.reference.legId
-        attributed["leg_generation"] = run.generation
-        return attributed
+        DeviceLegPresentationEventAttribution(run: run).adding(to: properties)
     }
 
     static func attributedValues(
         _ values: ExactJSONObject<ExperienceReleaseJSONValue>,
         run: DeviceLegRun
     ) -> ExactJSONObject<ExperienceReleaseJSONValue> {
-        var attributed = values
-        attributed["journey_id"] = .string(run.journeyId)
-        attributed["experience_id"] = .string(run.reference.experienceId)
-        attributed["experience_version"] = .string(run.reference.versionId)
-        attributed["leg_id"] = .string(run.reference.legId)
-        attributed["leg_generation"] = .number(Double(run.generation))
-        return attributed
+        DeviceLegPresentationEventAttribution(run: run).adding(to: values)
     }
 
     static func properties(

@@ -82,6 +82,17 @@ final class ExperiencePresentationService {
         let experienceId: String
     }
 
+    private enum DeviceLegPresentationAdmission<Prepared> {
+        case admitted(
+            presentationID: UUID,
+            controller: ExperienceViewController,
+            prepared: Prepared
+        )
+        case noPresentation
+        case declined
+        case rejected
+    }
+
     private struct PendingDeviceLegReservation {
         let id: UUID
         let ownerDistinctId: String
@@ -642,25 +653,22 @@ final class ExperiencePresentationService {
         screenId: String,
         transition: ExperienceReleaseJSONValue?
     ) async -> DeviceLegPresentationNavigationResult {
-        guard let presentationID = currentPresentationID,
-              let context = currentDeviceLegContext,
-              let controller = currentExperienceViewController else {
+        let admission = await admitDeviceLegPresentation(
+            owner: owner,
+            prepare: { () }
+        )
+        let presentationID: UUID
+        let controller: ExperienceViewController
+        switch admission {
+        case .admitted(let admittedID, let admittedController, _):
+            presentationID = admittedID
+            controller = admittedController
+        case .noPresentation:
             return .noPresentation
-        }
-        guard context.owner == owner,
-              ownsCurrentDeviceLegPresentation(owner) else {
+        case .declined:
             return .declined
-        }
-        guard await waitForDeviceLegForegroundAuthority(
-            presentationID: presentationID
-        ) else {
-            return .noPresentation
-        }
-        guard ownsCurrentDeviceLegPresentation(
-            owner,
-            presentationID: presentationID
-        ) else {
-            return .noPresentation
+        case .rejected:
+            return .failed
         }
         let navigationResult = await controller.navigateAndWaitResult(
             to: screenId,
@@ -712,29 +720,35 @@ final class ExperiencePresentationService {
         action: [String: ExperienceReleaseJSONValue],
         effectId: String
     ) async -> DeviceLegPresentationActionResult {
-        guard let presentationID = currentPresentationID,
-              let context = currentDeviceLegContext,
-              let controller = currentExperienceViewController else {
+        let admission: DeviceLegPresentationAdmission<DeviceLegActionType> =
+            await admitDeviceLegPresentation(
+                owner: owner,
+                prepare: {
+                    guard let type = DeviceLegActionType(action: action),
+                          type.isPresentationOwned else {
+                        return nil
+                    }
+                    return type
+                }
+            )
+        let presentationID: UUID
+        let controller: ExperienceViewController
+        let type: DeviceLegActionType
+        switch admission {
+        case .admitted(
+            let admittedID,
+            let admittedController,
+            let admittedType
+        ):
+            presentationID = admittedID
+            controller = admittedController
+            type = admittedType
+        case .noPresentation:
             return .noPresentation
-        }
-        guard context.owner == owner,
-              ownsCurrentDeviceLegPresentation(owner) else {
+        case .declined:
             return .declined
-        }
-        guard let type = DeviceLegActionType(action: action),
-              type.isPresentationOwned else {
+        case .rejected:
             return .failed
-        }
-        guard await waitForDeviceLegForegroundAuthority(
-            presentationID: presentationID
-        ) else {
-            return .noPresentation
-        }
-        guard ownsCurrentDeviceLegPresentation(
-            owner,
-            presentationID: presentationID
-        ) else {
-            return .noPresentation
         }
         let result: DeviceLegPresentationActionResult
         switch type {
@@ -1249,8 +1263,9 @@ final class ExperiencePresentationService {
         }
 
         if accepted {
+            let experienceVersionId = presentation.experienceVersionId
             LogInfo(
-                "ExperiencePresentationService: Experience \(presentation.experienceVersionId) dismissed with reason: \(CloseReason.hostDismissed)"
+                "ExperiencePresentationService: Experience \(experienceVersionId) host dismissed"
             )
             if let journey = presentation.journey {
                 await trackDismissal(
@@ -1345,6 +1360,40 @@ final class ExperiencePresentationService {
         }
         return currentDeviceLegContext?.owner == owner
             && presentationOwner == .deviceLeg(owner)
+    }
+
+    private func admitDeviceLegPresentation<Prepared>(
+        owner: DeviceLegPresentationOwner,
+        prepare: () -> Prepared?
+    ) async -> DeviceLegPresentationAdmission<Prepared> {
+        guard let presentationID = currentPresentationID,
+              let context = currentDeviceLegContext,
+              let controller = currentExperienceViewController else {
+            return .noPresentation
+        }
+        guard context.owner == owner,
+              ownsCurrentDeviceLegPresentation(owner) else {
+            return .declined
+        }
+        guard let prepared = prepare() else {
+            return .rejected
+        }
+        guard await waitForDeviceLegForegroundAuthority(
+            presentationID: presentationID
+        ) else {
+            return .noPresentation
+        }
+        guard ownsCurrentDeviceLegPresentation(
+            owner,
+            presentationID: presentationID
+        ) else {
+            return .noPresentation
+        }
+        return .admitted(
+            presentationID: presentationID,
+            controller: controller,
+            prepared: prepared
+        )
     }
 
     private func associatePresentationOperation(
