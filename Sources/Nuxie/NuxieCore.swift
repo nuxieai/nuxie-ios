@@ -121,6 +121,7 @@ final class NuxieCore: @unchecked Sendable {
     // and observer ↔ transactionService). The box is set at the end of init
     // and only read after init completes.
     let builtTransactionService = LateBound<TransactionService>()
+    let builtTransactionObserver = LateBound<TransactionObserverProtocol>()
     let builtTriggerService = LateBound<TriggerServiceProtocol>()
     let builtFeatureService = LateBound<FeatureServiceProtocol>()
     let systemEvents = overrides.systemEvents ?? TriggerSystemEventSink(
@@ -228,6 +229,10 @@ final class NuxieCore: @unchecked Sendable {
             featureId: featureId,
             entityId: nil
           )
+        },
+        storeEntitlements: {
+          guard !configuration.testStoreEnabled else { return [] }
+          return await builtTransactionObserver.get().currentEntitledStoreProductIds()
         },
         dispatcher: DeviceLegEffectDispatcher(
           identity: identity,
@@ -383,6 +388,7 @@ final class NuxieCore: @unchecked Sendable {
       dateProvider: dateProvider,
       recoverySources: overrides.transactionRecoverySources
     )
+    builtTransactionObserver.set(transactionObserver)
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
       customStoragePath: internalConfiguration.customStoragePath,
       scope: purchaseStorageScope

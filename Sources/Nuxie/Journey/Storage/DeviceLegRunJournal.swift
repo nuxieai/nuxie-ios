@@ -5,10 +5,16 @@ struct DeviceLegRun {
     struct Park {
         let wakeAt: Date?
         let anchorAt: Date?
+        var pendingEvent: DeviceLegControlExecutor.Event?
 
-        init(wakeAt: Date?, anchorAt: Date? = nil) {
+        init(
+            wakeAt: Date?,
+            anchorAt: Date? = nil,
+            pendingEvent: DeviceLegControlExecutor.Event? = nil
+        ) {
             self.wakeAt = wakeAt
             self.anchorAt = anchorAt
+            self.pendingEvent = pendingEvent
         }
     }
     struct Completion {
@@ -683,6 +689,38 @@ struct DeviceLegRunJournal {
             run.park = .init(wakeAt: until)
             state.runs[id] = run
         }
+    }
+
+    /// Retains the first event that satisfies a parked rendered wait while the
+    /// host is backgrounded. The park remains the resumable checkpoint until
+    /// foreground presentation admission opens again.
+    @discardableResult
+    func stageParkedEvent(
+        _ id: String,
+        expectedStepId: String,
+        expectedCheckpoint: DeviceLegControlExecutor.Checkpoint,
+        event: DeviceLegControlExecutor.Event,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        let expectedWakeAt = Self.date(expectedCheckpoint.wakeAtMillis)
+        let expectedAnchorAt = Self.date(expectedCheckpoint.anchorAtMillis)
+        return try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id],
+                  run.startedQueued,
+                  run.completion == nil,
+                  run.stepId == expectedStepId,
+                  var park = run.park,
+                  park.wakeAt == expectedWakeAt,
+                  park.anchorAt == expectedAnchorAt else {
+                throw DeviceLegJournalError.invalidState
+            }
+            if park.pendingEvent == nil {
+                park.pendingEvent = event
+                run.park = park
+                state.runs[id] = run
+            }
+            return true
+        } ?? false
     }
 
     /// Persist a stable effect identity before dispatch. Re-entering an

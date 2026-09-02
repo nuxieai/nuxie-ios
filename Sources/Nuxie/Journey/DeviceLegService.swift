@@ -36,6 +36,7 @@ extension DeviceLegServiceProtocol {
 /// EventLog's existing durable event queue.
 actor DeviceLegService {
     typealias FeatureAccessLookup = @Sendable (String) async -> FeatureAccess?
+    typealias StoreEntitlementLookup = @Sendable () async -> Set<String>
     typealias PinnedReleaseAuthenticator = @Sendable (
         DeviceLegReleaseProfileEntry,
         ArmedDeviceLeg.Reference
@@ -113,6 +114,7 @@ actor DeviceLegService {
     private var storageScope: DeviceLegStorageScope?
     private let acceptsProfileAuthorityScope: Bool
     private let featureAccess: FeatureAccessLookup
+    private let storeEntitlements: StoreEntitlementLookup
     private let dispatcher: any DeviceLegDispatching
     private let presenter: (any DeviceLegPresenting)?
     private let pinnedReleaseAuthenticator: PinnedReleaseAuthenticator
@@ -161,6 +163,7 @@ actor DeviceLegService {
         journalDirectory: URL?,
         storageScope: DeviceLegStorageScope? = .testFixture,
         featureAccess: @escaping FeatureAccessLookup,
+        storeEntitlements: @escaping StoreEntitlementLookup = { [] },
         dispatcher: any DeviceLegDispatching,
         presenter: (any DeviceLegPresenting)? = nil,
         pinnedReleaseAuthenticator: @escaping PinnedReleaseAuthenticator,
@@ -188,6 +191,7 @@ actor DeviceLegService {
         self.storageScope = storageScope
         acceptsProfileAuthorityScope = storageScope == nil
         self.featureAccess = featureAccess
+        self.storeEntitlements = storeEntitlements
         self.dispatcher = dispatcher
         self.presenter = presenter
         self.pinnedReleaseAuthenticator = pinnedReleaseAuthenticator
@@ -198,7 +202,11 @@ actor DeviceLegService {
     deinit {
         wakeTask?.cancel()
     }
+}
 
+// MARK: - Runtime lifecycle and profile publication
+
+extension DeviceLegService {
     func initialize() async {
         guard !initialized else { return }
         initialized = true
@@ -258,7 +266,9 @@ actor DeviceLegService {
     ) async {
         await commitProfile(snapshot, artifacts: nil, distinctId: distinctId)
     }
+}
 
+private extension DeviceLegService {
     private func commitProfile(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         artifacts: PreparedDeviceLegArtifacts?,
@@ -293,7 +303,9 @@ actor DeviceLegService {
         await resumeParkedRuns(state: state, event: nil)
         await evaluateStateArms(state: state, kinds: nil)
     }
+}
 
+extension DeviceLegService {
     func profileDidClear(distinctId: String) async {
         guard profileState?.distinctId == distinctId
                 || journal?.distinctId == distinctId else { return }
@@ -386,7 +398,11 @@ actor DeviceLegService {
         }
         await scheduleNextWake()
     }
+}
 
+// MARK: - Presentation commerce outcomes
+
+private extension DeviceLegService {
     private func resumePresentationActionOutcome(
         state: ProfileState,
         event: NuxieEvent,
@@ -490,7 +506,11 @@ actor DeviceLegService {
         }
         return true
     }
+}
 
+// MARK: - Host lifecycle and identity transitions
+
+extension DeviceLegService {
     func onAppDidEnterBackground() async {
         foreground = false
         cancelWake()
@@ -547,7 +567,11 @@ actor DeviceLegService {
         await resetForegroundStateArmReceiptsIfNeeded()
         await scheduleNextWake()
     }
+}
 
+// MARK: - Admission, journal, and release recovery
+
+private extension DeviceLegService {
     private func currentProfileState() -> ProfileState? {
         guard let state = profileState,
               state.distinctId == identity.getDistinctId() else { return nil }
@@ -728,6 +752,7 @@ actor DeviceLegService {
         ) else { return }
         let entitlementSuppressed = await entitlementGateSuppresses(
             release.descriptor.leg.entitlementGate,
+            release: release,
             features: features
         )
         guard !entitlementSuppressed, isCurrent(state) else { return }
@@ -847,9 +872,36 @@ actor DeviceLegService {
 
     private func entitlementGateSuppresses(
         _ gate: DeviceLeg.EntitlementGate,
+        release: AuthenticatedDeviceLegRelease,
         features: IRFeatureQueries
     ) async -> Bool {
-        guard gate.enabled else { return false }
+        guard gate.enabled, !gate.products.isEmpty else { return false }
+        let entitledStoreProductIds = await storeEntitlements()
+        if !entitledStoreProductIds.isEmpty,
+           let releaseProducts = try? decodeDeviceLegDocuments(
+               ExperienceReleaseProductDocument.self,
+               from: release.descriptor.products
+           ) {
+            let ownedProducts = releaseProducts.filter {
+                $0.store.platform == "apple_app_store"
+                    && entitledStoreProductIds.contains($0.store.productId)
+            }
+            let ownedProductIds = Set(ownedProducts.map(\.id))
+            for gatedProduct in gate.products {
+                if ownedProductIds.contains(gatedProduct.productId) {
+                    return true
+                }
+                let requiredFeatures = Set(gatedProduct.featureIds)
+                guard !requiredFeatures.isEmpty else { continue }
+                if ownedProducts.contains(where: { owned in
+                    requiredFeatures.isSubset(of: Set(owned.entitlements.map {
+                        $0.featureId ?? $0.id
+                    }))
+                }) {
+                    return true
+                }
+            }
+        }
         for product in gate.products where !product.featureIds.isEmpty {
             var fullyGranted = true
             for featureId in product.featureIds {
@@ -906,8 +958,10 @@ actor DeviceLegService {
                         ifCurrent: state.generation
                       ) else { return }
                 if event == nil {
-                    guard let wake = parked.park?.wakeAt,
-                          wake <= dateProvider.now() else { continue }
+                    guard parked.park?.pendingEvent != nil
+                            || parked.park?.wakeAt.map({
+                                $0 <= dateProvider.now()
+                            }) == true else { continue }
                 }
                 let executionFenceToken = executionFence.token()
                 guard let release = await release(
@@ -931,6 +985,33 @@ actor DeviceLegService {
                         wakeAtMillis: wakeMillis
                     )
                 }
+                if !foreground, !release.descriptor.leg.screens.isEmpty {
+                    if let event,
+                       let controlEvent = controlEvent(event),
+                       let checkpoint,
+                       let step = release.descriptor.leg.steps.first(where: {
+                           $0.id == parked.stepId
+                       }), controlExecutor(for: release).parkedWaitAccepts(
+                           controlEvent,
+                           step: step,
+                           context: parked.context,
+                           assignments: state.snapshot.profile.facts.assignments,
+                           checkpoint: checkpoint
+                       ), let admission = journalCommitAdmission(
+                           journal: journal,
+                           executionFenceToken: executionFenceToken
+                       ) {
+                        _ = try await journal.stageParkedEvent(
+                            parked.id,
+                            expectedStepId: parked.stepId,
+                            expectedCheckpoint: checkpoint,
+                            event: controlEvent,
+                            admission: admission
+                        )
+                    }
+                    continue
+                }
+                let pendingEvent = parked.park?.pendingEvent
                 guard let resumed = try await journal.resumeParked(
                     parked.id,
                     profileFence: profileFence,
@@ -944,7 +1025,8 @@ actor DeviceLegService {
                     release: release,
                     state: state,
                     executionFenceToken: executionFenceToken,
-                    signal: executorSignal(event),
+                    signal: event.map(executorSignal)
+                        ?? .init(event: pendingEvent),
                     checkpoint: checkpoint,
                     journal: journal
                 )
@@ -1094,7 +1176,11 @@ actor DeviceLegService {
             )
         }
     }
+}
 
+// MARK: - Renderer batch publication
+
+private extension DeviceLegService {
     private func handlePresentationBatch(
         _ batch: ScreenEmissionBatch,
         runId: String,
@@ -1492,7 +1578,11 @@ actor DeviceLegService {
         }
         return true
     }
+}
 
+// MARK: - Presentation lifecycle
+
+private extension DeviceLegService {
     private func handlePresentationOutcome(
         _ outcome: DeviceLegSurfaceOutcome,
         screenId: String?,
@@ -1953,7 +2043,11 @@ actor DeviceLegService {
             return false
         }
     }
+}
 
+// MARK: - Durable execution
+
+private extension DeviceLegService {
     private func execute(
         _ initial: DeviceLegRun,
         release: AuthenticatedDeviceLegRelease,
@@ -1969,13 +2063,7 @@ actor DeviceLegService {
     ) async {
         let leg = release.descriptor.leg
         let steps = Dictionary(uniqueKeysWithValues: leg.steps.map { ($0.id, $0) })
-        let appDefaultTimezone: String? = if case .string(let value)? =
-            release.descriptor.metadata["appDefaultTimezone"] { value } else { nil }
-        let executor = DeviceLegControlExecutor(
-            timezones: timezones,
-            currentDeviceTimezone: currentDeviceTimezone,
-            appDefaultTimezone: appDefaultTimezone
-        )
+        let executor = controlExecutor(for: release)
         var run = initial
         var checkpoint = initialCheckpoint
         var signal = initialSignal
@@ -2762,6 +2850,18 @@ actor DeviceLegService {
         return .init(event: controlEvent)
     }
 
+    private func controlExecutor(
+        for release: AuthenticatedDeviceLegRelease
+    ) -> DeviceLegControlExecutor {
+        let appDefaultTimezone: String? = if case .string(let value)? =
+            release.descriptor.metadata["appDefaultTimezone"] { value } else { nil }
+        return DeviceLegControlExecutor(
+            timezones: timezones,
+            currentDeviceTimezone: currentDeviceTimezone,
+            appDefaultTimezone: appDefaultTimezone
+        )
+    }
+
     private func controlEvent(
         _ event: NuxieEvent
     ) -> DeviceLegControlExecutor.Event? {
@@ -2812,7 +2912,11 @@ actor DeviceLegService {
         resolved["url"] = .string(url)
         return resolved
     }
+}
 
+// MARK: - Presentation availability and wake scheduling
+
+private extension DeviceLegService {
     private func presentationDidBecomeAvailable() async {
         guard initialized,
               foreground,

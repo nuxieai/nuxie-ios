@@ -107,6 +107,43 @@ final class InternalServiceDependencyTests: XCTestCase {
         }
     }
 
+    func testTransactionObserverReturnsOnlyActiveCurrentEntitlementProductIds() async {
+        let mocks = MockFactory.shared
+        let settings = NuxieRuntimeSettings(
+            configuration: NuxieConfiguration(apiKey: "entitlement-snapshot")
+        )
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
+        )
+        let currentEntitlements = [
+            recoveryItem(productId: "active"),
+            recoveryItem(productId: "revoked", isRevoked: true),
+            recoveryItem(productId: "upgraded", isUpgraded: true),
+            recoveryItem(productId: "active"),
+        ]
+        let observer = TransactionObserver(
+            api: mocks.nuxieApi,
+            features: features,
+            identity: mocks.identityService,
+            settings: settings,
+            eventSink: EventSink(),
+            transactionServiceProvider: { fatalError("unused in this test") },
+            recoverySources: StoreTransactionRecoverySources(
+                unfinished: { [] },
+                currentEntitlements: { currentEntitlements }
+            )
+        )
+
+        let productIds = await observer.currentEntitledStoreProductIds()
+
+        XCTAssertEqual(productIds, ["active"])
+    }
+
     func testCoreWiresEachProductAuthorityAdmissionToOneLifecycleGatedRecovery() async throws {
         let configuration = NuxieConfiguration(apiKey: "authority-admission")
         let observer = MockTransactionObserver()
@@ -198,5 +235,24 @@ final class InternalServiceDependencyTests: XCTestCase {
         XCTAssertEqual(finishCount, 1)
         XCTAssertEqual(sink.names.filter { $0 == SystemEventNames.purchaseSynced }.count, 1)
         await core.transactionObserver.stopListening()
+    }
+
+    private func recoveryItem(
+        productId: String,
+        isRevoked: Bool = false,
+        isUpgraded: Bool = false
+    ) -> StoreTransactionRecoveryItem {
+        StoreTransactionRecoveryItem(
+            update: VerifiedStoreTransactionUpdate(
+                transactionId: "transaction-\(productId)",
+                originalTransactionId: "original-\(productId)",
+                productId: productId,
+                appAccountToken: nil,
+                isRevoked: isRevoked,
+                isUpgraded: isUpgraded,
+                finish: {}
+            ),
+            jwsRepresentation: "jws-\(productId)"
+        )
     }
 }

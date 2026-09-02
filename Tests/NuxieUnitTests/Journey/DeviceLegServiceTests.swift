@@ -3,7 +3,7 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
-private final class SupersedingProfileAdmission: @unchecked Sendable {
+final class SupersedingProfileAdmission: @unchecked Sendable {
     private let lock = NSLock()
     private var reads = 0
 
@@ -19,7 +19,7 @@ private final class SupersedingProfileAdmission: @unchecked Sendable {
     }
 }
 
-private final class DeviceLegJournalPersistenceFailures: @unchecked Sendable {
+final class DeviceLegJournalPersistenceFailures: @unchecked Sendable {
     private enum InjectedFailure: Error {
         case persist
     }
@@ -43,7 +43,7 @@ private final class DeviceLegJournalPersistenceFailures: @unchecked Sendable {
     }
 }
 
-private final class DeviceLegBeforeSendCallRecorder: @unchecked Sendable {
+final class DeviceLegBeforeSendCallRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
 
@@ -54,7 +54,7 @@ private final class DeviceLegBeforeSendCallRecorder: @unchecked Sendable {
     }
 }
 
-private struct RenderedDeviceLegTestContext {
+struct RenderedDeviceLegTestContext {
     let directory: URL
     let snapshot: DeviceLegProfileCatalog.Snapshot
     let identity: MockIdentityService
@@ -64,7 +64,7 @@ private struct RenderedDeviceLegTestContext {
     let journal: DeviceLegRunJournal
 }
 
-private struct RenderedDeviceLegHarness {
+struct RenderedDeviceLegHarness {
     let directory: URL
     let events: MockEventLog
     let presenter: RecordingDeviceLegPresenter
@@ -73,7 +73,7 @@ private struct RenderedDeviceLegHarness {
     let journal: DeviceLegRunJournal
 }
 
-private actor DeviceLegNthRoutedCaptureGate {
+actor DeviceLegNthRoutedCaptureGate {
     private let eventName: String
     private let suspendedCall: Int
     private var count = 0
@@ -102,7 +102,7 @@ private actor DeviceLegNthRoutedCaptureGate {
     }
 }
 
-private final class DeviceLegCompletionFlag: @unchecked Sendable {
+final class DeviceLegCompletionFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var completed = false
 
@@ -113,7 +113,9 @@ private final class DeviceLegCompletionFlag: @unchecked Sendable {
     }
 }
 
-final class DeviceLegServiceTests: XCTestCase {
+class DeviceLegTestCase: XCTestCase {}
+
+final class DeviceLegServiceTests: DeviceLegTestCase {
     func testSendEventRoutesTheDurableCaptureToCommittedSubscribers() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
         let snapshot = try await authenticatedSnapshot(fixture)
@@ -1967,1408 +1969,6 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    func testRuntimeDelegateProvidesIntroEligibilityAuthorizationForItsOwner() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey-authority",
-                distinctId: "customer-authority"
-            ),
-            reservation: nil,
-            onEmissionBatch: { _ in true },
-            onOutcome: { _, _ in true }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let provider = delegate as any IntroEligibilityAuthorizationContextProviding
-
-        XCTAssertEqual(
-            provider.introEligibilityAuthorizationContext,
-            IntroEligibilityAuthorizationContext(
-                distinctId: "customer-authority",
-                journeyId: "journey-authority"
-            )
-        )
-    }
-
-    func testRuntimeDelegateReportsInitialRevealAndLaterVisibleScreenChanges() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let reveals = DeviceLegRevealRecorder()
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey-reveal",
-                distinctId: "customer-reveal"
-            ),
-            reservation: nil,
-            onScreenChanged: { _ in true },
-            onEmissionBatch: { _ in true },
-            onPresentationRevealed: {
-                await reveals.record()
-            },
-            onOutcome: { _, _ in true }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_welcome"
-        )
-        let revealsBeforePresentation = await reveals.count()
-        XCTAssertEqual(revealsBeforePresentation, 0)
-
-        await delegate.experienceViewControllerDidReveal(controller)
-        for _ in 0..<100 {
-            if await reveals.count() == 1 { break }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        let revealsAfterPresentation = await reveals.count()
-        XCTAssertEqual(revealsAfterPresentation, 1)
-
-        await delegate.experienceViewController(
-            controller,
-            didDismissScreen: "screen_welcome",
-            revealingScreenId: "screen_details",
-            method: "navigate"
-        )
-        let revealsAfterSourceDismissal = await reveals.count()
-        XCTAssertEqual(revealsAfterSourceDismissal, 1)
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_details"
-        )
-        let revealsAfterNavigation = await reveals.count()
-        XCTAssertEqual(revealsAfterNavigation, 2)
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_details"
-        )
-        let revealsAfterRepeatedCallback = await reveals.count()
-        XCTAssertEqual(revealsAfterRepeatedCallback, 2)
-    }
-
-    func testRuntimeDelegateJoinsInitialRevealCallback() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(
-            entryKey: "renderedEntry"
-        )
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let gate = DeviceLegScreenCommitGate()
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey-reveal-join",
-                distinctId: "customer-reveal-join"
-            ),
-            reservation: nil,
-            onEmissionBatch: { _ in true },
-            onPresentationRevealed: {
-                await gate.suspend()
-            },
-            onOutcome: { _, _ in true }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-        let completion = DeviceLegCompletionFlag()
-
-        let reveal = Task {
-            await delegate.experienceViewControllerDidReveal(controller)
-            completion.finish()
-        }
-        await gate.waitUntilEntered()
-
-        XCTAssertFalse(completion.isCompleted)
-        await gate.release()
-        await reveal.value
-        XCTAssertTrue(completion.isCompleted)
-    }
-
-    func testRuntimeDelegateResolvesDynamicPurchasePlacementFromActiveScreenState() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = replacing(
-            try await authenticatedRenderedSnapshot(fixture),
-            viewModelValues: [
-                [
-                    "viewModelName": .string("WelcomeModel"),
-                    "instanceId": .string("welcome"),
-                    "path": .string("product"),
-                    "value": .object([
-                        "placementId": .string("golden:yearly")
-                    ]),
-                ],
-                [
-                    "viewModelName": .string("WelcomeModel"),
-                    "instanceId": .string("secondary"),
-                    "path": .string("product"),
-                    "value": .object([
-                        "placementId": .string("golden:secondary")
-                    ]),
-                ],
-            ]
-        )
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onEmissionBatch: { _ in true },
-            onOutcome: { _, _ in true }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-        let placementReference = ExperienceReleaseJSONValue.object([
-            "ref": .object([
-                "kind": .string("path"),
-                "path": .string("product.placementId"),
-            ])
-        ])
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_welcome"
-        )
-        let initialPlacement = await delegate.resolvePresentationString(
-            placementReference
-        )
-        await delegate.experienceViewController(
-            controller,
-            didEmitViewModelChange: ExperienceRendererViewModelChange(
-                path: VmPathRef(path: "product.placementId"),
-                value: "golden:monthly",
-                source: "runtime",
-                screenId: "screen_welcome",
-                instanceId: "welcome",
-                isTrigger: false
-            )
-        )
-        let changedPlacement = await delegate.resolvePresentationString(
-            placementReference
-        )
-        let secondaryPlacement = await delegate.resolvePresentationString(
-            placementReference,
-            source: ScreenEmissionSource(
-                screenId: "screen_welcome",
-                actionId: "purchase-secondary",
-                componentId: "secondary-button",
-                instanceId: "secondary"
-            )
-        )
-
-        XCTAssertEqual(initialPlacement, "golden:yearly")
-        XCTAssertEqual(changedPlacement, "golden:monthly")
-        XCTAssertEqual(secondaryPlacement, "golden:secondary")
-    }
-
-    func testRuntimeDelegateForwardsRendererOpenLinksFromTheActiveScreen() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onEmissionBatch: { _ in true },
-            onOutcome: { _, _ in true }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_welcome"
-        )
-        await delegate.experienceViewController(
-            controller,
-            didRequestOpenLink: ExperienceRendererOpenLinkRequest(
-                urlString: "https://example.com/account",
-                target: "in_app",
-                screenId: "screen_welcome",
-                instanceId: "secondary"
-            )
-        )
-        await delegate.experienceViewController(
-            controller,
-            didRequestOpenLink: ExperienceRendererOpenLinkRequest(
-                urlString: "https://example.com/stale",
-                target: "external",
-                screenId: "screen_details",
-                instanceId: nil
-            )
-        )
-
-        let links = await MainActor.run { controller.performedOpenLinks }
-        XCTAssertEqual(links.count, 1)
-        XCTAssertEqual(links.first?.urlString, "https://example.com/account")
-        XCTAssertEqual(links.first?.target, "in_app")
-    }
-
-    func testRuntimeDelegateRoutesPermissionResultsWithTheCapturedOwnerAfterDismissal() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter
-        )
-
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-        let hostDismissed = await delegate
-            .experienceViewControllerDidRequestHostDismiss(controller)
-        XCTAssertTrue(hostDismissed)
-
-        let captured = expectation(description: "permission events captured")
-        captured.expectedFulfillmentCount = 4
-        let expectedNames: Set<String> = [
-            SystemEventNames.notificationsEnabled,
-            SystemEventNames.permissionGranted,
-            SystemEventNames.trackingAuthorized,
-            SystemEventNames.permissionDenied,
-        ]
-        events.addEventHandler(pattern: "*") { event in
-            if expectedNames.contains(event.name) {
-                captured.fulfill()
-            }
-        }
-
-        await MainActor.run {
-            delegate.experienceViewController(
-                controller,
-                didResolveNotificationPermissionEvent:
-                    SystemEventNames.notificationsEnabled,
-                properties: ["journey_id": "spoofed"],
-                journeyId: request.owner.journeyId
-            )
-            delegate.experienceViewController(
-                controller,
-                didResolveRequestPermissionEvent:
-                    SystemEventNames.permissionGranted,
-                properties: ["type": "camera"],
-                journeyId: request.owner.journeyId
-            )
-            delegate.experienceViewController(
-                controller,
-                didResolveTrackingPermissionEvent:
-                    SystemEventNames.trackingAuthorized,
-                properties: [:],
-                journeyId: request.owner.journeyId
-            )
-            delegate.experienceViewController(
-                controller,
-                didIgnoreUnsupportedRequestPermissionType: "unsupported-sensor",
-                journeyId: request.owner.journeyId
-            )
-        }
-        await fulfillment(of: [captured], timeout: 2)
-
-        let permissionEvents = events.routedEvents.filter {
-            expectedNames.contains($0.name)
-        }
-        XCTAssertEqual(permissionEvents.count, 4)
-        for event in permissionEvents {
-            XCTAssertEqual(event.distinctId, "customer")
-            XCTAssertEqual(event.properties["journey_id"] as? String, request.owner.journeyId)
-            XCTAssertEqual(event.properties["experience_id"] as? String, "experience_golden")
-            XCTAssertEqual(event.properties["experience_version"] as? String, "version_golden")
-        }
-        let unsupported = try XCTUnwrap(permissionEvents.first {
-            $0.name == SystemEventNames.permissionDenied
-        })
-        XCTAssertEqual(unsupported.properties["type"] as? String, "unsupported-sensor")
-
-        let misattributed = expectation(
-            description: "departing-owner permission is not reassigned"
-        )
-        misattributed.isInverted = true
-        events.addEventHandler(pattern: SystemEventNames.trackingDenied) { _ in
-            misattributed.fulfill()
-        }
-        identity.setDistinctId("other-customer")
-        identity.setDistinctId("customer")
-        await MainActor.run {
-            delegate.experienceViewController(
-                controller,
-                didResolveTrackingPermissionEvent:
-                    SystemEventNames.trackingDenied,
-                properties: [:],
-                journeyId: request.owner.journeyId
-            )
-        }
-        await fulfillment(of: [misattributed], timeout: 0.2)
-    }
-
-    func testRuntimeDelegatePreservesForwardNavigationForAuthoredBack() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onEmissionBatch: { _ in true },
-            onOutcome: { _, _ in true }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_welcome"
-        )
-        await delegate.experienceViewController(
-            controller,
-            didDismissScreen: "screen_welcome",
-            revealingScreenId: "screen_details",
-            method: "navigate"
-        )
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_details"
-        )
-
-        let backTarget = await MainActor.run {
-            delegate.prepareBackNavigation(steps: 1)
-        }
-        XCTAssertEqual(backTarget, "screen_welcome")
-    }
-
-    func testRuntimeDelegateGivesHostDismissalPrecedenceOverTopLevelScreenDismissal() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let screenDismissals = DeviceLegOutcomeCallRecorder()
-        let outcomes = DeviceLegOutcomeCallRecorder()
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onScreenDismissed: { screenId, _, _ in
-                await screenDismissals.record(
-                    outcome: .dismissed,
-                    screenId: screenId
-                )
-                return .completed
-            },
-            onEmissionBatch: { _ in true },
-            onOutcome: { outcome, screenId in
-                await outcomes.record(outcome: outcome, screenId: screenId)
-                return true
-            }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_welcome"
-        )
-        await delegate.experienceViewControllerWillRequestHostDismiss(controller)
-        await delegate.experienceViewController(
-            controller,
-            didDismissScreen: "screen_welcome",
-            revealingScreenId: nil,
-            method: "host"
-        )
-
-        let screenDismissalCount = await screenDismissals.count()
-        XCTAssertEqual(screenDismissalCount, 0)
-        let accepted = await delegate
-            .experienceViewControllerDidRequestHostDismiss(controller)
-        XCTAssertTrue(accepted)
-        let hostOutcome = await outcomes.onlyCall()
-        XCTAssertEqual(hostOutcome?.outcome, .dismissed)
-        XCTAssertEqual(hostOutcome?.screenId, "screen_welcome")
-    }
-
-    func testRuntimeDelegateCoalescesConcurrentSurfaceResolution() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let gate = DeviceLegScreenCommitGate()
-        let calls = DeviceLegOutcomeCallRecorder()
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onEmissionBatch: { _ in true },
-            onOutcome: { outcome, screenId in
-                await calls.record(outcome: outcome, screenId: screenId)
-                await gate.suspend()
-                return true
-            }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-        let firstHostDismissal = Task { @MainActor in
-            await delegate.experienceViewControllerDidRequestHostDismiss(controller)
-        }
-
-        await gate.waitUntilEntered()
-        let secondHostDismissal = Task { @MainActor in
-            await delegate.experienceViewControllerDidRequestHostDismiss(controller)
-        }
-        for _ in 0..<20 {
-            await Task.yield()
-        }
-        let callsBeforeRelease = await calls.count()
-        XCTAssertEqual(callsBeforeRelease, 1)
-
-        await gate.release()
-        let firstAccepted = await firstHostDismissal.value
-        let secondAccepted = await secondHostDismissal.value
-        let finalCallCount = await calls.count()
-
-        XCTAssertTrue(firstAccepted)
-        XCTAssertTrue(secondAccepted)
-        XCTAssertEqual(finalCallCount, 1)
-    }
-
-    func testRuntimeDelegateAcknowledgesOrdinaryCloseWithoutHostOutcome() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let screenDismissals = DeviceLegOutcomeCallRecorder()
-        let outcomes = DeviceLegOutcomeCallRecorder()
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onScreenDismissed: { screenId, _, _ in
-                await screenDismissals.record(
-                    outcome: .dismissed,
-                    screenId: screenId
-                )
-                return .handled
-            },
-            onEmissionBatch: { _ in true },
-            onOutcome: { outcome, screenId in
-                await outcomes.record(outcome: outcome, screenId: screenId)
-                return true
-            }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_welcome"
-        )
-        await delegate.experienceViewController(
-            controller,
-            didDismissScreen: "screen_welcome",
-            revealingScreenId: nil,
-            method: "user"
-        )
-        let accepted = await delegate.experienceViewControllerDidRequestDismiss(
-            controller,
-            reason: .userDismissed
-        )
-
-        XCTAssertTrue(accepted)
-        let screenDismissalCount = await screenDismissals.count()
-        let outcomeCount = await outcomes.count()
-        XCTAssertEqual(screenDismissalCount, 1)
-        XCTAssertEqual(outcomeCount, 0)
-    }
-
-    func testRuntimeDelegateEnablesScreenEmissionsOnlyAfterLifecycleCommit() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let gate = DeviceLegScreenCommitGate()
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onScreenChanged: { _ in
-                await gate.suspend()
-                return true
-            },
-            onEmissionBatch: { _ in true },
-            onOutcome: { _, _ in true }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-        let activation = Task { @MainActor in
-            await delegate.experienceViewController(
-                controller,
-                didChangeScreen: "screen_welcome"
-            )
-        }
-
-        await gate.waitUntilEntered()
-        let scopeBeforeCommit = await MainActor.run {
-            controller.captureScreenEmissionRun()
-        }
-        XCTAssertNil(scopeBeforeCommit)
-
-        await gate.release()
-        await activation.value
-
-        let scopeAfterCommit = await MainActor.run {
-            controller.captureScreenEmissionRun()
-        }
-        XCTAssertEqual(scopeAfterCommit?.journeyId, "journey")
-        XCTAssertEqual(scopeAfterCommit?.presentationEpoch, 1)
-    }
-
-    func testRuntimeDelegateRejectsABatchFromAnEarlierVisitToTheSameScreen() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let recorder = DeviceLegEmissionBatchRecorder()
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onScreenChanged: { _ in true },
-            onEmissionBatch: { batch in
-                await recorder.accept(batch)
-            },
-            onOutcome: { _, _ in true }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_welcome"
-        )
-        let staleBatch = presentationBatch(
-            request: request,
-            presentationEpoch: 1,
-            invocationId: "stale-return",
-            emissions: []
-        )
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_details"
-        )
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_welcome"
-        )
-
-        let staleAccepted = await delegate.experienceViewController(
-            controller,
-            didEmitScreenEmissionBatch: staleBatch
-        )
-        let currentAccepted = await delegate.experienceViewController(
-            controller,
-            didEmitScreenEmissionBatch: presentationBatch(
-                request: request,
-                presentationEpoch: 3,
-                invocationId: "current-return",
-                emissions: []
-            )
-        )
-
-        XCTAssertFalse(staleAccepted)
-        XCTAssertTrue(currentAccepted)
-        let invocationIds = await recorder.invocationIds()
-        XCTAssertEqual(invocationIds, ["current-return"])
-    }
-
-    func testRuntimeDelegateClosesSurfaceWhenInitialLifecycleCommitIsRejected() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onScreenChanged: { _ in false },
-            onEmissionBatch: { _ in true },
-            onOutcome: { outcome, _ in outcome == .abandoned }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-
-        await delegate.experienceViewController(
-            controller,
-            didChangeScreen: "screen_welcome"
-        )
-
-        let reasons = await MainActor.run { controller.performDismissReasons }
-        XCTAssertEqual(reasons.count, 1)
-        guard case .error(ExperienceError.invalidManifest)? = reasons.first else {
-            return XCTFail("Expected invalid-manifest dismissal")
-        }
-    }
-
-    func testRuntimeDelegateClosesSurfaceWhenProductFailureCannotBeCommitted() async throws {
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let request = DeviceLegPresentationRequest(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome",
-            owner: .init(
-                journeyId: "journey",
-                distinctId: "customer"
-            ),
-            reservation: nil,
-            onProductsUnavailable: { _ in .rejected },
-            onEmissionBatch: { _ in true },
-            onOutcome: { outcome, _ in outcome == .abandoned }
-        )
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-
-        await delegate.experienceViewController(
-            controller,
-            didFailToResolveProductsFor: "screen_welcome"
-        )
-
-        let reasons = await MainActor.run { controller.performDismissReasons }
-        XCTAssertEqual(reasons.count, 1)
-        guard case .error(ExperienceError.productsUnavailable)? = reasons.first else {
-            return XCTFail("Expected products-unavailable dismissal")
-        }
-    }
-
-    func testProductResolutionFailureRoutesThroughTheRuntimeDelegateAndCompletes() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = try await authenticatedRenderedSnapshot(fixture)
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter
-        )
-
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
-        let completionCommitted = expectation(description: "product failure completed")
-        events.addEventHandler(pattern: JourneyEvents.journeyLegCompleted) { _ in
-            completionCommitted.fulfill()
-        }
-        let delegate = await MainActor.run {
-            DeviceLegRuntimeDelegate(request: request)
-        }
-        let controller = await MainActor.run {
-            MockExperienceViewController(mockExperienceVersionId: "version_golden")
-        }
-
-        await delegate.experienceViewController(
-            controller,
-            didFailToResolveProductsFor: "screen_welcome"
-        )
-        await fulfillment(of: [completionCommitted], timeout: 2)
-
-        let dismissalReasons = await MainActor.run {
-            controller.performDismissReasons
-        }
-        let finishedOwners = await MainActor.run {
-            presenter.finishedOwners
-        }
-        XCTAssertEqual(dismissalReasons.count, 1)
-        if let reason = dismissalReasons.first, case .error = reason {
-            // Expected: teardown is queued only after the product callback
-            // returns to the navigation drain.
-        } else {
-            XCTFail("Expected product failure to request error dismissal")
-        }
-        XCTAssertTrue(finishedOwners.isEmpty)
-
-        XCTAssertEqual(events.routedEvents.map(\.name), [
-            JourneyEvents.journeyLegStarted,
-            SystemEventNames.productsUnavailable,
-            JourneyEvents.journeyLegCompleted,
-        ])
-        let unavailable = try XCTUnwrap(events.routedEvents.first {
-            $0.name == SystemEventNames.productsUnavailable
-        })
-        XCTAssertEqual(
-            Set(unavailable.properties["product_ids"] as? [String] ?? []),
-            ["monthly", "yearly"]
-        )
-        XCTAssertEqual(
-            unavailable.properties["experience_version"] as? String,
-            "version_golden"
-        )
-        XCTAssertEqual(
-            events.routedEvents.last?.properties["outcome"] as? String,
-            "products_unavailable"
-        )
-    }
-
-    func testRenderedProductBoundScreenResolvesItsAuthenticatedStoreKitPlacements() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = replacing(
-            try await authenticatedRenderedSnapshot(fixture),
-            viewModelValues: [[
-                "viewModelName": .string("WelcomeModel"),
-                "instanceId": .string("welcome"),
-                "path": .string("products"),
-                "value": .array([
-                    .object(["placementId": .string("golden:monthly")]),
-                    .object(["placementId": .string("golden:yearly")]),
-                ]),
-            ]]
-        )
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let productService = MockProductService()
-        productService.mockProducts = [
-            MockStoreProduct(
-                id: "monthly",
-                displayName: "Monthly",
-                price: 9.99,
-                displayPrice: "$9.99",
-                productType: .autoRenewable
-            ),
-            MockStoreProduct(
-                id: "yearly",
-                displayName: "Yearly",
-                price: 79.99,
-                displayPrice: "$79.99",
-                productType: .autoRenewable
-            ),
-        ]
-        let releaseStore = ExperienceReleaseAcquisitionStore(
-            cacheDirectory: directory,
-            authorizationKeys: [],
-            supportedRuntime: ExperienceReleaseRuntime.current,
-            admission: ExperienceReleaseAdmission(
-                store: InMemoryExperienceReleaseHighWaterStore()
-            )
-        )
-        let loader = ExperienceLoader(
-            productService: productService,
-            releaseStore: releaseStore,
-            warmLoadsInitiallySuspended: true
-        )
-
-        let products = try await loader.productsForDeviceLegPresentation(
-            release: release,
-            screenID: "screen_welcome"
-        )
-
-        XCTAssertEqual(productService.requestedProductIds, ["monthly", "yearly"])
-        XCTAssertEqual(Set(products.map(\.productId)), ["monthly", "yearly"])
-        XCTAssertEqual(
-            Set(products.map(\.placementId)),
-            ["golden:monthly", "golden:yearly"]
-        )
-    }
-
-    func testCanonicalProfileRegistersDeviceJourneyProductsForRecovery() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(
-            entryKey: "renderedEntry"
-        )
-        let snapshot = try replacingWithHeadlessArtifacts(
-            try await authenticatedRenderedSnapshot(fixture)
-        )
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let loader = ExperienceLoader(
-            productService: ProductService(),
-            releaseStore: ExperienceReleaseAcquisitionStore(
-                cacheDirectory: directory,
-                authorizationKeys: [],
-                supportedRuntime: ExperienceReleaseRuntime.current,
-                admission: ExperienceReleaseAdmission(
-                    store: InMemoryExperienceReleaseHighWaterStore()
-                )
-            ),
-            warmLoadsInitiallySuspended: true
-        )
-
-        let preparedProfile = try await loader.prepareReleaseProfile(
-            nil,
-            deviceLegSnapshot: snapshot
-        )
-        let admitted = try await loader.commitReleaseProfile(
-            preparedProfile,
-            generation: 1
-        )
-        XCTAssertNotNil(admitted)
-        let activeAuthority = await loader.purchaseEvidenceAuthority(
-            storeProductId: "monthly"
-        )
-        XCTAssertEqual(
-            activeAuthority,
-            .nativeStoreKit
-        )
-        let exactAllowances = await loader.optimisticEntitlementAllowances(
-            releaseDescriptorSHA256: release.descriptorSHA256,
-            productId: "monthly",
-            storeProductId: "monthly"
-        )
-        XCTAssertEqual(
-            exactAllowances,
-            []
-        )
-
-        _ = try await loader.commitReleaseProfile(
-            PreparedExperienceReleaseProfile(profile: nil, catalog: nil),
-            generation: 2
-        )
-        let clearedAuthority = await loader.purchaseEvidenceAuthority(
-            storeProductId: "monthly"
-        )
-        XCTAssertEqual(
-            clearedAuthority,
-            .readyNoMatch
-        )
-        let clearedAllowances = await loader.optimisticEntitlementAllowances(
-            releaseDescriptorSHA256: release.descriptorSHA256,
-            productId: "monthly",
-            storeProductId: "monthly"
-        )
-        XCTAssertNil(clearedAllowances)
-    }
-
-    func testSupersededProfileDoesNotPublishDeviceJourneyProductAuthority() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(
-            entryKey: "renderedEntry"
-        )
-        let snapshot = try replacingWithHeadlessArtifacts(
-            try await authenticatedRenderedSnapshot(fixture)
-        )
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let loader = ExperienceLoader(
-            productService: ProductService(),
-            releaseStore: ExperienceReleaseAcquisitionStore(
-                cacheDirectory: directory,
-                authorizationKeys: [],
-                supportedRuntime: ExperienceReleaseRuntime.current,
-                admission: ExperienceReleaseAdmission(
-                    store: InMemoryExperienceReleaseHighWaterStore()
-                )
-            ),
-            warmLoadsInitiallySuspended: true
-        )
-        let admission = SupersedingProfileAdmission()
-
-        let preparedProfile = try await loader.prepareReleaseProfile(
-            nil,
-            deviceLegSnapshot: snapshot
-        )
-        let committed = try await loader.commitReleaseProfile(
-            preparedProfile,
-            generation: 1,
-            admission: ProfileSideEffectAdmission {
-                admission.isCurrent()
-            }
-        )
-
-        XCTAssertNil(committed)
-        XCTAssertEqual(admission.readCount, 2)
-        let authority = await loader.purchaseEvidenceAuthority(
-            storeProductId: "monthly"
-        )
-        XCTAssertEqual(authority, .unavailable)
-        let allowances = await loader.optimisticEntitlementAllowances(
-            releaseDescriptorSHA256: release.descriptorSHA256,
-            productId: "monthly",
-            storeProductId: "monthly"
-        )
-        XCTAssertNil(allowances)
-    }
-
-    func testRenderedScreenDoesNotLoadPurchasesReachableOnlyFromAnotherScreen() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let base = try await authenticatedRenderedSnapshot(fixture)
-        let snapshot = replacing(
-            base,
-            steps: [
-                .init(
-                    kind: .action,
-                    id: "present",
-                    action: [
-                        "type": .string("navigate"),
-                        "screenId": .string("screen_welcome"),
-                    ],
-                    outlets: [:],
-                    outcome: nil
-                ),
-                .init(
-                    kind: .action,
-                    id: "buy_monthly",
-                    action: [
-                        "type": .string("purchase"),
-                        "placementId": .object([
-                            "literal": .string("golden:monthly")
-                        ]),
-                    ],
-                    outlets: [:],
-                    outcome: nil
-                ),
-                .init(
-                    kind: .action,
-                    id: "buy_yearly",
-                    action: [
-                        "type": .string("purchase"),
-                        "placementId": .object([
-                            "literal": .string("golden:yearly")
-                        ]),
-                    ],
-                    outlets: [:],
-                    outcome: nil
-                ),
-            ],
-            routes: [
-                .init(
-                    host: .init(kind: .screen, screenId: "screen_welcome"),
-                    eventName: "buy",
-                    entryStepId: "buy_monthly"
-                ),
-                .init(
-                    host: .init(kind: .screen, screenId: "screen_details"),
-                    eventName: "buy",
-                    entryStepId: "buy_yearly"
-                ),
-            ],
-            screens: [
-                .init(
-                    id: "screen_welcome",
-                    defaultViewModelName: "WelcomeModel",
-                    defaultInstanceId: "welcome",
-                    responseCaptures: []
-                ),
-                .init(
-                    id: "screen_details",
-                    defaultViewModelName: "DetailsModel",
-                    defaultInstanceId: "details",
-                    responseCaptures: []
-                ),
-            ],
-            viewModelValues: [[
-                "viewModelName": .string("WelcomeModel"),
-                "instanceId": .string("welcome"),
-                "path": .string("product"),
-                "value": .object([
-                    "placementId": .string("golden:monthly")
-                ]),
-            ]]
-        )
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let productService = MockProductService()
-        productService.mockProducts = [MockStoreProduct(
-            id: "monthly",
-            displayName: "Monthly",
-            price: 9.99,
-            displayPrice: "$9.99",
-            productType: .autoRenewable
-        )]
-        let loader = ExperienceLoader(
-            productService: productService,
-            releaseStore: ExperienceReleaseAcquisitionStore(
-                cacheDirectory: directory,
-                authorizationKeys: [],
-                supportedRuntime: ExperienceReleaseRuntime.current,
-                admission: ExperienceReleaseAdmission(
-                    store: InMemoryExperienceReleaseHighWaterStore()
-                )
-            ),
-            warmLoadsInitiallySuspended: true
-        )
-
-        let products = try await loader.productsForDeviceLegPresentation(
-            release: release,
-            screenID: "screen_welcome"
-        )
-
-        XCTAssertEqual(productService.requestedProductIds, ["monthly"])
-        XCTAssertEqual(products.map(\.productId), ["monthly"])
-        XCTAssertEqual(products.map(\.placementId), ["golden:monthly"])
-    }
-
-    func testCanonicalProfileAcquiresRenderedArtifactsBeforePublishingAuthority() async throws {
-        let directory = temporaryDirectory()
-        defer {
-            StubURLProtocol.reset()
-            removeTemporaryDirectoryIfPresent(directory)
-        }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let sceneBytes = Data("offline-ready-device-leg-scene".utf8)
-        let snapshot = try replacingRenderedArtifact(
-            try await authenticatedRenderedSnapshot(fixture),
-            sceneBytes: sceneBytes
-        )
-        let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
-        let requests = DeviceLegArtifactRequestCounter()
-        StubURLProtocol.register(matcher: { _ in true }) { request in
-            requests.increment()
-            return (
-                HTTPURLResponse(
-                    url: try XCTUnwrap(request.url),
-                    statusCode: 200,
-                    httpVersion: nil,
-                    headerFields: [
-                        "Content-Length": String(sceneBytes.count),
-                        "Content-Type": "application/vnd.rive",
-                    ]
-                )!,
-                sceneBytes
-            )
-        }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let store = ExperienceReleaseAcquisitionStore(
-            cacheDirectory: directory,
-            urlSession: URLSession(configuration: configuration),
-            authorizationKeys: [],
-            supportedRuntime: ExperienceReleaseRuntime.current,
-            admission: ExperienceReleaseAdmission(
-                store: InMemoryExperienceReleaseHighWaterStore()
-            )
-        )
-        let loader = ExperienceLoader(
-            productService: ProductService(),
-            releaseStore: store,
-            warmLoadsInitiallySuspended: true
-        )
-
-        let preparedProfile = try await loader.prepareReleaseProfile(
-            nil,
-            deviceLegSnapshot: snapshot
-        )
-        XCTAssertEqual(requests.value, 1)
-        let committed = try await loader.commitReleaseProfile(
-            preparedProfile,
-            generation: 1
-        )
-        XCTAssertNotNil(committed)
-
-        StubURLProtocol.reset()
-        StubURLProtocol.register(matcher: { _ in true }) { _ in
-            requests.increment()
-            throw URLError(.notConnectedToInternet)
-        }
-        let preparedPresentation = try await store.preparePresentation(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            productResolver: { _ in [] }
-        )
-        let artifact = try await preparedPresentation.artifactLoader(
-            preparedPresentation.experience,
-            nil,
-            "screen_welcome"
-        )
-
-        XCTAssertEqual(requests.value, 1)
-        XCTAssertEqual(artifact.sceneBytes, sceneBytes)
-    }
-
-    func testLiveRunRetainsRenderedArtifactsAcrossProfileReplacementAndRelaunch() async throws {
-        let root = temporaryDirectory()
-        let cacheDirectory = root.appendingPathComponent("cache")
-        let journalDirectory = root.appendingPathComponent("journal")
-        defer {
-            StubURLProtocol.reset()
-            removeTemporaryDirectoryIfPresent(root)
-        }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(
-            entryKey: "renderedEntry"
-        )
-        let sceneBytes = Data("durably-pinned-device-leg-scene".utf8)
-        let snapshot = try replacingRenderedArtifact(
-            try await authenticatedRenderedSnapshot(fixture),
-            sceneBytes: sceneBytes
-        )
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[
-            arm.reference.descriptorSha256
-        ])
-        let requests = DeviceLegArtifactRequestCounter()
-        StubURLProtocol.register(matcher: { _ in true }) { request in
-            requests.increment()
-            return (
-                HTTPURLResponse(
-                    url: try XCTUnwrap(request.url),
-                    statusCode: 200,
-                    httpVersion: nil,
-                    headerFields: [
-                        "Content-Length": String(sceneBytes.count),
-                        "Content-Type": "application/vnd.rive",
-                    ]
-                )!,
-                sceneBytes
-            )
-        }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let store = ExperienceReleaseAcquisitionStore(
-            cacheDirectory: cacheDirectory,
-            urlSession: URLSession(configuration: configuration),
-            authorizationKeys: [],
-            supportedRuntime: ExperienceReleaseRuntime.current,
-            admission: ExperienceReleaseAdmission(
-                store: InMemoryExperienceReleaseHighWaterStore()
-            )
-        )
-        let loader = ExperienceLoader(
-            productService: ProductService(),
-            releaseStore: store,
-            warmLoadsInitiallySuspended: true
-        )
-        var preparedProfile: PreparedExperienceReleaseProfile? =
-            try await loader.prepareReleaseProfile(
-                nil,
-                deviceLegSnapshot: snapshot
-            )
-        let artifactSource = try XCTUnwrap(
-            preparedProfile?.deviceLegArtifacts?.source(
-                for: release.descriptorSHA256
-            )
-        )
-        let originalPin = try XCTUnwrap(snapshot.profile.releases.first)
-        let releasePin = DeviceLegReleaseProfileEntry(
-            locator: originalPin.locator,
-            envelope: .init(
-                mediaType: originalPin.envelope.mediaType,
-                encoding: originalPin.envelope.encoding,
-                descriptorSha256: release.descriptorSHA256,
-                descriptorSizeBytes: release.exactDescriptorBytes.count,
-                descriptorBytesBase64:
-                    release.exactDescriptorBytes.base64EncodedString(),
-                signature: originalPin.envelope.signature
-            )
-        )
-        let journal = try DeviceLegRunJournal(
-            directory: journalDirectory,
-            distinctId: "customer"
-        )
-        let admitted = try await journal.admit(
-            arm: arm,
-            release: releasePin,
-            artifactSource: artifactSource,
-            reentry: release.descriptor.leg.reentry,
-            entryStepId: release.descriptor.leg.entryStepId,
-            at: Date(timeIntervalSince1970: 1_000)
-        )
-        let run = try XCTUnwrap(admitted)
-        preparedProfile = nil
-        for object in artifactSource.objects {
-            let cached = cacheDirectory.appendingPathComponent(object.sha256)
-            if FileManager.default.fileExists(atPath: cached.path) {
-                try FileManager.default.removeItem(at: cached)
-            }
-        }
-
-        StubURLProtocol.reset()
-        StubURLProtocol.register(matcher: { _ in true }) { _ in
-            requests.increment()
-            throw URLError(.notConnectedToInternet)
-        }
-        let relaunched = try DeviceLegRunJournal(
-            directory: journalDirectory,
-            distinctId: "customer"
-        )
-        let retainedArtifacts = try await relaunched.pinnedArtifacts(
-            forRunId: run.id
-        )
-        let pinnedArtifacts = try XCTUnwrap(retainedArtifacts)
-        let preparedPresentation = try await store.preparePresentation(
-            release: release,
-            delivery: snapshot.profile.delivery,
-            pinnedArtifacts: pinnedArtifacts,
-            productResolver: { _ in [] }
-        )
-        let artifact = try await preparedPresentation.artifactLoader(
-            preparedPresentation.experience,
-            nil,
-            "screen_welcome"
-        )
-
-        XCTAssertEqual(requests.value, 1)
-        XCTAssertEqual(artifact.sceneBytes, sceneBytes)
-    }
-
     func testRenderedRouteNavigatesWithinTheOwnedSurfaceWithoutPresentingAgain() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
@@ -4802,6 +3402,159 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(presentationCount, 1)
     }
 
+    func testBackgroundEventKeepsRenderedWaitParkedUntilForeground() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = replacing(
+            try await authenticatedRenderedSnapshot(fixture),
+            steps: [
+                .init(
+                    kind: .action,
+                    id: "present",
+                    action: [
+                        "type": .string("navigate"),
+                        "screenId": .string("screen_welcome"),
+                    ],
+                    outlets: [:],
+                    outcome: nil
+                ),
+                .init(
+                    kind: .action,
+                    id: "wait",
+                    action: [
+                        "type": .string("wait_until"),
+                        "trigger": .object([
+                            "kind": .string("event"),
+                            "eventName": .string("unlock"),
+                        ]),
+                        "condition": .object([
+                            "type": .string("Truthy"),
+                            "value": .object([
+                                "type": .string("Event.Field"),
+                                "key": .string("allowed"),
+                            ]),
+                        ]),
+                        "maxTimeMs": .number(10_000),
+                    ],
+                    outlets: [
+                        "satisfied": "show_details",
+                        "timeout": "timed_out",
+                    ],
+                    outcome: nil
+                ),
+                .init(
+                    kind: .action,
+                    id: "show_details",
+                    action: [
+                        "type": .string("navigate"),
+                        "screenId": .string("screen_details"),
+                    ],
+                    outlets: [:],
+                    outcome: nil
+                ),
+                .init(
+                    kind: .complete,
+                    id: "timed_out",
+                    action: nil,
+                    outlets: nil,
+                    outcome: "timed_out"
+                ),
+            ],
+            routes: [.init(
+                host: .init(kind: .screen, screenId: "screen_welcome"),
+                eventName: "continue",
+                entryStepId: "wait"
+            )],
+            screens: [
+                .init(
+                    id: "screen_welcome",
+                    defaultViewModelName: "WelcomeModel",
+                    defaultInstanceId: "welcome",
+                    responseCaptures: []
+                ),
+                .init(
+                    id: "screen_details",
+                    defaultViewModelName: "DetailsModel",
+                    defaultInstanceId: "details",
+                    responseCaptures: []
+                ),
+            ]
+        )
+        let eventDate = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-08-29T12:00:00Z")
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let dateProvider = MockDateProvider(initialDate: eventDate)
+        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            dateProvider: dateProvider,
+            presenter: presenter
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presentedRequest = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presentedRequest)
+        let enteredWait = await request.onEmissionBatch(presentationBatch(
+            request: request,
+            invocationId: "enter-background-wait",
+            emissions: [.init(
+                id: "00000000-0000-7000-8000-000000000501",
+                sequence: 0,
+                occurredAt: "2026-08-29T12:00:00Z",
+                name: "continue",
+                payload: [:]
+            )]
+        ))
+        XCTAssertTrue(enteredWait)
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        for _ in 0..<100 {
+            if try await journal.runs().first?.park != nil { break }
+            await Task.yield()
+        }
+
+        await service.onAppDidEnterBackground()
+        await service.handleEvent(NuxieEvent(
+            name: "unlock",
+            distinctId: "customer",
+            properties: ["allowed": true],
+            timestamp: eventDate.addingTimeInterval(0.001)
+        ))
+
+        let backgroundRuns = try await journal.runs()
+        let backgroundRun = try XCTUnwrap(backgroundRuns.first)
+        XCTAssertEqual(backgroundRun.park?.pendingEvent?.name, "unlock")
+        let backgroundNavigation = await MainActor.run {
+            presenter.navigationScreenIds
+        }
+        XCTAssertEqual(backgroundNavigation, ["screen_welcome"])
+
+        await service.onAppWillEnterForeground()
+        await service.onAppBecameActive()
+
+        let foregroundNavigation = await MainActor.run {
+            presenter.navigationScreenIds
+        }
+        XCTAssertEqual(
+            foregroundNavigation,
+            ["screen_welcome", "screen_details"]
+        )
+        let foregroundRuns = try await journal.runs()
+        let foregroundRun = try XCTUnwrap(foregroundRuns.first)
+        XCTAssertNil(foregroundRun.park)
+        XCTAssertEqual(foregroundRun.stepId, "show_details")
+    }
+
     func testBusyPresentationLeavesRenderedArmUnconsumedForRevalidation() async throws {
         let context = try await makeRenderedDeviceLegTestContext(
             presenterAvailable: false
@@ -5770,6 +4523,56 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertTrue(events.routedEvents.isEmpty)
     }
 
+    func testEntitlementGateWaitsForStoreKitAndSuppressesAnOwnedGrant() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entitlementGate: .init(enabled: true, products: [
+                .init(productId: "pro", featureIds: ["premium"])
+            ]),
+            products: [
+                releaseProductDocument(
+                    id: "pro",
+                    storeProductId: "com.example.pro",
+                    featureIds: ["premium"]
+                ),
+                releaseProductDocument(
+                    id: "pro-plus",
+                    storeProductId: "com.example.pro-plus",
+                    featureIds: ["premium", "plus"]
+                ),
+            ]
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let lookupGate = DeviceLegScreenCommitGate()
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            storeEntitlements: {
+                await lookupGate.suspend()
+                return ["com.example.pro-plus"]
+            }
+        )
+
+        await service.initialize()
+        let commit = Task {
+            await service.profileDidCommit(snapshot, distinctId: "customer")
+        }
+        await lookupGate.waitUntilEntered()
+        XCTAssertTrue(events.routedEvents.isEmpty)
+
+        await lookupGate.release()
+        await commit.value
+
+        XCTAssertTrue(events.routedEvents.isEmpty)
+    }
+
     func testProfileClearAbandonsAParkedRun() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -6432,7 +5235,45 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(responses["answer"] as? String, "retained")
     }
 
-    private func authenticatedSnapshot(
+}
+
+extension DeviceLegTestCase {
+    func releaseProductDocument(
+        id: String,
+        storeProductId: String,
+        featureIds: [String]
+    ) -> ExperienceReleaseJSONValue {
+        .object([
+            "id": .string(id),
+            "type": .string("subscription"),
+            "store": .object([
+                "platform": .string("apple_app_store"),
+                "productId": .string(storeProductId),
+                "productType": .string("autoRenewable"),
+            ]),
+            "preview": .object([
+                "name": .string(id),
+                "description": .string(id),
+                "price": .string("$1.00"),
+                "period": .string("month"),
+                "periodCount": .number(1),
+                "periodLabel": .string("month"),
+                "hasTrial": .bool(false),
+                "trialLabel": .string(""),
+                "introOfferLabel": .string(""),
+                "renewalLabel": .string("$1.00/month"),
+            ]),
+            "entitlements": .array(featureIds.map { featureId in
+                .object([
+                    "id": .string(featureId),
+                    "featureId": .string(featureId),
+                    "purchaseUsageFeatureIds": .array([]),
+                ])
+            }),
+        ])
+    }
+
+    func authenticatedSnapshot(
         _ fixture: DeviceLegPlaneProfileTestFixture,
         supportedRuntime: ExperienceReleaseSupportedRuntime = ExperienceReleaseRuntime.current
     ) async throws -> DeviceLegProfileCatalog.Snapshot {
@@ -6453,7 +5294,7 @@ final class DeviceLegServiceTests: XCTestCase {
         return try XCTUnwrap(snapshot)
     }
 
-    private func authenticatedRenderedSnapshot(
+    func authenticatedRenderedSnapshot(
         _ fixture: DeviceLegPlaneProfileTestFixture
     ) async throws -> DeviceLegProfileCatalog.Snapshot {
         let entry = try XCTUnwrap(fixture.profile.releases.first)
@@ -6506,7 +5347,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func makeRenderedDeviceLegHarness(
+    func makeRenderedDeviceLegHarness(
         _ preparedTriggerBeforeSend:
             (@Sendable (NuxieEvent) -> NuxieEvent?)? = nil
     ) async throws -> RenderedDeviceLegHarness {
@@ -6536,7 +5377,7 @@ final class DeviceLegServiceTests: XCTestCase {
         }
     }
 
-    private func makeRenderedDeviceLegTestContext(
+    func makeRenderedDeviceLegTestContext(
         snapshot: DeviceLegProfileCatalog.Snapshot? = nil,
         presenterAvailable: Bool = true,
         preparedTriggerBeforeSend:
@@ -6591,7 +5432,7 @@ final class DeviceLegServiceTests: XCTestCase {
         }
     }
 
-    private func renderedNavigationSnapshot(
+    func renderedNavigationSnapshot(
         _ snapshot: DeviceLegProfileCatalog.Snapshot
     ) -> DeviceLegProfileCatalog.Snapshot {
         replacing(
@@ -6640,7 +5481,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func renderedExperimentSnapshot(
+    func renderedExperimentSnapshot(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         assignment: DeviceLegFactTable.Assignment?
     ) -> DeviceLegProfileCatalog.Snapshot {
@@ -6704,7 +5545,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func renderedVisibleExperimentSnapshot(
+    func renderedVisibleExperimentSnapshot(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         assignment: DeviceLegFactTable.Assignment?,
         targetScreenId: String = "screen_details"
@@ -6788,7 +5629,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func renderedDismissalCompletionSnapshot(
+    func renderedDismissalCompletionSnapshot(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         eventName: String = SystemEventNames.screenDismissed
     ) -> DeviceLegProfileCatalog.Snapshot {
@@ -6827,7 +5668,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func renderedEventPropertyBranchSnapshot(
+    func renderedEventPropertyBranchSnapshot(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         eventName: String
     ) -> DeviceLegProfileCatalog.Snapshot {
@@ -6895,7 +5736,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func renderedResponseWaitSnapshot(
+    func renderedResponseWaitSnapshot(
         _ snapshot: DeviceLegProfileCatalog.Snapshot
     ) -> DeviceLegProfileCatalog.Snapshot {
         let responseField: [String: ExperienceReleaseJSONValue] = [
@@ -6985,7 +5826,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func presentationBatch(
+    func presentationBatch(
         request: DeviceLegPresentationRequest,
         presentationEpoch: UInt64 = 1,
         batchSequence: UInt64 = 0,
@@ -7013,7 +5854,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func assertDurableEventCommitIsRejected(
+    func assertDurableEventCommitIsRejected(
         action: [String: ExperienceReleaseJSONValue],
         effectId: String,
         revocation: DeviceLegCommitRevocation
@@ -7098,12 +5939,13 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func makeService(
+    func makeService(
         identity: MockIdentityService,
         events: MockEventLog,
         directory: URL,
         dateProvider: DateProviderProtocol = MockDateProvider(),
         featureAccess: @escaping DeviceLegService.FeatureAccessLookup = { _ in nil },
+        storeEntitlements: @escaping DeviceLegService.StoreEntitlementLookup = { [] },
         dispatcher: (any DeviceLegDispatching)? = nil,
         presenter: (any DeviceLegPresenting)? = nil,
         pinnedReleaseAuthenticator: @escaping DeviceLegService.PinnedReleaseAuthenticator = {
@@ -7118,6 +5960,7 @@ final class DeviceLegServiceTests: XCTestCase {
             sleepProvider: MockSleepProvider(),
             journalDirectory: directory,
             featureAccess: featureAccess,
+            storeEntitlements: storeEntitlements,
             dispatcher: dispatcher ?? DeviceLegEffectDispatcher(
                 identity: identity,
                 events: events
@@ -7130,7 +5973,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func removingDeliveredReleases(
+    func removingDeliveredReleases(
         from snapshot: DeviceLegProfileCatalog.Snapshot
     ) -> DeviceLegProfileCatalog.Snapshot {
         .init(
@@ -7147,11 +5990,12 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func replacing(
+    func replacing(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         entry: DeviceLegEntryCondition? = nil,
         reentry: DeviceLeg.Reentry? = nil,
         entitlementGate: DeviceLeg.EntitlementGate? = nil,
+        products: [ExperienceReleaseJSONValue]? = nil,
         inputs: DeviceLeg.Boundary? = nil,
         completionOutputs: [String: DeviceLeg.Boundary]? = nil,
         entryStepId: String? = nil,
@@ -7191,7 +6035,7 @@ final class DeviceLegServiceTests: XCTestCase {
             metadata: originalDescriptor.metadata,
             presentation: originalDescriptor.presentation,
             leg: nextLeg,
-            products: originalDescriptor.products,
+            products: products ?? originalDescriptor.products,
             placements: originalDescriptor.placements,
             viewModelValues: viewModelValues ?? originalDescriptor.viewModelValues,
             screenBehaviors: originalDescriptor.screenBehaviors,
@@ -7226,7 +6070,7 @@ final class DeviceLegServiceTests: XCTestCase {
         return .init(profile: profile, releasesByDigest: releases)
     }
 
-    private func replacingRenderedArtifact(
+    func replacingRenderedArtifact(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         sceneBytes: Data
     ) throws -> DeviceLegProfileCatalog.Snapshot {
@@ -7293,7 +6137,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func replacingWithHeadlessArtifacts(
+    func replacingWithHeadlessArtifacts(
         _ snapshot: DeviceLegProfileCatalog.Snapshot
     ) throws -> DeviceLegProfileCatalog.Snapshot {
         let originalArm = try XCTUnwrap(snapshot.profile.armedLegs.first)
@@ -7366,12 +6210,12 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    private func temporaryDirectory() -> URL {
+    func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
     }
 
-    private func waitForPresentationActions(
+    func waitForPresentationActions(
         _ expectedCount: Int,
         presenter: RecordingDeviceLegPresenter
     ) async {
@@ -7384,7 +6228,7 @@ final class DeviceLegServiceTests: XCTestCase {
         }
     }
 
-    private func removeTemporaryDirectoryIfPresent(_ directory: URL) {
+    func removeTemporaryDirectoryIfPresent(_ directory: URL) {
         guard FileManager.default.fileExists(atPath: directory.path) else {
             return
         }
@@ -7392,7 +6236,7 @@ final class DeviceLegServiceTests: XCTestCase {
     }
 }
 
-private final class DeviceLegArtifactRequestCounter: @unchecked Sendable {
+final class DeviceLegArtifactRequestCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
 
@@ -7405,12 +6249,12 @@ private final class DeviceLegArtifactRequestCounter: @unchecked Sendable {
     }
 }
 
-private enum DeviceLegCommitRevocation {
+enum DeviceLegCommitRevocation {
     case execution
     case identity
 }
 
-private actor InspectingDeviceLegDispatcher: DeviceLegDispatching {
+actor InspectingDeviceLegDispatcher: DeviceLegDispatching {
     private let directory: URL
     private let distinctId: String
     private var requests: [DeviceLegDispatchRequest] = []
@@ -7444,7 +6288,7 @@ private actor InspectingDeviceLegDispatcher: DeviceLegDispatching {
     func observedDurableClaim() -> Bool { durableClaim }
 }
 
-private actor CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {
+actor CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {
     private var routed: [NuxieEvent] = []
 
     func captureSystemEvent(
@@ -7522,7 +6366,7 @@ private actor CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {
     }
 }
 
-private actor SuspendedDeviceLegDispatcher: DeviceLegDispatching {
+actor SuspendedDeviceLegDispatcher: DeviceLegDispatching {
     private let underlying: any DeviceLegDispatching
     private var entered = false
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
@@ -7557,7 +6401,7 @@ private actor SuspendedDeviceLegDispatcher: DeviceLegDispatching {
     }
 }
 
-private actor DeviceLegEmissionBatchRecorder {
+actor DeviceLegEmissionBatchRecorder {
     private var batches: [ScreenEmissionBatch] = []
 
     func accept(_ batch: ScreenEmissionBatch) -> Bool {
@@ -7571,7 +6415,7 @@ private actor DeviceLegEmissionBatchRecorder {
 }
 
 @MainActor
-private final class DeviceLegAppActionRecorder {
+final class DeviceLegAppActionRecorder {
     private var actions: [AppAction] = []
 
     func record(_ action: AppAction) {
@@ -7583,7 +6427,7 @@ private final class DeviceLegAppActionRecorder {
     }
 }
 
-private actor SequencedFeatureAccess {
+actor SequencedFeatureAccess {
     private var values: [Bool]
     private var count = 0
 
@@ -7605,7 +6449,7 @@ private actor SequencedFeatureAccess {
     func readCount() -> Int { count }
 }
 
-private actor PinnedReleaseAuthenticationRecorder {
+actor PinnedReleaseAuthenticationRecorder {
     private var value = 0
 
     func record() {
@@ -7615,7 +6459,7 @@ private actor PinnedReleaseAuthenticationRecorder {
     func count() -> Int { value }
 }
 
-private actor DeviceLegScreenCommitGate {
+actor DeviceLegScreenCommitGate {
     private var entered = false
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
     private var continuations: [CheckedContinuation<Void, Never>] = []
@@ -7642,7 +6486,7 @@ private actor DeviceLegScreenCommitGate {
     }
 }
 
-private actor DeviceLegOutcomeCallRecorder {
+actor DeviceLegOutcomeCallRecorder {
     private var values: [(DeviceLegSurfaceOutcome, String?)] = []
 
     func record(outcome: DeviceLegSurfaceOutcome, screenId: String?) {
@@ -7662,7 +6506,7 @@ private actor DeviceLegOutcomeCallRecorder {
     }
 }
 
-private actor DeviceLegRevealRecorder {
+actor DeviceLegRevealRecorder {
     private var value = 0
 
     func record() {
@@ -7672,7 +6516,7 @@ private actor DeviceLegRevealRecorder {
     func count() -> Int { value }
 }
 
-private actor DeviceLegResponsePersistenceProbe {
+actor DeviceLegResponsePersistenceProbe {
     private var values: [String?] = []
 
     func record(_ value: String?) {
@@ -7685,7 +6529,7 @@ private actor DeviceLegResponsePersistenceProbe {
 }
 
 @MainActor
-private final class RecordingDeviceLegPresenter {
+final class RecordingDeviceLegPresenter {
     fileprivate final class Reservation: @unchecked Sendable {
         private weak var owner: RecordingDeviceLegPresenter?
         private var released = false
