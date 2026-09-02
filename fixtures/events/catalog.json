@@ -448,8 +448,8 @@
     "constant": "JourneyEvents.experienceDismissed",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1520",
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1573"
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1519",
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1571"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -489,8 +489,8 @@
     "constant": "JourneyEvents.experienceErrored",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1532",
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1564"
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1531",
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:1562"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -530,7 +530,7 @@
     "constant": "JourneyEvents.experienceShown",
     "docs": true,
     "emitters": [
-      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:541"
+      "Sources/Nuxie/Experiences/ExperiencePresentationService.swift:540"
     ],
     "endpoint": "batch",
     "fixtures": [
@@ -1606,7 +1606,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1432",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -1677,7 +1677,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1432",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -1749,7 +1749,7 @@
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Journey/JourneyService.swift:3466",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1432",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -1825,7 +1825,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1432",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -2592,7 +2592,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1432",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [
@@ -2663,7 +2663,7 @@
     "emitters": [
       "Sources/Nuxie/Journey/JourneyService.swift:3051",
       "Sources/Nuxie/Experiences/ExperienceViewController.swift:983",
-      "Sources/Nuxie/Journey/DeviceLegService.swift:1432",
+      "Sources/Nuxie/Journey/DeviceLegService.swift:1413",
       "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:82"
     ],
     "endpoint": [

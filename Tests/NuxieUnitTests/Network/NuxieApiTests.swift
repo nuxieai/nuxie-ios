@@ -241,8 +241,8 @@ final class NuxieApiTests: AsyncSpec {
                     expect(timed.planeProfile?.releases.count).to(equal(1))
                     switch conditional {
                     case .modified(let profile, let validator):
-                        expect(profile.planeProfile?.facts.properties["ready"]?.present)
-                            .to(beTrue())
+                        expect(profile.planeProfile?.facts.properties.count)
+                            .to(equal(0))
                         expect(validator?.authority)
                             .to(equal(fixture.deliveryAuthority))
                     case .notModified:
