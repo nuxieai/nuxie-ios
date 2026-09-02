@@ -33,6 +33,7 @@ struct NuxieCoreOverrides {
   var localeProvider: LocaleIdentifierProviding?
   var purchaseSettings: PurchaseSettingsProviding?
   var presentationTrace: ExperiencePresentationTraceRecording?
+  var deviceLegPresentation: (any DeviceLegPresenting)?
   /// Explicit test-host control. Nil preserves the legacy qualification-host
   /// behavior for callers that install a presentation trace recorder.
   var presentationDiagnosticsEnabled: Bool?
@@ -73,6 +74,7 @@ final class NuxieCore: @unchecked Sendable {
   let features: FeatureServiceProtocol
   let triggerBroker: TriggerBrokerProtocol
   let experiencePresentation: ExperiencePresentationServiceProtocol
+  let deviceLegPresentation: any DeviceLegPresenting
   let goalEvaluator: GoalEvaluatorProtocol
   let journeyStore: JourneyStoreProtocol
   let journeys: JourneyServiceProtocol
@@ -199,13 +201,17 @@ final class NuxieCore: @unchecked Sendable {
       testStoreEnabled: configuration.testStoreEnabled
     )
     let triggerBroker = overrides.triggerBroker ?? TriggerBroker()
-    let experiencePresentation = overrides.experiencePresentation ?? ExperiencePresentationService(
+    let defaultExperiencePresentation = ExperiencePresentationService(
       windowProvider: nil,
       experiences: experiences,
       eventLog: eventLog,
       triggerBroker: triggerBroker,
       dateProvider: dateProvider
     )
+    let experiencePresentation = overrides.experiencePresentation
+      ?? defaultExperiencePresentation
+    let deviceLegPresentation = overrides.deviceLegPresentation
+      ?? defaultExperiencePresentation
     let deviceLegs: (any DeviceLegServiceProtocol)?
     if let timezones = SignedTimezoneBundle.installed {
       deviceLegs = DeviceLegService(
@@ -228,7 +234,7 @@ final class NuxieCore: @unchecked Sendable {
           events: eventLog,
           appActionHandler: appActionHandler
         ),
-        presenter: experiencePresentation,
+        presenter: deviceLegPresentation,
         pinnedReleaseAuthenticator: { entry, reference in
           try await deviceLegProfiles.authenticatePinnedRelease(
             entry,
@@ -441,6 +447,7 @@ final class NuxieCore: @unchecked Sendable {
     self.features = features
     self.triggerBroker = triggerBroker
     self.experiencePresentation = experiencePresentation
+    self.deviceLegPresentation = deviceLegPresentation
     self.goalEvaluator = goalEvaluator
     self.journeyStore = journeyStore
     self.journeys = journeys

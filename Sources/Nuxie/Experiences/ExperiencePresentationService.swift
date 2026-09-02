@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol for presenting experiences in dedicated windows
-protocol ExperiencePresentationServiceProtocol: DeviceLegPresenting {
+protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
     /// Present a experience by ID in a dedicated window
     @discardableResult
     @MainActor func presentExperience(_ experienceVersionId: String, from journey: Journey?, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController
@@ -46,10 +46,6 @@ protocol ExperiencePresentationServiceProtocol: DeviceLegPresenting {
     /// Called when app becomes active - starts grace period
     @MainActor func onAppBecameActive()
 
-    /// Re-opens device Journey presentation admission after the foreground
-    /// profile authority and its dependent projections are current.
-    @MainActor func deviceLegProfileRefreshDidComplete()
-    
     /// Called when app enters background - clears grace period
     @MainActor func onAppDidEnterBackground()
 }
@@ -1589,6 +1585,7 @@ final class ExperiencePresentationService {
 }
 
 extension ExperiencePresentationService: ExperiencePresentationServiceProtocol {}
+extension ExperiencePresentationService: DeviceLegPresenting {}
 
 // MARK: - Errors
 

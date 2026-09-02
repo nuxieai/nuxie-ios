@@ -181,7 +181,7 @@ private actor LifecycleTransitionGate {
     }
 }
 
-private actor ForegroundPresentationAdmissionProbe: DeviceLegServiceProtocol {
+private actor ForegroundPresentationAdmissionProbe {
     private let presenter: any DeviceLegPresenting
     private var observedOpenAdmission: Bool?
     private var observationWaiters: [CheckedContinuation<Bool, Never>] = []
@@ -245,6 +245,8 @@ private actor ForegroundPresentationAdmissionProbe: DeviceLegServiceProtocol {
         }
     }
 }
+
+extension ForegroundPresentationAdmissionProbe: DeviceLegServiceProtocol {}
 
 private func waitForShutdownCompletion(
     _ probe: ShutdownCompletionProbe,
@@ -422,6 +424,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
             profile: profile,
             experiences: experiences,
             experiencePresentation: presenter,
+            deviceLegPresentation: presenter,
             features: features
         )
         lifecycle.start()

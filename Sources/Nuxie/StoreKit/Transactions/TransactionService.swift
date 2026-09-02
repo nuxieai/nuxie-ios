@@ -1019,17 +1019,12 @@ actor TransactionService {
         properties: [String: Any]?,
         correlation: CommerceOutcomeCorrelation?
     ) async {
-        guard let correlation else {
-            eventSink.emit(name, properties: properties)
-            return
-        }
         let properties = UncheckedSendable(properties)
-        guard await eventSink.capture(.init(
-            name: name,
-            properties: properties.value,
-            eventId: correlation.eventId,
-            distinctId: correlation.distinctId
-        )) else {
+        guard await eventSink.emitOrCaptureCommerceOutcome(
+            name,
+            properties: properties,
+            correlation: correlation
+        ) else {
             LogError(
                 "TransactionService: correlated commerce outcome has no capture retry owner"
             )
