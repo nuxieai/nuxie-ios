@@ -51,6 +51,7 @@ playground.xcworkspace
 .artifacts/
 __pycache__/
 *.xcresult/
+macos-unit-crash-reports/
 .xcode-spm/
 test-results/
 
