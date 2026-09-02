@@ -225,10 +225,12 @@ private actor ForegroundPresentationAdmissionProbe: DeviceLegServiceProtocol {
 
     func profileDidCommit(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        artifacts: PreparedDeviceLegArtifacts?,
         authority: ProfileDeliveryAuthority,
         distinctId: String
     ) async {
         _ = snapshot
+        _ = artifacts
         _ = authority
         _ = distinctId
     }

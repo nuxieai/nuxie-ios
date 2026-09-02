@@ -152,6 +152,7 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     func viewController(
         forDeviceLeg release: AuthenticatedDeviceLegRelease,
         delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?,
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController
@@ -235,10 +236,12 @@ extension ExperienceServiceProtocol {
     func viewController(
         forDeviceLeg release: AuthenticatedDeviceLegRelease,
         delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?,
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
         _ = delivery
+        _ = pinnedArtifacts
         _ = runtimeDelegate
         _ = colorSchemeMode
         throw ExperienceError.notFound(
@@ -679,6 +682,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     func viewController(
         forDeviceLeg release: AuthenticatedDeviceLegRelease,
         delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?,
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode = .system
     ) async throws -> ExperienceViewController {
@@ -688,6 +692,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         let prepared = try await releaseStore.preparePresentation(
             release: release,
             delivery: delivery,
+            pinnedArtifacts: pinnedArtifacts,
             productResolver: { [experienceLoader] screenID in
                 try await experienceLoader.productsForDeviceLegPresentation(
                     release: release,

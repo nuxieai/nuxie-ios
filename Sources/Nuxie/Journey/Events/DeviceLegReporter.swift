@@ -43,12 +43,14 @@ struct DeviceLegReporter {
         }
         // Terminal beforeSend drops are also durable acknowledgements. Host
         // privacy policy must not create an immortal retry record.
-        guard let _ = await events.captureAndRouteSystemEvent(
-            completion ? JourneyEvents.journeyLegCompleted : JourneyEvents.journeyLegStarted,
+        guard let _ = await events.captureAndRouteSystemEvent(.init(
+            name: completion
+                ? JourneyEvents.journeyLegCompleted
+                : JourneyEvents.journeyLegStarted,
             properties: properties,
             eventId: completion ? run.completedEventId : run.startedEventId,
             distinctId: journal.distinctId
-        ) else { return false }
+        )) else { return false }
         return true
     }
 
@@ -116,21 +118,19 @@ struct DeviceLegExperimentExposureReporter: Sendable {
         eventId: String,
         admission: DeviceLegCommitAdmission?
     ) async -> DurableTriggerCapture? {
-        if let admission {
-            return await events.captureAndRouteSystemEvent(
-                name,
-                properties: properties,
-                eventId: eventId,
-                distinctId: journal.distinctId,
-                admission: admission
-            )
-        }
-        return await events.captureAndRouteSystemEvent(
-            name,
+        let request = StableSystemEventCaptureRequest(
+            name: name,
             properties: properties,
             eventId: eventId,
             distinctId: journal.distinctId
         )
+        if let admission {
+            return await events.captureAndRouteSystemEvent(
+                request,
+                admission: admission
+            )
+        }
+        return await events.captureAndRouteSystemEvent(request)
     }
 
     private func properties(

@@ -34,31 +34,22 @@ private final class RecordingTransactionEventSink: SystemEventSink, @unchecked S
     }
 
     func capture(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        _ = distinctId
         lock.withLock {
             routedCaptures += 1
-            capturedEventIds.append(eventId)
-            storage.append((name, properties))
+            capturedEventIds.append(request.eventId)
+            storage.append((request.name, request.properties))
         }
         return true
     }
 
     func captureOnly(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        _ = eventId
-        _ = distinctId
         lock.withLock {
             captureOnlyCaptures += 1
-            storage.append((name, properties))
+            storage.append((request.name, request.properties))
         }
         return true
     }

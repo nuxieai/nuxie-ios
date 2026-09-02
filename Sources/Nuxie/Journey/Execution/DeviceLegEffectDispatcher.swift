@@ -79,10 +79,7 @@ struct DeviceLegDispatchRequest: Sendable {
 /// authenticated execution snapshot and customer identity remain current.
 /// The lock order matches the other device-leg publications: execution first,
 /// then identity.
-struct DeviceLegCommitAdmission:
-    StableEventCaptureCommitAdmission,
-    StableEventCaptureBatchCommitAdmission
-{
+struct DeviceLegCommitAdmission {
     let identity: IdentityServiceProtocol
     let identityFenceToken: IdentityFenceToken?
     let executionFence: DeviceLegProfileFence
@@ -147,6 +144,9 @@ struct DeviceLegCommitAdmission:
     }
 }
 
+extension DeviceLegCommitAdmission: StableEventCaptureCommitAdmission {}
+extension DeviceLegCommitAdmission: StableEventCaptureBatchCommitAdmission {}
+
 enum DeviceLegDispatchResult: Equatable, Sendable {
     case outlet(String)
     case complete(String)
@@ -159,9 +159,9 @@ protocol DeviceLegDispatching: Sendable {
 }
 
 /// Executes authenticated local effects after DeviceLegRunJournal has made
-/// their stable identity durable. Presentation and commerce remain parked at
-/// this seam until their artifact-backed adapters are installed.
-struct DeviceLegEffectDispatcher: DeviceLegDispatching {
+/// their stable identity durable. Presentation and commerce are handled by
+/// the renderer-backed presentation owner before this seam.
+struct DeviceLegEffectDispatcher {
     private let identity: IdentityServiceProtocol
     private let events: any RoutedStableSystemEventCapturing
     private let appActionHandler: @MainActor @Sendable (AppAction) -> Void
@@ -222,10 +222,12 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         properties["leg_id"] = request.reference.legId
         properties["leg_generation"] = request.generation
         guard let _ = await events.captureAndRouteSystemEvent(
-                action.eventName,
-                properties: properties,
-                eventId: request.effectId,
-                distinctId: request.distinctId,
+                .init(
+                    name: action.eventName,
+                    properties: properties,
+                    eventId: request.effectId,
+                    distinctId: request.distinctId
+                ),
                 admission: eventCommitAdmission(request)
               ),
               await requestIsCurrent(request) else {
@@ -276,10 +278,12 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         var properties = legAttribution(request)
         properties["milestone_id"] = action.milestoneId
         guard let _ = await events.captureAndRouteSystemEvent(
-                JourneyEvents.journeyMilestone,
-                properties: properties,
-                eventId: request.effectId,
-                distinctId: request.distinctId,
+                .init(
+                    name: JourneyEvents.journeyMilestone,
+                    properties: properties,
+                    eventId: request.effectId,
+                    distinctId: request.distinctId
+                ),
                 admission: eventCommitAdmission(request)
               ),
               await requestIsCurrent(request) else {
@@ -343,10 +347,12 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         request: DeviceLegDispatchRequest
     ) async -> Bool {
         guard let _ = await events.captureAndRouteSystemEvent(
-            event,
-            properties: properties,
-            eventId: request.effectId,
-            distinctId: request.distinctId,
+            .init(
+                name: event,
+                properties: properties,
+                eventId: request.effectId,
+                distinctId: request.distinctId
+            ),
             admission: eventCommitAdmission(request)
         ), await requestIsCurrent(request) else { return false }
         return await requestIsCurrent(request)
@@ -451,6 +457,8 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         }
     }
 }
+
+extension DeviceLegEffectDispatcher: DeviceLegDispatching {}
 
 private struct SendEvent: Decodable {
     let eventName: String

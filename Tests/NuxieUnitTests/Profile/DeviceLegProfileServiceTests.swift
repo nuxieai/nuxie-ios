@@ -73,10 +73,12 @@ private actor RecordingDeviceLegProfileConsumer: DeviceLegProfileConsuming {
 
     func profileDidCommit(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        artifacts: PreparedDeviceLegArtifacts?,
         authority: ProfileDeliveryAuthority,
         distinctId: String
     ) {
         _ = distinctId
+        _ = artifacts
         commits.append(snapshot)
         authorities.append(authority)
     }
