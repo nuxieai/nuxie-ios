@@ -35,6 +35,34 @@ private final class ChunkedProfileController: @unchecked Sendable {
     }
 }
 
+private final class CancellationUncooperativeOperation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Int, Never>?
+    private var releaseRequested = false
+
+    func wait() async -> Int {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if releaseRequested {
+                lock.unlock()
+                continuation.resume(returning: 1)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func release() {
+        lock.lock()
+        releaseRequested = true
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: 1)
+    }
+}
+
 private final class ChunkedProfileURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     private nonisolated(unsafe) static var controller: ChunkedProfileController?
@@ -556,21 +584,18 @@ final class NuxieApiTests: AsyncSpec {
                 }
 
                 it("does not await a cancellation-uncooperative operation past the deadline") {
-                    let startedAt = Date()
+                    let operation = CancellationUncooperativeOperation()
+                    defer { operation.release() }
 
                     do {
                         _ = try await raceRequestAgainstDeadline(
                             nanoseconds: 20_000_000
                         ) {
-                            await withCheckedContinuation { continuation in
-                                DispatchQueue.global().asyncAfter(deadline: .now() + 0.25) {
-                                    continuation.resume(returning: 1)
-                                }
-                            }
+                            await operation.wait()
                         }
                         fail("Expected timeout")
                     } catch NuxieNetworkError.timeout {
-                        expect(Date().timeIntervalSince(startedAt)).to(beLessThan(0.15))
+                        // The operation cannot finish until this test returns and releases it.
                     } catch {
                         fail("Expected NuxieNetworkError.timeout but got \(error)")
                     }
