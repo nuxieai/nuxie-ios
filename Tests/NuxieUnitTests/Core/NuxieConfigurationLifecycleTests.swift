@@ -235,6 +235,13 @@ private actor ForegroundPresentationAdmissionProbe {
         _ = distinctId
     }
 
+    func profileDidWithdraw(
+        authority: ProfileDeliveryAuthority?,
+        distinctId: String
+    ) async {
+        _ = authority
+        _ = distinctId
+    }
     func profileDidClear(distinctId: String) async { _ = distinctId }
     func profileDidClearAll() async {}
 

@@ -260,59 +260,29 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     public func captureAndRouteSystemEvent(
         _ request: StableSystemEventCaptureRequest
     ) async -> DurableTriggerCapture? {
-        let captureHandler = lock.withLock { _routedCaptureHandler }
-        await captureHandler?(request.name, request.eventId)
-        let shouldFail = lock.withLock { () -> Bool in
-            guard _routedCaptureFailuresRemaining > 0 else { return false }
-            _routedCaptureFailuresRemaining -= 1
-            return true
+        await captureAndRoute(request) {
+            await self.captureSystemEvent(
+                request.name,
+                properties: request.properties,
+                eventId: request.eventId,
+                distinctId: request.distinctId
+            )
         }
-        guard !shouldFail else { return nil }
-        let subscriberAdmissions = captureCommittedAdmissions()
-        guard let capture = await captureSystemEvent(
-            request.name,
-            properties: request.properties,
-            eventId: request.eventId,
-            distinctId: request.distinctId
-        ) else { return nil }
-        guard capture.routesLocally, capture.isNewlyCommitted else {
-            return capture
-        }
-        _ = await route(
-            capture.event,
-            subscriberAdmissions: subscriberAdmissions
-        )
-        return capture
     }
 
     public func captureAndRouteSystemEvent(
         _ request: StableSystemEventCaptureRequest,
         admission: any StableEventCaptureCommitAdmission
     ) async -> DurableTriggerCapture? {
-        let captureHandler = lock.withLock { _routedCaptureHandler }
-        await captureHandler?(request.name, request.eventId)
-        let shouldFail = lock.withLock { () -> Bool in
-            guard _routedCaptureFailuresRemaining > 0 else { return false }
-            _routedCaptureFailuresRemaining -= 1
-            return true
+        await captureAndRoute(request) {
+            await self.captureSystemEvent(
+                request.name,
+                properties: request.properties,
+                eventId: request.eventId,
+                distinctId: request.distinctId,
+                admission: admission
+            )
         }
-        guard !shouldFail else { return nil }
-        let subscriberAdmissions = captureCommittedAdmissions()
-        guard let capture = await captureSystemEvent(
-            request.name,
-            properties: request.properties,
-            eventId: request.eventId,
-            distinctId: request.distinctId,
-            admission: admission
-        ) else { return nil }
-        guard capture.routesLocally, capture.isNewlyCommitted else {
-            return capture
-        }
-        _ = await route(
-            capture.event,
-            subscriberAdmissions: subscriberAdmissions
-        )
-        return capture
     }
 
     public func captureAndRouteSystemEvent(
@@ -320,6 +290,22 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         occurredAt: Date,
         admission: any StableEventCaptureCommitAdmission
     ) async -> DurableTriggerCapture? {
+        await captureAndRoute(request) {
+            await self.captureSystemEvent(
+                request.name,
+                properties: request.properties,
+                eventId: request.eventId,
+                distinctId: request.distinctId,
+                occurredAt: occurredAt,
+                admission: admission
+            )
+        }
+    }
+
+    private func captureAndRoute(
+        _ request: StableSystemEventCaptureRequest,
+        capture: () async -> DurableTriggerCapture?
+    ) async -> DurableTriggerCapture? {
         let captureHandler = lock.withLock { _routedCaptureHandler }
         await captureHandler?(request.name, request.eventId)
         let shouldFail = lock.withLock { () -> Bool in
@@ -329,22 +315,15 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
         guard !shouldFail else { return nil }
         let subscriberAdmissions = captureCommittedAdmissions()
-        guard let capture = await captureSystemEvent(
-            request.name,
-            properties: request.properties,
-            eventId: request.eventId,
-            distinctId: request.distinctId,
-            occurredAt: occurredAt,
-            admission: admission
-        ) else { return nil }
-        guard capture.routesLocally, capture.isNewlyCommitted else {
-            return capture
+        guard let result = await capture() else { return nil }
+        guard result.routesLocally, result.isNewlyCommitted else {
+            return result
         }
         _ = await route(
-            capture.event,
+            result.event,
             subscriberAdmissions: subscriberAdmissions
         )
-        return capture
+        return result
     }
 
     public func captureAndRouteSystemEventBatch(

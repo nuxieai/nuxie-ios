@@ -148,6 +148,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         async let left = first.admit(
             arm: candidate,
             release: retainedRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: policy,
             entryStepId: "step",
             at: date(100),
@@ -156,6 +157,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         async let right = second.admit(
             arm: candidate,
             release: retainedRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: policy,
             entryStepId: "step",
             at: date(100),
@@ -168,6 +170,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let readmittedAfterLatchReset = try await first.admit(
             arm: candidate,
             release: retainedRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: policy,
             entryStepId: "step",
             at: date(200),
@@ -179,6 +182,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let readmittedAfterArmRetirement = try await first.admit(
             arm: candidate,
             release: retainedRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: policy,
             entryStepId: "step",
             at: date(300),
@@ -348,8 +352,11 @@ final class DeviceLegRunJournalTests: XCTestCase {
                 let fence = DeviceLegProfileFence()
                 _ = try await reopened.resumeParked(
                     run.id,
-                    profileFence: fence,
-                    profileFenceToken: fence.token()
+                    admission: .executionOnly(
+                        identity: MockIdentityService(),
+                        executionFence: fence,
+                        executionFenceToken: fence.token()
+                    )
                 )
                 // Consuming a park point is durable before the next action.
                 // Death after consumption must never replay that action.
@@ -531,7 +538,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         XCTAssertNil(retiredWindowCheckmark)
     }
 
-    func testProfileReplacementCannotConsumeAParkWithAStaleToken() async throws {
+    func testExecutionRevocationCannotConsumeAParkWithAStaleToken() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -554,8 +561,11 @@ final class DeviceLegRunJournalTests: XCTestCase {
 
         let resumed = try await journal.resumeParked(
             run.id,
-            profileFence: fence,
-            profileFenceToken: stale
+            admission: .executionOnly(
+                identity: MockIdentityService(),
+                executionFence: fence,
+                executionFenceToken: stale
+            )
         )
 
         XCTAssertNil(resumed)
@@ -582,6 +592,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             try await journal.admit(
                 arm: candidate,
                 release: release(for: candidate.reference),
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "wait",
                 at: date(100),
@@ -625,6 +636,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let admittedFirst = try await journal.admit(
             arm: enrollmentArm,
             release: pin,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "step",
             at: date(100)
@@ -653,6 +665,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             _ = try await journal.admit(
                 arm: continuationArm,
                 release: conflictingPin,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "step",
                 at: date(105)
@@ -665,6 +678,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let admittedSecond = try await journal.admit(
             arm: continuationArm,
             release: pin,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "step",
             at: date(110)
@@ -728,6 +742,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             arm: enrollmentArm,
             release: release(for: enrollmentArm.reference),
             artifactSource: source,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "step",
             at: date(100)
@@ -750,6 +765,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let admittedSecond = try await journal.admit(
             arm: continuationArm,
             release: release(for: continuationArm.reference),
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "step",
             at: date(110)
@@ -800,6 +816,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
                 arm: candidate,
                 release: release(for: candidate.reference),
                 artifactSource: source,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "step",
                 at: date(100)
@@ -867,6 +884,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
                 arm: candidate,
                 release: release(for: candidate.reference),
                 artifactSource: source,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "step",
                 at: date(100)
@@ -934,6 +952,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             let admitted = try await journal.admit(
                 arm: candidate,
                 release: retainedRelease,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "wait",
                 at: date(Double(100 + index))
@@ -1233,6 +1252,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let first = try await firstJournal.admit(
             arm: firstArm,
             release: firstRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "wait",
             at: date(100)
@@ -1242,6 +1262,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             _ = try await secondJournal.admit(
                 arm: secondArm,
                 release: secondRelease,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "wait",
                 at: date(101)
@@ -1269,6 +1290,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let admitted = try await journal.admit(
             arm: candidate,
             release: release(for: candidate.reference),
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "wait",
             at: date(100)
@@ -1762,11 +1784,22 @@ private extension DeviceLegRunJournal {
         try await admit(
             arm: arm,
             release: testDeviceLegRelease(for: arm.reference),
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: reentry,
             entryStepId: entryStepId,
             at: at
         )
     }
+}
+
+private func testDeviceLegExecutionSnapshot() -> DeviceLegRun.ExecutionSnapshot {
+    .init(
+        delivery: .init(
+            renderBaseUrl: "https://render.example.test/",
+            assetBaseUrl: "https://assets.example.test/"
+        ),
+        assignments: [:]
+    )
 }
 
 private func testDeviceLegRelease(

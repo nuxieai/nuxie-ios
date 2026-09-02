@@ -465,6 +465,10 @@ final class DeviceLegExperienceLoaderTests: DeviceLegTestCase {
             arm: arm,
             release: releasePin,
             artifactSource: artifactSource,
+            executionSnapshot: .init(
+                delivery: snapshot.profile.delivery,
+                assignments: snapshot.profile.facts.assignments
+            ),
             reentry: release.descriptor.leg.reentry,
             entryStepId: release.descriptor.leg.entryStepId,
             at: Date(timeIntervalSince1970: 1_000)

@@ -660,7 +660,8 @@ internal actor ProfileService: ProfileServiceProtocol {
             admission: cacheStoreAdmission(for: admission)
         ) ?? true
         if clearedDeviceProfile {
-            await deviceLegRuntime?.profileDidClear(
+            await deviceLegRuntime?.profileDidWithdraw(
+                authority: try? await authorityStore.authority(),
                 distinctId: admission.distinctId
             )
         }
@@ -839,7 +840,10 @@ internal actor ProfileService: ProfileServiceProtocol {
                 distinctId: distinctId
             )
         } else {
-            await deviceLegRuntime?.profileDidClear(distinctId: distinctId)
+            await deviceLegRuntime?.profileDidWithdraw(
+                authority: try? await authorityStore.authority(),
+                distinctId: distinctId
+            )
         }
 
         // Server facts and mailbox work are customer-scoped, not localized:
@@ -954,7 +958,10 @@ internal actor ProfileService: ProfileServiceProtocol {
         cachedProfile = nil
         triggerAdmission = nil
         await deviceLegProfiles?.clear(distinctId: distinctId)
-        await deviceLegRuntime?.profileDidClear(distinctId: distinctId)
+        await deviceLegRuntime?.profileDidWithdraw(
+            authority: try? await authorityStore.authority(),
+            distinctId: distinctId
+        )
         
         // Clear disk
         await diskCache.remove(forKey: distinctId)
