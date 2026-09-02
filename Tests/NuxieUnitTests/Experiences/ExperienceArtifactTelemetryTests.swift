@@ -25,7 +25,7 @@ private actor ArtifactLoadCancellationProbe {
     }
 }
 
-private actor InteractiveDismissalSuspension {
+private actor TestSuspension {
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseContinuation: CheckedContinuation<Void, Never>?
     private var entered = false
@@ -285,7 +285,7 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         let controller = MockExperienceViewController(
             mockExperienceVersionId: "version-stale-interactive-dismissal"
         )
-        let suspension = InteractiveDismissalSuspension()
+        let suspension = TestSuspension()
         var closeOwners: [String] = []
         controller.prepareForDismissalHandler = { await suspension.suspend() }
         controller.onClose = { _ in closeOwners.append("old") }
@@ -383,13 +383,17 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
             assetBaseURL: URL(string: "https://assets.nuxie.test/")!
         )
         let cancellationProbe = ArtifactLoadCancellationProbe()
+        let acquisitionSuspension = TestSuspension()
         let eventLog = MockEventLog()
+        let timedOut = expectation(description: "presentation deadline elapsed")
+        let failed = expectation(description: "artifact acquisition failed")
         let viewModel = ExperienceViewModel(
             experience: experience,
             loadingTimeoutSeconds: 0.01,
             artifactLoader: { _, _, _ in
                 do {
-                    try await Task.sleep(nanoseconds: 30_000_000)
+                    await acquisitionSuspension.suspend()
+                    try Task.checkCancellation()
                     await cancellationProbe.recordCompletion()
                     throw NuxieError.invalidConfiguration("expected test completion")
                 } catch is CancellationError {
@@ -399,26 +403,50 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
             },
             eventLog: eventLog
         )
+        viewModel.onStateChanged = { state in
+            switch state {
+            case .timedOut:
+                timedOut.fulfill()
+            case .error:
+                failed.fulfill()
+            case .loading, .loaded:
+                break
+            }
+        }
 
         viewModel.loadExperience()
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await acquisitionSuspension.waitUntilEntered()
+        await fulfillment(of: [timedOut], timeout: 5)
+
+        XCTAssertEqual(viewModel.currentState, .timedOut)
+        let wasCancelledAtDeadline = await cancellationProbe.wasCancelled()
+        let didCompleteAtDeadline = await cancellationProbe.didComplete()
+        XCTAssertFalse(wasCancelledAtDeadline)
+        XCTAssertFalse(didCompleteAtDeadline)
+        XCTAssertTrue(eventLog.trackedEvents.allSatisfy {
+            $0.name != JourneyEvents.experienceArtifactLoadSucceeded
+                && $0.name != JourneyEvents.experienceArtifactLoadFailed
+        })
+
+        await acquisitionSuspension.resume()
+        await fulfillment(of: [failed], timeout: 5)
 
         XCTAssertEqual(viewModel.currentState, .error)
-        let wasCancelled = await cancellationProbe.wasCancelled()
-        let didComplete = await cancellationProbe.didComplete()
-        XCTAssertFalse(wasCancelled)
-        XCTAssertTrue(didComplete)
-        let artifactEvents = eventLog.trackedEvents.filter {
+        let wasCancelledAfterFailure = await cancellationProbe.wasCancelled()
+        let didCompleteAfterFailure = await cancellationProbe.didComplete()
+        XCTAssertFalse(wasCancelledAfterFailure)
+        XCTAssertTrue(didCompleteAfterFailure)
+        let terminalArtifactEvents = eventLog.trackedEvents.filter {
             $0.name == JourneyEvents.experienceArtifactLoadSucceeded
                 || $0.name == JourneyEvents.experienceArtifactLoadFailed
         }
-        XCTAssertEqual(artifactEvents.count, 1)
+        XCTAssertEqual(terminalArtifactEvents.count, 1)
         XCTAssertEqual(
-            artifactEvents.first?.name,
+            terminalArtifactEvents.first?.name,
             JourneyEvents.experienceArtifactLoadFailed
         )
         XCTAssertTrue(
-            (artifactEvents.first?.properties?["error_message"] as? String)?
+            (terminalArtifactEvents.first?.properties?["error_message"] as? String)?
                 .contains("expected test completion") == true
         )
 
