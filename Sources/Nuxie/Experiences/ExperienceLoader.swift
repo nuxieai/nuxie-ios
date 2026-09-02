@@ -1,6 +1,6 @@
 import Foundation
 
-private func decodeDeviceLegDocuments<Document: Decodable>(
+func decodeDeviceLegDocuments<Document: Decodable>(
     _ type: Document.Type,
     from values: [ExperienceReleaseJSONValue]
 ) throws -> [Document] {
@@ -789,19 +789,13 @@ actor ExperienceLoader {
         )
         let products: [StoreProduct]
         do {
-            // Storefront, price, billing plans, and introductory eligibility
-            // are presentation-time facts. Keep release/artifact caches warm,
-            // but never reuse a prior presentation's commercial resolution.
-            await productService.invalidate(productIDs)
-            products = try await fetchProducts(
+            products = try await freshProductsForPresentation(
                 for: initialScreenID,
-                in: release,
+                in: productAuthority(release),
+                productIDs: productIDs,
+                placementIDs: placementIDs,
                 introEligibilityAuthorization: introEligibilityAuthorization
             )
-            guard Set(products.map(\.storeProductId)) == productIDs,
-                  Set(products.map(\.placementId)) == placementIDs else {
-                throw ExperienceError.productsUnavailable
-            }
             if let productSpan { presentationTraceContext?.complete(productSpan) }
         } catch {
             if let productSpan {
@@ -879,17 +873,13 @@ actor ExperienceLoader {
             throw ExperienceError.productsUnavailable
         }
         do {
-            await productService.invalidate(productIDs)
-            let products = try await fetchProducts(
+            return try await freshProductsForPresentation(
                 for: screenID,
                 in: authority,
+                productIDs: productIDs,
+                placementIDs: placementIDs,
                 introEligibilityAuthorization: introEligibilityAuthorization
             )
-            guard Set(products.map(\.storeProductId)) == productIDs,
-                  Set(products.map(\.placementId)) == placementIDs else {
-                throw ExperienceError.productsUnavailable
-            }
-            return products
         } catch {
             if error is CancellationError { throw error }
             throw ExperienceError.productsUnavailable
@@ -1357,16 +1347,15 @@ actor ExperienceLoader {
             ]
         )
         do {
-            await productService.invalidate(productIDs)
-            let products = try await fetchProducts(
+            let products = try await freshProductsForPresentation(
                 for: screenID,
-                in: release,
+                in: productAuthority(release),
+                productIDs: productIDs,
+                placementIDs: placementIDs,
                 introEligibilityAuthorization: introEligibilityAuthorization
             )
-            guard Set(products.map(\.storeProductId)) == productIDs,
-                  Set(products.map(\.placementId)) == placementIDs,
-                  releasesByVersion[key]?.releaseID == releaseID else {
-                throw ExperienceError.productsUnavailable
+            guard releasesByVersion[key]?.releaseID == releaseID else {
+                throw CancellationError()
             }
             if let span { presentationTraceContext?.complete(span) }
             return products
@@ -1875,16 +1864,27 @@ actor ExperienceLoader {
         warmTasksByRelease.removeAll()
     }
 
-    private func fetchProducts(
+    private func freshProductsForPresentation(
         for screenID: String,
-        in release: AuthenticatedExperienceReleaseDefinition,
-        introEligibilityAuthorization: IntroEligibilityAuthorizationContext? = nil
+        in release: ProductReleaseAuthority,
+        productIDs: Set<String>,
+        placementIDs: Set<String>,
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
     ) async throws -> [StoreProduct] {
-        try await fetchProducts(
+        // Storefront, price, billing plans, and introductory eligibility are
+        // presentation-time facts. Keep release/artifact caches warm, but never
+        // reuse a prior presentation's commercial resolution.
+        await productService.invalidate(productIDs)
+        let products = try await fetchProducts(
             for: screenID,
-            in: productAuthority(release),
+            in: release,
             introEligibilityAuthorization: introEligibilityAuthorization
         )
+        guard Set(products.map(\.storeProductId)) == productIDs,
+              Set(products.map(\.placementId)) == placementIDs else {
+            throw ExperienceError.productsUnavailable
+        }
+        return products
     }
 
     private func fetchProducts(

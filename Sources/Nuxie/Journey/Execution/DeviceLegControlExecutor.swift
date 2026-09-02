@@ -69,6 +69,35 @@ struct DeviceLegControlExecutor {
         return advance(outlets, outlet: outlet, context: context)
     }
 
+    /// Determines whether a committed event satisfies the exact parked wait
+    /// without consuming its durable checkpoint. Rendered runs use this while
+    /// backgrounded so the event can be retained until presentation reopens.
+    func parkedWaitAccepts(
+        _ event: Event,
+        step: DeviceLeg.Step,
+        context: ArmedDeviceLeg.Context,
+        assignments: ExactJSONObject<DeviceLegFactTable.Assignment?>,
+        checkpoint: Checkpoint
+    ) -> Bool {
+        guard let action = step.action,
+              DeviceLegActionType(action: action) == .waitUntil else {
+            return false
+        }
+        switch evaluate(
+            step: step,
+            context: context,
+            assignments: assignments,
+            nowMillis: checkpoint.anchorAtMillis,
+            checkpoint: checkpoint,
+            signal: .init(event: event)
+        ) {
+        case .advance:
+            return true
+        case .park, .complete, .dispatch, .invalid:
+            return false
+        }
+    }
+
     private func evaluateChecked(
         _ step: DeviceLeg.Step,
         context: ArmedDeviceLeg.Context,
@@ -214,6 +243,8 @@ struct DeviceLegControlExecutor {
         return Int64(value.rounded(.towardZero))
     }
 }
+
+extension DeviceLegControlExecutor.Event: Codable, Equatable {}
 
 private struct CompiledDelay: Decodable { let durationMs: Int }
 private struct CompiledCondition: Decodable {

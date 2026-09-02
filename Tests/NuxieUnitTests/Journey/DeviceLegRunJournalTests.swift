@@ -1333,6 +1333,70 @@ final class DeviceLegRunJournalTests: XCTestCase {
         XCTAssertNil(advanced.park)
     }
 
+    func testParkedEventPersistsWithItsCheckpointAcrossRelaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(1)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        let checkpoint = DeviceLegControlExecutor.Checkpoint(
+            anchorAtMillis: 2_000,
+            wakeAtMillis: 12_000
+        )
+        try await journal.transition(
+            run.id,
+            stepId: "wait",
+            context: run.context,
+            checkpoint: checkpoint
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(
+            identity.performWithCurrentIdentityFence("customer", { _ in () })
+        )
+        let executionFence = DeviceLegProfileFence()
+        let admission = DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFence.token,
+            executionFence: executionFence,
+            executionFenceToken: executionFence.token()
+        )
+        let event = DeviceLegControlExecutor.Event(
+            name: "unlock",
+            occurredAtMillis: 3_000,
+            properties: ["allowed": .bool(true)]
+        )
+
+        let staged = try await journal.stageParkedEvent(
+            run.id,
+            expectedStepId: "wait",
+            expectedCheckpoint: checkpoint,
+            event: event,
+            admission: admission
+        )
+        XCTAssertTrue(staged)
+
+        let reopened = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let reopenedRuns = try await reopened.runs()
+        let persisted = try XCTUnwrap(reopenedRuns.first?.park)
+        XCTAssertEqual(persisted.anchorAt, date(2))
+        XCTAssertEqual(persisted.wakeAt, date(12))
+        XCTAssertEqual(persisted.pendingEvent, event)
+    }
+
     func testTransitionAdmissionRejectsRevokedExecutionAuthority() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
