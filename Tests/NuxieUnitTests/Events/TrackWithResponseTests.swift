@@ -880,7 +880,9 @@ final class TrackWithResponseTests: AsyncSpec {
                 }
 
                 it("lets an authoritative ownership response fence a suspended exit capture") {
-                    mockEventStore.stableCaptureDelayNanoseconds = 300_000_000
+                    let exitEventId = "journey-exited:suspended-stale-owner"
+                    mockEventStore.suspendInsert(id: exitEventId)
+                    defer { mockEventStore.resumeInsert(id: exitEventId) }
                     await mockNuxieApi.setTrackEventResponse(
                         EventResponse(
                             status: "ok",
@@ -896,7 +898,7 @@ final class TrackWithResponseTests: AsyncSpec {
                         await eventLog.captureOwnedJourneySystemEvent(
                             JourneyEvents.journeyExited,
                             properties: ["journey_id": "journey-1"],
-                            eventId: "journey-exited:suspended-stale-owner",
+                            eventId: exitEventId,
                             distinctId: "customer-a",
                             ownership: JourneyEventOwnership(
                                 journeyId: "journey-1",
@@ -914,6 +916,10 @@ final class TrackWithResponseTests: AsyncSpec {
                             flushStrategy: .none
                         )
                     }
+                    await expect {
+                        mockEventStore.journeyOwnershipFences["journey-1"]
+                    }.toEventually(equal(4))
+                    mockEventStore.resumeInsert(id: exitEventId)
 
                     guard case .ownershipLost = await capture.value else {
                         _ = try await response.value
@@ -924,9 +930,9 @@ final class TrackWithResponseTests: AsyncSpec {
                     expect(mockEventStore.journeyOwnershipFences["journey-1"])
                         == 4
                     expect(mockEventStore.storedEvents.map(\.id))
-                        .toNot(contain("journey-exited:suspended-stale-owner"))
+                        .toNot(contain(exitEventId))
                     expect(mockEventStore.pendingIds)
-                        .toNot(contain("journey-exited:suspended-stale-owner"))
+                        .toNot(contain(exitEventId))
                 }
 
                 it("applies beforeSend while preserving stable capture identity") {
