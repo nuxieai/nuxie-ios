@@ -63,6 +63,34 @@ private final class CancellationUncooperativeOperation: @unchecked Sendable {
     }
 }
 
+private final class BlockingProfileRequest: @unchecked Sendable {
+    let started = DispatchSemaphore(value: 0)
+    let finished = DispatchSemaphore(value: 0)
+
+    private let releaseGate = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var _isFinished = false
+
+    var isFinished: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isFinished
+    }
+
+    func blockUntilReleased() {
+        started.signal()
+        releaseGate.wait()
+        lock.lock()
+        _isFinished = true
+        lock.unlock()
+        finished.signal()
+    }
+
+    func release() {
+        releaseGate.signal()
+    }
+}
+
 private final class ChunkedProfileURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     private nonisolated(unsafe) static var controller: ChunkedProfileController?
@@ -551,10 +579,20 @@ final class NuxieApiTests: AsyncSpec {
                 }
 
                 it("enforces the custom timeout as an overall deadline") {
+                    let blockedRequest = BlockingProfileRequest()
+                    let watchdog = DispatchWorkItem { blockedRequest.release() }
+                    DispatchQueue.global().asyncAfter(
+                        deadline: .now() + 2,
+                        execute: watchdog
+                    )
+                    defer {
+                        watchdog.cancel()
+                        blockedRequest.release()
+                    }
                     StubURLProtocol.register(
                         matcher: RequestMatchers.post("/profile"),
                         handler: { request in
-                            Thread.sleep(forTimeInterval: 0.25)
+                            blockedRequest.blockUntilReleased()
                             let response = HTTPURLResponse(
                                 url: request.url!,
                                 statusCode: 200,
@@ -568,19 +606,28 @@ final class NuxieApiTests: AsyncSpec {
                             return (response, try ResponseBuilders.toJSON(profile))
                         }
                     )
-                    let startedAt = Date()
+                    let requestTask = Task {
+                        try await api.fetchProfileWithTimeout(
+                            for: distinctId,
+                            timeout: 0.5
+                        )
+                    }
+                    expect(blockedRequest.started.wait(timeout: .now() + 1))
+                        .to(equal(.success))
 
                     do {
-                        _ = try await api.fetchProfileWithTimeout(
-                            for: distinctId,
-                            timeout: 0.05
-                        )
+                        _ = try await requestTask.value
                         fail("Expected overall timeout")
                     } catch NuxieNetworkError.timeout {
-                        expect(Date().timeIntervalSince(startedAt)).to(beLessThan(0.2))
+                        expect(blockedRequest.isFinished).to(beFalse())
                     } catch {
                         fail("Expected NuxieNetworkError.timeout but got \(error)")
                     }
+
+                    blockedRequest.release()
+                    expect(blockedRequest.finished.wait(timeout: .now() + 1))
+                        .to(equal(.success))
+                    watchdog.cancel()
                 }
 
                 it("does not await a cancellation-uncooperative operation past the deadline") {
