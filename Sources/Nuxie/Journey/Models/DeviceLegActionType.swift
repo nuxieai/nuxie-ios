@@ -3,14 +3,7 @@ import Foundation
 /// The authenticated local-program operation vocabulary. Decoding the wire
 /// string once keeps validation, ownership, dispatch, and outcome correlation
 /// on the same closed set.
-enum DeviceLegActionType: String, Codable, CaseIterable, Sendable {
-    enum ExecutionOwner: Equatable, Sendable {
-        case control
-        case presentation
-        case device
-        case server
-    }
-
+enum DeviceLegActionType: String, Codable, Sendable {
     case condition
     case experiment
     case timeWindow = "time_window"
@@ -50,23 +43,14 @@ enum DeviceLegActionType: String, Codable, CaseIterable, Sendable {
         return rawValue
     }
 
-    var executionOwner: ExecutionOwner {
+    var isPresentationOwned: Bool {
         switch self {
-        case .condition, .experiment, .timeWindow, .delay, .waitUntil:
-            return .control
         case .navigate, .back, .purchase, .restore, .requestNotifications,
              .requestPermission, .requestTracking, .openLink, .dismiss:
-            return .presentation
-        case .sendEvent, .updateCustomer, .milestone, .submitResponse,
-             .appAction, .exit:
-            return .device
-        case .connectorAction, .grantEntitlement, .deviceAvailable:
-            return .server
+            return true
+        default:
+            return false
         }
-    }
-
-    var isPresentationOwned: Bool {
-        executionOwner == .presentation
     }
 
     var isCommerce: Bool {

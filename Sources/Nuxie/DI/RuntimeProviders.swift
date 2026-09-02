@@ -64,6 +64,35 @@ extension SystemEventSink {
         }
         return await captureOnly(request)
     }
+
+    /// Emits an ordinary commerce outcome or durably captures the stable
+    /// identity owned by a device Journey action. Both StoreKit entry points
+    /// use this seam so correlated outcomes cannot drift onto different retry
+    /// or routing behavior.
+    func emitOrCaptureCommerceOutcome(
+        _ name: String,
+        properties: UncheckedSendable<[String: Any]?>,
+        correlation: CommerceOutcomeCorrelation?,
+        uncorrelatedEmitter: (@MainActor @Sendable (
+            _ name: String,
+            _ properties: UncheckedSendable<[String: Any]?>
+        ) -> Void)? = nil
+    ) async -> Bool {
+        guard let correlation else {
+            if let uncorrelatedEmitter {
+                await uncorrelatedEmitter(name, properties)
+            } else {
+                emit(name, properties: properties.value)
+            }
+            return true
+        }
+        return await capture(.init(
+            name: name,
+            properties: properties.value,
+            eventId: correlation.eventId,
+            distinctId: correlation.distinctId
+        ))
+    }
 }
 
 final class DiscardingSystemEventSink: SystemEventSink, Sendable {
