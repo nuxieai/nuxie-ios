@@ -1746,6 +1746,46 @@ final class DeviceLegRunJournalTests: XCTestCase {
         await log.close()
     }
 
+    func testCommittedCompletionSurvivesReleasePinCleanupFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .oneTime, windowSeconds: nil),
+            entryStepId: "screen",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.complete(
+            run.id,
+            outcome: "closed",
+            at: date(200)
+        )
+
+        let customerDigest = DeviceLegStorageScope.testFixture.customerDigest(
+            distinctId: "customer"
+        )
+        let customerPins = directory
+            .appendingPathComponent("device-leg-journal-v1", isDirectory: true)
+            .appendingPathComponent("release-pins", isDirectory: true)
+            .appendingPathComponent(customerDigest, isDirectory: true)
+        try FileManager.default.removeItem(at: customerPins)
+        try Data("blocks-directory-enumeration".utf8).write(to: customerPins)
+
+        try await journal.markCompletionQueued(run)
+
+        let remainingRuns = try await journal.runs()
+        XCTAssertTrue(remainingRuns.isEmpty)
+        let checklist = try await journal.checkmark(experienceId: "experience")
+        XCTAssertEqual(checklist?.outcome, "closed")
+    }
+
     private func eventLog(directory: URL, store: SQLiteEventStore, api: MockNuxieApiForQueue, dropEvents: Bool = false) async throws -> EventLog {
         let log = EventLog(identity: MockIdentityService(), dateProvider: MockDateProvider(initialDate: date(1000)),
                            apiClient: api, store: store)

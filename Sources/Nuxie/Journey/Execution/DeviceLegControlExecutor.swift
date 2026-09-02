@@ -163,11 +163,11 @@ struct DeviceLegControlExecutor {
             let control = try decode(CompiledTimeWindow.self, action)
             guard let timezone = TimeWindowMath.resolveTimezone(control.timezone, current: currentDeviceTimezone,
                                                                  appDefault: appDefaultTimezone, bundle: timezones) else { return .invalid }
-            switch TimeWindowMath.evaluate(now: date(nowMillis), startTime: control.startTime, endTime: control.endTime,
+            switch TimeWindowMath.evaluate(now: DeviceLegTime.date(nowMillis), startTime: control.startTime, endTime: control.endTime,
                                            daysOfWeek: control.daysOfWeek, timezone: timezone) {
             case .inWindow: return advance(outlets, outlet: "inside", context: context)
             case .pause(let until):
-                guard let wake = milliseconds(until) else { return .invalid }
+                guard let wake = DeviceLegTime.milliseconds(until) else { return .invalid }
                 return .park(stepId: step.id, checkpoint: .init(anchorAtMillis: checkpoint?.anchorAtMillis ?? nowMillis,
                                                                 wakeAtMillis: wake))
             case .malformed, .unavailable: return .invalid
@@ -236,12 +236,6 @@ struct DeviceLegControlExecutor {
         try ExactJSONCodec.decode(type, from: ExactJSONCodec.encode(ExperienceReleaseJSONValue.object(.init(action))))
     }
 
-    private func date(_ milliseconds: Int64) -> Date { Date(timeIntervalSince1970: Double(milliseconds) / 1_000) }
-    private func milliseconds(_ date: Date) -> Int64? {
-        let value = date.timeIntervalSince1970 * 1_000
-        guard value.isFinite, value >= Double(Int64.min), value <= Double(Int64.max) else { return nil }
-        return Int64(value.rounded(.towardZero))
-    }
 }
 
 extension DeviceLegControlExecutor.Event: Codable, Equatable {}

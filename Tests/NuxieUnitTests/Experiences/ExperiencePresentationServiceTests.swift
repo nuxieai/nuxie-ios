@@ -1687,7 +1687,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     await gate.release()
 
                     let presentationResult = await presentation.value
-                    expect(presentationResult).to(equal(.failed))
+                    expect(presentationResult).to(equal(.declined))
                     expect(service.isExperiencePresented).to(beFalse())
                     expect(mockWindowProvider.createdWindows).to(beEmpty())
                 }

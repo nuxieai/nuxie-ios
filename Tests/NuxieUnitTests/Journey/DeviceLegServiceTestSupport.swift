@@ -1132,7 +1132,7 @@ enum DeviceLegCommitRevocation {
     case identity
 }
 
-actor InspectingDeviceLegDispatcher: DeviceLegDispatching {
+actor InspectingDeviceLegDispatcher {
     private let directory: URL
     private let distinctId: String
     private var requests: [DeviceLegDispatchRequest] = []
@@ -1166,7 +1166,9 @@ actor InspectingDeviceLegDispatcher: DeviceLegDispatching {
     func observedDurableClaim() -> Bool { durableClaim }
 }
 
-actor CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {
+extension InspectingDeviceLegDispatcher: DeviceLegDispatching {}
+
+actor CaptureOnlyDeviceLegEvents {
     private var routed: [NuxieEvent] = []
 
     func captureSystemEvent(
@@ -1244,7 +1246,9 @@ actor CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {
     }
 }
 
-actor SuspendedDeviceLegDispatcher: DeviceLegDispatching {
+extension CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {}
+
+actor SuspendedDeviceLegDispatcher {
     private let underlying: any DeviceLegDispatching
     private var entered = false
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
@@ -1278,6 +1282,8 @@ actor SuspendedDeviceLegDispatcher: DeviceLegDispatching {
         resumeContinuation = nil
     }
 }
+
+extension SuspendedDeviceLegDispatcher: DeviceLegDispatching {}
 
 actor DeviceLegEmissionBatchRecorder {
     private var batches: [ScreenEmissionBatch] = []

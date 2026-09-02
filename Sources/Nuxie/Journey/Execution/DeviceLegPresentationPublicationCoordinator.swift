@@ -101,7 +101,7 @@ actor DeviceLegPresentationPublicationCoordinator {
             }
             guard let occurredAt = DeviceLegPresentationEventProjector.date(
                 emission.occurredAt
-            ), Self.milliseconds(occurredAt) != nil else {
+            ), DeviceLegTime.milliseconds(occurredAt) != nil else {
                 return .rejected
             }
             let properties = DeviceLegPresentationEventProjector.values(
@@ -526,17 +526,12 @@ actor DeviceLegPresentationPublicationCoordinator {
         from park: DeviceLegRun.Park?
     ) -> DeviceLegControlExecutor.Checkpoint? {
         guard let wakeAt = park?.wakeAt,
-              let wakeMillis = milliseconds(wakeAt) else { return nil }
-        let anchor = park?.anchorAt.flatMap(milliseconds) ?? wakeMillis
+              let wakeMillis = DeviceLegTime.milliseconds(wakeAt) else {
+            return nil
+        }
+        let anchor = park?.anchorAt.flatMap(DeviceLegTime.milliseconds)
+            ?? wakeMillis
         return .init(anchorAtMillis: anchor, wakeAtMillis: wakeMillis)
-    }
-
-    private static func milliseconds(_ date: Date) -> Int64? {
-        let value = date.timeIntervalSince1970 * 1_000
-        guard value.isFinite,
-              value >= Double(Int64.min),
-              value <= Double(Int64.max) else { return nil }
-        return Int64(value.rounded(.towardZero))
     }
 }
 
@@ -657,7 +652,9 @@ enum DeviceLegPresentationEventProjector {
     static func controlEvent(
         _ event: NuxieEvent
     ) -> DeviceLegControlExecutor.Event? {
-        guard let occurredAt = milliseconds(event.timestamp) else { return nil }
+        guard let occurredAt = DeviceLegTime.milliseconds(event.timestamp) else {
+            return nil
+        }
         var properties = ExactJSONObject<ExperienceReleaseJSONValue>()
         for (key, value) in event.properties {
             guard let converted = jsonValue(value) else { continue }
@@ -719,11 +716,4 @@ enum DeviceLegPresentationEventProjector {
         return nil
     }
 
-    private static func milliseconds(_ date: Date) -> Int64? {
-        let value = date.timeIntervalSince1970 * 1_000
-        guard value.isFinite,
-              value >= Double(Int64.min),
-              value <= Double(Int64.max) else { return nil }
-        return Int64(value.rounded(.towardZero))
-    }
 }

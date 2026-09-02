@@ -463,8 +463,8 @@ struct DeviceLegRunJournal {
     ) async throws -> Bool {
         let expectedPark = expectedCheckpoint.map {
             DeviceLegRun.Park(
-                wakeAt: Self.date($0.wakeAtMillis),
-                anchorAt: Self.date($0.anchorAtMillis)
+                wakeAt: DeviceLegTime.date($0.wakeAtMillis),
+                anchorAt: DeviceLegTime.date($0.anchorAtMillis)
             )
         }
         let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
@@ -544,7 +544,10 @@ struct DeviceLegRunJournal {
                 run.pendingPresentationPublication = nil
             }
             run.park = checkpoint.map {
-                .init(wakeAt: Self.date($0.wakeAtMillis), anchorAt: Self.date($0.anchorAtMillis))
+                .init(
+                    wakeAt: DeviceLegTime.date($0.wakeAtMillis),
+                    anchorAt: DeviceLegTime.date($0.anchorAtMillis)
+                )
             }
             state.runs[id] = run
         }
@@ -592,8 +595,14 @@ struct DeviceLegRunJournal {
         }
     }
 
-    func park(_ id: String, stepId: String, until: Date?) async throws {
-        try await update { state in
+    @discardableResult
+    func park(
+        _ id: String,
+        stepId: String,
+        until: Date?,
+        admission: DeviceLegCommitAdmission? = nil
+    ) async throws -> Bool {
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
             guard var run = state.runs[id], run.startedQueued, run.completion == nil else {
                 throw DeviceLegJournalError.invalidState
             }
@@ -601,6 +610,11 @@ struct DeviceLegRunJournal {
             run.park = .init(wakeAt: until)
             state.runs[id] = run
         }
+        if let admission {
+            return try await updateIfCurrent(admission, mutation) != nil
+        }
+        try await update(mutation)
+        return true
     }
 
     /// Retains the first event that satisfies a parked rendered wait while the
@@ -614,8 +628,12 @@ struct DeviceLegRunJournal {
         event: DeviceLegControlExecutor.Event,
         admission: DeviceLegCommitAdmission
     ) async throws -> Bool {
-        let expectedWakeAt = Self.date(expectedCheckpoint.wakeAtMillis)
-        let expectedAnchorAt = Self.date(expectedCheckpoint.anchorAtMillis)
+        let expectedWakeAt = DeviceLegTime.date(
+            expectedCheckpoint.wakeAtMillis
+        )
+        let expectedAnchorAt = DeviceLegTime.date(
+            expectedCheckpoint.anchorAtMillis
+        )
         return try await updateIfCurrent(admission) { state in
             guard var run = state.runs[id],
                   run.startedQueued,
@@ -908,7 +926,18 @@ struct DeviceLegRunJournal {
             try beforePersist?()
             try Self.persist(state, to: file)
             if cleanupReleasePins {
-                try releasePins.removeUnreferenced(Self.pinReferences(state))
+                do {
+                    try releasePins.removeUnreferenced(
+                        Self.pinReferences(state)
+                    )
+                } catch {
+                    // The journal replacement is the terminal authority. Pin
+                    // pruning is reclaimable maintenance and cannot turn a
+                    // committed run deletion into a failed completion.
+                    LogWarning(
+                        "DeviceLegRunJournal: failed to prune retired release pins: \(error)"
+                    )
+                }
             }
             return value
         }
@@ -967,9 +996,6 @@ struct DeviceLegRunJournal {
         return state
     }
 
-    private static func date(_ milliseconds: Int64) -> Date {
-        Date(timeIntervalSince1970: Double(milliseconds) / 1_000)
-    }
 }
 
 extension DeviceLegRun: Codable, Sendable {

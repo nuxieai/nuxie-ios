@@ -672,6 +672,67 @@ final class DeviceLegPresentationAdmissionTests: DeviceLegTestCase {
         XCTAssertEqual(request?.screenId, "screen_welcome")
     }
 
+    func testBackgroundedPresentationAttemptKeepsItsAdmittedArmForForegroundRetry() async throws {
+        let context = try await makeRenderedDeviceLegTestContext()
+        defer { removeTemporaryDirectoryIfPresent(context.directory) }
+        let presentationGate = DeviceLegScreenCommitGate()
+        await MainActor.run {
+            context.presenter.presentHandler = { _ in
+                await presentationGate.suspend()
+                return .declined
+            }
+        }
+
+        let publication = Task {
+            await context.service.profileDidCommit(
+                context.snapshot,
+                distinctId: "customer"
+            )
+        }
+        await presentationGate.waitUntilEntered()
+        await context.service.onAppDidEnterBackground()
+        await presentationGate.release()
+        await publication.value
+
+        let backgroundRuns = try await context.journal.runs()
+        let backgroundRun = try XCTUnwrap(backgroundRuns.first)
+        XCTAssertEqual(backgroundRun.stepId, "present")
+        XCTAssertNotNil(backgroundRun.park)
+        XCTAssertNotNil(backgroundRun.effectReceipts["present"])
+        XCTAssertEqual(context.events.routedEvents.map(\.name), [
+            JourneyEvents.journeyLegStarted,
+        ])
+
+        await MainActor.run {
+            context.presenter.presentHandler = nil
+            context.presenter.result = .shown
+        }
+        await context.service.onAppWillEnterForeground()
+        await context.service.onAppBecameActive()
+        for _ in 0..<100 {
+            let attempts = await MainActor.run {
+                context.presenter.presentationRequests.count
+            }
+            if attempts == 2 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let foregroundRuns = try await context.journal.runs()
+        let foregroundRun = try XCTUnwrap(foregroundRuns.first)
+        XCTAssertNil(foregroundRun.park)
+        XCTAssertEqual(
+            foregroundRun.effectReceipts["present"],
+            backgroundRun.effectReceipts["present"]
+        )
+        let presentationRequests = await MainActor.run {
+            context.presenter.presentationRequests
+        }
+        XCTAssertEqual(presentationRequests.count, 2)
+        XCTAssertEqual(context.events.routedEvents.map(\.name), [
+            JourneyEvents.journeyLegStarted,
+        ])
+    }
+
     func testDeclinedEventArmWaitsForTheNextMatchingEventWithoutQueuing() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let eventEntry = DeviceLegEntryCondition(
