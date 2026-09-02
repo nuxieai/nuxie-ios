@@ -1126,14 +1126,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ensureDurableCarrier: true
                 )
             case .restored(let testStore):
-                captured = await eventSink.captureStableSystemEvent(
-                    SystemEventNames.restoreCompleted,
+                captured = await eventSink.captureStableSystemEvent(.init(
+                    name: SystemEventNames.restoreCompleted,
                     properties: [
                         "source": source.rawValue,
                         "test_store": testStore,
                     ],
                     eventId: eventId,
-                    distinctId: declaration.distinctId,
+                    distinctId: declaration.distinctId
+                ),
                     routeToJourneys: routeToJourneys,
                     ensureDurableCarrier: true
                 )
@@ -1568,11 +1569,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         routeToJourneys: Bool,
         ensureDurableCarrier: Bool = false
     ) async -> Bool {
-        await eventSink.captureStableSystemEvent(
-            SystemEventNames.purchaseCompleted,
+        await eventSink.captureStableSystemEvent(.init(
+            name: SystemEventNames.purchaseCompleted,
             properties: properties,
             eventId: eventId,
-            distinctId: distinctId,
+            distinctId: distinctId
+        ),
             routeToJourneys: routeToJourneys,
             ensureDurableCarrier: ensureDurableCarrier
         )
@@ -2068,12 +2070,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         context.release.identity.experienceVersionId
                     purchaseSyncedProperties["placement_id"] = context.placementId
                 }
-                let purchaseSynced = await eventSink.capture(
-                    SystemEventNames.purchaseSynced,
+                let purchaseSynced = await eventSink.capture(.init(
+                    name: SystemEventNames.purchaseSynced,
                     properties: purchaseSyncedProperties,
                     eventId: purchaseSyncedEventId(evidence: evidence),
                     distinctId: distinctId
-                )
+                ))
                 guard purchaseSynced else {
                     releasePurchaseUsageClaim(transactionId: evidence.transactionId)
                     throw NuxieNetworkError.invalidResponse

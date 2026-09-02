@@ -149,6 +149,9 @@ enum DeviceLegSchemaValidator {
               let type = DeviceLegActionType(rawValue: rawType) else {
             throw invalid
         }
+        guard !type.isPresentationOwned || !screens.isEmpty else {
+            throw invalid
+        }
         switch type {
         case .connectorAction, .grantEntitlement, .deviceAvailable:
             throw invalid

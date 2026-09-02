@@ -249,10 +249,12 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                 }
                 let activeEventId = "purchase-completed:active-checkout"
                 let activeCaptured = await sink.capture(
-                    "$purchase_completed",
-                    properties: ["transaction_id": "active-checkout"],
-                    eventId: activeEventId,
-                    distinctId: distinctId
+                    .init(
+                        name: "$purchase_completed",
+                        properties: ["transaction_id": "active-checkout"],
+                        eventId: activeEventId,
+                        distinctId: distinctId
+                    )
                 )
 
                 expect(activeCaptured) == true
@@ -260,10 +262,12 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
 
                 let coldEventId = "purchase-completed:cold-recovery"
                 let coldCaptured = await sink.captureOnly(
-                    "$purchase_completed",
-                    properties: ["transaction_id": "cold-recovery"],
-                    eventId: coldEventId,
-                    distinctId: distinctId
+                    .init(
+                        name: "$purchase_completed",
+                        properties: ["transaction_id": "cold-recovery"],
+                        eventId: coldEventId,
+                        distinctId: distinctId
+                    )
                 )
 
                 expect(coldCaptured) == true
@@ -281,10 +285,12 @@ final class PurchaseCompletionRecoveryIntegrationTests: AsyncSpec {
                     makeTrigger(relaunchedJourneys)
                 }
                 let recovered = await relaunchedSink.captureOnly(
-                    "$purchase_completed",
-                    properties: ["transaction_id": "active-checkout"],
-                    eventId: activeEventId,
-                    distinctId: distinctId
+                    .init(
+                        name: "$purchase_completed",
+                        properties: ["transaction_id": "active-checkout"],
+                        eventId: activeEventId,
+                        distinctId: distinctId
+                    )
                 )
 
                 expect(recovered) == true

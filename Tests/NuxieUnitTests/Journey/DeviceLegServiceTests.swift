@@ -3282,6 +3282,131 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(artifact.sceneBytes, sceneBytes)
     }
 
+    func testLiveRunRetainsRenderedArtifactsAcrossProfileReplacementAndRelaunch() async throws {
+        let root = temporaryDirectory()
+        let cacheDirectory = root.appendingPathComponent("cache")
+        let journalDirectory = root.appendingPathComponent("journal")
+        defer {
+            StubURLProtocol.reset()
+            removeTemporaryDirectoryIfPresent(root)
+        }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load(
+            entryKey: "renderedEntry"
+        )
+        let sceneBytes = Data("durably-pinned-device-leg-scene".utf8)
+        let snapshot = try replacingRenderedArtifact(
+            try await authenticatedRenderedSnapshot(fixture),
+            sceneBytes: sceneBytes
+        )
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[
+            arm.reference.descriptorSha256
+        ])
+        let requests = DeviceLegArtifactRequestCounter()
+        StubURLProtocol.register(matcher: { _ in true }) { request in
+            requests.increment()
+            return (
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Length": String(sceneBytes.count),
+                        "Content-Type": "application/vnd.rive",
+                    ]
+                )!,
+                sceneBytes
+            )
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let store = ExperienceReleaseAcquisitionStore(
+            cacheDirectory: cacheDirectory,
+            urlSession: URLSession(configuration: configuration),
+            authorizationKeys: [],
+            supportedRuntime: ExperienceReleaseRuntime.current,
+            admission: ExperienceReleaseAdmission(
+                store: InMemoryExperienceReleaseHighWaterStore()
+            )
+        )
+        let loader = ExperienceLoader(
+            productService: ProductService(),
+            releaseStore: store,
+            warmLoadsInitiallySuspended: true
+        )
+        var preparedProfile: PreparedExperienceReleaseProfile? =
+            try await loader.prepareReleaseProfile(
+                nil,
+                deviceLegSnapshot: snapshot
+            )
+        let artifactSource = try XCTUnwrap(
+            preparedProfile?.deviceLegArtifacts?.source(
+                for: release.descriptorSHA256
+            )
+        )
+        let originalPin = try XCTUnwrap(snapshot.profile.releases.first)
+        let releasePin = DeviceLegReleaseProfileEntry(
+            locator: originalPin.locator,
+            envelope: .init(
+                mediaType: originalPin.envelope.mediaType,
+                encoding: originalPin.envelope.encoding,
+                descriptorSha256: release.descriptorSHA256,
+                descriptorSizeBytes: release.exactDescriptorBytes.count,
+                descriptorBytesBase64:
+                    release.exactDescriptorBytes.base64EncodedString(),
+                signature: originalPin.envelope.signature
+            )
+        )
+        let journal = try DeviceLegRunJournal(
+            directory: journalDirectory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm,
+            release: releasePin,
+            artifactSource: artifactSource,
+            reentry: release.descriptor.leg.reentry,
+            entryStepId: release.descriptor.leg.entryStepId,
+            at: Date(timeIntervalSince1970: 1_000)
+        )
+        let run = try XCTUnwrap(admitted)
+        preparedProfile = nil
+        for object in artifactSource.objects {
+            let cached = cacheDirectory.appendingPathComponent(object.sha256)
+            if FileManager.default.fileExists(atPath: cached.path) {
+                try FileManager.default.removeItem(at: cached)
+            }
+        }
+
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: { _ in true }) { _ in
+            requests.increment()
+            throw URLError(.notConnectedToInternet)
+        }
+        let relaunched = try DeviceLegRunJournal(
+            directory: journalDirectory,
+            distinctId: "customer"
+        )
+        let retainedArtifacts = try await relaunched.pinnedArtifacts(
+            forRunId: run.id
+        )
+        let pinnedArtifacts = try XCTUnwrap(retainedArtifacts)
+        let preparedPresentation = try await store.preparePresentation(
+            release: release,
+            delivery: snapshot.profile.delivery,
+            pinnedArtifacts: pinnedArtifacts,
+            productResolver: { _ in [] }
+        )
+        let artifact = try await preparedPresentation.artifactLoader(
+            preparedPresentation.experience,
+            nil,
+            "screen_welcome"
+        )
+
+        XCTAssertEqual(requests.value, 1)
+        XCTAssertEqual(artifact.sceneBytes, sceneBytes)
+    }
+
     func testRenderedRouteNavigatesWithinTheOwnedSurfaceWithoutPresentingAgain() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
@@ -3674,7 +3799,7 @@ final class DeviceLegServiceTests: XCTestCase {
         }
     }
 
-    func testScreenlessRendererActionRetainsCursorWithoutPresentationOwnership() async throws {
+    func testScreenlessPresentationActionIsRejectedBeforeAdmission() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try DeviceLegPlaneProfileTestFixture.load(
@@ -3719,11 +3844,7 @@ final class DeviceLegServiceTests: XCTestCase {
             distinctId: "customer"
         )
         let runs = try await journal.runs()
-        let run = try XCTUnwrap(runs.first)
-        XCTAssertEqual(run.stepId, actionStep.id)
-        XCTAssertNotNil(run.park)
-        XCTAssertNotNil(run.effectReceipts[actionStep.id])
-        XCTAssertNil(run.completion)
+        XCTAssertTrue(runs.isEmpty)
         let presentationActions = await MainActor.run {
             presenter.presentationActions
         }
@@ -5287,7 +5408,7 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
-    func testHandledHostDismissalClearsThePriorEventContext() async throws {
+    func testHandledHostDismissalClearsContextBeforeUnsupportedContinuationAbandons() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -5365,12 +5486,15 @@ final class DeviceLegServiceTests: XCTestCase {
             request.onPresentationFinished()
         }
         for _ in 0..<100 {
-            if try await journal.runs().first?.park != nil { break }
+            if try await journal.runs().isEmpty { break }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         let continuedRuns = try await journal.runs()
-        let continuedRun = try XCTUnwrap(continuedRuns.first)
-        XCTAssertNotNil(continuedRun.park)
+        XCTAssertTrue(continuedRuns.isEmpty)
+        XCTAssertEqual(
+            events.routedEvents.last?.properties["outcome"] as? String,
+            "abandoned"
+        )
     }
 
     func testProfileClearShutsDownTheRenderedLegSurface() async throws {
@@ -6222,7 +6346,7 @@ final class DeviceLegServiceTests: XCTestCase {
         XCTAssertEqual(completion.properties["outcome"] as? String, "continue")
     }
 
-    func testFutureParkDefersAuthenticationAndThenReusesTheReleasePin() async throws {
+    func testUnsupportedInjectedEffectAbandonsInsteadOfCreatingResumePoint() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
@@ -6245,47 +6369,28 @@ final class DeviceLegServiceTests: XCTestCase {
             entryStepId: "future",
             steps: [unsupported, complete]
         )
-        let retained = try XCTUnwrap(snapshot.releasesByDigest.values.first)
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
         let events = MockEventLog()
         events.identity = identity
-        let authentications = PinnedReleaseAuthenticationRecorder()
         let service = makeService(
             identity: identity,
             events: events,
-            directory: directory,
-            pinnedReleaseAuthenticator: { _, _ in
-                await authentications.record()
-                return retained
-            }
+            directory: directory
         )
-        let replacement = removingDeliveredReleases(from: snapshot)
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        await service.profileDidCommit(replacement, distinctId: "customer")
-        let coldAuthenticationCount = await authentications.count()
-        XCTAssertEqual(coldAuthenticationCount, 0)
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
 
-        await service.handleEvent(NuxieEvent(
-            id: "00000000-0000-7000-8000-000000000301",
-            name: "unrelated",
-            distinctId: "customer",
-            properties: [:],
-            timestamp: Date(timeIntervalSince1970: 1_001)
-        ))
-        await service.profileDidCommit(replacement, distinctId: "customer")
-        await service.handleEvent(NuxieEvent(
-            id: "00000000-0000-7000-8000-000000000302",
-            name: "unrelated",
-            distinctId: "customer",
-            properties: [:],
-            timestamp: Date(timeIntervalSince1970: 1_002)
-        ))
-
-        let authenticationCount = await authentications.count()
-        XCTAssertEqual(authenticationCount, 1)
+        let remainingRuns = try await journal.runs()
+        XCTAssertTrue(remainingRuns.isEmpty)
+        let completion = try XCTUnwrap(events.routedEvents.last)
+        XCTAssertEqual(completion.name, JourneyEvents.journeyLegCompleted)
+        XCTAssertEqual(completion.properties["outcome"] as? String, "abandoned")
     }
 
     func testDueRunAbandonsWhenItsReleasePinCannotAuthenticateAfterProfileReplacement() async throws {
@@ -7308,33 +7413,27 @@ private actor CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {
     }
 
     func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> DurableTriggerCapture? {
         let capture = DurableTriggerCapture(event: NuxieEvent(
-            id: eventId,
-            name: event,
-            distinctId: distinctId,
-            properties: properties ?? [:]
+            id: request.eventId,
+            name: request.name,
+            distinctId: request.distinctId,
+            properties: request.properties ?? [:]
         ))
         routed.append(capture.event)
         return capture
     }
 
     func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String,
+        _ request: StableSystemEventCaptureRequest,
         admission: any StableEventCaptureCommitAdmission
     ) async -> DurableTriggerCapture? {
         let capture = DurableTriggerCapture(event: NuxieEvent(
-            id: eventId,
-            name: event,
-            distinctId: distinctId,
-            properties: properties ?? [:]
+            id: request.eventId,
+            name: request.name,
+            distinctId: request.distinctId,
+            properties: request.properties ?? [:]
         ))
         let admitted = admission.commitIfCurrent {
             routed.append(capture.event)
@@ -7352,10 +7451,10 @@ private actor CaptureOnlyDeviceLegEvents: RoutedStableSystemEventCapturing {
     ) async -> [String: DurableTriggerCapture]? {
         let events = items.map { item in
             NuxieEvent(
-                id: item.eventId,
-                name: item.name,
-                distinctId: item.distinctId,
-                properties: item.properties,
+                id: item.request.eventId,
+                name: item.request.name,
+                distinctId: item.request.distinctId,
+                properties: item.request.properties ?? [:],
                 timestamp: item.occurredAt
             )
         }

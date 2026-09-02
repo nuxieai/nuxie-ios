@@ -476,10 +476,12 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     func viewController(
         forDeviceLeg release: AuthenticatedDeviceLegRelease,
         delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?,
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
         _ = delivery
+        _ = pinnedArtifacts
         return try await viewController(
             for: release.descriptor.identity.experienceVersionId,
             runtimeDelegate: runtimeDelegate,

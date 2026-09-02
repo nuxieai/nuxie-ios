@@ -824,6 +824,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         if let committedDeviceSnapshot, let preparedDeviceProfile {
             await deviceLegRuntime?.profileDidCommit(
                 committedDeviceSnapshot,
+                artifacts: preparedReleaseProfile.deviceLegArtifacts,
                 authority: preparedDeviceProfile.authority,
                 distinctId: distinctId
             )

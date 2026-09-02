@@ -258,13 +258,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
 
     public func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> DurableTriggerCapture? {
         let captureHandler = lock.withLock { _routedCaptureHandler }
-        await captureHandler?(event, eventId)
+        await captureHandler?(request.name, request.eventId)
         let shouldFail = lock.withLock { () -> Bool in
             guard _routedCaptureFailuresRemaining > 0 else { return false }
             _routedCaptureFailuresRemaining -= 1
@@ -273,10 +270,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         guard !shouldFail else { return nil }
         let subscriberAdmissions = captureCommittedAdmissions()
         guard let capture = await captureSystemEvent(
-            event,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId
+            request.name,
+            properties: request.properties,
+            eventId: request.eventId,
+            distinctId: request.distinctId
         ) else { return nil }
         guard capture.routesLocally, capture.isNewlyCommitted else {
             return capture
@@ -289,14 +286,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
 
     public func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String,
+        _ request: StableSystemEventCaptureRequest,
         admission: any StableEventCaptureCommitAdmission
     ) async -> DurableTriggerCapture? {
         let captureHandler = lock.withLock { _routedCaptureHandler }
-        await captureHandler?(event, eventId)
+        await captureHandler?(request.name, request.eventId)
         let shouldFail = lock.withLock { () -> Bool in
             guard _routedCaptureFailuresRemaining > 0 else { return false }
             _routedCaptureFailuresRemaining -= 1
@@ -305,10 +299,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         guard !shouldFail else { return nil }
         let subscriberAdmissions = captureCommittedAdmissions()
         guard let capture = await captureSystemEvent(
-            event,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId,
+            request.name,
+            properties: request.properties,
+            eventId: request.eventId,
+            distinctId: request.distinctId,
             admission: admission
         ) else { return nil }
         guard capture.routesLocally, capture.isNewlyCommitted else {
@@ -322,15 +316,12 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
 
     public func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String,
+        _ request: StableSystemEventCaptureRequest,
         occurredAt: Date,
         admission: any StableEventCaptureCommitAdmission
     ) async -> DurableTriggerCapture? {
         let captureHandler = lock.withLock { _routedCaptureHandler }
-        await captureHandler?(event, eventId)
+        await captureHandler?(request.name, request.eventId)
         let shouldFail = lock.withLock { () -> Bool in
             guard _routedCaptureFailuresRemaining > 0 else { return false }
             _routedCaptureFailuresRemaining -= 1
@@ -339,10 +330,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         guard !shouldFail else { return nil }
         let subscriberAdmissions = captureCommittedAdmissions()
         guard let capture = await captureSystemEvent(
-            event,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId,
+            request.name,
+            properties: request.properties,
+            eventId: request.eventId,
+            distinctId: request.distinctId,
             occurredAt: occurredAt,
             admission: admission
         ) else { return nil }
@@ -360,17 +351,17 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         _ items: [RoutedStableSystemEventBatchItem],
         admission: any StableEventCaptureBatchCommitAdmission
     ) async -> [String: DurableTriggerCapture]? {
-        guard !items.contains(where: { $0.name.isEmpty }),
-              Set(items.map(\.eventId)).count == items.count else {
+        guard !items.contains(where: { $0.request.name.isEmpty }),
+              Set(items.map(\.request.eventId)).count == items.count else {
             return nil
         }
         guard !items.isEmpty else { return [:] }
         let subscriberAdmissions = captureCommittedAdmissions()
         var capturesByEventId = lock.withLock {
             Dictionary(uniqueKeysWithValues: items.compactMap { item in
-                _stableCaptures[item.eventId].map { existing in
+                _stableCaptures[item.request.eventId].map { existing in
                     (
-                        item.eventId,
+                        item.request.eventId,
                         DurableTriggerCapture(
                             event: existing.event,
                             routesLocally: existing.routesLocally,
@@ -381,7 +372,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             })
         }
         let pendingItems = items.filter {
-            capturesByEventId[$0.eventId] == nil
+            capturesByEventId[$0.request.eventId] == nil
         }
         guard !pendingItems.isEmpty else { return capturesByEventId }
         var candidates: [(
@@ -396,30 +387,32 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             switch item.preparation {
             case .prepared(let event):
                 original = NuxieEvent(
-                    id: item.eventId,
-                    name: item.name,
-                    distinctId: item.distinctId,
-                    properties: item.properties,
+                    id: item.request.eventId,
+                    name: item.request.name,
+                    distinctId: item.request.distinctId,
+                    properties: item.request.properties ?? [:],
                     timestamp: item.occurredAt
                 )
                 transformed = event
             case .unprepared:
-                let enriched = await prepareTriggerProperties(item.properties)
+                let enriched = await prepareTriggerProperties(
+                    item.request.properties
+                )
                 original = NuxieEvent(
-                    id: item.eventId,
-                    name: item.name,
-                    distinctId: item.distinctId,
+                    id: item.request.eventId,
+                    name: item.request.name,
+                    distinctId: item.request.distinctId,
                     properties: enriched,
                     timestamp: item.occurredAt
                 )
                 transformed = await applyBeforeSend(to: original).map {
                     var properties = $0.properties
-                    properties["$distinct_id"] = item.distinctId
+                    properties["$distinct_id"] = item.request.distinctId
                     return NuxieEvent(
-                        id: item.eventId,
+                        id: item.request.eventId,
                         name: $0.name,
                         forwardingName: original.forwardingName,
-                        distinctId: item.distinctId,
+                        distinctId: item.request.distinctId,
                         properties: properties,
                         timestamp: item.occurredAt
                     )
@@ -453,7 +446,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                                 ]
                             )
                         }
-                        if let existing = captures[candidate.item.eventId] {
+                        let request = candidate.item.request
+                        if let existing = captures[request.eventId] {
                             results.append((
                                 capture: DurableTriggerCapture(
                                     event: existing.event,
@@ -463,17 +457,17 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                                 isNew: false
                             ))
                         } else {
-                            captures[candidate.item.eventId] = candidate.capture
+                            captures[request.eventId] = candidate.capture
                             results.append((capture: candidate.capture, isNew: true))
                         }
                     }
                     _stableCaptures = captures
                     _trackForTriggerCalls.append(contentsOf: candidates.map {
                         (
-                            event: $0.item.name,
-                            properties: $0.item.properties,
+                            event: $0.item.request.name,
+                            properties: $0.item.request.properties,
                             persistToHistory: true,
-                            distinctIdOverride: $0.item.distinctId
+                            distinctIdOverride: $0.item.request.distinctId
                         )
                     })
                     committedCaptures = results
@@ -499,7 +493,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             )
         }
         for (candidate, committed) in zip(candidates, committedCaptures) {
-            capturesByEventId[candidate.item.eventId] = committed.capture
+            capturesByEventId[candidate.item.request.eventId] = committed.capture
         }
         return capturesByEventId
     }

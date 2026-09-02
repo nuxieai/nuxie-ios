@@ -1179,6 +1179,15 @@ actor SQLiteEventStore: EventStoreProtocol {
     )
   }
 
+  /// Commits an indivisible batch of stable event outcomes.
+  ///
+  /// - Parameters:
+  ///   - records: Stable event records to deduplicate and commit together.
+  ///   - assigningCommitSequence: Whether newly stored events receive a
+  ///     contiguous commit sequence in this transaction.
+  ///   - admission: Optional authority checked around the final synchronous
+  ///     database mutation.
+  /// - Returns: One terminal commit result for every input record, in order.
   public func commitStableCaptureBatch(
     _ records: [StableEventCaptureRecord],
     assigningCommitSequence: Bool,

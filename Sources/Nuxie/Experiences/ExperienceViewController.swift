@@ -2474,12 +2474,12 @@ extension ExperienceViewController {
             return
         }
         let properties = UncheckedSendable(properties)
-        guard await systemEventSink.capture(
-            name,
+        guard await systemEventSink.capture(.init(
+            name: name,
             properties: properties.value.isEmpty ? nil : properties.value,
             eventId: correlation.eventId,
             distinctId: correlation.distinctId
-        ) else {
+        )) else {
             LogError(
                 "ExperienceViewController: correlated commerce outcome has no capture retry owner"
             )

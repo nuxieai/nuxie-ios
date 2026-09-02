@@ -3,6 +3,7 @@ import Foundation
 protocol DeviceLegProfileConsuming: AnyObject, Sendable {
     func profileDidCommit(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        artifacts: PreparedDeviceLegArtifacts?,
         authority: ProfileDeliveryAuthority,
         distinctId: String
     ) async
@@ -33,7 +34,7 @@ extension DeviceLegServiceProtocol {
 /// profile catalog authenticates immutable programs; this actor evaluates
 /// arms, journals every transition, and reports terminal boundaries through
 /// EventLog's existing durable event queue.
-actor DeviceLegService: DeviceLegServiceProtocol {
+actor DeviceLegService {
     typealias FeatureAccessLookup = @Sendable (String) async -> FeatureAccess?
     typealias PinnedReleaseAuthenticator = @Sendable (
         DeviceLegReleaseProfileEntry,
@@ -43,6 +44,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     private struct ProfileState: Sendable {
         let distinctId: String
         let snapshot: DeviceLegProfileCatalog.Snapshot
+        let artifacts: PreparedDeviceLegArtifacts?
         let generation: UInt64
     }
 
@@ -228,6 +230,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
 
     func profileDidCommit(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        artifacts: PreparedDeviceLegArtifacts?,
         authority: ProfileDeliveryAuthority,
         distinctId: String
     ) async {
@@ -240,7 +243,11 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             }
             storageScope = authenticatedScope
         }
-        await commitProfile(snapshot, distinctId: distinctId)
+        await commitProfile(
+            snapshot,
+            artifacts: artifacts,
+            distinctId: distinctId
+        )
     }
 
     /// Direct runtime tests use an injected fixed namespace and do not model
@@ -249,11 +256,12 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         distinctId: String
     ) async {
-        await commitProfile(snapshot, distinctId: distinctId)
+        await commitProfile(snapshot, artifacts: nil, distinctId: distinctId)
     }
 
     private func commitProfile(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        artifacts: PreparedDeviceLegArtifacts?,
         distinctId: String
     ) async {
         guard identity.getDistinctId() == distinctId else { return }
@@ -261,6 +269,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         profileState = ProfileState(
             distinctId: distinctId,
             snapshot: snapshot,
+            artifacts: artifacts,
             generation: generation
         )
         retainReceipts(for: snapshot)
@@ -765,6 +774,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 guard let run = try await journal.admit(
                     arm: admittedArm,
                     release: releasePin,
+                    artifactSource: state.artifacts?.source(
+                        for: release.descriptorSHA256
+                    ),
                     reentry: release.descriptor.leg.reentry,
                     entryStepId: release.descriptor.leg.entryStepId,
                     at: dateProvider.now(),
@@ -1238,7 +1250,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 return true
             }
             for item in ordinaryItems {
-                guard let capture = published.captures[item.eventId],
+                guard let capture = published.captures[
+                    item.request.eventId
+                ],
                       capture.routesLocally,
                       let candidate = presentationRoute(
                         in: leg,
@@ -1416,10 +1430,12 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             executionFenceToken: executionFenceToken
         )
         _ = await events.captureAndRouteSystemEvent(
-            eventName,
-            properties: scopedPropertiesBox.value,
-            eventId: UUID.v7().uuidString,
-            distinctId: journal.distinctId,
+            .init(
+                name: eventName,
+                properties: scopedPropertiesBox.value,
+                eventId: UUID.v7().uuidString,
+                distinctId: journal.distinctId
+            ),
             admission: admission
         )
     }
@@ -2196,11 +2212,31 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                         )
                     }
                     presentationReservation = nil
+                    let pinnedArtifacts: DeviceLegPinnedReleaseArtifacts
+                    do {
+                        guard let retained = try await journal.pinnedArtifacts(
+                            forRunId: run.id
+                        ) else {
+                            throw DeviceLegJournalError.invalidState
+                        }
+                        pinnedArtifacts = retained
+                    } catch {
+                        await finish(
+                            run,
+                            outcome: "abandoned",
+                            leg: leg,
+                            journal: journal,
+                            dismissPresentation: dismissPresentationOnCompletion,
+                            executionFenceToken: executionFenceToken
+                        )
+                        return
+                    }
                     let presentedRun = run
                     let presentationIdentityFenceToken = identityFence.token
                     let result = await presenter.presentDeviceLeg(.init(
                         release: release,
                         delivery: state.snapshot.profile.delivery,
+                        pinnedArtifacts: pinnedArtifacts,
                         screenId: screenId,
                         owner: .init(
                             journeyId: run.journeyId,
@@ -2504,15 +2540,14 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     return
 
                 case .unsupported:
-                    do {
-                        try await journal.park(
-                            run.id,
-                            stepId: stepId,
-                            until: nil
-                        )
-                    } catch {
-                        LogWarning("DeviceLegService: failed to retain effect cursor: \(error)")
-                    }
+                    await finish(
+                        run,
+                        outcome: "abandoned",
+                        leg: leg,
+                        journal: journal,
+                        dismissPresentation: dismissPresentationOnCompletion,
+                        executionFenceToken: executionFenceToken
+                    )
                     return
 
                 case .failed:
@@ -2871,6 +2906,8 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         return Int64(value.rounded(.towardZero))
     }
 }
+
+extension DeviceLegService: DeviceLegServiceProtocol {}
 
 private struct ClosureFeatureQueries: IRFeatureQueries {
     let access: DeviceLegService.FeatureAccessLookup

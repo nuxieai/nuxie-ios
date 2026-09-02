@@ -307,17 +307,21 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 }
                 let batch = [
                     RoutedStableSystemEventBatchItem(
-                        name: "renderer-first",
-                        properties: [:],
-                        eventId: "orchestration-renderer:first",
-                        distinctId: "customer-a",
+                        request: .init(
+                            name: "renderer-first",
+                            properties: [:],
+                            eventId: "orchestration-renderer:first",
+                            distinctId: "customer-a"
+                        ),
                         occurredAt: Date(timeIntervalSince1970: 1_000)
                     ),
                     RoutedStableSystemEventBatchItem(
-                        name: "renderer-second",
-                        properties: [:],
-                        eventId: "orchestration-renderer:second",
-                        distinctId: "customer-a",
+                        request: .init(
+                            name: "renderer-second",
+                            properties: [:],
+                            eventId: "orchestration-renderer:second",
+                            distinctId: "customer-a"
+                        ),
                         occurredAt: Date(timeIntervalSince1970: 1_001)
                     ),
                 ]

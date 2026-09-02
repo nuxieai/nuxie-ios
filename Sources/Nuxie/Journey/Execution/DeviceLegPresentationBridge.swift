@@ -52,6 +52,7 @@ extension ScreenEmissionValue {
 struct DeviceLegPresentationRequest: Sendable {
     let release: AuthenticatedDeviceLegRelease
     let delivery: ExperienceReleaseDelivery
+    let pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?
     let screenId: String
     let owner: DeviceLegPresentationOwner
     let reservation: (any DeviceLegPresentationReservation)?
@@ -79,6 +80,7 @@ struct DeviceLegPresentationRequest: Sendable {
     init(
         release: AuthenticatedDeviceLegRelease,
         delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts? = nil,
         screenId: String,
         owner: DeviceLegPresentationOwner,
         reservation: (any DeviceLegPresentationReservation)?,
@@ -109,6 +111,7 @@ struct DeviceLegPresentationRequest: Sendable {
     ) {
         self.release = release
         self.delivery = delivery
+        self.pinnedArtifacts = pinnedArtifacts
         self.screenId = screenId
         self.owner = owner
         self.reservation = reservation

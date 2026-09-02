@@ -158,16 +158,11 @@ private final class RecordingPresentationSystemEventSink:
     }
 
     func capture(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        _ = properties
-        _ = distinctId
         lock.withLock {
-            capturedNames.append(name)
-            capturedEventIds.append(eventId)
+            capturedNames.append(request.name)
+            capturedEventIds.append(request.eventId)
         }
         return true
     }

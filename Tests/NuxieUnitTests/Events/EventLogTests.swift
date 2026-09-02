@@ -92,10 +92,12 @@ final class EventLogTests: AsyncSpec {
 
                     let stableTask = Task {
                         await log.captureAndRouteSystemEvent(
-                            JourneyEvents.journeyLegStarted,
-                            properties: nil,
-                            eventId: "stable-after-ordinary",
-                            distinctId: "customer-a"
+                            .init(
+                                name: JourneyEvents.journeyLegStarted,
+                                properties: nil,
+                                eventId: "stable-after-ordinary",
+                                distinctId: "customer-a"
+                            )
                         )
                     }
                     for _ in 0..<10 { await Task.yield() }
@@ -130,10 +132,12 @@ final class EventLogTests: AsyncSpec {
                         await received.append(event.name)
                         guard event.name == "outer" else { return }
                         let committed = await sink.capture(
-                            "nested",
-                            properties: nil,
-                            eventId: "nested-from-committed-subscriber",
-                            distinctId: event.distinctId
+                            .init(
+                                name: "nested",
+                                properties: nil,
+                                eventId: "nested-from-committed-subscriber",
+                                distinctId: event.distinctId
+                            )
                         )
                         expect(committed).to(beTrue())
                     }
@@ -290,10 +294,12 @@ final class EventLogTests: AsyncSpec {
                     defer { mockStore.resumeStableCaptureAfterCommit(id: stableId) }
                     let stableTask = Task {
                         await log.captureAndRouteSystemEvent(
-                            JourneyEvents.journeyLegStarted,
-                            properties: nil,
-                            eventId: stableId,
-                            distinctId: "customer-a"
+                            .init(
+                                name: JourneyEvents.journeyLegStarted,
+                                properties: nil,
+                                eventId: stableId,
+                                distinctId: "customer-a"
+                            )
                         )
                     }
                     await expect {
@@ -346,17 +352,21 @@ final class EventLogTests: AsyncSpec {
                     try await log.configure(configuration: testConfig)
                     let batch = [
                         RoutedStableSystemEventBatchItem(
-                            name: "first",
-                            properties: [:],
-                            eventId: "stable-batch:first",
-                            distinctId: "customer-a",
+                            request: .init(
+                                name: "first",
+                                properties: [:],
+                                eventId: "stable-batch:first",
+                                distinctId: "customer-a"
+                            ),
                             occurredAt: Date(timeIntervalSince1970: 1_000)
                         ),
                         RoutedStableSystemEventBatchItem(
-                            name: "second",
-                            properties: [:],
-                            eventId: "stable-batch:second",
-                            distinctId: "customer-a",
+                            request: .init(
+                                name: "second",
+                                properties: [:],
+                                eventId: "stable-batch:second",
+                                distinctId: "customer-a"
+                            ),
                             occurredAt: Date(timeIntervalSince1970: 1_001)
                         ),
                     ]

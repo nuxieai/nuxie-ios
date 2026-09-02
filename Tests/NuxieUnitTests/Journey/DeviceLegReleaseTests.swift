@@ -120,6 +120,34 @@ final class DeviceLegReleaseTests: XCTestCase {
         XCTAssertThrowsError(try DeviceLegSchemaValidator.validate(root))
     }
 
+    func testRejectsPresentationActionInScreenlessLeg() throws {
+        let fixture = try golden()
+        let bytes = try XCTUnwrap(
+            Data(base64Encoded: fixture.envelope.descriptorBytesBase64)
+        )
+        var root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+        )
+        var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+        leg["entryStepId"] = "dismiss"
+        leg["steps"] = [
+            [
+                "kind": "action",
+                "id": "dismiss",
+                "action": ["type": "dismiss"],
+                "outlets": ["next": "report"],
+            ],
+            [
+                "kind": "complete",
+                "id": "report",
+                "outcome": "continue",
+            ],
+        ]
+        root["leg"] = leg
+
+        XCTAssertThrowsError(try DeviceLegSchemaValidator.validate(root))
+    }
+
     func testValidatesWaitPayloadSchemaBeforeAdmission() throws {
         let fixture = try golden()
         let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))

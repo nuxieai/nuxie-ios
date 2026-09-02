@@ -158,10 +158,12 @@ final class TriggerServiceTests: AsyncSpec {
                 )
 
                 let captured = await sink.captureStableSystemEvent(
-                    SystemEventNames.purchaseCompleted,
-                    properties: ["transaction_id": "transaction-committed"],
-                    eventId: "purchase-completed:committed-subscriber",
-                    distinctId: "customer-a",
+                    .init(
+                        name: SystemEventNames.purchaseCompleted,
+                        properties: ["transaction_id": "transaction-committed"],
+                        eventId: "purchase-completed:committed-subscriber",
+                        distinctId: "customer-a"
+                    ),
                     routeToJourneys: true,
                     ensureDurableCarrier: true
                 )
@@ -189,16 +191,20 @@ final class TriggerServiceTests: AsyncSpec {
                 let eventId = "purchase-failed:queued-capture"
 
                 let accepted = await sink.capture(
-                    SystemEventNames.purchaseFailed,
-                    properties: ["reason": "store_unavailable"],
-                    eventId: eventId,
-                    distinctId: "customer-a"
+                    .init(
+                        name: SystemEventNames.purchaseFailed,
+                        properties: ["reason": "store_unavailable"],
+                        eventId: eventId,
+                        distinctId: "customer-a"
+                    )
                 )
                 let duplicateWhilePending = await sink.capture(
-                    SystemEventNames.purchaseFailed,
-                    properties: ["reason": "store_unavailable"],
-                    eventId: eventId,
-                    distinctId: "customer-a"
+                    .init(
+                        name: SystemEventNames.purchaseFailed,
+                        properties: ["reason": "store_unavailable"],
+                        eventId: eventId,
+                        distinctId: "customer-a"
+                    )
                 )
 
                 expect(accepted).to(beFalse())
@@ -232,16 +238,20 @@ final class TriggerServiceTests: AsyncSpec {
                 )
 
                 let firstAccepted = await sink.capture(
-                    SystemEventNames.purchaseFailed,
-                    properties: ["reason": "first"],
-                    eventId: firstId,
-                    distinctId: "customer-a"
+                    .init(
+                        name: SystemEventNames.purchaseFailed,
+                        properties: ["reason": "first"],
+                        eventId: firstId,
+                        distinctId: "customer-a"
+                    )
                 )
                 let secondAccepted = await sink.capture(
-                    SystemEventNames.purchaseFailed,
-                    properties: ["reason": "second"],
-                    eventId: secondId,
-                    distinctId: "customer-a"
+                    .init(
+                        name: SystemEventNames.purchaseFailed,
+                        properties: ["reason": "second"],
+                        eventId: secondId,
+                        distinctId: "customer-a"
+                    )
                 )
 
                 expect(firstAccepted).to(beFalse())

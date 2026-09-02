@@ -199,25 +199,16 @@ enum RoutedStableSystemEventPreparation: Sendable {
 /// The payload is immutable after construction but Foundation JSON values do
 /// not conform to `Sendable`.
 struct RoutedStableSystemEventBatchItem: @unchecked Sendable {
-  let name: String
-  let properties: [String: Any]
-  let eventId: String
-  let distinctId: String
+  let request: StableSystemEventCaptureRequest
   let occurredAt: Date
   let preparation: RoutedStableSystemEventPreparation
 
   init(
-    name: String,
-    properties: [String: Any],
-    eventId: String,
-    distinctId: String,
+    request: StableSystemEventCaptureRequest,
     occurredAt: Date,
     preparation: RoutedStableSystemEventPreparation = .unprepared
   ) {
-    self.name = name
-    self.properties = properties
-    self.eventId = eventId
-    self.distinctId = distinctId
+    self.request = request
     self.occurredAt = occurredAt
     self.preparation = preparation
   }
@@ -1507,10 +1498,12 @@ actor EventLog: EventLogProtocol {
     distinctId: String
   ) async -> DurableTriggerCapture? {
     switch await captureStableSystemEvent(
-      event,
-      properties: properties,
-      eventId: eventId,
-      distinctId: distinctId,
+      .init(
+        name: event,
+        properties: properties,
+        eventId: eventId,
+        distinctId: distinctId
+      ),
       ownership: nil,
       routeToSubscribers: false
     ) {
@@ -1529,10 +1522,12 @@ actor EventLog: EventLogProtocol {
     ownership: JourneyEventOwnership
   ) async -> DurableOwnedTriggerCaptureResult {
     await captureStableSystemEvent(
-      event,
-      properties: properties,
-      eventId: eventId,
-      distinctId: distinctId,
+      .init(
+        name: event,
+        properties: properties,
+        eventId: eventId,
+        distinctId: distinctId
+      ),
       ownership: ownership,
       routeToSubscribers: false
     )
@@ -1571,10 +1566,7 @@ actor EventLog: EventLogProtocol {
   }
 
   private func prepareStableSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
+    _ request: StableSystemEventCaptureRequest,
     occurredAt: Date,
     preparation: RoutedStableSystemEventPreparation = .unprepared,
     preservesJourneyLegOutputs: Bool = false
@@ -1587,21 +1579,21 @@ actor EventLog: EventLogProtocol {
     // Preserve their exact values through generic sanitization; the host's
     // beforeSend privacy hook still runs below.
     let legOutputs = preservesJourneyLegOutputs
-      ? try properties?["outputs"].map {
+      ? try request.properties?["outputs"].map {
         try JSONSerialization.data(withJSONObject: $0)
       }
       : nil
-    var scopedProperties = await buildTriggerProperties(properties)
+    var scopedProperties = await buildTriggerProperties(request.properties)
     if let legOutputs {
       scopedProperties["outputs"] = try JSONSerialization.jsonObject(
         with: legOutputs
       )
     }
-    scopedProperties["$distinct_id"] = distinctId
+    scopedProperties["$distinct_id"] = request.distinctId
     let originalEvent = NuxieEvent(
-      id: eventId,
-      name: event,
-      distinctId: distinctId,
+      id: request.eventId,
+      name: request.name,
+      distinctId: request.distinctId,
       properties: scopedProperties,
       timestamp: occurredAt
     )
@@ -1612,12 +1604,12 @@ actor EventLog: EventLogProtocol {
       // Stable capture owns identity and idempotency. Hosts may redact
       // properties or rename the event without changing either authority.
       var transformedProperties = transformed.properties
-      transformedProperties["$distinct_id"] = distinctId
+      transformedProperties["$distinct_id"] = request.distinctId
       return NuxieEvent(
-        id: eventId,
+        id: request.eventId,
         name: transformed.name,
         forwardingName: originalEvent.forwardingName,
-        distinctId: distinctId,
+        distinctId: request.distinctId,
         properties: transformedProperties,
         timestamp: occurredAt
       )
@@ -1656,16 +1648,13 @@ actor EventLog: EventLogProtocol {
   }
 
   private func captureStableSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
+    _ request: StableSystemEventCaptureRequest,
     ownership: JourneyEventOwnership?,
     routeToSubscribers: Bool,
     occurredAt: Date? = nil,
     admission: (any StableEventCaptureCommitAdmission)? = nil
   ) async -> DurableOwnedTriggerCaptureResult {
-    guard !event.isEmpty else { return .failed }
+    guard !request.name.isEmpty else { return .failed }
     guard !closeFlag.isClosed else { return .failed }
     let subscriberAdmissions = routeToSubscribers
       ? committedAdmissionRegistry.capture()
@@ -1697,12 +1686,12 @@ actor EventLog: EventLogProtocol {
       // Stable identity is policy-terminal. Replays return the canonical
       // captured/drop outcome before enrichment or invoking a changed hook,
       // but only while this epoch is still owned.
-      if let existing = try await store.queryStableCapture(id: eventId) {
+      if let existing = try await store.queryStableCapture(
+        id: request.eventId
+      ) {
         guard let capture = durableCapture(
           from: existing,
-          fallbackEvent: event,
-          eventId: eventId,
-          distinctId: distinctId
+          request: request
         ) else { return .ownershipLost }
         return .captured(capture)
       }
@@ -1722,13 +1711,10 @@ actor EventLog: EventLogProtocol {
       }
 
       let transformedEvent = try await prepareStableSystemEvent(
-        event,
-        properties: properties,
-        eventId: eventId,
-        distinctId: distinctId,
+        request,
         occurredAt: occurredAt ?? attemptedTimestamp,
         preservesJourneyLegOutputs:
-          event == JourneyEvents.journeyLegCompleted
+          request.name == JourneyEvents.journeyLegCompleted
       )
       guard !closeFlag.isClosed else { return .failed }
       if let ownership,
@@ -1737,7 +1723,7 @@ actor EventLog: EventLogProtocol {
       }
       let forwardingAdmission = forwardingAdmission(receivedAt: attemptedTimestamp)
       let commit = try await store.commitStableCapture(
-        eventId: eventId,
+        eventId: request.eventId,
         event: transformedEvent.map(makeStoredEvent(from:)),
         recordedAt: attemptedTimestamp,
         ownership: ownership,
@@ -1752,13 +1738,11 @@ actor EventLog: EventLogProtocol {
         ))
       }
       if transformedEvent == nil {
-        LogDebug("Event '\(event)' terminally dropped by beforeSend hook")
+        LogDebug("Event '\(request.name)' terminally dropped by beforeSend hook")
       }
       guard let capture = durableCapture(
         from: commit.outcome,
-        fallbackEvent: event,
-        eventId: eventId,
-        distinctId: distinctId
+        request: request
       ) else {
         publishStableCapture(
           nil,
@@ -1800,16 +1784,14 @@ actor EventLog: EventLogProtocol {
 
   private func durableCapture(
     from outcome: StableEventCaptureOutcome,
-    fallbackEvent: String,
-    eventId: String,
-    distinctId: String
+    request: StableSystemEventCaptureRequest
   ) -> DurableTriggerCapture? {
     switch outcome {
     case .captured(let storedEvent, let isNew):
       return DurableTriggerCapture(event: NuxieEvent(
         id: storedEvent.id,
         name: storedEvent.name,
-        forwardingName: fallbackEvent,
+        forwardingName: request.name,
         distinctId: storedEvent.distinctId,
         properties: storedEvent.getPropertiesDict(),
         timestamp: storedEvent.timestamp
@@ -1817,9 +1799,9 @@ actor EventLog: EventLogProtocol {
     case .dropped:
       return DurableTriggerCapture(
         event: NuxieEvent(
-          id: eventId,
-          name: fallbackEvent,
-          distinctId: distinctId
+          id: request.eventId,
+          name: request.name,
+          distinctId: request.distinctId
         ),
         routesLocally: false
       )
@@ -4135,23 +4117,14 @@ protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
   @discardableResult
   func drainCommittedRouting() async -> Bool
   func captureAndRouteSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String
+    _ request: StableSystemEventCaptureRequest
   ) async -> DurableTriggerCapture?
   func captureAndRouteSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
+    _ request: StableSystemEventCaptureRequest,
     admission: any StableEventCaptureCommitAdmission
   ) async -> DurableTriggerCapture?
   func captureAndRouteSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
+    _ request: StableSystemEventCaptureRequest,
     occurredAt: Date,
     admission: any StableEventCaptureCommitAdmission
   ) async -> DurableTriggerCapture?
@@ -4166,19 +4139,13 @@ extension RoutedStableSystemEventCapturing {
   func drainCommittedRouting() async -> Bool { true }
 
   func captureAndRouteSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
+    _ request: StableSystemEventCaptureRequest,
     occurredAt: Date,
     admission: any StableEventCaptureCommitAdmission
   ) async -> DurableTriggerCapture? {
     _ = occurredAt
     return await captureAndRouteSystemEvent(
-      event,
-      properties: properties,
-      eventId: eventId,
-      distinctId: distinctId,
+      request,
       admission: admission
     )
   }
@@ -4197,16 +4164,10 @@ extension EventLog {
   }
 
   func captureAndRouteSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String
+    _ request: StableSystemEventCaptureRequest
   ) async -> DurableTriggerCapture? {
     switch await captureStableSystemEvent(
-      event,
-      properties: properties,
-      eventId: eventId,
-      distinctId: distinctId,
+      request,
       ownership: nil,
       routeToSubscribers: true
     ) {
@@ -4218,17 +4179,11 @@ extension EventLog {
   }
 
   func captureAndRouteSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
+    _ request: StableSystemEventCaptureRequest,
     admission: any StableEventCaptureCommitAdmission
   ) async -> DurableTriggerCapture? {
     switch await captureStableSystemEvent(
-      event,
-      properties: properties,
-      eventId: eventId,
-      distinctId: distinctId,
+      request,
       ownership: nil,
       routeToSubscribers: true,
       admission: admission
@@ -4241,18 +4196,12 @@ extension EventLog {
   }
 
   func captureAndRouteSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
+    _ request: StableSystemEventCaptureRequest,
     occurredAt: Date,
     admission: any StableEventCaptureCommitAdmission
   ) async -> DurableTriggerCapture? {
     switch await captureStableSystemEvent(
-      event,
-      properties: properties,
-      eventId: eventId,
-      distinctId: distinctId,
+      request,
       ownership: nil,
       routeToSubscribers: true,
       occurredAt: occurredAt,
@@ -4269,8 +4218,8 @@ extension EventLog {
     _ items: [RoutedStableSystemEventBatchItem],
     admission: any StableEventCaptureBatchCommitAdmission
   ) async -> [String: DurableTriggerCapture]? {
-    guard !items.contains(where: { $0.name.isEmpty }),
-          Set(items.map(\.eventId)).count == items.count else {
+    guard !items.contains(where: { $0.request.name.isEmpty }),
+          Set(items.map(\.request.eventId)).count == items.count else {
       return nil
     }
     guard !items.isEmpty else { return [:] }
@@ -4299,24 +4248,20 @@ extension EventLog {
       pending.reserveCapacity(items.count)
 
       for item in items {
-        if let existing = try await store.queryStableCapture(id: item.eventId) {
+        let request = item.request
+        if let existing = try await store.queryStableCapture(id: request.eventId) {
           guard let capture = durableCapture(
             from: existing,
-            fallbackEvent: item.name,
-            eventId: item.eventId,
-            distinctId: item.distinctId
+            request: request
           ) else {
             return nil
           }
-          capturesByEventId[item.eventId] = capture
+          capturesByEventId[request.eventId] = capture
           continue
         }
 
         let transformedEvent = try await prepareStableSystemEvent(
-          item.name,
-          properties: item.properties,
-          eventId: item.eventId,
-          distinctId: item.distinctId,
+          request,
           occurredAt: item.occurredAt,
           preparation: item.preparation
         )
@@ -4331,7 +4276,7 @@ extension EventLog {
       let commits = try await store.commitStableCaptureBatch(
         pending.map { value in
           StableEventCaptureRecord(
-            eventId: value.item.eventId,
+            eventId: value.item.request.eventId,
             event: value.transformed.map { makeStoredEvent(from: $0) },
             recordedAt: attemptedTimestamp,
             ownership: nil
@@ -4352,14 +4297,12 @@ extension EventLog {
       for (value, commit) in zip(pending, commits) {
         guard let capture = durableCapture(
           from: commit.outcome,
-          fallbackEvent: value.item.name,
-          eventId: value.item.eventId,
-          distinctId: value.item.distinctId
+          request: value.item.request
         ) else {
           return nil
         }
         captures.append(capture)
-        capturesByEventId[value.item.eventId] = capture
+        capturesByEventId[value.item.request.eventId] = capture
       }
       guard commits.allSatisfy({ $0.commitSequence != nil }) else {
         LogError("EventLog: stable capture batch omitted commit metadata")

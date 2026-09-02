@@ -95,7 +95,9 @@ build step; runtime source and XCFramework production live in `nuxie-runtime`.
 - Group related functionality into appropriate subdirectories
 - Keep files focused on a single responsibility
 - Use extensions to organize code within files
-- Place protocol conformances in separate extensions
+- Place behavioral protocol conformances in separate extensions. Compiler-
+  synthesized value and marker conformances such as `Sendable`, `Equatable`,
+  `Hashable`, `Codable`, and `Error` may remain on the declaration.
 
 ### Testing
 
