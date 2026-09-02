@@ -80,12 +80,12 @@ struct DeviceLegRun {
 struct DeviceLegStateArmReceipt: Codable, Hashable, Sendable {
     let reference: ArmedDeviceLeg.Reference
     let binding: ArmedDeviceLeg.Binding
-    let entryKind: String
+    let entryKind: DeviceLegEntryCondition.Kind
 
     init(_ arm: ArmedDeviceLeg) {
         reference = arm.reference
         binding = arm.binding
-        entryKind = arm.entryCondition.type.rawValue
+        entryKind = arm.entryCondition.type
     }
 }
 
@@ -472,7 +472,9 @@ struct DeviceLegRunJournal {
     /// Reopens one state latch without disturbing receipts for other entry
     /// kinds. The filesystem transaction keeps multiple SDK instances from
     /// starting the same arm when they observe the latch transition together.
-    func clearStateArmReceipts(entryKind: String) async throws {
+    func clearStateArmReceipts(
+        entryKind: DeviceLegEntryCondition.Kind
+    ) async throws {
         try await update { state in
             state.stateArmReceipts = Set(
                 (state.stateArmReceipts ?? []).filter {
