@@ -11,6 +11,7 @@ final class MockWindowProvider: WindowProviderProtocol, @unchecked Sendable {
     private var _canPresent = true
     private var _createdWindows: [MockPresentationWindow] = []
     private var _onWindowLifecycleEvent: ((String) -> Void)?
+    private var _presentHandler: (@MainActor () async -> Void)?
 
     // Configuration
     var canPresent: Bool {
@@ -25,6 +26,10 @@ final class MockWindowProvider: WindowProviderProtocol, @unchecked Sendable {
         get { lock.withLock { _onWindowLifecycleEvent } }
         set { lock.withLock { _onWindowLifecycleEvent = newValue } }
     }
+    var presentHandler: (@MainActor () async -> Void)? {
+        get { lock.withLock { _presentHandler } }
+        set { lock.withLock { _presentHandler = newValue } }
+    }
 
     @MainActor
     func canPresentWindow() -> Bool {
@@ -37,6 +42,7 @@ final class MockWindowProvider: WindowProviderProtocol, @unchecked Sendable {
 
         let window = MockPresentationWindow()
         window.onLifecycleEvent = onWindowLifecycleEvent
+        window.presentHandler = presentHandler
         lock.withLock { _createdWindows.append(window) }
         return window
     }
@@ -45,6 +51,7 @@ final class MockWindowProvider: WindowProviderProtocol, @unchecked Sendable {
         lock.withLock {
             _canPresent = true
             _createdWindows.removeAll()
+            _presentHandler = nil
         }
     }
 
@@ -67,6 +74,7 @@ class MockPresentationWindow: PresentationWindowProtocol {
     var dismissAnimated = false
     var destroyCalled = false
     var onLifecycleEvent: ((String) -> Void)?
+    var presentHandler: (@MainActor () async -> Void)?
     
     // Simulate presentation delays
     var presentDelay: TimeInterval = 0
@@ -81,6 +89,7 @@ class MockPresentationWindow: PresentationWindowProtocol {
         presentAnimated = true
         presentedShellContract = shell
         onLifecycleEvent?("window-present")
+        await presentHandler?()
         
         if presentDelay > 0 {
             try? await Task.sleep(nanoseconds: UInt64(presentDelay * 1_000_000_000))
@@ -126,5 +135,6 @@ class MockPresentationWindow: PresentationWindowProtocol {
         destroyCalled = false
         presentDelay = 0
         dismissDelay = 0
+        presentHandler = nil
     }
 }
