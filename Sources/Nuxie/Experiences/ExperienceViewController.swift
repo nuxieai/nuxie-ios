@@ -812,14 +812,8 @@ class ExperienceViewController: NuxiePlatformViewController {
         journeyId: String
     ) async -> DeviceLegPresentationPermissionEvent {
         let outcome = await permissions.resolveNotificationAuthorization()
-        let eventName = switch outcome {
-        case .enabled:
-            SystemEventNames.notificationsEnabled
-        case .denied:
-            SystemEventNames.notificationsDenied
-        }
         return DeviceLegPresentationPermissionEvent(
-            name: eventName,
+            name: notificationPermissionEventName(outcome),
             properties: ["journey_id": journeyId]
         )
     }
@@ -831,15 +825,9 @@ class ExperienceViewController: NuxiePlatformViewController {
         let resolution = await permissions.resolveRequestPermission(
             permissionType: permissionType
         )
-        let eventName: String
-        if case .status(let outcome) = resolution,
-           outcome == .granted || outcome == .limited {
-            eventName = SystemEventNames.permissionGranted
-        } else {
-            eventName = SystemEventNames.permissionDenied
-        }
         return DeviceLegPresentationPermissionEvent(
-            name: eventName,
+            name: requestPermissionEventName(resolution)
+                ?? SystemEventNames.permissionDenied,
             properties: [
                 "journey_id": journeyId,
                 "type": permissionType,
@@ -861,12 +849,8 @@ class ExperienceViewController: NuxiePlatformViewController {
             let outcome = await permissions.resolveTrackingAuthorization(
                 currentStatus: currentStatus
             )
-            switch outcome {
-            case .authorized:
-                eventName = SystemEventNames.trackingAuthorized
-            case .denied, .unsupported:
-                eventName = SystemEventNames.trackingDenied
-            }
+            eventName = trackingPermissionEventName(outcome)
+                ?? SystemEventNames.trackingDenied
         }
         return DeviceLegPresentationPermissionEvent(
             name: eventName,
@@ -879,15 +863,8 @@ class ExperienceViewController: NuxiePlatformViewController {
             guard let self else { return }
             let outcome = await self.permissions.resolveNotificationAuthorization()
             let properties = self.journeyScopedEventProperties(journeyId: journeyId)
-            let eventName: String
-            switch outcome {
-            case .enabled:
-                eventName = SystemEventNames.notificationsEnabled
-            case .denied:
-                eventName = SystemEventNames.notificationsDenied
-            }
             self.dispatchNotificationPermissionEvent(
-                eventName,
+                self.notificationPermissionEventName(outcome),
                 properties: properties,
                 journeyId: journeyId
             )
@@ -900,14 +877,9 @@ class ExperienceViewController: NuxiePlatformViewController {
             let resolution = await self.permissions.resolveRequestPermission(
                 permissionType: permissionType
             )
-            guard case let .status(outcome) = resolution else {
-                self.handleUnsupportedRequestPermission(
-                    permissionType: permissionType,
-                    journeyId: journeyId
-                )
-                return
-            }
-            guard outcome != .unsupported else {
+            guard let eventName = self.requestPermissionEventName(
+                resolution
+            ) else {
                 self.handleUnsupportedRequestPermission(
                     permissionType: permissionType,
                     journeyId: journeyId
@@ -918,17 +890,6 @@ class ExperienceViewController: NuxiePlatformViewController {
                 journeyId: journeyId,
                 permissionType: permissionType
             )
-            let eventName: String
-            switch outcome {
-            case .granted:
-                eventName = SystemEventNames.permissionGranted
-            case .denied, .restricted, .notDetermined:
-                eventName = SystemEventNames.permissionDenied
-            case .limited:
-                eventName = SystemEventNames.permissionGranted
-            case .unsupported:
-                return
-            }
             self.dispatchRequestPermissionEvent(
                 eventName,
                 properties: properties,
@@ -961,15 +922,8 @@ class ExperienceViewController: NuxiePlatformViewController {
                 currentStatus: currentStatus
             )
             let properties = self.journeyScopedEventProperties(journeyId: journeyId)
-            let eventName: String
-            switch outcome {
-            case .authorized:
-                eventName = SystemEventNames.trackingAuthorized
-            case .denied:
-                eventName = SystemEventNames.trackingDenied
-            case .unsupported:
-                return
-            }
+            guard let eventName = self.trackingPermissionEventName(outcome)
+            else { return }
             self.dispatchTrackingPermissionEvent(
                 eventName,
                 properties: properties,
@@ -1741,6 +1695,44 @@ private extension ExperienceViewController {
             journeyId: journeyId,
             extraProperties: ["type": permissionType]
         )
+    }
+
+    func notificationPermissionEventName(
+        _ outcome: NotificationAuthorizationOutcome
+    ) -> String {
+        switch outcome {
+        case .enabled:
+            return SystemEventNames.notificationsEnabled
+        case .denied:
+            return SystemEventNames.notificationsDenied
+        }
+    }
+
+    func requestPermissionEventName(
+        _ resolution: RequestPermissionResolution
+    ) -> String? {
+        guard case .status(let outcome) = resolution else { return nil }
+        switch outcome {
+        case .granted, .limited:
+            return SystemEventNames.permissionGranted
+        case .denied, .restricted, .notDetermined:
+            return SystemEventNames.permissionDenied
+        case .unsupported:
+            return nil
+        }
+    }
+
+    func trackingPermissionEventName(
+        _ outcome: TrackingAuthorizationOutcome
+    ) -> String? {
+        switch outcome {
+        case .authorized:
+            return SystemEventNames.trackingAuthorized
+        case .denied:
+            return SystemEventNames.trackingDenied
+        case .unsupported:
+            return nil
+        }
     }
 
     func handleUnsupportedRequestPermission(

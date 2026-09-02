@@ -600,8 +600,11 @@ final class ExperiencePresentationService {
         _ request: DeviceLegPresentationRequest
     ) async -> DeviceLegPresentationResult {
         guard appIsForeground,
-              deviceLegForegroundAuthorityReady,
-              request.release.descriptor.leg.screens.contains(where: {
+              deviceLegForegroundAuthorityReady else {
+            request.reservation?.release()
+            return .declined
+        }
+        guard request.release.descriptor.leg.screens.contains(where: {
             $0.id == request.screenId
         }) else {
             request.reservation?.release()
@@ -643,6 +646,12 @@ final class ExperiencePresentationService {
             return .shown
         } catch ExperiencePresentationError.presentationDeclined {
             return .declined
+        } catch ExperiencePresentationError.presentationSuperseded {
+            return .declined
+        } catch is CancellationError {
+            return appIsForeground && deviceLegForegroundAuthorityReady
+                ? .failed
+                : .declined
         } catch {
             return .failed
         }

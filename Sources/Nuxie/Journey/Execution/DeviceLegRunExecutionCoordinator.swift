@@ -69,7 +69,7 @@ struct DeviceLegRunExecutionCoordinator {
 
     func command(at now: Date) -> Command {
         guard let step = steps[run.stepId],
-              let nowMillis = Self.milliseconds(now) else {
+              let nowMillis = DeviceLegTime.milliseconds(now) else {
             return .invalid
         }
         switch executor.evaluate(
@@ -194,11 +194,4 @@ struct DeviceLegRunExecutionCoordinator {
         )
     }
 
-    private static func milliseconds(_ date: Date) -> Int64? {
-        let value = date.timeIntervalSince1970 * 1_000
-        guard value.isFinite,
-              value >= Double(Int64.min),
-              value <= Double(Int64.max) else { return nil }
-        return Int64(value.rounded(.towardZero))
-    }
 }
