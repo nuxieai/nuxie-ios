@@ -722,7 +722,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard isCurrentAdmission(admission) else { return false }
 
         let preparedReleaseProfile = try await experienceService.prepareReleaseProfile(
-            profile.planeProfile == nil ? profile.releases : nil
+            profile.planeProfile == nil ? profile.releases : nil,
+            deviceLegSnapshot: preparedDeviceProfile?.snapshot
         )
         guard isCurrentAdmission(admission) else { return false }
 
@@ -766,9 +767,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         // the prepared snapshot earlier would publish commerce authority even
         // when the durable high-water write subsequently rejected the profile.
         guard let routingCatalog = try await experienceService.commitReleaseProfile(
-            preparedReleaseProfile.includingDeviceLegSnapshot(
-                committedDeviceSnapshot
-            ),
+            preparedReleaseProfile,
             generation: admission.generation,
             admission: cacheStoreAdmission(for: admission)
         ) else { return false }

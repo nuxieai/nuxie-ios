@@ -14,6 +14,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     private var _latestProfileGeneration: UInt64 = 0
     private var _authenticatedReleaseReferences: [ExperienceReference]?
     private var _releaseProfileFailuresRemaining = 0
+    private var _deviceLegArtifactPreparationFailuresRemaining = 0
     private var _releaseProfileAuthenticationGate: ReleaseProfileAuthenticationGate?
     
     // Error testing properties
@@ -77,6 +78,11 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     var releaseProfileFailuresRemaining: Int {
         get { withLock { _releaseProfileFailuresRemaining } }
         set { withLock { _releaseProfileFailuresRemaining = newValue } }
+    }
+
+    var deviceLegArtifactPreparationFailuresRemaining: Int {
+        get { withLock { _deviceLegArtifactPreparationFailuresRemaining } }
+        set { withLock { _deviceLegArtifactPreparationFailuresRemaining = newValue } }
     }
 
     var releaseProfileAuthenticationGate: ReleaseProfileAuthenticationGate? {
@@ -246,9 +252,22 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     }
     
     public func prepareReleaseProfile(
-        _ profile: ExperienceReleaseProfile?
+        _ profile: ExperienceReleaseProfile?,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
     ) async throws -> PreparedExperienceReleaseProfile {
         withLock { _releaseProfiles.append(profile) }
+        if deviceLegSnapshot != nil {
+            let shouldFail = withLock { () -> Bool in
+                guard _deviceLegArtifactPreparationFailuresRemaining > 0 else {
+                    return false
+                }
+                _deviceLegArtifactPreparationFailuresRemaining -= 1
+                return true
+            }
+            if shouldFail {
+                throw URLError(.notConnectedToInternet)
+            }
+        }
         if profile != nil {
             let shouldFail = withLock { () -> Bool in
                 guard _releaseProfileFailuresRemaining > 0 else { return false }
@@ -264,13 +283,18 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             }
         }
         guard let profile else {
-            return PreparedExperienceReleaseProfile(profile: nil, catalog: nil)
+            return PreparedExperienceReleaseProfile(
+                profile: nil,
+                catalog: nil,
+                deviceLegSnapshot: deviceLegSnapshot
+            )
         }
         if let configured = withLock({ _authenticatedReleaseReferences }) {
             return PreparedExperienceReleaseProfile(
                 profile: profile,
                 catalog: nil,
-                references: configured
+                references: configured,
+                deviceLegSnapshot: deviceLegSnapshot
             )
         }
         let references = (profile.active + profile.pinned).map {
@@ -282,7 +306,8 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
         return PreparedExperienceReleaseProfile(
             profile: profile,
             catalog: nil,
-            references: references
+            references: references,
+            deviceLegSnapshot: deviceLegSnapshot
         )
     }
 

@@ -273,6 +273,52 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         XCTAssertTrue(experiences.committedDeviceLegReleaseCounts.isEmpty)
     }
 
+    func testDeviceLegPreparationFailureWithholdsCanonicalProfileAuthority() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let cache = InMemoryCachedProfileStore(ttl: nil)
+        let experiences = MockExperienceService()
+        experiences.deviceLegArtifactPreparationFailuresRemaining = 1
+        let runtime = RecordingDeviceLegProfileConsumer()
+        let catalog = try makeCatalog(
+            fixture,
+            store: InMemoryExperienceReleaseHighWaterStore()
+        )
+        let service = makeService(
+            cache: cache,
+            identity: identity,
+            api: DeviceLegProfileSequenceAPI([
+                .response(ProfileResponse(planeProfile: fixture.profile))
+            ], authority: fixture.deliveryAuthority),
+            experiences: experiences,
+            catalog: catalog,
+            runtime: runtime
+        )
+
+        do {
+            _ = try await service.refetchProfile(distinctId: "customer")
+            XCTFail("Expected required device-leg artifact acquisition to fail")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet)
+        }
+
+        let catalogSnapshot = await catalog.snapshot(distinctId: "customer")
+        let runtimeCommits = await runtime.commits
+        let cachedProfile = await cache.retrieve(
+            forKey: "customer",
+            allowStale: true
+        )
+        let triggerAdmission = await service.getTriggerAdmission(
+            distinctId: "customer"
+        )
+        XCTAssertNil(catalogSnapshot)
+        XCTAssertTrue(runtimeCommits.isEmpty)
+        XCTAssertTrue(experiences.committedDeviceLegReleaseCounts.isEmpty)
+        XCTAssertNil(cachedProfile)
+        XCTAssertNil(triggerAdmission)
+    }
+
     func testDiskReloadReauthenticatesCanonicalAuthorityWhileOffline() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
         let cache = InMemoryCachedProfileStore(ttl: nil)

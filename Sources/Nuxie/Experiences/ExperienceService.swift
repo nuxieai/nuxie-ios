@@ -8,28 +8,20 @@ struct PreparedExperienceReleaseProfile: Sendable {
     let catalog: AuthenticatedExperienceReleaseCatalog?
     let references: [ExperienceReference]?
     let deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
+    let deviceLegArtifacts: PreparedDeviceLegArtifacts?
 
     init(
         profile: ExperienceReleaseProfile?,
         catalog: AuthenticatedExperienceReleaseCatalog?,
         references: [ExperienceReference]? = nil,
-        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot? = nil
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot? = nil,
+        deviceLegArtifacts: PreparedDeviceLegArtifacts? = nil
     ) {
         self.profile = profile
         self.catalog = catalog
         self.references = references ?? catalog?.references
         self.deviceLegSnapshot = deviceLegSnapshot
-    }
-
-    func includingDeviceLegSnapshot(
-        _ snapshot: DeviceLegProfileCatalog.Snapshot?
-    ) -> Self {
-        Self(
-            profile: profile,
-            catalog: catalog,
-            references: references,
-            deviceLegSnapshot: snapshot
-        )
+        self.deviceLegArtifacts = deviceLegArtifacts
     }
 }
 
@@ -67,7 +59,8 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     ) async throws -> [ExperienceReference]?
 
     func prepareReleaseProfile(
-        _ profile: ExperienceReleaseProfile?
+        _ profile: ExperienceReleaseProfile?,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
     ) async throws -> PreparedExperienceReleaseProfile
 
     func commitReleaseProfile(
@@ -195,6 +188,22 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
 }
 
 extension ExperienceServiceProtocol {
+    func prepareReleaseProfile(
+        _ profile: ExperienceReleaseProfile?
+    ) async throws -> PreparedExperienceReleaseProfile {
+        try await prepareReleaseProfile(profile, deviceLegSnapshot: nil)
+    }
+
+    func prepareReleaseProfile(
+        _ profile: ExperienceReleaseProfile?,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
+    ) async throws -> PreparedExperienceReleaseProfile {
+        guard deviceLegSnapshot == nil else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
+        return PreparedExperienceReleaseProfile(profile: profile, catalog: nil)
+    }
+
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
@@ -235,11 +244,6 @@ extension ExperienceServiceProtocol {
         throw ExperienceError.notFound(
             release.descriptor.identity.experienceVersionId
         )
-    }
-    func prepareReleaseProfile(
-        _ profile: ExperienceReleaseProfile?
-    ) async throws -> PreparedExperienceReleaseProfile {
-        PreparedExperienceReleaseProfile(profile: profile, catalog: nil)
     }
     func commitReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
@@ -404,9 +408,13 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     }
 
     func prepareReleaseProfile(
-        _ profile: ExperienceReleaseProfile?
+        _ profile: ExperienceReleaseProfile?,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
     ) async throws -> PreparedExperienceReleaseProfile {
-        try await experienceLoader.prepareReleaseProfile(profile)
+        try await experienceLoader.prepareReleaseProfile(
+            profile,
+            deviceLegSnapshot: deviceLegSnapshot
+        )
     }
 
     func commitReleaseProfile(

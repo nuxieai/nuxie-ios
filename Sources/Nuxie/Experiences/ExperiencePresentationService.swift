@@ -54,13 +54,35 @@ protocol ExperiencePresentationServiceProtocol: DeviceLegPresenting {
     @MainActor func onAppDidEnterBackground()
 }
 
+@MainActor
+private final class DeviceLegReservation {
+    let id: UUID
+    let ownerDistinctId: String
+    private let service: ExperiencePresentationService
+
+    init(
+        id: UUID,
+        ownerDistinctId: String,
+        service: ExperiencePresentationService
+    ) {
+        self.id = id
+        self.ownerDistinctId = ownerDistinctId
+        self.service = service
+    }
+
+    func release() {
+        service.releaseDeviceLegReservation(id: id)
+    }
+}
+
+extension DeviceLegReservation: DeviceLegPresentationReservation {}
+
 /// Service for presenting experiences in dedicated windows over the entire app
 @MainActor
 final class ExperiencePresentationService: ExperiencePresentationServiceProtocol {
 
     private struct DeviceLegPresentationContext {
-        let journeyId: String
-        let distinctId: String
+        let owner: DeviceLegPresentationOwner
         let experienceId: String
     }
 
@@ -68,26 +90,6 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         let id: UUID
         let ownerDistinctId: String
         var wasContended: Bool
-    }
-
-    private final class DeviceLegReservation: DeviceLegPresentationReservation {
-        let id: UUID
-        let ownerDistinctId: String
-        private let service: ExperiencePresentationService
-
-        init(
-            id: UUID,
-            ownerDistinctId: String,
-            service: ExperiencePresentationService
-        ) {
-            self.id = id
-            self.ownerDistinctId = ownerDistinctId
-            self.service = service
-        }
-
-        func release() {
-            service.releaseDeviceLegReservation(id: id)
-        }
     }
 
     private struct PresentationOperationState {
@@ -101,6 +103,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     /// owner uses the dedicated navigation seam instead of another present.
     private enum PresentationOwner: Equatable {
         case journey(String)
+        case deviceLeg(DeviceLegPresentationOwner)
         case direct
     }
 
@@ -284,7 +287,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             operationID: presentationOperationID,
             deviceLegReservation: deviceLegReservation,
             requiresDeviceLegReservation: deviceLegContext != nil,
-            deviceLegOwnerDistinctId: deviceLegContext?.distinctId
+            deviceLegOwnerDistinctId: deviceLegContext?.owner.distinctId
         )
         let shutdownGeneration = presentationShutdownGeneration
         try Task.checkCancellation()
@@ -512,11 +515,11 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         } else if let deviceLegContext {
             trackExperienceShown(
                 properties: [
-                    "journey_id": deviceLegContext.journeyId,
+                    "journey_id": deviceLegContext.owner.journeyId,
                     "experience_id": deviceLegContext.experienceId,
                     "experience_version": experienceVersionId,
                 ],
-                distinctId: deviceLegContext.distinctId
+                distinctId: deviceLegContext.owner.distinctId
             )
         }
 
@@ -582,13 +585,9 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     }
 
     func ownsDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) -> Bool {
-        currentPresentationID != nil
-            && currentDeviceLegContext?.journeyId == journeyId
-            && currentDeviceLegContext?.distinctId == ownerDistinctId
-            && presentationOwner == .journey(journeyId)
+        ownsCurrentDeviceLegPresentation(owner)
     }
 
     func presentDeviceLeg(
@@ -604,7 +603,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         }
         let reservation = request.reservation as? DeviceLegReservation
         guard request.reservation == nil || reservation != nil,
-              reservation?.ownerDistinctId == request.ownerDistinctId
+              reservation?.ownerDistinctId == request.owner.distinctId
                 || reservation == nil else {
             request.reservation?.release()
             return .declined
@@ -619,10 +618,9 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 colorSchemeMode: .system,
                 initialScreenID: request.screenId,
                 expectedCommit: nil,
-                owner: .journey(request.journeyId),
+                owner: .deviceLeg(request.owner),
                 deviceLegContext: .init(
-                    journeyId: request.journeyId,
-                    distinctId: request.ownerDistinctId,
+                    owner: request.owner,
                     experienceId: request.release.descriptor.identity.experienceId
                 ),
                 deviceLegReservation: reservation,
@@ -644,8 +642,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     }
 
     func navigateDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         screenId: String,
         transition: ExperienceReleaseJSONValue?
     ) async -> DeviceLegPresentationNavigationResult {
@@ -654,9 +651,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
               let controller = currentExperienceViewController else {
             return .noPresentation
         }
-        guard context.journeyId == journeyId,
-              context.distinctId == ownerDistinctId,
-              presentationOwner == .journey(journeyId) else {
+        guard context.owner == owner,
+              ownsCurrentDeviceLegPresentation(owner) else {
             return .declined
         }
         guard await waitForDeviceLegForegroundAuthority(
@@ -664,19 +660,20 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         ) else {
             return .noPresentation
         }
-        guard currentPresentationID == presentationID,
-              currentDeviceLegContext?.journeyId == journeyId,
-              currentDeviceLegContext?.distinctId == ownerDistinctId,
-              presentationOwner == .journey(journeyId) else {
+        guard ownsCurrentDeviceLegPresentation(
+            owner,
+            presentationID: presentationID
+        ) else {
             return .noPresentation
         }
         let navigationResult = await controller.navigateAndWaitResult(
             to: screenId,
             transition: deviceLegFoundationValue(transition)
         )
-        guard currentPresentationID == presentationID,
-              currentDeviceLegContext?.journeyId == journeyId,
-              currentDeviceLegContext?.distinctId == ownerDistinctId else {
+        guard ownsCurrentDeviceLegPresentation(
+            owner,
+            presentationID: presentationID
+        ) else {
             return .failed
         }
         switch navigationResult {
@@ -692,14 +689,11 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     }
 
     func resolveDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         source: ScreenEmissionSource?
     ) -> [String: ExperienceReleaseJSONValue]? {
-        guard currentDeviceLegContext?.journeyId == journeyId,
-              currentDeviceLegContext?.distinctId == ownerDistinctId,
-              presentationOwner == .journey(journeyId),
+        guard ownsCurrentDeviceLegPresentation(owner),
               let type = DeviceLegActionType(action: action) else {
             return nil
         }
@@ -718,8 +712,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     }
 
     func dispatchDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         effectId: String
     ) async -> DeviceLegPresentationActionResult {
@@ -728,9 +721,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
               let controller = currentExperienceViewController else {
             return .noPresentation
         }
-        guard context.journeyId == journeyId,
-              context.distinctId == ownerDistinctId,
-              presentationOwner == .journey(journeyId) else {
+        guard context.owner == owner,
+              ownsCurrentDeviceLegPresentation(owner) else {
             return .declined
         }
         guard let type = DeviceLegActionType(action: action),
@@ -742,10 +734,10 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         ) else {
             return .noPresentation
         }
-        guard currentPresentationID == presentationID,
-              currentDeviceLegContext?.journeyId == journeyId,
-              currentDeviceLegContext?.distinctId == ownerDistinctId,
-              presentationOwner == .journey(journeyId) else {
+        guard ownsCurrentDeviceLegPresentation(
+            owner,
+            presentationID: presentationID
+        ) else {
             return .noPresentation
         }
         let result: DeviceLegPresentationActionResult
@@ -794,7 +786,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 placementId: placementId,
                 outcomeCorrelation: CommerceOutcomeCorrelation(
                     eventId: effectId,
-                    distinctId: ownerDistinctId
+                    distinctId: owner.distinctId
                 )
             )
             result = .awaitingOutcome
@@ -802,7 +794,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         case .restore:
             controller.performRestore(outcomeCorrelation: CommerceOutcomeCorrelation(
                 eventId: effectId,
-                distinctId: ownerDistinctId
+                distinctId: owner.distinctId
             ))
             result = .awaitingOutcome
 
@@ -810,7 +802,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             result = .permissionResolved(
                 outlet: "next",
                 event: await controller.resolveDeviceLegNotificationPermissionEvent(
-                    journeyId: journeyId
+                    journeyId: owner.journeyId
                 )
             )
 
@@ -823,7 +815,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 outlet: "next",
                 event: await controller.resolveDeviceLegRequestPermissionEvent(
                     permissionType: permissionType,
-                    journeyId: journeyId
+                    journeyId: owner.journeyId
                 )
             )
 
@@ -831,7 +823,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             result = .permissionResolved(
                 outlet: "next",
                 event: await controller.resolveDeviceLegTrackingPermissionEvent(
-                    journeyId: journeyId
+                    journeyId: owner.journeyId
                 )
             )
 
@@ -852,21 +844,23 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             return .failed
         }
 
-        guard currentPresentationID == presentationID,
-              currentDeviceLegContext?.journeyId == journeyId,
-              currentDeviceLegContext?.distinctId == ownerDistinctId else {
+        guard ownsCurrentDeviceLegPresentation(
+            owner,
+            presentationID: presentationID
+        ) else {
             return .failed
         }
         return result
     }
 
     func finishDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) async {
         guard let presentationID = currentPresentationID,
-              currentDeviceLegContext?.journeyId == journeyId,
-              currentDeviceLegContext?.distinctId == ownerDistinctId else {
+              ownsCurrentDeviceLegPresentation(
+                owner,
+                presentationID: presentationID
+              ) else {
             return
         }
         presentationAttemptGeneration &+= 1
@@ -884,12 +878,13 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             $0.deviceLegOwnerDistinctId == ownerDistinctId
         })
         let ownedCurrentPresentationID =
-            currentDeviceLegContext?.distinctId == ownerDistinctId
+            currentDeviceLegContext?.owner.distinctId == ownerDistinctId
                 ? currentPresentationID
                 : nil
         let detachedTasks = detachedHostPresentations.compactMap {
             id, presentation -> Task<Void, Never>? in
-            guard presentation.deviceLegContext?.distinctId == ownerDistinctId else {
+            guard presentation.deviceLegContext?.owner.distinctId
+                    == ownerDistinctId else {
                 return nil
             }
             return detachedHostDismissalTasks[id]
@@ -918,7 +913,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         refreshDeviceLegPresentationCapacity()
     }
 
-    private func releaseDeviceLegReservation(id: UUID) {
+    fileprivate func releaseDeviceLegReservation(id: UUID) {
         guard let reservation = pendingDeviceLegReservation,
               reservation.id == id else { return }
         pendingDeviceLegReservation = nil
@@ -1343,6 +1338,19 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         refreshDeviceLegPresentationCapacity()
     }
 
+    private func ownsCurrentDeviceLegPresentation(
+        _ owner: DeviceLegPresentationOwner,
+        presentationID expectedPresentationID: UUID? = nil
+    ) -> Bool {
+        guard let currentPresentationID,
+              expectedPresentationID == nil
+                || expectedPresentationID == currentPresentationID else {
+            return false
+        }
+        return currentDeviceLegContext?.owner == owner
+            && presentationOwner == .deviceLeg(owner)
+    }
+
     private func associatePresentationOperation(
         _ operationID: UUID,
         with presentationID: UUID
@@ -1538,7 +1546,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         context: DeviceLegPresentationContext
     ) {
         var properties: [String: Any] = [
-            "journey_id": context.journeyId,
+            "journey_id": context.owner.journeyId,
             "experience_id": context.experienceId,
             "experience_version": experienceVersionId,
         ]
@@ -1556,7 +1564,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 properties: properties,
                 userProperties: nil,
                 userPropertiesSetOnce: nil,
-                distinctIdOverride: context.distinctId
+                distinctIdOverride: context.owner.distinctId
             )
             return
         }
@@ -1565,7 +1573,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             properties: properties,
             userProperties: nil,
             userPropertiesSetOnce: nil,
-            distinctIdOverride: context.distinctId
+            distinctIdOverride: context.owner.distinctId
         )
     }
 }

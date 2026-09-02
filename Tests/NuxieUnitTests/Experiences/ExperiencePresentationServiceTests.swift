@@ -920,8 +920,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
@@ -970,8 +972,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
@@ -1013,8 +1017,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onScreenDismissed: { _, _, _ in
                             order.screenDismissed()
@@ -1053,8 +1059,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
@@ -1066,8 +1074,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-contender",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-contender",
+                            distinctId: "user-1"
+                        ),
                         reservation: nil,
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
@@ -1100,8 +1110,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
@@ -1110,8 +1122,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(presentationResult).to(equal(.shown))
 
                     let result = await service.navigateDeviceLegPresentation(
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         screenId: "screen-next",
                         transition: .string("crossfade")
                     )
@@ -1126,8 +1140,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
 
                     controller.navigationResult = .productsUnavailable
                     let recoveryResult = await service.navigateDeviceLegPresentation(
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         screenId: "screen-products",
                         transition: nil
                     )
@@ -1159,8 +1175,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
@@ -1169,15 +1187,19 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(presentationResult).to(equal(.shown))
 
                     await service.finishDeviceLegPresentation(
-                        journeyId: "journey-contender",
-                        ownerDistinctId: "user-1"
+                        owner: .init(
+                            journeyId: "journey-contender",
+                            distinctId: "user-1"
+                        )
                     )
                     expect(service.isExperiencePresented).to(beTrue())
                     expect(controller.shutdownRuntimeCallCount).to(equal(0))
 
                     await service.finishDeviceLegPresentation(
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1"
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        )
                     )
 
                     expect(service.isExperiencePresented).to(beFalse())
@@ -1232,8 +1254,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
@@ -1254,8 +1278,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let completed = ExperiencePresentationTestSignal()
                     let action = Task { @MainActor in
                         let result = await service.dispatchDeviceLegPresentationAction(
-                            journeyId: "journey-owner",
-                            ownerDistinctId: "user-1",
+                            owner: .init(
+                                journeyId: "journey-owner",
+                                distinctId: "user-1"
+                            ),
                             action: [
                                 "type": .string("back"),
                                 "steps": .number(1),
@@ -1308,8 +1334,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
@@ -1318,8 +1346,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(presentationResult).to(equal(.shown))
 
                     let actionResult = await service.dispatchDeviceLegPresentationAction(
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         action: [
                             "type": .string("request_permission"),
                             "permissionType": .string("camera"),
@@ -1361,8 +1391,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
@@ -1371,8 +1403,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(presentationResult).to(equal(.shown))
 
                     let purchaseResult = await service.dispatchDeviceLegPresentationAction(
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         action: [
                             "type": .string("purchase"),
                             "placementId": .string("placement-gold"),
@@ -1380,8 +1414,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         effectId: "effect-purchase"
                     )
                     let restoreResult = await service.dispatchDeviceLegPresentationAction(
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         action: ["type": .string("restore")],
                         effectId: "effect-restore"
                     )
@@ -1424,8 +1460,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { outcome, _ in
@@ -1436,8 +1474,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(presentationResult).to(equal(.shown))
 
                     let actionResult = await service.dispatchDeviceLegPresentationAction(
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         action: [
                             "type": .string("dismiss"),
                             "reason": .string("completed"),
@@ -1518,8 +1558,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
@@ -1586,8 +1628,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "device-leg-journey",
-                        ownerDistinctId: "device-leg-user",
+                        owner: .init(
+                            journeyId: "device-leg-journey",
+                            distinctId: "device-leg-user"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
@@ -1630,8 +1674,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         release: release,
                         delivery: deviceLegDelivery(),
                         screenId: screenID,
-                        journeyId: "journey-owner",
-                        ownerDistinctId: "user-1",
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
                         reservation: reservation,
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }

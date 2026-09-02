@@ -335,11 +335,9 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
 
     @MainActor
     func ownsDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) -> Bool {
-        _ = journeyId
-        _ = ownerDistinctId
+        _ = owner
         return false
     }
 
@@ -353,13 +351,11 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
 
     @MainActor
     func navigateDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         screenId: String,
         transition: ExperienceReleaseJSONValue?
     ) async -> DeviceLegPresentationNavigationResult {
-        _ = journeyId
-        _ = ownerDistinctId
+        _ = owner
         _ = screenId
         _ = transition
         return .noPresentation
@@ -367,26 +363,22 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
 
     @MainActor
     func resolveDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         source: ScreenEmissionSource?
     ) -> [String: ExperienceReleaseJSONValue]? {
-        _ = journeyId
-        _ = ownerDistinctId
+        _ = owner
         _ = source
         return action
     }
 
     @MainActor
     func dispatchDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         effectId: String
     ) async -> DeviceLegPresentationActionResult {
-        _ = journeyId
-        _ = ownerDistinctId
+        _ = owner
         _ = action
         _ = effectId
         return .noPresentation
@@ -394,11 +386,9 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
 
     @MainActor
     func finishDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) async {
-        _ = journeyId
-        _ = ownerDistinctId
+        _ = owner
     }
 
     @MainActor
