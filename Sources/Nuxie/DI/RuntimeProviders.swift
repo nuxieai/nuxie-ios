@@ -184,6 +184,11 @@ private actor StableSystemEventCaptureRetryQueue {
         pendingByEventId[eventId] = pending
         pendingOrder.append(eventId)
 
+        guard pendingOrder.first == eventId else {
+            startRetryTaskIfNeeded()
+            return false
+        }
+
         if await attempt(pending) {
             remove(eventId)
             return true
@@ -257,6 +262,10 @@ private actor StableSystemEventCaptureRetryQueue {
             if await attempt(pending) {
                 remove(eventId)
                 madeProgress = true
+            } else {
+                // A later correlated outcome must never overtake the oldest
+                // unacknowledged capture.
+                break
             }
         }
         let isEmpty = pendingOrder.isEmpty
