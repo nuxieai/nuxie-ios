@@ -128,6 +128,10 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       await experienceService.onAppBecameActive()
       // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
       await featureService.syncFeatureInfo()
+      // Presentation actions resumed by either runtime may await this gate.
+      // Re-open it after profile authority is current, before invoking those
+      // runtimes, so the serialized lifecycle worker cannot wait on itself.
+      await experiencePresentationService.deviceLegProfileRefreshDidComplete()
       await deviceLegService?.onAppBecameActive()
       await journeyService.onAppBecameActive()
     }

@@ -23,6 +23,17 @@ import AppKit
 import SafariServices
 #endif
 
+enum ExperienceScreenNavigationResult: Equatable, Sendable {
+    case navigated
+    case alreadyActive
+    case productsUnavailable
+    case failed
+
+    var didNavigate: Bool {
+        self == .navigated || self == .alreadyActive
+    }
+}
+
 // @unchecked Sendable: immutable snapshot; the Any value is write-once at
 // construction and never mutated afterwards.
 struct ExperienceRendererViewModelChange: @unchecked Sendable {
@@ -110,7 +121,11 @@ protocol ExperienceRuntimeDelegate: AnyObject {
         screenId: String
     )
 
-    func experienceViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason)
+    @discardableResult
+    func experienceViewControllerDidRequestDismiss(
+        _ controller: ExperienceViewController,
+        reason: CloseReason
+    ) async -> Bool
 
     func experienceViewControllerWillRequestHostDismiss(
         _ controller: ExperienceViewController
@@ -219,14 +234,23 @@ extension ExperienceRuntimeDelegate {
     ) {}
 
     @discardableResult
+    func experienceViewControllerDidRequestDismiss(
+        _ controller: ExperienceViewController,
+        reason: CloseReason
+    ) async -> Bool {
+        _ = controller
+        _ = reason
+        return true
+    }
+
+    @discardableResult
     func experienceViewControllerDidRequestHostDismiss(
         _ controller: ExperienceViewController
     ) async -> Bool {
-        experienceViewControllerDidRequestDismiss(
+        await experienceViewControllerDidRequestDismiss(
             controller,
             reason: .hostDismissed
         )
-        return true
     }
 
     func experienceViewControllerWillRequestHostDismiss(
@@ -397,6 +421,7 @@ class ExperienceViewController: NuxiePlatformViewController {
     #endif
     private var didInvokeClose = false
     private var closeGeneration: UInt64 = 0
+    private var dismissalTask: Task<Void, Never>?
     private var runtimePreparationGeneration: UInt64 = 0
     private var runtimeShutdownTask: Task<Void, Never>?
     private var runtimeShutdownID: UUID?
@@ -411,7 +436,8 @@ class ExperienceViewController: NuxiePlatformViewController {
     private let presentationDiagnosticsEnabled: Bool
     private var recoveryAffordanceTask: Task<Void, Never>?
     private var inFlightPurchaseOperationCount = 0
-    private var purchaseOperationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var purchaseOperationWaiters:
+        [UUID: CheckedContinuation<Void, Never>] = [:]
     private var hostDismissalRequested = false
     private let screenEmissionDispatcher: ScreenEmissionDispatcher
     private let screenEmissionPublicationGate = ExperienceInteractiveOperationGate()
@@ -604,6 +630,8 @@ class ExperienceViewController: NuxiePlatformViewController {
         failPendingDisplayPresentationTrace(error: CancellationError())
         presentationTraceToken = traceToken
         closeGeneration &+= 1
+        dismissalTask?.cancel()
+        dismissalTask = nil
         didInvokeClose = false
         presentationShellIsPresented = false
         contentIsRevealed = false
@@ -692,6 +720,8 @@ class ExperienceViewController: NuxiePlatformViewController {
     /// A later presentation reloads the cached artifact through ExperienceViewModel
     /// and opens an entirely new native ownership graph.
     func shutdownRuntime() async {
+        dismissalTask?.cancel()
+        dismissalTask = nil
         releasePresentationWarmReservation()
         cancelRecoveryAffordances()
         failPendingDisplayPresentationTrace(error: CancellationError())
@@ -754,12 +784,86 @@ class ExperienceViewController: NuxiePlatformViewController {
         #endif
     }
 
-    func performPurchase(placementId: String) {
-        handleNativePurchase(placementId: placementId)
+    func performPurchase(
+        placementId: String,
+        outcomeCorrelation: CommerceOutcomeCorrelation? = nil
+    ) {
+        handleNativePurchase(
+            placementId: placementId,
+            outcomeCorrelation: outcomeCorrelation
+        )
     }
 
-    func performRestore() {
-        handleNativeRestore()
+    func performRestore(
+        outcomeCorrelation: CommerceOutcomeCorrelation? = nil
+    ) {
+        handleNativeRestore(outcomeCorrelation: outcomeCorrelation)
+    }
+
+    func resolveDeviceLegNotificationPermissionEvent(
+        journeyId: String
+    ) async -> DeviceLegPresentationPermissionEvent {
+        let outcome = await permissions.resolveNotificationAuthorization()
+        let eventName = switch outcome {
+        case .enabled:
+            SystemEventNames.notificationsEnabled
+        case .denied:
+            SystemEventNames.notificationsDenied
+        }
+        return DeviceLegPresentationPermissionEvent(
+            name: eventName,
+            properties: ["journey_id": journeyId]
+        )
+    }
+
+    func resolveDeviceLegRequestPermissionEvent(
+        permissionType: String,
+        journeyId: String
+    ) async -> DeviceLegPresentationPermissionEvent {
+        let resolution = await permissions.resolveRequestPermission(
+            permissionType: permissionType
+        )
+        let eventName: String
+        if case .status(let outcome) = resolution,
+           outcome == .granted || outcome == .limited {
+            eventName = SystemEventNames.permissionGranted
+        } else {
+            eventName = SystemEventNames.permissionDenied
+        }
+        return DeviceLegPresentationPermissionEvent(
+            name: eventName,
+            properties: [
+                "journey_id": journeyId,
+                "type": permissionType,
+            ]
+        )
+    }
+
+    func resolveDeviceLegTrackingPermissionEvent(
+        journeyId: String
+    ) async -> DeviceLegPresentationPermissionEvent {
+        let currentStatus = trackingAuthorizationHandler.authorizationStatus()
+        let eventName: String
+        if currentStatus == .unsupported {
+            LogWarning(
+                "ExperienceViewController: tracking authorization is unsupported on this platform; resolving denied"
+            )
+            eventName = SystemEventNames.trackingDenied
+        } else {
+            let outcome = await permissions.resolveTrackingAuthorization(
+                currentStatus: currentStatus
+            )
+            switch outcome {
+            case .authorized:
+                eventName = SystemEventNames.trackingAuthorized
+            case .denied, .unsupported:
+                eventName = SystemEventNames.trackingDenied
+            }
+        }
+        return DeviceLegPresentationPermissionEvent(
+            name: eventName,
+            properties: ["journey_id": journeyId]
+        )
     }
 
     func performRequestNotifications(journeyId: String? = nil) {
@@ -872,13 +976,29 @@ class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func performDismiss(reason: CloseReason = .userDismissed) {
-        guard !hostDismissalRequested else { return }
+        guard !hostDismissalRequested, dismissalTask == nil else { return }
         let generation = closeGeneration
-        Task { @MainActor [weak self] in
+        let dismissalDelegate = runtimeDelegate
+        dismissalTask = Task { @MainActor [weak self] in
             guard let self, !self.hostDismissalRequested else { return }
             await self.prepareForDismissal(reason: reason)
-            guard !self.hostDismissalRequested else { return }
-            self.runtimeDelegate?.experienceViewControllerDidRequestDismiss(self, reason: reason)
+            guard self.closeGeneration == generation,
+                  !self.hostDismissalRequested,
+                  !Task.isCancelled else { return }
+            while self.closeGeneration == generation,
+                  !self.hostDismissalRequested,
+                  !Task.isCancelled {
+                if await dismissalDelegate?.experienceViewControllerDidRequestDismiss(
+                    self,
+                    reason: reason
+                ) ?? true {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard self.closeGeneration == generation,
+                  !self.hostDismissalRequested,
+                  !Task.isCancelled else { return }
 
             #if canImport(UIKit)
             self.dismiss(animated: true) { [weak self] in
@@ -903,15 +1023,26 @@ class ExperienceViewController: NuxiePlatformViewController {
         let dismissalDelegate = runtimeDelegate
         let close = onClose
         didInvokeClose = true
-        Task { @MainActor [weak self] in
+        dismissalTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.prepareForDismissal(reason: reason)
             guard self.closeGeneration == generation,
-                  !self.hostDismissalRequested else { return }
-            dismissalDelegate?.experienceViewControllerDidRequestDismiss(
-                self,
-                reason: reason
-            )
+                  !self.hostDismissalRequested,
+                  !Task.isCancelled else { return }
+            while self.closeGeneration == generation,
+                  !self.hostDismissalRequested,
+                  !Task.isCancelled {
+                if await dismissalDelegate?.experienceViewControllerDidRequestDismiss(
+                    self,
+                    reason: reason
+                ) ?? true {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard self.closeGeneration == generation,
+                  !self.hostDismissalRequested,
+                  !Task.isCancelled else { return }
             close?(reason)
         }
     }
@@ -998,23 +1129,34 @@ class ExperienceViewController: NuxiePlatformViewController {
 
     @MainActor
     func navigateAndWait(to screenId: String, transition: Any? = nil) async -> Bool {
+        (await navigateAndWaitResult(
+            to: screenId,
+            transition: transition
+        )).didNavigate
+    }
+
+    @MainActor
+    func navigateAndWaitResult(
+        to screenId: String,
+        transition: Any? = nil
+    ) async -> ExperienceScreenNavigationResult {
         #if canImport(UIKit)
         let generation = runtimeSession.generation
         guard runtimeSession.isReady(generation),
-              let coordinator = screenTransitionCoordinator else { return false }
+              let coordinator = screenTransitionCoordinator else { return .failed }
         return await withCheckedContinuation { continuation in
             var resumed = false
             let accepted = coordinator.navigate(
                 to: screenId,
                 transition: transition
-            ) { didNavigate, _ in
+            ) { result, _ in
                 guard !resumed else { return }
                 resumed = true
-                continuation.resume(returning: didNavigate)
+                continuation.resume(returning: result)
             }
             if !accepted, !resumed {
                 resumed = true
-                continuation.resume(returning: false)
+                continuation.resume(returning: .failed)
             }
         }
         #else
@@ -1022,7 +1164,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         // not expose UIKit's transition coordinator completion, so admission
         // of the command is the stable boundary available on this platform.
         navigate(to: screenId, transition: transition)
-        return true
+        return .navigated
         #endif
     }
 
@@ -1761,10 +1903,10 @@ private extension ExperienceViewController {
         let accepted = coordinator.navigate(
             to: screenId,
             transition: transition
-        ) { [weak self] didNavigate, completedScreenId in
+        ) { [weak self] result, completedScreenId in
             self?.completeNativeRuntimeNavigation(
                 navigation,
-                didNavigate: didNavigate,
+                didNavigate: result.didNavigate,
                 completedScreenId: completedScreenId
             )
         }
@@ -2110,18 +2252,42 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
 extension ExperienceViewController {
     func beginHostDismissal() {
         hostDismissalRequested = true
+        // Host dismissal supersedes an ordinary dismissal retry loop. Clear
+        // that task now so a failed host terminalization can return control to
+        // a fresh user dismissal instead of leaving the old task as a blocker.
+        dismissalTask?.cancel()
+        dismissalTask = nil
     }
 
     func cancelHostDismissal() {
+        dismissalTask?.cancel()
+        dismissalTask = nil
         hostDismissalRequested = false
     }
 
     func waitForInFlightPurchaseBeforeHostDismissal() async {
         beginHostDismissal()
         guard inFlightPurchaseOperationCount > 0 else { return }
-        await withCheckedContinuation { continuation in
-            purchaseOperationWaiters.append(continuation)
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            guard !Task.isCancelled else { return }
+            await withCheckedContinuation { continuation in
+                guard inFlightPurchaseOperationCount > 0,
+                      !Task.isCancelled else {
+                    continuation.resume()
+                    return
+                }
+                purchaseOperationWaiters[waiterID] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelPurchaseOperationWaiter(waiterID)
+            }
         }
+    }
+
+    private func cancelPurchaseOperationWaiter(_ waiterID: UUID) {
+        purchaseOperationWaiters.removeValue(forKey: waiterID)?.resume()
     }
 
     private func beginPurchaseOperation(
@@ -2139,12 +2305,15 @@ extension ExperienceViewController {
         guard inFlightPurchaseOperationCount > 0 else { return }
         inFlightPurchaseOperationCount -= 1
         guard inFlightPurchaseOperationCount == 0 else { return }
-        let waiters = purchaseOperationWaiters
+        let waiters = Array(purchaseOperationWaiters.values)
         purchaseOperationWaiters.removeAll()
         waiters.forEach { $0.resume() }
     }
 
-    fileprivate func handleNativePurchase(placementId: String) {
+    fileprivate func handleNativePurchase(
+        placementId: String,
+        outcomeCorrelation: CommerceOutcomeCorrelation?
+    ) {
         LogDebug("ExperienceViewController: Native purchase for placement: \(placementId)")
         let transactionService = self.transactionService
 
@@ -2154,30 +2323,35 @@ extension ExperienceViewController {
             })
             guard let storeProduct = resolvedStoreProduct,
                   storeProduct.appStoreProduct != nil || storeProduct.isTestStoreProduct else {
-                self.emitSystemEvent(
+                await self.publishCommerceOutcome(
                     SystemEventNames.purchaseFailed,
                     properties: [
                         "placement_id": placementId,
                         "error": "Resolved StoreKit product not found",
                         "test_store": resolvedStoreProduct?.isTestStoreProduct ?? false,
-                    ]
+                    ],
+                    correlation: outcomeCorrelation
                 )
                 return
             }
             do {
-                let syncResult = try await transactionService.purchase(storeProduct)
+                let syncResult = try await transactionService.purchase(
+                    storeProduct,
+                    outcomeCorrelation: outcomeCorrelation
+                )
                 if let syncTask = syncResult.syncTask {
                     _ = await syncTask.value
                 }
             } catch StoreKitError.purchaseCancelled {
-                self.emitSystemEvent(
+                await self.publishCommerceOutcome(
                     SystemEventNames.purchaseCancelled,
                     properties: [
                         "placement_id": placementId,
                         "product_id": storeProduct.productId,
                         "store_product_id": storeProduct.storeProductId,
                         "test_store": storeProduct.isTestStoreProduct,
-                    ]
+                    ],
+                    correlation: outcomeCorrelation
                 )
             } catch StoreKitError.purchasePending {
                 // Ask-to-Buy / SCA: surface a pending status so the paywall
@@ -2212,7 +2386,7 @@ extension ExperienceViewController {
                     let error = StoreKitError.productTermsChanged(
                         storeProduct.storeProductId
                     )
-                    self.emitSystemEvent(
+                    await self.publishCommerceOutcome(
                         SystemEventNames.purchaseFailed,
                         properties: [
                             "placement_id": placementId,
@@ -2220,7 +2394,8 @@ extension ExperienceViewController {
                             "store_product_id": storeProduct.storeProductId,
                             "reason": "product_terms_changed",
                             "test_store": storeProduct.isTestStoreProduct,
-                        ]
+                        ],
+                        correlation: outcomeCorrelation
                     )
                     self.performDismiss(reason: .error(error))
                 }
@@ -2235,7 +2410,7 @@ extension ExperienceViewController {
                 // that routes this action to the separate change flow.
                 LogInfo("ExperienceViewController: subscription change required for placement \(placementId)")
             } catch {
-                self.emitSystemEvent(
+                await self.publishCommerceOutcome(
                     SystemEventNames.purchaseFailed,
                     properties: [
                         "placement_id": placementId,
@@ -2243,26 +2418,56 @@ extension ExperienceViewController {
                         "store_product_id": storeProduct.storeProductId,
                         "error": error.localizedDescription,
                         "test_store": storeProduct.isTestStoreProduct,
-                    ]
+                    ],
+                    correlation: outcomeCorrelation
                 )
             }
         }
     }
 
-    fileprivate func handleNativeRestore() {
+    fileprivate func handleNativeRestore(
+        outcomeCorrelation: CommerceOutcomeCorrelation?
+    ) {
         LogDebug("ExperienceViewController: Native restore purchases")
         let transactionService = self.transactionService
         beginPurchaseOperation {
             do {
-                try await transactionService.restore()
+                try await transactionService.restore(
+                    outcomeCorrelation: outcomeCorrelation
+                )
             } catch StoreKitError.restoreFailed(_) {
                 LogWarning("ExperienceViewController: restore purchases failed")
             } catch {
-                self.emitSystemEvent(
+                await self.publishCommerceOutcome(
                     SystemEventNames.restoreFailed,
-                    properties: ["error": error.localizedDescription]
+                    properties: ["error": error.localizedDescription],
+                    correlation: outcomeCorrelation
                 )
             }
+        }
+    }
+
+    private func publishCommerceOutcome(
+        _ name: String,
+        properties: [String: Any],
+        correlation: CommerceOutcomeCorrelation?
+    ) async {
+        guard correlation != nil || !hostDismissalRequested else { return }
+        guard let correlation else {
+            emitSystemEvent(name, properties: properties)
+            return
+        }
+        let properties = UncheckedSendable(properties)
+        guard await systemEventSink.capture(
+            name,
+            properties: properties.value.isEmpty ? nil : properties.value,
+            eventId: correlation.eventId,
+            distinctId: correlation.distinctId
+        ) else {
+            LogError(
+                "ExperienceViewController: correlated commerce outcome has no capture retry owner"
+            )
+            return
         }
     }
 }

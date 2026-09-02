@@ -52,8 +52,8 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `$purchase_completed` | active | platform | yes | governed | batch | `purchaseCompleted` | The purchase outcome committer captures verified evidence and external declarations under a stable evidence or callback-operation identity. |
-| `$purchase_failed` | active | platform | yes | governed | `/i/event` | `purchaseFailed` | Purchase setup or execution fails. |
-| `$purchase_cancelled` | active | platform | yes | governed | `/i/event` | `purchaseCancelled` | Customer cancels a purchase. |
+| `$purchase_failed` | active | platform | yes | governed | `/i/event` or batch | `purchaseFailed` | Purchase setup or execution fails. A partitioned Journey action uses its stable effect id on the batch lane. |
+| `$purchase_cancelled` | active | platform | yes | governed | `/i/event` or batch | `purchaseCancelled` | Customer cancels a purchase. A partitioned Journey action uses its stable effect id on the batch lane. |
 | `$purchase_pending` | active | platform | yes | governed | `/i/event` | `purchasePending` | Purchase awaits later approval. |
 | `$purchase_synced` | active | platform | yes | governed | batch or `/i/event` | `purchaseSynced` | Atomic capture queues batch delivery; ordinary synchronization uses the trigger lane. |
 
@@ -62,8 +62,8 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `$restore_completed` | active | platform | yes | governed | batch or `/i/event` | `restoreCompleted` | External declarations use stable callback-operation capture; native and test-store restores use the trigger lane. |
-| `$restore_failed` | active | platform | yes | governed | `/i/event` | `restoreFailed` | Restore fails. |
-| `$restore_no_purchases` | active | platform | yes | governed | `/i/event` | `restoreNoPurchases` | Restore finishes without purchases. |
+| `$restore_failed` | active | platform | yes | governed | `/i/event` or batch | `restoreFailed` | Restore fails. A partitioned Journey action uses its stable effect id on the batch lane. |
+| `$restore_no_purchases` | active | platform | yes | governed | `/i/event` or batch | `restoreNoPurchases` | Restore finishes without purchases. A partitioned Journey action uses its stable effect id on the batch lane. |
 
 ## Features
 
@@ -83,14 +83,14 @@ The conformance test loads that fixture, binds every declared Swift constant at 
 
 | Name | Status | Authored by | Persists | beforeSend | Wire | Forwarding | Meaning |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `$notifications_enabled` | active | platform | yes | governed | `/i/event` | `permissionResolved` | Notification authorization resolves enabled. |
-| `$notifications_denied` | active | platform | yes | governed | `/i/event` | `permissionResolved` | Notification authorization resolves denied. |
-| `$permission_granted` | active | platform | yes | governed | `/i/event` | `permissionResolved` | An authored platform permission resolves granted or limited. |
-| `$permission_denied` | active | platform | yes | governed | `/i/event` | `permissionResolved` | An authored platform permission resolves denied, including the unsupported scoped path. |
-| `$tracking_authorized` | active | platform | yes | governed | `/i/event` | `permissionResolved` | Tracking authorization resolves authorized. |
-| `$tracking_denied` | active | platform | yes | governed | `/i/event` | `permissionResolved` | Tracking authorization resolves denied or unsupported. |
+| `$notifications_enabled` | active | platform | yes | governed | `/i/event` or batch | `permissionResolved` | Notification authorization resolves enabled. |
+| `$notifications_denied` | active | platform | yes | governed | `/i/event` or batch | `permissionResolved` | Notification authorization resolves denied. |
+| `$permission_granted` | active | platform | yes | governed | `/i/event` or batch | `permissionResolved` | An authored platform permission resolves granted or limited. |
+| `$permission_denied` | active | platform | yes | governed | `/i/event` or batch | `permissionResolved` | An authored platform permission resolves denied, including the unsupported scoped path. |
+| `$tracking_authorized` | active | platform | yes | governed | `/i/event` or batch | `permissionResolved` | Tracking authorization resolves authorized. |
+| `$tracking_denied` | active | platform | yes | governed | `/i/event` or batch | `permissionResolved` | Tracking authorization resolves denied or unsupported. |
 
-Scoped and unscoped permission events use governed, persistent `trackForTrigger`; both paths use the `/i/event` response lane.
+Legacy scoped and unscoped permission events use governed, persistent `trackForTrigger` through the `/i/event` response lane. The partitioned Journey runtime captures the same governed events through batch delivery while preserving the presenting Journey's identity and release attribution.
 
 ## Identity and riders
 

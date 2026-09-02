@@ -183,6 +183,44 @@ struct ExperienceDefinition: Sendable {
         controlsByScreen = try Self.controlActions(descriptor.screenBehaviors)
     }
 
+    /// Projects the renderer-owned portion of a partitioned Journey release.
+    /// The flat Journey executor owns routes and topology, while this value
+    /// supplies only authenticated screens, view-model defaults, and controls
+    /// to the native renderer.
+    init(deviceLegDescriptor descriptor: DeviceLegReleaseDescriptor) throws {
+        entryRouteEventName = ""
+        screens = descriptor.leg.screens.map {
+            JourneyScreen(
+                id: $0.id,
+                defaultViewModelName: $0.defaultViewModelName,
+                defaultInstanceId: $0.defaultInstanceId
+            )
+        }
+        viewModelValues = try descriptor.viewModelValues.map { entry in
+            guard case .string(let viewModelName) = entry["viewModelName"],
+                  case .string(let path) = entry["path"],
+                  let value = entry["value"] else {
+                throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+            }
+            return JourneyViewModelValue(
+                viewModelName: viewModelName,
+                instanceId: entry["instanceId"]?.stringValue,
+                instanceName: entry["instanceName"]?.stringValue,
+                path: path,
+                value: AnyCodable(value.foundationValue)
+            )
+        }
+        routes = [:]
+        executionPlans = []
+        responseSchema = nil
+        controlsByScreen = try Self.controlActions(descriptor.screenBehaviors)
+        if case .string(let identifier) = descriptor.metadata["appDefaultTimezone"] {
+            appDefaultTimezone = identifier
+        } else {
+            appDefaultTimezone = nil
+        }
+    }
+
     func route(host: JourneyRouteHost, eventName: String) -> JourneyRoute? {
         routes[JourneyRouteKey(host: host, eventName: eventName)]
     }

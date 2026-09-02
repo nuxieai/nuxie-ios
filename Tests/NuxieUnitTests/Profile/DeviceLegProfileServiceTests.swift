@@ -90,6 +90,22 @@ private actor RecordingDeviceLegProfileConsumer: DeviceLegProfileConsuming {
     }
 }
 
+private actor RejectingHighWaterCommitStore: ExperienceReleaseHighWaterStore {
+    func admitActiveBatch(
+        _ candidates: [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
+    ) throws {
+        _ = candidates
+        throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
+    }
+
+    func highWater(
+        for key: ExperienceReleaseHighWaterKey
+    ) -> ExperienceReleaseHighWaterMark? {
+        _ = key
+        return nil
+    }
+}
+
 final class DeviceLegProfileServiceTests: XCTestCase {
     func testForegroundAlwaysRevalidatesFreshCanonicalProfile() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load()
@@ -185,6 +201,7 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         let current = try XCTUnwrap(currentSnapshot)
         XCTAssertEqual(current.releasesByDigest.count, 1)
         XCTAssertNil(experiences.committedReleaseProfiles.last ?? nil)
+        XCTAssertEqual(experiences.committedDeviceLegReleaseCounts, [1])
         let initialRuntimeCommits = await runtime.commits
         XCTAssertEqual(initialRuntimeCommits.count, 1)
         XCTAssertEqual(initialRuntimeCommits.first?.releasesByDigest.count, 1)
@@ -207,12 +224,53 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         XCTAssertNotNil(retainedProfile?.planeProfile)
         let retainedRuntimeCommits = await runtime.commits
         XCTAssertEqual(retainedRuntimeCommits.count, 1)
+        XCTAssertEqual(experiences.committedDeviceLegReleaseCounts, [1])
 
         _ = try await service.refetchProfile(distinctId: "customer")
         let cleared = await catalog.snapshot(distinctId: "customer")
         XCTAssertNil(cleared)
+        XCTAssertEqual(experiences.committedDeviceLegReleaseCounts, [1, nil])
         let runtimeClears = await runtime.clearedDistinctIds
         XCTAssertEqual(runtimeClears, ["customer"])
+    }
+
+    func testHighWaterCommitFailureDoesNotPublishDeviceProductAuthority() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let experiences = MockExperienceService()
+        let runtime = RecordingDeviceLegProfileConsumer()
+        let catalog = try makeCatalog(
+            fixture,
+            store: RejectingHighWaterCommitStore()
+        )
+        let service = makeService(
+            cache: InMemoryCachedProfileStore(ttl: nil),
+            identity: identity,
+            api: DeviceLegProfileSequenceAPI([
+                .response(ProfileResponse(planeProfile: fixture.profile))
+            ], authority: fixture.deliveryAuthority),
+            experiences: experiences,
+            catalog: catalog,
+            runtime: runtime
+        )
+
+        do {
+            _ = try await service.refetchProfile(distinctId: "customer")
+            XCTFail("Expected replay high-water rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .replayRejected
+            )
+        }
+
+        let catalogSnapshot = await catalog.snapshot(distinctId: "customer")
+        let runtimeCommits = await runtime.commits
+        XCTAssertNil(catalogSnapshot)
+        XCTAssertTrue(runtimeCommits.isEmpty)
+        XCTAssertTrue(experiences.committedReleaseProfiles.isEmpty)
+        XCTAssertTrue(experiences.committedDeviceLegReleaseCounts.isEmpty)
     }
 
     func testDiskReloadReauthenticatesCanonicalAuthorityWhileOffline() async throws {

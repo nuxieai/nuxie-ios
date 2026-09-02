@@ -130,8 +130,12 @@ final class ExperienceJourneyRunnerRuntimeDelegate: ExperienceRuntimeDelegate {
         }
     }
 
-    func experienceViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason) {
+    func experienceViewControllerDidRequestDismiss(
+        _ controller: ExperienceViewController,
+        reason: CloseReason
+    ) async -> Bool {
         // Not used in these E2E tests.
+        return true
     }
 
 }

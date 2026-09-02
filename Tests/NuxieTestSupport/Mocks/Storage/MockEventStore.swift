@@ -84,6 +84,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _shouldFailUnresolvedJourneyOwnershipResponseRecord = false
     private var _pendingDeliveryQueryDelay: TimeInterval = 0
     private var _pendingInsertDelayNanoseconds: UInt64 = 0
+    private var _suspendNextInsert = false
     private var _suspendedInsertIds: Set<String> = []
     private var _suspendedInsertContinuations: [String: CheckedContinuation<Void, Never>] = [:]
     private var _suspendedStableCaptureAfterCommitIds: Set<String> = []
@@ -96,6 +97,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _waitingStableCaptureBeforeCommitIds: Set<String> = []
     private var _stableCaptureDelayNanoseconds: UInt64 = 0
     private var _stableCaptureCommitCallCount = 0
+    private var _stableCaptureBatchFailureIndex: Int?
 
     public var shouldFailInitialize: Bool {
         get { lock.withLock { _initializeFailure != .none } }
@@ -146,6 +148,16 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         _ = lock.withLock { _suspendedInsertIds.insert(id) }
     }
 
+    /// Holds the next insert without requiring the caller to know the event's
+    /// generated id in advance.
+    public func suspendNextInsert() {
+        lock.withLock { _suspendNextInsert = true }
+    }
+
+    public var waitingInsertIds: Set<String> {
+        lock.withLock { Set(_suspendedInsertContinuations.keys) }
+    }
+
     public func resumeInsert(id: String) {
         let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
             _suspendedInsertIds.remove(id)
@@ -155,7 +167,14 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
 
     private func waitIfInsertSuspended(id: String) async {
-        guard lock.withLock({ _suspendedInsertIds.contains(id) }) else { return }
+        let shouldSuspend = lock.withLock {
+            if _suspendNextInsert {
+                _suspendNextInsert = false
+                _suspendedInsertIds.insert(id)
+            }
+            return _suspendedInsertIds.contains(id)
+        }
+        guard shouldSuspend else { return }
         await withCheckedContinuation { continuation in
             let resumeImmediately = lock.withLock { () -> Bool in
                 guard _suspendedInsertIds.contains(id) else { return true }
@@ -211,6 +230,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
     public var stableCaptureCommitCallCount: Int {
         lock.withLock { _stableCaptureCommitCallCount }
+    }
+    public var stableCaptureBatchFailureIndex: Int? {
+        get { lock.withLock { _stableCaptureBatchFailureIndex } }
+        set { lock.withLock { _stableCaptureBatchFailureIndex = newValue } }
     }
 
     // Call tracking (lock-guarded)
@@ -289,6 +312,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
+            _suspendNextInsert = false
             _suspendedInsertIds.removeAll()
             _suspendedInsertContinuations.removeAll()
             _suspendedStableCaptureAfterCommitIds.removeAll()
@@ -466,6 +490,105 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             }
         }
         return commit
+    }
+
+    public func commitStableCaptureBatch(
+        _ records: [StableEventCaptureRecord],
+        assigningCommitSequence: Bool,
+        admission: (any StableEventCaptureBatchCommitAdmission)?
+    ) async throws -> [StableEventCaptureCommit] {
+        let operation = { [self] () throws -> [StableEventCaptureCommit] in
+            try lock.withLock {
+                if _shouldFailStore { throw mockError(2, "Mock store error") }
+                var storedEvents = _storedEvents
+                var originsByEventId = _originsByEventId
+                var pendingIds = _pendingIds
+                var stableDroppedAt = _stableDroppedAt
+                var nextCommitSequence = _nextCommitSequence
+                var commits: [StableEventCaptureCommit] = []
+                commits.reserveCapacity(records.count)
+
+                func takeSequence() -> UInt64? {
+                    guard assigningCommitSequence else { return nil }
+                    defer { nextCommitSequence &+= 1 }
+                    return nextCommitSequence
+                }
+
+                for (index, record) in records.enumerated() {
+                    if _stableCaptureBatchFailureIndex == index {
+                        throw mockError(8, "Mock stable capture batch error")
+                    }
+                    if let existing = storedEvents.first(where: {
+                        $0.id == record.eventId
+                    }) {
+                        commits.append(.init(
+                            outcome: .captured(existing, isNew: false),
+                            commitSequence: takeSequence()
+                        ))
+                        continue
+                    }
+                    if stableDroppedAt[record.eventId] != nil {
+                        commits.append(.init(
+                            outcome: .dropped,
+                            commitSequence: takeSequence()
+                        ))
+                        continue
+                    }
+                    if let ownership = record.ownership,
+                       (_journeyOwnershipFences[ownership.journeyId] ?? Int.min)
+                        >= ownership.epoch {
+                        commits.append(.init(
+                            outcome: .ownershipLost,
+                            commitSequence: takeSequence()
+                        ))
+                        continue
+                    }
+                    if let ownership = record.ownership,
+                       _unresolvedJourneyOwnershipResponses.values
+                        .flatMap({ $0 })
+                        .contains(where: {
+                            $0.journeyId == ownership.journeyId
+                                && $0.epoch >= ownership.epoch
+                        }) {
+                        throw mockError(
+                            3,
+                            "Mock unresolved journey ownership response"
+                        )
+                    }
+                    if let event = record.event {
+                        storedEvents.append(event)
+                        originsByEventId[record.eventId] = .device
+                        pendingIds.insert(record.eventId)
+                        commits.append(.init(
+                            outcome: .captured(event, isNew: true),
+                            commitSequence: takeSequence()
+                        ))
+                    } else {
+                        stableDroppedAt[record.eventId] = record.recordedAt
+                        commits.append(.init(
+                            outcome: .dropped,
+                            commitSequence: takeSequence()
+                        ))
+                    }
+                }
+
+                _stableCaptureCommitCallCount += records.count
+                _storeEventCallCount += records.count
+                _storedEvents = storedEvents
+                _originsByEventId = originsByEventId
+                _pendingIds = pendingIds
+                _stableDroppedAt = stableDroppedAt
+                _nextCommitSequence = nextCommitSequence
+                return commits
+            }
+        }
+        if let admission {
+            guard let committed = try admission.commitBatchIfCurrent(operation) else {
+                throw StableEventCaptureCommitAdmissionError.rejected
+            }
+            return committed
+        }
+        return try operation()
     }
 
     private func takeCommitSequence(if requested: Bool) -> UInt64? {
@@ -830,6 +953,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
+            _suspendNextInsert = false
             _suspendedInsertIds.removeAll()
             _suspendedInsertContinuations.removeAll()
             _suspendedStableCaptureAfterCommitIds.removeAll()

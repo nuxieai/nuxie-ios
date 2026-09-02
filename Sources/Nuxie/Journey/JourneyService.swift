@@ -2951,9 +2951,9 @@ actor JourneyService: JourneyServiceProtocol {
     controller: ExperienceViewController
   ) async -> Bool {
     guard !isShutDown else { return true }
-    guard let journey = inMemoryJourneysById[journeyId] else {
-      return true
-    }
+    guard let journey = inMemoryJourneysById[journeyId] else { return true }
+    // A detached retry cannot start after identity authority has moved.
+    guard journey.distinctId == identityService.getDistinctId() else { return false }
     guard await journey.hasHostDismissalReservation(),
           inMemoryJourneysById[journeyId] === journey else {
       return false

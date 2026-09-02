@@ -93,6 +93,19 @@ struct ExternalPurchaseDeclaration: Sendable {
     let operationId: String
     let distinctId: String
     let kind: Kind
+    let outcomeEventId: String?
+
+    init(
+        operationId: String,
+        distinctId: String,
+        kind: Kind,
+        outcomeEventId: String? = nil
+    ) {
+        self.operationId = operationId
+        self.distinctId = distinctId
+        self.kind = kind
+        self.outcomeEventId = outcomeEventId
+    }
 }
 
 enum PurchaseOutcome: Sendable {
@@ -1086,9 +1099,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         _ declaration: ExternalPurchaseDeclaration,
         source: PurchaseOutcomeSource
     ) async -> PurchaseCommitResult {
-        let eventId = (["purchase-outcome", source.rawValue]
-            + purchaseStorageScope.storageComponents
-            + [declaration.operationId]).joined(separator: ":")
+        let eventId = declaration.outcomeEventId
+            ?? (["purchase-outcome", source.rawValue]
+                + purchaseStorageScope.storageComponents
+                + [declaration.operationId]).joined(separator: ":")
         let routeToJourneys = declaration.distinctId
             == identityService.getDistinctId()
         var captured = false

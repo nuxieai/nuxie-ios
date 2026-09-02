@@ -14,6 +14,11 @@ struct DeviceLegReporter {
                 try await journal.markStartedQueued(run)
             }
             if run.completion != nil {
+                // A shown experiment decision owns its exposure record before
+                // the terminal run can be removed from the journal.
+                guard !run.experimentExposures.contains(where: {
+                    $0.shownAt != nil && !$0.queued
+                }) else { continue }
                 guard await queue(run, completion: true) else { continue }
                 try await journal.markCompletionQueued(run)
             }
@@ -55,3 +60,101 @@ struct DeviceLegReporter {
 }
 
 extension DeviceLegReporter: Sendable {}
+
+/// Flushes only experiment decisions whose selected variant reached a visible
+/// surface. The journal keeps the stable event ID until EventLog accepts it,
+/// so a crash or transient storage failure cannot duplicate an exposure.
+struct DeviceLegExperimentExposureReporter: Sendable {
+    let journal: DeviceLegRunJournal
+    let events: any RoutedStableSystemEventCapturing
+
+    func flushPending(
+        admission: DeviceLegCommitAdmission? = nil
+    ) async throws -> Bool {
+        for run in try await journal.runs() {
+            for exposure in run.experimentExposures
+            where exposure.shownAt != nil && !exposure.queued {
+                let properties = properties(exposure, run: run)
+                let capture: DurableTriggerCapture?
+                switch exposure.kind {
+                case .assigned:
+                    capture = await captureStableSystemEvent(
+                        JourneyEvents.experimentExposure,
+                        properties: properties,
+                        eventId: exposure.eventId,
+                        admission: admission
+                    )
+                case .fallback:
+                    capture = await captureStableSystemEvent(
+                        JourneyEvents.experimentExposureFallback,
+                        properties: properties,
+                        eventId: exposure.eventId,
+                        admission: admission
+                    )
+                case .invalidAssignment:
+                    capture = await captureStableSystemEvent(
+                        JourneyEvents.experimentExposureError,
+                        properties: properties,
+                        eventId: exposure.eventId,
+                        admission: admission
+                    )
+                }
+                guard capture != nil else { return false }
+                await events.drainCommittedRouting()
+                try await journal.markExperimentExposureQueued(
+                    run.id,
+                    eventId: exposure.eventId
+                )
+            }
+        }
+        return true
+    }
+
+    private func captureStableSystemEvent(
+        _ name: String,
+        properties: sending [String: Any],
+        eventId: String,
+        admission: DeviceLegCommitAdmission?
+    ) async -> DurableTriggerCapture? {
+        if let admission {
+            return await events.captureAndRouteSystemEvent(
+                name,
+                properties: properties,
+                eventId: eventId,
+                distinctId: journal.distinctId,
+                admission: admission
+            )
+        }
+        return await events.captureAndRouteSystemEvent(
+            name,
+            properties: properties,
+            eventId: eventId,
+            distinctId: journal.distinctId
+        )
+    }
+
+    private func properties(
+        _ exposure: DeviceLegRun.ExperimentExposure,
+        run: DeviceLegRun
+    ) -> [String: Any] {
+        var properties: [String: Any] = [
+            "journey_id": run.journeyId,
+            "experience_id": run.reference.experienceId,
+            "experience_version": run.reference.versionId,
+            "experiment_key": exposure.experimentId,
+            "variant_key": exposure.variantId,
+        ]
+        switch exposure.kind {
+        case .assigned:
+            properties["assignment_source"] = "profile"
+            properties["is_holdout"] = exposure.isHoldout
+        case .fallback:
+            properties["assignment_source"] = "no_assignment"
+        case .invalidAssignment:
+            properties["variant_key"] = exposure.assignedVariantId
+                ?? exposure.variantId
+            properties["reason"] = "variant_not_found"
+        }
+        return properties
+    }
+}

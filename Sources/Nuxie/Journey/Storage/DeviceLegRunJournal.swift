@@ -15,6 +15,23 @@ struct DeviceLegRun {
         let outcome: String
         let at: Date
     }
+    struct ExperimentExposure: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Sendable {
+            case assigned
+            case fallback
+            case invalidAssignment
+        }
+
+        let experimentId: String
+        let variantId: String
+        let assignedVariantId: String?
+        let isHoldout: Bool
+        let kind: Kind
+        let eventId: String
+        let selectedAt: Date
+        var shownAt: Date?
+        var queued: Bool
+    }
 
     let journeyId: String
     let generation: Int
@@ -33,6 +50,10 @@ struct DeviceLegRun {
     /// A claimed effect is deliberately not a resume point: process death
     /// after this write abandons the run instead of replaying the effect.
     var effectReceipts: [String: String] = [:]
+    /// Experiment decisions survive until a selected variant reaches a visible
+    /// presentation. A stable event identity makes post-show reporting
+    /// idempotent across retries and process recovery.
+    var experimentExposures: [ExperimentExposure] = []
     var completion: Completion?
 
     var id: String { "\(journeyId):\(generation)" }
@@ -105,6 +126,7 @@ struct DeviceLegRunJournal {
     private let lockScope: CacheFilesystemLockScope
     private let releasePinBudgetBytes: Int
     private let releasePinCountLimit: Int
+    private let beforePersist: (@Sendable () throws -> Void)?
     /// A canonical profile may carry up to 24 MiB of admitted context. Keep
     /// the previous 16 MiB journal allowance as headroom for cursors,
     /// responses, receipts, and the reentry checklist.
@@ -119,11 +141,13 @@ struct DeviceLegRunJournal {
         distinctId: String,
         storageScope: DeviceLegStorageScope = .testFixture,
         releasePinBudgetBytes: Int = Self.defaultReleasePinBudgetBytes,
-        releasePinCountLimit: Int = Self.defaultReleasePinCountLimit
+        releasePinCountLimit: Int = Self.defaultReleasePinCountLimit,
+        beforePersist: (@Sendable () throws -> Void)? = nil
     ) throws {
         self.distinctId = distinctId
         self.releasePinBudgetBytes = max(0, releasePinBudgetBytes)
         self.releasePinCountLimit = max(0, releasePinCountLimit)
+        self.beforePersist = beforePersist
         let root = directory.appendingPathComponent("device-leg-journal-v1", isDirectory: true)
         self.root = root
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -172,6 +196,7 @@ struct DeviceLegRunJournal {
         let releasePinBudgetBytes = releasePinBudgetBytes
         let releasePinCountLimit = releasePinCountLimit
         let revocationFile = revocationFile
+        let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
             to: root,
             lockScope: lockScope
@@ -286,6 +311,7 @@ struct DeviceLegRunJournal {
                     guard try profileFence.performIfCurrent(
                         profileFenceToken,
                         { () -> Void in
+                            try beforePersist?()
                             try Self.persist(state, to: file)
                             onAdmitted()
                         }
@@ -296,6 +322,7 @@ struct DeviceLegRunJournal {
                         return nil
                     }
                 } else {
+                    try beforePersist?()
                     try Self.persist(state, to: file)
                     onAdmitted()
                 }
@@ -421,9 +448,16 @@ struct DeviceLegRunJournal {
     }
 
     /// Persist one executor transition before another step or effect runs.
-    func transition(_ id: String, stepId: String, context: ArmedDeviceLeg.Context,
-                    checkpoint: DeviceLegControlExecutor.Checkpoint? = nil) async throws {
-        try await update { state in
+    @discardableResult
+    func transition(
+        _ id: String,
+        stepId: String,
+        context: ArmedDeviceLeg.Context,
+        checkpoint: DeviceLegControlExecutor.Checkpoint? = nil,
+        experimentExposure: DeviceLegRun.ExperimentExposure? = nil,
+        admission: DeviceLegCommitAdmission? = nil
+    ) async throws -> Bool {
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
             guard var run = state.runs[id], run.startedQueued, run.completion == nil else {
                 throw DeviceLegJournalError.invalidState
             }
@@ -432,9 +466,57 @@ struct DeviceLegRunJournal {
             run.effectReceipts.removeValue(forKey: run.stepId)
             run.stepId = stepId
             run.context = context
+            if let experimentExposure,
+               !run.experimentExposures.contains(where: {
+                   $0.experimentId == experimentExposure.experimentId
+               }) {
+                run.experimentExposures.append(experimentExposure)
+            }
             run.park = checkpoint.map {
                 .init(wakeAt: Self.date($0.wakeAtMillis), anchorAt: Self.date($0.anchorAtMillis))
             }
+            state.runs[id] = run
+        }
+        if let admission {
+            return try await updateIfCurrent(admission, mutation) != nil
+        }
+        try await update(mutation)
+        return true
+    }
+
+    @discardableResult
+    func markExperimentExposuresShown(
+        _ id: String,
+        at: Date,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id], run.startedQueued,
+                  run.completion == nil else {
+                throw DeviceLegJournalError.invalidState
+            }
+            for index in run.experimentExposures.indices
+            where run.experimentExposures[index].shownAt == nil
+                    && !run.experimentExposures[index].queued {
+                run.experimentExposures[index].shownAt = at
+            }
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
+    func markExperimentExposureQueued(
+        _ id: String,
+        eventId: String
+    ) async throws {
+        try await update { state in
+            guard var run = state.runs[id],
+                  let index = run.experimentExposures.firstIndex(where: {
+                      $0.eventId == eventId
+                  }), run.experimentExposures[index].shownAt != nil else {
+                throw DeviceLegJournalError.invalidState
+            }
+            run.experimentExposures[index].queued = true
             state.runs[id] = run
         }
     }
@@ -481,6 +563,7 @@ struct DeviceLegRunJournal {
         let file = file
         let releasePinDirectory = releasePinDirectory
         let revocationFile = revocationFile
+        let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
             to: root,
             lockScope: lockScope
@@ -525,6 +608,7 @@ struct DeviceLegRunJournal {
                     state.runs[id] = run
                 }
             }
+            try beforePersist?()
             try Self.persist(state, to: file)
             try Self.removeUnreferencedReleasePins(
                 from: releasePinDirectory,
@@ -544,6 +628,7 @@ struct DeviceLegRunJournal {
         let root = root
         let file = file
         let revocationFile = revocationFile
+        let beforePersist = beforePersist
         try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
             to: root,
             lockScope: lockScope
@@ -571,6 +656,7 @@ struct DeviceLegRunJournal {
             // delivery of the same arm belongs to a new profile authority and
             // must be able to start when its state is satisfied.
             state.stateArmReceipts = []
+            try beforePersist?()
             try Self.persist(state, to: file)
         }
     }
@@ -602,6 +688,7 @@ struct DeviceLegRunJournal {
         profileFenceToken: DeviceLegProfileFenceToken
     ) async throws -> DeviceLegRun? {
         let file = file
+        let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
             to: file,
             lockScope: lockScope
@@ -614,20 +701,25 @@ struct DeviceLegRunJournal {
             state.runs[id] = run
             guard try profileFence.performIfCurrent(
                 profileFenceToken,
-                { try Self.persist(state, to: file) }
+                {
+                    try beforePersist?()
+                    try Self.persist(state, to: file)
+                }
             ) != nil else { return nil }
             return run
         }
     }
 
+    @discardableResult
     func complete(
         _ id: String,
         outcome: String,
         at: Date,
         eventOutputs: ExactJSONObject<ExperienceReleaseJSONValue> = [:],
-        responseOutputs: ExactJSONObject<ExperienceReleaseJSONValue> = [:]
-    ) async throws {
-        try await update { state in
+        responseOutputs: ExactJSONObject<ExperienceReleaseJSONValue> = [:],
+        admission: DeviceLegCommitAdmission? = nil
+    ) async throws -> Bool {
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
             guard var run = state.runs[id] else { throw DeviceLegJournalError.invalidState }
             // A retry cannot rewrite the outcome, outputs, or occurrence time.
             guard run.completion == nil else { return }
@@ -643,6 +735,11 @@ struct DeviceLegRunJournal {
             )
             state.runs[id] = run
         }
+        if let admission {
+            return try await updateIfCurrent(admission, mutation) != nil
+        }
+        try await update(mutation)
+        return true
     }
 
     func markStartedQueued(_ run: DeviceLegRun) async throws {
@@ -711,9 +808,11 @@ struct DeviceLegRunJournal {
     ) async throws -> Value {
         let file = file
         let releasePinDirectory = releasePinDirectory
+        let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(to: file, lockScope: lockScope) {
             var state = try Self.load(file)
             let value = try operation(&state)
+            try beforePersist?()
             try Self.persist(state, to: file)
             if cleanupReleasePins {
                 try Self.removeUnreferencedReleasePins(
@@ -722,6 +821,26 @@ struct DeviceLegRunJournal {
                 )
             }
             return value
+        }
+    }
+
+    private func updateIfCurrent<Value: Sendable>(
+        _ admission: DeviceLegCommitAdmission,
+        _ operation: @escaping @Sendable (inout Snapshot) throws -> Value
+    ) async throws -> Value? {
+        let file = file
+        let beforePersist = beforePersist
+        return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
+            to: file,
+            lockScope: lockScope
+        ) {
+            var state = try Self.load(file)
+            let value = try operation(&state)
+            return try admission.commitJournalIfCurrent {
+                try beforePersist?()
+                try Self.persist(state, to: file)
+                return value
+            }
         }
     }
 
@@ -939,6 +1058,7 @@ extension DeviceLegRun: Codable, Sendable {
         case context
         case outputs
         case effectReceipts
+        case experimentExposures
         case completion
     }
 
@@ -967,6 +1087,10 @@ extension DeviceLegRun: Codable, Sendable {
             [String: String].self,
             forKey: .effectReceipts
         ) ?? [:]
+        experimentExposures = try container.decodeIfPresent(
+            [ExperimentExposure].self,
+            forKey: .experimentExposures
+        ) ?? []
         completion = try container.decodeIfPresent(Completion.self, forKey: .completion)
     }
 
@@ -986,6 +1110,7 @@ extension DeviceLegRun: Codable, Sendable {
         try container.encode(context, forKey: .context)
         try container.encode(outputs, forKey: .outputs)
         try container.encode(effectReceipts, forKey: .effectReceipts)
+        try container.encode(experimentExposures, forKey: .experimentExposures)
         try container.encodeIfPresent(completion, forKey: .completion)
     }
 }

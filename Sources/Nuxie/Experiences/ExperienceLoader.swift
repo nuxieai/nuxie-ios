@@ -38,6 +38,25 @@ actor ExperienceLoader {
         let versionId: String
     }
 
+    private struct ProductReleaseAuthority {
+        let releaseID: AuthenticatedExperienceReleaseID
+        let journey: JourneyDocument
+        let definition: ExperienceDefinition
+        let products: [ExperienceReleaseProductDocument]
+        let placements: [ExperienceReleasePlacementDocument]
+        let additionalPlacementIDs: Set<String>
+        let hasDynamicPurchase: Bool
+    }
+
+    /// Product and entitlement authority from one authenticated descriptor,
+    /// independent of whether its render runtime is the legacy or device
+    /// Journey representation.
+    private struct ProductCatalogRelease {
+        let releaseID: AuthenticatedExperienceReleaseID
+        let isActive: Bool
+        let products: [ExperienceReleaseProductDocument]
+    }
+
     private struct OptimisticAllowanceCatalogKey: Hashable {
         let releaseID: AuthenticatedExperienceReleaseID
         let isActive: Bool
@@ -98,6 +117,7 @@ actor ExperienceLoader {
     private var optimisticAllowanceCatalog: [
         OptimisticAllowanceCatalogKey: [OptimisticEntitlementAllowance]
     ]?
+    private var productCatalogReleases: [ProductCatalogRelease] = []
     private var productAuthorityChangeHandler: (@Sendable () async -> Void)?
     private var pendingProductAuthorityChangeNotification = false
     private var preparedReleasesByVersion: [ExperienceVersionKey: StoredPreparedRelease] = [:]
@@ -201,58 +221,45 @@ actor ExperienceLoader {
         admission: ProfileSideEffectAdmission? = nil
     ) async throws -> ExperienceRoutingCatalog? {
 
-        guard let catalog = prepared.catalog else {
-            let authorityChanged = installProductAuthorityCatalog([:])
-            let allowancesChanged = installOptimisticAllowanceCatalog([:])
-            cancelWarmTasks()
-            finishPreloadAccounting(cancelled: true)
-            cancelPendingPreparations()
-            experiencesByVersion.removeAll()
-            releasesByVersion.removeAll()
-            productMappingsByReleaseAndID.removeAll()
-            productMappingsByReleaseAndStoreID.removeAll()
-            preparedReleasesByVersion.removeAll()
-            await interactivePreparationCache.removeAll()
-            guard generation == nil || generation == latestProfileGeneration,
-              admission?() != false else { return nil }
-            preloadMetricsByRelease.removeAll()
-            reportedPreloadMetricsByRelease.removeAll()
-            if authorityChanged || allowancesChanged {
-                await notifyProductAuthorityChanged()
-            }
-            return makeRoutingCatalog(
-                generation: generation ?? latestProfileGeneration,
-                references: [],
-                releases: [:]
-            )
-        }
-        for rejection in catalog.rejections {
-            LogError(
-                """
-                Experience release rejected independently: \
-                \(rejection.locator.experienceId)/\(rejection.locator.experienceVersionId) \
-                \(rejection.contractCode)
-                """
-            )
-        }
         var installed: [ExperienceVersionKey: AuthenticatedExperienceReleaseDefinition] = [:]
-        for definition in catalog.definitions {
-            let key = ExperienceVersionKey(
-                experienceId: definition.reference.experienceId,
-                versionId: definition.reference.versionId
-            )
-            if let existing = installed[key], existing.releaseID != definition.releaseID {
-                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        if let catalog = prepared.catalog {
+            for rejection in catalog.rejections {
+                LogError(
+                    """
+                    Experience release rejected independently: \
+                    \(rejection.locator.experienceId)/\(rejection.locator.experienceVersionId) \
+                    \(rejection.contractCode)
+                    """
+                )
             }
-            installed[key] = definition
+            for definition in catalog.definitions {
+                let key = ExperienceVersionKey(
+                    experienceId: definition.reference.experienceId,
+                    versionId: definition.reference.versionId
+                )
+                if let existing = installed[key],
+                   existing.releaseID != definition.releaseID {
+                    throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+                }
+                installed[key] = definition
+            }
         }
-        let productMappings = makeProductMappingCache(installed.values)
+        let catalogReleases = try makeProductCatalogReleases(
+            legacyDefinitions: installed.values,
+            deviceLegSnapshot: prepared.deviceLegSnapshot
+        )
+        let productMappings = makeProductMappingCache(catalogReleases)
+        guard generation == nil || generation == latestProfileGeneration,
+              admission?() != false else { return nil }
         let authorityChanged = installProductAuthorityCatalog(
-            makeProductAuthorityCatalog(installed.values)
+            makeProductAuthorityCatalog(catalogReleases)
         )
         let allowancesChanged = installOptimisticAllowanceCatalog(
-            makeOptimisticAllowanceCatalog(installed.values)
+            makeOptimisticAllowanceCatalog(catalogReleases)
         )
+        productCatalogReleases = catalogReleases
+        let clearsAllProductAuthority = prepared.catalog == nil
+            && prepared.deviceLegSnapshot == nil
 
         if hasSameReleaseAuthority(as: installed) {
             // Disk admission and a concurrent network refresh can authenticate
@@ -260,16 +267,23 @@ actor ExperienceLoader {
             // artifacts. Preserve that exact in-flight work; cancellation is
             // reserved for a real identity, delivery-origin, or mode change.
             releasesByVersion = installed
-            productMappingsByReleaseAndID.merge(productMappings.byID) { current, _ in current }
-            productMappingsByReleaseAndStoreID.merge(productMappings.byStoreID) {
-                current, _ in current
+            if clearsAllProductAuthority {
+                productMappingsByReleaseAndID.removeAll()
+                productMappingsByReleaseAndStoreID.removeAll()
+            } else {
+                productMappingsByReleaseAndID.merge(productMappings.byID) {
+                    current, _ in current
+                }
+                productMappingsByReleaseAndStoreID.merge(productMappings.byStoreID) {
+                    current, _ in current
+                }
             }
             if authorityChanged || allowancesChanged {
                 await notifyProductAuthorityChanged()
             }
             return makeRoutingCatalog(
                 generation: generation ?? latestProfileGeneration,
-                references: catalog.references,
+                references: prepared.references ?? [],
                 releases: installed
             )
         }
@@ -279,9 +293,16 @@ actor ExperienceLoader {
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion = installed
-        productMappingsByReleaseAndID.merge(productMappings.byID) { current, _ in current }
-        productMappingsByReleaseAndStoreID.merge(productMappings.byStoreID) {
-            current, _ in current
+        if clearsAllProductAuthority {
+            productMappingsByReleaseAndID.removeAll()
+            productMappingsByReleaseAndStoreID.removeAll()
+        } else {
+            productMappingsByReleaseAndID.merge(productMappings.byID) {
+                current, _ in current
+            }
+            productMappingsByReleaseAndStoreID.merge(productMappings.byStoreID) {
+                current, _ in current
+            }
         }
         preparedReleasesByVersion = preparedReleasesByVersion.filter { key, stored in
             installed[key]?.releaseID == stored.releaseID
@@ -299,7 +320,7 @@ actor ExperienceLoader {
         }
         return makeRoutingCatalog(
             generation: generation ?? latestProfileGeneration,
-            references: catalog.references,
+            references: prepared.references ?? [],
             releases: installed
         )
     }
@@ -361,9 +382,43 @@ actor ExperienceLoader {
         }
     }
 
+    private func makeProductCatalogReleases(
+        legacyDefinitions: Dictionary<ExperienceVersionKey,
+            AuthenticatedExperienceReleaseDefinition>.Values,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
+    ) throws -> [ProductCatalogRelease] {
+        var releases = legacyDefinitions.map { definition in
+            ProductCatalogRelease(
+                releaseID: definition.releaseID,
+                isActive: definition.mode == .active,
+                products: definition.products
+            )
+        }
+        guard let deviceLegSnapshot else { return releases }
+        let activeDigests = Set(deviceLegSnapshot.profile.armedLegs.compactMap {
+            $0.binding.type == .new ? $0.reference.descriptorSha256 : nil
+        })
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        for release in deviceLegSnapshot.releasesByDigest.values {
+            let products = try decoder.decode(
+                [ExperienceReleaseProductDocument].self,
+                from: encoder.encode(release.descriptor.products)
+            )
+            releases.append(ProductCatalogRelease(
+                releaseID: .init(
+                    identity: release.descriptor.identity,
+                    descriptorSHA256: release.descriptorSHA256
+                ),
+                isActive: activeDigests.contains(release.descriptorSHA256),
+                products: products
+            ))
+        }
+        return releases
+    }
+
     private func makeProductMappingCache(
-        _ definitions: Dictionary<ExperienceVersionKey,
-            AuthenticatedExperienceReleaseDefinition>.Values
+        _ definitions: [ProductCatalogRelease]
     ) -> (
         byID: [String: ExperienceReleaseProductDocument],
         byStoreID: [String: ExperienceReleaseProductDocument]
@@ -384,11 +439,10 @@ actor ExperienceLoader {
     }
 
     private func makeProductAuthorityCatalog(
-        _ definitions: Dictionary<ExperienceVersionKey,
-            AuthenticatedExperienceReleaseDefinition>.Values
+        _ definitions: [ProductCatalogRelease]
     ) -> [String: ActiveProductEvidenceAuthorityResolution] {
         let products = definitions
-            .filter { $0.mode == .active }
+            .filter(\.isActive)
             .flatMap(\.products)
         let storeProductIds = Set(products.compactMap { product in
             product.store.platform == "apple_app_store"
@@ -407,21 +461,16 @@ actor ExperienceLoader {
     }
 
     private func makeOptimisticAllowanceCatalog(
-        _ definitions: Dictionary<ExperienceVersionKey,
-            AuthenticatedExperienceReleaseDefinition>.Values
+        _ definitions: [ProductCatalogRelease]
     ) -> [OptimisticAllowanceCatalogKey: [OptimisticEntitlementAllowance]] {
         var catalog: [
             OptimisticAllowanceCatalogKey: [OptimisticEntitlementAllowance]
         ] = [:]
         for definition in definitions {
-            let isActive = switch definition.mode {
-            case .active: true
-            case .pinned: false
-            }
             for product in definition.products {
                 let key = OptimisticAllowanceCatalogKey(
                     releaseID: definition.releaseID,
-                    isActive: isActive,
+                    isActive: definition.isActive,
                     productID: product.id,
                     platform: product.store.platform,
                     storeProductID: product.store.productId
@@ -477,8 +526,8 @@ actor ExperienceLoader {
                 productID: productId
             )
         } else {
-            let matches = releasesByVersion.values
-                .filter { $0.mode == .active }
+            let matches = productCatalogReleases
+                .filter(\.isActive)
                 .flatMap(\.products)
                 .filter {
                     $0.store.platform == "apple_app_store"
@@ -548,6 +597,7 @@ actor ExperienceLoader {
         releasesByVersion.removeAll()
         productMappingsByReleaseAndID.removeAll()
         productMappingsByReleaseAndStoreID.removeAll()
+        productCatalogReleases.removeAll()
         preparedReleasesByVersion.removeAll()
         await interactivePreparationCache.removeAll()
         preloadMetricsByRelease.removeAll()
@@ -746,9 +796,162 @@ actor ExperienceLoader {
         )
     }
 
+    func productsForDeviceLegPresentation(
+        release: AuthenticatedDeviceLegRelease,
+        screenID: String,
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext? = nil
+    ) async throws -> [StoreProduct] {
+        let authority: ProductReleaseAuthority
+        do {
+            authority = try productAuthority(release, screenID: screenID)
+        } catch {
+            throw ExperienceError.productsUnavailable
+        }
+        let placementIDs = requiredPlacementIDs(
+            for: screenID,
+            in: authority
+        )
+        guard !placementIDs.isEmpty else { return [] }
+        let productIDs = requiredProductIDs(
+            for: screenID,
+            in: authority
+        )
+        guard !productIDs.isEmpty else {
+            throw ExperienceError.productsUnavailable
+        }
+        do {
+            await productService.invalidate(productIDs)
+            let products = try await fetchProducts(
+                for: screenID,
+                in: authority,
+                introEligibilityAuthorization: introEligibilityAuthorization
+            )
+            guard Set(products.map(\.storeProductId)) == productIDs,
+                  Set(products.map(\.placementId)) == placementIDs else {
+                throw ExperienceError.productsUnavailable
+            }
+            return products
+        } catch {
+            if error is CancellationError { throw error }
+            throw ExperienceError.productsUnavailable
+        }
+    }
+
+    private func productAuthority(
+        _ release: AuthenticatedExperienceReleaseDefinition
+    ) -> ProductReleaseAuthority {
+        ProductReleaseAuthority(
+            releaseID: release.releaseID,
+            journey: release.journey,
+            definition: release.definition,
+            products: release.products,
+            placements: release.placements,
+            additionalPlacementIDs: [],
+            hasDynamicPurchase: false
+        )
+    }
+
+    private func productAuthority(
+        _ release: AuthenticatedDeviceLegRelease,
+        screenID: String
+    ) throws -> ProductReleaseAuthority {
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let products = try decoder.decode(
+            [ExperienceReleaseProductDocument].self,
+            from: encoder.encode(release.descriptor.products)
+        )
+        let placements = try decoder.decode(
+            [ExperienceReleasePlacementDocument].self,
+            from: encoder.encode(release.descriptor.placements)
+        )
+        let flatRequirements = flatProductRequirements(
+            for: screenID,
+            in: release.descriptor.leg
+        )
+        let definition = try ExperienceDefinition(
+            deviceLegDescriptor: release.descriptor
+        )
+        return ProductReleaseAuthority(
+            releaseID: .init(
+                identity: release.descriptor.identity,
+                descriptorSHA256: release.descriptorSHA256
+            ),
+            journey: definition.renderShell,
+            definition: definition,
+            products: products,
+            placements: placements,
+            additionalPlacementIDs: flatRequirements.placementIDs,
+            hasDynamicPurchase: flatRequirements.hasDynamicPurchase
+        )
+    }
+
+    private func flatProductRequirements(
+        for screenID: String,
+        in leg: DeviceLeg
+    ) -> (placementIDs: Set<String>, hasDynamicPurchase: Bool) {
+        var stepsByID: [String: DeviceLeg.Step] = [:]
+        for step in leg.steps {
+            stepsByID[step.id] = step
+        }
+        var pending = leg.routes.compactMap { route -> String? in
+            switch route.host.kind {
+            case .journey:
+                return route.entryStepId
+            case .screen where route.host.screenId == screenID:
+                return route.entryStepId
+            case .screen:
+                return nil
+            }
+        }
+        var visited: Set<String> = []
+        var placementIDs: Set<String> = []
+        var hasDynamicPurchase = false
+
+        while let stepID = pending.popLast() {
+            guard visited.insert(stepID).inserted,
+                  let step = stepsByID[stepID] else {
+                continue
+            }
+            if case .string("navigate")? = step.action?["type"] {
+                // The destination screen resolves its own first-frame and
+                // reachable-action products when navigation reaches it.
+                continue
+            }
+            if case .string("purchase")? = step.action?["type"] {
+                switch step.action?["placementId"] {
+                case .string(let placementID):
+                    placementIDs.insert(placementID)
+                case .object(let wrapped):
+                    if case .string(let placementID)? = wrapped["literal"] {
+                        placementIDs.insert(placementID)
+                    } else {
+                        hasDynamicPurchase = true
+                    }
+                default:
+                    hasDynamicPurchase = true
+                }
+            }
+            if let outlets = step.outlets {
+                pending.append(contentsOf: outlets.values)
+            }
+        }
+        return (placementIDs, hasDynamicPurchase)
+    }
+
     private func requiredProductIDs(
         for screenID: String,
         in release: AuthenticatedExperienceReleaseDefinition
+    ) -> Set<String> {
+        requiredProductIDs(
+            for: screenID,
+            in: productAuthority(release)
+        )
+    }
+
+    private func requiredProductIDs(
+        for screenID: String,
+        in release: ProductReleaseAuthority
     ) -> Set<String> {
         Set(appleProductBindings(for: screenID, in: release).map {
             $0.product.store.productId
@@ -758,6 +961,16 @@ actor ExperienceLoader {
     private func requiredPlacementIDs(
         for screenID: String,
         in release: AuthenticatedExperienceReleaseDefinition
+    ) -> Set<String> {
+        requiredPlacementIDs(
+            for: screenID,
+            in: productAuthority(release)
+        )
+    }
+
+    private func requiredPlacementIDs(
+        for screenID: String,
+        in release: ProductReleaseAuthority
     ) -> Set<String> {
         guard let screen = release.journey.screens.first(where: { $0.id == screenID }) else {
             return []
@@ -811,6 +1024,7 @@ actor ExperienceLoader {
             }
         }
         collectPurchasePlacementIDs(in: devicePrograms, into: &referenced)
+        referenced.formUnion(release.additionalPlacementIDs)
         // A purchase may resolve its placement from Response.Field,
         // Event.Field, or another runtime value. There is no safe placement
         // identity to derive during release admission in that case, while
@@ -819,7 +1033,8 @@ actor ExperienceLoader {
         // placement whenever the reachable program contains a dynamic
         // purchase; the signed release remains the authority and malformed
         // references still fail closed at checkout.
-        if containsDynamicPurchase(in: devicePrograms) {
+        if containsDynamicPurchase(in: devicePrograms)
+            || release.hasDynamicPurchase {
             let appleProductIDs = Set(
                 release.products
                     .filter { $0.store.platform == "apple_app_store" }
@@ -1042,6 +1257,16 @@ actor ExperienceLoader {
     private func appleProductBindings(
         for screenID: String,
         in release: AuthenticatedExperienceReleaseDefinition
+    ) -> [(placement: ExperienceReleasePlacementDocument, product: ExperienceReleaseProductDocument)] {
+        appleProductBindings(
+            for: screenID,
+            in: productAuthority(release)
+        )
+    }
+
+    private func appleProductBindings(
+        for screenID: String,
+        in release: ProductReleaseAuthority
     ) -> [(placement: ExperienceReleasePlacementDocument, product: ExperienceReleaseProductDocument)] {
         let placementIDs = requiredPlacementIDs(for: screenID, in: release)
         let productsByID = Dictionary(uniqueKeysWithValues: release.products.map { ($0.id, $0) })
@@ -1596,6 +1821,18 @@ actor ExperienceLoader {
     private func fetchProducts(
         for screenID: String,
         in release: AuthenticatedExperienceReleaseDefinition,
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext? = nil
+    ) async throws -> [StoreProduct] {
+        try await fetchProducts(
+            for: screenID,
+            in: productAuthority(release),
+            introEligibilityAuthorization: introEligibilityAuthorization
+        )
+    }
+
+    private func fetchProducts(
+        for screenID: String,
+        in release: ProductReleaseAuthority,
         introEligibilityAuthorization: IntroEligibilityAuthorizationContext? = nil
     ) async throws -> [StoreProduct] {
         let bindings = appleProductBindings(for: screenID, in: release)

@@ -70,9 +70,9 @@ $experience_artifact_load_succeeded	processCapture	governed	batch	true	true
 $experience_dismissed	processCapture	governed	batch	true	true
 $experience_errored	processCapture	governed	batch	true	true
 $experience_shown	processCapture	governed	batch	true	true
-$experiment_exposure	processCapture	governed	batch	true	true
-$experiment_exposure_error	processCapture	governed	batch	true	true
-$experiment_exposure_fallback	processCapture	governed	batch	true	true
+$experiment_exposure	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$experiment_exposure_error	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$experiment_exposure_fallback	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
 $feature_used	featureCommand|storePreparedEventInHistory	governed	/i/event response lane	true	true
 $identify	processCapture	governed	batch	true	true
 $journey_claimed	trackForTrigger	exempt	/i/event response lane	true	true
@@ -89,25 +89,25 @@ $journey_parked	processCapture	governed	batch	true	true
 $journey_started	none	exempt	none	false	false
 $journey_superseded	commitServerFacts	exempt	none	true	false
 $journey_transition	trackWithResponse|processCapture	exempt|governed	/i/event response lane|batch	true	true
-$notifications_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
-$notifications_enabled	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
-$permission_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
-$permission_granted	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
-$products_unavailable	processCapture	governed	batch	true	true
-$purchase_cancelled	trackForTrigger	governed	/i/event response lane	true	true
+$notifications_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
+$notifications_enabled	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
+$permission_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
+$permission_granted	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
+$products_unavailable	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$purchase_cancelled	trackForTrigger|captureStableSystemEvent	governed|governed	/i/event response lane|batch	true|true	true|true
 $purchase_completed	captureStableSystemEvent	governed	batch	true	true
-$purchase_failed	trackForTrigger	governed	/i/event response lane	true	true
+$purchase_failed	trackForTrigger|captureStableSystemEvent	governed|governed	/i/event response lane|batch	true|true	true|true
 $purchase_pending	trackForTrigger	governed	/i/event response lane	true	true
 $purchase_synced	captureStableSystemEvent|trackForTrigger	governed|governed	batch|/i/event response lane	true|true	true|true
 $response_set	none	exempt	none	false	false
 $response_unset	none	exempt	none	false	false
 $restore_completed	captureStableSystemEvent|trackForTrigger	governed|governed	batch|/i/event response lane	true|true	true|true
-$restore_failed	trackForTrigger	governed	/i/event response lane	true	true
-$restore_no_purchases	trackForTrigger	governed	/i/event response lane	true	true
-$screen_dismissed	processCapture	governed	batch	true	true
-$screen_shown	processCapture	governed	batch	true	true
-$tracking_authorized	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
-$tracking_denied	trackForTrigger|trackForTrigger	governed|governed	/i/event response lane|/i/event response lane	true|true	true|true
+$restore_failed	trackForTrigger|captureStableSystemEvent	governed|governed	/i/event response lane|batch	true|true	true|true
+$restore_no_purchases	trackForTrigger|captureStableSystemEvent	governed|governed	/i/event response lane|batch	true|true	true|true
+$screen_dismissed	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$screen_shown	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$tracking_authorized	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
+$tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
 """#
 
     private static let declaredConstants: [(path: String, value: String)] = [

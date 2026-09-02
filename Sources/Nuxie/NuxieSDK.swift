@@ -325,6 +325,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       // CancellationError instead of letting it finish against this graph.
       await core.featureUseCommands.close()
       await run.featureCommandRecoveryTask?.value
+      await core.deviceLegs?.shutdown()
       await core.journeys.shutdown()
       await core.eventLog.close()
       await core.profile.cleanupExpired()
