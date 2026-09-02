@@ -150,6 +150,18 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         continuation?.resume()
     }
 
+    private func waitIfInsertSuspended(id: String) async {
+        guard lock.withLock({ _suspendedInsertIds.contains(id) }) else { return }
+        await withCheckedContinuation { continuation in
+            let resumeImmediately = lock.withLock { () -> Bool in
+                guard _suspendedInsertIds.contains(id) else { return true }
+                _suspendedInsertContinuations[id] = continuation
+                return false
+            }
+            if resumeImmediately { continuation.resume() }
+        }
+    }
+
     /// Holds a stable capture after its row and commit sequence have been
     /// assigned, but before the EventLog receives the commit result. This
     /// lets ordering tests interleave a later commit deterministically.
@@ -281,17 +293,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         if delayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
-        let shouldSuspend = lock.withLock { _suspendedInsertIds.contains(event.id) }
-        if shouldSuspend {
-            await withCheckedContinuation { continuation in
-                let resumeImmediately = lock.withLock { () -> Bool in
-                    guard _suspendedInsertIds.contains(event.id) else { return true }
-                    _suspendedInsertContinuations[event.id] = continuation
-                    return false
-                }
-                if resumeImmediately { continuation.resume() }
-            }
-        }
+        await waitIfInsertSuspended(id: event.id)
         return lock.withLock {
             if let existing = _storedEvents.first(where: { $0.id == event.id }) {
                 if !existing.isByteEquivalent(to: event) {
@@ -342,6 +344,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         if delayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
+        await waitIfInsertSuspended(id: eventId)
         let commit = try lock.withLock { () -> StableEventCaptureCommit in
             _storeEventCallCount += 1
             if _shouldFailStore { throw mockError(2, "Mock store error") }
