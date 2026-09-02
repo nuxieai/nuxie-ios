@@ -609,18 +609,15 @@ $tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	govern
         )
         let permissionProducers = [
             ("    func performRequestNotifications(", [
-                "SystemEventNames.notificationsEnabled",
-                "SystemEventNames.notificationsDenied",
+                "notificationPermissionEventName(",
                 "dispatchNotificationPermissionEvent(",
             ]),
             ("    func performRequestPermission(", [
-                "SystemEventNames.permissionGranted",
-                "SystemEventNames.permissionDenied",
+                "requestPermissionEventName(",
                 "dispatchRequestPermissionEvent(",
             ]),
             ("    func performRequestTracking(", [
-                "SystemEventNames.trackingAuthorized",
-                "SystemEventNames.trackingDenied",
+                "trackingPermissionEventName(",
                 "dispatchTrackingPermissionEvent(",
             ]),
         ]
@@ -628,6 +625,29 @@ $tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	govern
             let body = try functionBody(in: controller, startingWith: signature)
             for requiredCall in requiredCalls {
                 XCTAssertTrue(body.contains(requiredCall), "Missing \(requiredCall) in \(signature)")
+            }
+        }
+        let permissionMappings = [
+            ("    func notificationPermissionEventName(", [
+                "SystemEventNames.notificationsEnabled",
+                "SystemEventNames.notificationsDenied",
+            ]),
+            ("    func requestPermissionEventName(", [
+                "SystemEventNames.permissionGranted",
+                "SystemEventNames.permissionDenied",
+            ]),
+            ("    func trackingPermissionEventName(", [
+                "SystemEventNames.trackingAuthorized",
+                "SystemEventNames.trackingDenied",
+            ]),
+        ]
+        for (signature, eventNames) in permissionMappings {
+            let body = try functionBody(in: controller, startingWith: signature)
+            for eventName in eventNames {
+                XCTAssertTrue(
+                    body.contains(eventName),
+                    "Missing \(eventName) in \(signature)"
+                )
             }
         }
 
