@@ -4,7 +4,7 @@ import Foundation
 /// Mock implementation of ExperiencePresentationService for testing
 // @unchecked Sendable: all mutable state is serialized through `lock`.
 // Non-final because integration tests subclass it to observe call ordering.
-class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, @unchecked Sendable {
+class MockExperiencePresentationService: @unchecked Sendable {
 
     private let lock = NSLock()
 
@@ -315,87 +315,6 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
         // Mock implementation - no-op for tests
     }
 
-    @MainActor
-    func deviceLegProfileRefreshDidComplete() {}
-
-    @MainActor
-    func setDeviceLegPresentationAvailabilityHandler(
-        _ handler: (@MainActor @Sendable () -> Void)?
-    ) {
-        _ = handler
-    }
-
-    @MainActor
-    func reserveDeviceLegPresentation(
-        ownerDistinctId: String
-    ) -> (any DeviceLegPresentationReservation)? {
-        _ = ownerDistinctId
-        return nil
-    }
-
-    @MainActor
-    func ownsDeviceLegPresentation(
-        owner: DeviceLegPresentationOwner
-    ) -> Bool {
-        _ = owner
-        return false
-    }
-
-    @MainActor
-    func presentDeviceLeg(
-        _ request: DeviceLegPresentationRequest
-    ) async -> DeviceLegPresentationResult {
-        _ = request
-        return .declined
-    }
-
-    @MainActor
-    func navigateDeviceLegPresentation(
-        owner: DeviceLegPresentationOwner,
-        screenId: String,
-        transition: ExperienceReleaseJSONValue?
-    ) async -> DeviceLegPresentationNavigationResult {
-        _ = owner
-        _ = screenId
-        _ = transition
-        return .noPresentation
-    }
-
-    @MainActor
-    func resolveDeviceLegPresentationAction(
-        owner: DeviceLegPresentationOwner,
-        action: [String: ExperienceReleaseJSONValue],
-        source: ScreenEmissionSource?
-    ) -> [String: ExperienceReleaseJSONValue]? {
-        _ = owner
-        _ = source
-        return action
-    }
-
-    @MainActor
-    func dispatchDeviceLegPresentationAction(
-        owner: DeviceLegPresentationOwner,
-        action: [String: ExperienceReleaseJSONValue],
-        effectId: String
-    ) async -> DeviceLegPresentationActionResult {
-        _ = owner
-        _ = action
-        _ = effectId
-        return .noPresentation
-    }
-
-    @MainActor
-    func finishDeviceLegPresentation(
-        owner: DeviceLegPresentationOwner
-    ) async {
-        _ = owner
-    }
-
-    @MainActor
-    func shutdownDeviceLegPresentation(ownerDistinctId: String) async {
-        _ = ownerDistinctId
-    }
-
     // MARK: - Test Helper Methods
 
     /// Simulate successful flow presentation
@@ -487,3 +406,6 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
         }
     }
 }
+
+extension MockExperiencePresentationService:
+    ExperiencePresentationServiceProtocol {}

@@ -229,6 +229,15 @@ internal actor ProfileService: ProfileServiceProtocol {
         let locale: String
     }
 
+    /// A report acknowledgement may wake the retained legacy mailbox path,
+    /// but it is not a canonical profile sync point. This token fences that
+    /// reduced request without claiming or invalidating profile admission.
+    private struct MailboxRefreshAdmission: Sendable {
+        let distinctId: String
+        let generation: UInt64
+        let locale: String
+    }
+
     // MARK: - Properties
 
     // Memory cache for instant access
@@ -252,6 +261,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     private var journeyMailboxHandler:
         (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     private var mailboxRefreshInFlight = false
+    private var mailboxRefreshGeneration: UInt64 = 0
     /// Highest admission generation whose customer-scoped portions committed.
     /// A stale request's reduced commit must not land after a NEWER admission
     /// (a replacement fetch under the new locale) already committed.
@@ -939,6 +949,7 @@ internal actor ProfileService: ProfileServiceProtocol {
 
     func clearCache(distinctId: String) async {
         invalidateProfileRequests()
+        invalidateMailboxRefresh()
         // Clear memory
         cachedProfile = nil
         triggerAdmission = nil
@@ -957,6 +968,7 @@ internal actor ProfileService: ProfileServiceProtocol {
 
     func clearAllCache() async {
         invalidateProfileRequests()
+        invalidateMailboxRefresh()
         // Clear memory
         cachedProfile = nil
         triggerAdmission = nil
@@ -1028,6 +1040,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     ) async {
         journeyMailboxHandler = handler
         if handler == nil {
+            invalidateMailboxRefresh()
             await eventLog.setMailboxPendingHandler(nil)
         } else {
             await installMailboxPendingHandler()
@@ -1038,13 +1051,65 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard !mailboxRefreshInFlight else { return }
         mailboxRefreshInFlight = true
         defer { mailboxRefreshInFlight = false }
+
+        let admission = beginMailboxRefresh()
+        let cached = cachedProfileForDistinctId(admission.distinctId)
+        let validator = cached?.locale == admission.locale
+            ? cached?.validator
+            : nil
         do {
-            _ = try await refreshProfile(
-                distinctId: identityService.getDistinctId()
+            let result = try await api.fetchProfile(
+                for: admission.distinctId,
+                locale: admission.locale,
+                revalidating: validator
             )
+            guard isCurrentMailboxRefresh(admission) else { return }
+
+            switch result {
+            case .modified(let profile, _):
+                // The legacy wake may consume only the append-only delivery
+                // channels. In particular, it must not publish planeProfile,
+                // release, membership, assignment, property, cache, or runtime
+                // state between the launch/foreground canonical sync points.
+                if let facts = profile.facts, !facts.isEmpty {
+                    await eventLog.commitServerFacts(
+                        facts,
+                        distinctId: admission.distinctId
+                    )
+                    guard isCurrentMailboxRefresh(admission) else { return }
+                }
+                if let mailbox = profile.mailbox, !mailbox.isEmpty {
+                    await journeyMailboxHandler?(mailbox, admission.distinctId)
+                }
+
+            case .notModified:
+                guard validator != nil else {
+                    throw NuxieNetworkError.invalidResponse
+                }
+            }
         } catch {
             LogWarning("Immediate mailbox profile refresh failed: \(error)")
         }
+    }
+
+    private func beginMailboxRefresh() -> MailboxRefreshAdmission {
+        mailboxRefreshGeneration &+= 1
+        return MailboxRefreshAdmission(
+            distinctId: identityService.getDistinctId(),
+            generation: mailboxRefreshGeneration,
+            locale: effectiveLocale
+        )
+    }
+
+    private func isCurrentMailboxRefresh(
+        _ admission: MailboxRefreshAdmission
+    ) -> Bool {
+        mailboxRefreshGeneration == admission.generation
+            && identityService.getDistinctId() == admission.distinctId
+    }
+
+    private func invalidateMailboxRefresh() {
+        mailboxRefreshGeneration &+= 1
     }
 
     private func installMailboxPendingHandler() async {
@@ -1056,6 +1121,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Handle user change - clear old cache and load new
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
         LogInfo("User changed from \(NuxieLogger.shared.logDistinctID(oldDistinctId)) to \(NuxieLogger.shared.logDistinctID(newDistinctId))")
+        invalidateMailboxRefresh()
         let admission = beginProfileRequest(distinctId: newDistinctId)
 
         guard isCurrentAdmission(admission) else { return }

@@ -144,10 +144,7 @@ private final class DeviceLegPresentationOutcomeRecorder {
     }
 }
 
-private final class RecordingPresentationSystemEventSink:
-    SystemEventSink,
-    @unchecked Sendable
-{
+private final class RecordingPresentationSystemEventSink: @unchecked Sendable {
     private let lock = NSLock()
     private var capturedNames: [String] = []
     private var capturedEventIds: [String] = []
@@ -170,6 +167,8 @@ private final class RecordingPresentationSystemEventSink:
     var names: [String] { lock.withLock { capturedNames } }
     var eventIds: [String] { lock.withLock { capturedEventIds } }
 }
+
+extension RecordingPresentationSystemEventSink: SystemEventSink {}
 
 @MainActor
 private final class CommerceActionRecordingExperienceViewController:

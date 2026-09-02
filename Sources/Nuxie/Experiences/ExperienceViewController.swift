@@ -2469,17 +2469,20 @@ extension ExperienceViewController {
         correlation: CommerceOutcomeCorrelation?
     ) async {
         guard correlation != nil || !hostDismissalRequested else { return }
-        guard let correlation else {
-            emitSystemEvent(name, properties: properties)
-            return
-        }
-        let properties = UncheckedSendable(properties)
-        guard await systemEventSink.capture(.init(
-            name: name,
-            properties: properties.value.isEmpty ? nil : properties.value,
-            eventId: correlation.eventId,
-            distinctId: correlation.distinctId
-        )) else {
+        let properties = UncheckedSendable<[String: Any]?>(
+            properties.isEmpty ? nil : properties
+        )
+        guard await systemEventSink.emitOrCaptureCommerceOutcome(
+            name,
+            properties: properties,
+            correlation: correlation,
+            uncorrelatedEmitter: { [weak self] name, properties in
+                self?.emitSystemEvent(
+                    name,
+                    properties: properties.value ?? [:]
+                )
+            }
+        ) else {
             LogError(
                 "ExperienceViewController: correlated commerce outcome has no capture retry owner"
             )

@@ -7707,10 +7707,8 @@ private actor DeviceLegResponsePersistenceProbe {
 }
 
 @MainActor
-private final class RecordingDeviceLegPresenter: DeviceLegPresenting {
-    private final class Reservation:
-        DeviceLegPresentationReservation,
-        @unchecked Sendable {
+private final class RecordingDeviceLegPresenter {
+    fileprivate final class Reservation: @unchecked Sendable {
         private weak var owner: RecordingDeviceLegPresenter?
         private var released = false
 
@@ -7718,6 +7716,7 @@ private final class RecordingDeviceLegPresenter: DeviceLegPresenting {
             self.owner = owner
         }
 
+        @MainActor
         func release() {
             guard !released else { return }
             released = true
@@ -7753,6 +7752,8 @@ private final class RecordingDeviceLegPresenter: DeviceLegPresenting {
     private var reservationPending = false
     private var availabilityWasOpen = true
     private var availabilityHandler: (@MainActor @Sendable () -> Void)?
+
+    func deviceLegProfileRefreshDidComplete() {}
 
     func setDeviceLegPresentationAvailabilityHandler(
         _ handler: (@MainActor @Sendable () -> Void)?
@@ -7895,3 +7896,7 @@ private final class RecordingDeviceLegPresenter: DeviceLegPresenting {
         }
     }
 }
+
+extension RecordingDeviceLegPresenter: DeviceLegPresenting {}
+extension RecordingDeviceLegPresenter.Reservation:
+    DeviceLegPresentationReservation {}

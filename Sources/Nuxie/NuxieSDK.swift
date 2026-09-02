@@ -141,6 +141,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         profile: core.profile,
         experiences: core.experiences,
         experiencePresentation: core.experiencePresentation,
+        deviceLegPresentation: core.deviceLegPresentation,
         features: core.features
       )
       lifecycleCoordinator.start()

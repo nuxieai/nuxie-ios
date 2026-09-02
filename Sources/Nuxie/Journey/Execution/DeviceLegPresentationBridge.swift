@@ -161,6 +161,11 @@ enum DeviceLegPresentationActionResult: Equatable, Sendable {
 }
 
 protocol DeviceLegPresenting: AnyObject, Sendable {
+    /// Re-opens presentation admission after foreground profile authority and
+    /// its dependent projections are current.
+    @MainActor
+    func deviceLegProfileRefreshDidComplete()
+
     @MainActor
     func setDeviceLegPresentationAvailabilityHandler(
         _ handler: (@MainActor @Sendable () -> Void)?

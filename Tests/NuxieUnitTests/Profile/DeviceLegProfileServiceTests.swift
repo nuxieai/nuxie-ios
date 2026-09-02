@@ -92,7 +92,17 @@ private actor RecordingDeviceLegProfileConsumer: DeviceLegProfileConsuming {
     }
 }
 
-private actor RejectingHighWaterCommitStore: ExperienceReleaseHighWaterStore {
+private actor DeviceLegMailboxProbe {
+    private(set) var journeyIds: [String] = []
+    private(set) var distinctIds: [String] = []
+
+    func record(_ entries: [JourneyMailboxEntry], distinctId: String) {
+        journeyIds.append(contentsOf: entries.map(\.journeyId))
+        distinctIds.append(distinctId)
+    }
+}
+
+private actor RejectingHighWaterCommitStore {
     func admitActiveBatch(
         _ candidates: [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
     ) throws {
@@ -107,6 +117,8 @@ private actor RejectingHighWaterCommitStore: ExperienceReleaseHighWaterStore {
         return nil
     }
 }
+
+extension RejectingHighWaterCommitStore: ExperienceReleaseHighWaterStore {}
 
 final class DeviceLegProfileServiceTests: XCTestCase {
     func testForegroundAlwaysRevalidatesFreshCanonicalProfile() async throws {
@@ -142,6 +154,90 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         let foregroundFetchCount = await api.fetchCount
         XCTAssertEqual(foregroundFetchCount, 2)
         XCTAssertTrue(sleepProvider.sleepCalls.isEmpty)
+    }
+
+    func testMailboxHintCannotRepublishCanonicalProfile() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let timestamp = Date(timeIntervalSince1970: 1_788_000_000)
+        let mailbox = JourneyMailboxEntry(
+            journeyId: "legacy-mailbox-journey",
+            experienceId: "legacy-mailbox-experience",
+            experienceVersion: "legacy-mailbox-version",
+            epoch: 1,
+            stateVersion: JourneyStateEnvelope.currentVersion,
+            envelope: JourneyStateEnvelope(
+                context: [:],
+                executionState: JourneyExecutionState(),
+                snapshots: [:],
+                responseSession: nil
+            ),
+            expiresAt: timestamp.addingTimeInterval(3_600)
+        )
+        let initial = ProfileResponse(
+            segments: [],
+            userProperties: ["source": AnyCodable("foreground")],
+            planeProfile: fixture.profile
+        )
+        let hinted = ProfileResponse(
+            segments: [],
+            userProperties: ["source": AnyCodable("report_ack")],
+            mailbox: [mailbox],
+            planeProfile: fixture.profile
+        )
+        let api = DeviceLegProfileSequenceAPI(
+            [.response(initial), .response(hinted)],
+            authority: fixture.deliveryAuthority
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let cache = InMemoryCachedProfileStore(ttl: nil)
+        let experiences = MockExperienceService()
+        let runtime = RecordingDeviceLegProfileConsumer()
+        let eventLog = MockEventLog()
+        let mailboxProbe = DeviceLegMailboxProbe()
+        let service = makeService(
+            cache: cache,
+            identity: identity,
+            api: api,
+            experiences: experiences,
+            catalog: try makeCatalog(
+                fixture,
+                store: InMemoryExperienceReleaseHighWaterStore()
+            ),
+            runtime: runtime,
+            eventLog: eventLog
+        )
+        await service.setJourneyMailboxHandler { entries, distinctId in
+            await mailboxProbe.record(entries, distinctId: distinctId)
+        }
+
+        _ = try await service.refetchProfile(distinctId: "customer")
+        await eventLog.deliverEventResponseSignals(
+            EventResponse(status: "ok", mailboxPending: true)
+        )
+
+        let runtimeCommits = await runtime.commits
+        let cached = await cache.retrieve(
+            forKey: "customer",
+            allowStale: true
+        )
+        let deliveredJourneyIds = await mailboxProbe.journeyIds
+        let deliveredDistinctIds = await mailboxProbe.distinctIds
+        let fetchCount = await api.fetchCount
+        XCTAssertEqual(fetchCount, 2)
+        XCTAssertEqual(runtimeCommits.count, 1)
+        XCTAssertEqual(experiences.committedDeviceLegReleaseCounts, [1])
+        XCTAssertEqual(cached?.validator?.rawValue, "\"device-leg-profile-1\"")
+        XCTAssertEqual(
+            cached?.response.userProperties?["source"],
+            AnyCodable("foreground")
+        )
+        XCTAssertEqual(
+            identity.getUserProperties()["source"] as? String,
+            "foreground"
+        )
+        XCTAssertEqual(deliveredJourneyIds, ["legacy-mailbox-journey"])
+        XCTAssertEqual(deliveredDistinctIds, ["customer"])
     }
 
     func testLegacyPeriodicRefreshDoesNotSpinWhenSleepReturnsEarly() async throws {
@@ -506,6 +602,7 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         experiences: MockExperienceService,
         catalog: DeviceLegProfileCatalog,
         runtime: (any DeviceLegProfileConsuming)? = nil,
+        eventLog: ProfileEventSink = MockEventLog(),
         sleepProvider: MockSleepProvider = MockSleepProvider(),
         dateProvider: MockDateProvider = MockDateProvider(),
         authorityStore: any ProfileAuthorityBindingStore =
@@ -519,7 +616,7 @@ final class DeviceLegProfileServiceTests: XCTestCase {
             experiences: experiences,
             deviceLegProfiles: catalog,
             deviceLegRuntime: runtime,
-            eventLog: MockEventLog(),
+            eventLog: eventLog,
             dateProvider: dateProvider,
             sleepProvider: sleepProvider,
             localeProvider: ConfigurationLocaleIdentifierProvider(

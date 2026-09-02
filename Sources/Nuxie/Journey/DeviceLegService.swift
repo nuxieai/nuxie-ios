@@ -1399,7 +1399,7 @@ actor DeviceLegService {
               await isCurrentIdentity(identityFenceToken, journal: journal) else {
             return
         }
-        let scopedProperties = presentationEventProperties(
+        let scopedProperties = DeviceLegPresentationEventProjector.attributedProperties(
             properties.value,
             run: run
         )
@@ -1433,7 +1433,7 @@ actor DeviceLegService {
               await isCurrentIdentity(identityFenceToken, journal: journal) else {
             return nil
         }
-        let scopedProperties = presentationEventProperties(
+        let scopedProperties = DeviceLegPresentationEventProjector.attributedProperties(
             Dictionary(
                 uniqueKeysWithValues: event.properties.map {
                     ($0.key, $0.value as Any)
@@ -1452,19 +1452,6 @@ actor DeviceLegService {
             identityFenceToken: identityFenceToken,
             executionFenceToken: executionFenceToken
         )
-    }
-
-    private func presentationEventProperties(
-        _ properties: [String: Any],
-        run: DeviceLegRun
-    ) -> [String: Any] {
-        var scoped = properties
-        scoped["journey_id"] = run.journeyId
-        scoped["experience_id"] = run.reference.experienceId
-        scoped["experience_version"] = run.reference.versionId
-        scoped["leg_id"] = run.reference.legId
-        scoped["leg_generation"] = run.generation
-        return scoped
     }
 
     private func acknowledgePublishedPresentationBatchFailure(

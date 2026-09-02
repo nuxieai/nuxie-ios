@@ -219,7 +219,7 @@ catalog_event_emitters_for_indirect_emission_site() {
       ;;
     'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:550' \
       | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:705' \
-      | 'Sources/Nuxie/NuxieSDK.swift:1216')
+      | 'Sources/Nuxie/NuxieSDK.swift:1217')
       # The accepted direct-response feature event keeps its authoritative id
       # when it is copied into delivered local history.
       printf '%s\t%s\n' '$feature_used' "$1"
@@ -283,9 +283,9 @@ is_allowlisted_indirect_emission_site() {
       ;;
     'Sources/Nuxie/DI/RuntimeProviders.swift:46' \
       | 'Sources/Nuxie/DI/RuntimeProviders.swift:65' \
-      | 'Sources/Nuxie/DI/RuntimeProviders.swift:144' \
-      | 'Sources/Nuxie/DI/RuntimeProviders.swift:153' \
-      | 'Sources/Nuxie/DI/RuntimeProviders.swift:247')
+      | 'Sources/Nuxie/DI/RuntimeProviders.swift:173' \
+      | 'Sources/Nuxie/DI/RuntimeProviders.swift:182' \
+      | 'Sources/Nuxie/DI/RuntimeProviders.swift:276')
       # Runtime role adapters, the ordered stable-capture retry queue, and
       # capture-only policy forward names; concrete event-sink callers are
       # checked at their cataloged sites.
@@ -340,7 +340,7 @@ is_allowlisted_indirect_emission_site() {
       # Runtime journey and host-command names are variable; reserved response names use the concrete calls above.
       return 0
       ;;
-    'Sources/Nuxie/Experiences/ExperienceViewController.swift:2473' \
+    'Sources/Nuxie/Experiences/ExperienceViewController.swift:2480' \
       | 'Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1023' \
       | 'Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1027')
       # Commerce outcome wrappers forward names whose concrete reserved-event
@@ -403,16 +403,16 @@ $event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4106
 $event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4245
 $experience_artifact_load_failed\tprocessCapture\tSources/Nuxie/Experiences/ExperienceViewModel.swift:370
 $experience_artifact_load_succeeded\tprocessCapture\tSources/Nuxie/Experiences/ExperienceViewModel.swift:352
-$experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1519\n$experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1571
-$experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1531\n$experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1562
-$experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:540
+$experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1515\n$experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1567
+$experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1527\n$experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1558
+$experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:536
 $experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3298\n$experiment_exposure\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:84
 $experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3257\n$experiment_exposure_error\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:98
 $experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3314\n$experiment_exposure_fallback\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:91
 $feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:550
 $feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:705
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1216
-$identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:675
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1217
+$identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:676
 $journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:984
 $journey_converted\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5408
 $journey_converted\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:2201
