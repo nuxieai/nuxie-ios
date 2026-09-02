@@ -3,6 +3,7 @@ import Foundation
 protocol DeviceLegProfileConsuming: AnyObject, Sendable {
     func profileDidCommit(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        authority: ProfileDeliveryAuthority,
         distinctId: String
     ) async
     func profileDidClear(distinctId: String) async
@@ -12,6 +13,11 @@ protocol DeviceLegProfileConsuming: AnyObject, Sendable {
 protocol DeviceLegServiceProtocol: DeviceLegProfileConsuming {
     func initialize() async
     func handleEvent(_ event: NuxieEvent) async
+    func handleEvent(
+        _ event: NuxieEvent,
+        admittedProfileGeneration: UInt64?
+    ) async
+    func eventAdmissionGeneration() -> UInt64
     func onAppDidEnterBackground() async
     func onAppWillEnterForeground() async
     func onAppBecameActive() async
@@ -24,6 +30,10 @@ protocol DeviceLegServiceProtocol: DeviceLegProfileConsuming {
 /// EventLog's existing durable event queue.
 actor DeviceLegService: DeviceLegServiceProtocol {
     typealias FeatureAccessLookup = @Sendable (String) async -> FeatureAccess?
+    typealias PinnedReleaseAuthenticator = @Sendable (
+        DeviceLegReleaseProfileEntry,
+        ArmedDeviceLeg.Reference
+    ) async throws -> AuthenticatedDeviceLegRelease
 
     private struct ProfileState: Sendable {
         let distinctId: String
@@ -31,17 +41,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         let generation: UInt64
     }
 
-    private struct StateArmKey: Hashable, Sendable {
-        let reference: ArmedDeviceLeg.Reference
-        let binding: ArmedDeviceLeg.Binding
-        let entryKind: String
-
-        init(_ arm: ArmedDeviceLeg) {
-            reference = arm.reference
-            binding = arm.binding
-            entryKind = arm.entryCondition.type.rawValue
-        }
-    }
+    private typealias StateArmKey = DeviceLegStateArmReceipt
 
     private struct AttemptKey: Hashable, Sendable {
         let arm: StateArmKey
@@ -49,13 +49,47 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         let profileGeneration: UInt64
     }
 
+    /// The journal publishes a state-arm receipt from its filesystem
+    /// transaction, outside this actor's executor. A short lock lets that
+    /// publication linearize with profile replacement without actor reentry.
+    private final class StateArmReceiptStore: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: Set<StateArmKey> = []
+
+        func contains(_ key: StateArmKey) -> Bool {
+            lock.withLock { values.contains(key) }
+        }
+
+        func insert(_ key: StateArmKey) {
+            lock.withLock { _ = values.insert(key) }
+        }
+
+        func retain(_ allowed: Set<StateArmKey>) {
+            lock.withLock { values.formIntersection(allowed) }
+        }
+
+        func remove(where shouldRemove: (StateArmKey) -> Bool) {
+            lock.withLock { values = Set(values.filter { !shouldRemove($0) }) }
+        }
+
+        func removeAll() {
+            lock.withLock { values.removeAll() }
+        }
+    }
+
     private let identity: IdentityServiceProtocol
     private let events: EventLogProtocol
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
     private let journalDirectory: URL?
+    /// Production starts without a journal namespace and installs one only
+    /// after profile transport authenticates the configured Nuxie app. Tests
+    /// may inject a fixed scope for direct journal inspection.
+    private var storageScope: DeviceLegStorageScope?
+    private let acceptsProfileAuthorityScope: Bool
     private let featureAccess: FeatureAccessLookup
     private let dispatcher: any DeviceLegDispatching
+    private let pinnedReleaseAuthenticator: PinnedReleaseAuthenticator
     private let timezones: SignedTimezoneBundle
     private let currentDeviceTimezone: TimeZone
 
@@ -64,9 +98,24 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     /// Lifecycle notifications close and reopen this latch thereafter.
     private var foreground = true
     private var profileState: ProfileState?
+    /// Advances for every profile publication and linearizes entry admission.
     private let profileFence = DeviceLegProfileFence()
+    /// Advances only when admitted execution authority is explicitly revoked.
+    private let executionFence = DeviceLegProfileFence()
     private var journal: DeviceLegRunJournal?
-    private var stateArmReceipts: Set<StateArmKey> = []
+    private var retainedReleasesByDigest: [String: AuthenticatedDeviceLegRelease] = [:]
+    private var retainedReleaseOrder: [String] = []
+    private var retainedReleaseBytes = 0
+    private static let retainedReleaseCacheByteLimit = 64 * 1_024 * 1_024
+    private static let retainedReleaseCacheCountLimit = 256
+    private let stateArmReceipts = StateArmReceiptStore()
+    /// Each foreground session reopens the app-foregrounded latch once per
+    /// customer journal. A failed journal write leaves the customer absent so
+    /// the next lifecycle/profile callback retries before evaluating arms.
+    private var foregroundReceiptResetCustomers: Set<String> = []
+    /// A failed revocation write blocks reuse of that journal until a later
+    /// profile/identity transition retries it successfully.
+    private var revokingCustomers: Set<String> = []
     private var inFlightAttempts: Set<AttemptKey> = []
     private var wakeTask: Task<Void, Never>?
     private var wakeGeneration: UInt64 = 0
@@ -77,8 +126,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
         journalDirectory: URL?,
+        storageScope: DeviceLegStorageScope? = .testFixture,
         featureAccess: @escaping FeatureAccessLookup,
         dispatcher: any DeviceLegDispatching,
+        pinnedReleaseAuthenticator: @escaping PinnedReleaseAuthenticator,
         timezones: SignedTimezoneBundle,
         currentDeviceTimezone: TimeZone = .current
     ) {
@@ -87,8 +138,11 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
         self.journalDirectory = journalDirectory
+        self.storageScope = storageScope
+        acceptsProfileAuthorityScope = storageScope == nil
         self.featureAccess = featureAccess
         self.dispatcher = dispatcher
+        self.pinnedReleaseAuthenticator = pinnedReleaseAuthenticator
         self.timezones = timezones
         self.currentDeviceTimezone = currentDeviceTimezone
     }
@@ -100,13 +154,42 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     func initialize() async {
         guard !initialized else { return }
         initialized = true
-        await openJournal(for: identity.getDistinctId())
+        if storageScope != nil {
+            await openJournal(for: identity.getDistinctId())
+        }
+        await resetForegroundStateArmReceiptsIfNeeded()
         guard let state = currentProfileState() else { return }
         await resumeParkedRuns(state: state, event: nil)
         await evaluateStateArms(state: state, kinds: nil)
     }
 
     func profileDidCommit(
+        _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        authority: ProfileDeliveryAuthority,
+        distinctId: String
+    ) async {
+        guard identity.getDistinctId() == distinctId else { return }
+        if acceptsProfileAuthorityScope {
+            let authenticatedScope = DeviceLegStorageScope(authority: authority)
+            guard storageScope == nil || storageScope == authenticatedScope else {
+                LogError("DeviceLegService: authenticated app authority changed")
+                return
+            }
+            storageScope = authenticatedScope
+        }
+        await commitProfile(snapshot, distinctId: distinctId)
+    }
+
+    /// Direct runtime tests use an injected fixed namespace and do not model
+    /// the profile transport boundary.
+    func profileDidCommit(
+        _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        distinctId: String
+    ) async {
+        await commitProfile(snapshot, distinctId: distinctId)
+    }
+
+    private func commitProfile(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         distinctId: String
     ) async {
@@ -120,6 +203,20 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         retainReceipts(for: snapshot)
         guard initialized else { return }
         await ensureJournal(for: distinctId)
+        await resetForegroundStateArmReceiptsIfNeeded()
+        if let journal, journal.distinctId == distinctId {
+            do {
+                try await journal.retainStateArmReceipts(
+                    stateArmReceiptKeys(for: snapshot)
+                )
+                try await journal.retainCheckmarks(
+                    liveExperiences: snapshot.liveReentryPolicies,
+                    at: dateProvider.now()
+                )
+            } catch {
+                LogWarning("DeviceLegService: failed to retain journal admission metadata: \(error)")
+            }
+        }
         guard let state = currentProfileState() else { return }
         await resumeParkedRuns(state: state, event: nil)
         await evaluateStateArms(state: state, kinds: nil)
@@ -131,7 +228,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         cancelWake()
         let journalToAbandon = journal?.distinctId == distinctId ? journal : nil
         _ = profileFence.advance()
+        _ = executionFence.advance()
         profileState = nil
+        clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
         if let journalToAbandon {
@@ -143,7 +242,9 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         cancelWake()
         let journalToAbandon = journal
         _ = profileFence.advance()
+        _ = executionFence.advance()
         profileState = nil
+        clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
         if let journalToAbandon {
@@ -151,7 +252,21 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         }
     }
 
+    nonisolated func eventAdmissionGeneration() -> UInt64 {
+        profileFence.token().generation
+    }
+
     func handleEvent(_ event: NuxieEvent) async {
+        await handleEvent(
+            event,
+            admittedProfileGeneration: eventAdmissionGeneration()
+        )
+    }
+
+    func handleEvent(
+        _ event: NuxieEvent,
+        admittedProfileGeneration: UInt64?
+    ) async {
         guard initialized,
               event.distinctId == identity.getDistinctId(),
               event.name != JourneyEvents.journeyLegStarted,
@@ -160,6 +275,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
 
         await resumeParkedRuns(state: state, event: event)
         guard isCurrent(state) else { return }
+        guard admittedProfileGeneration == state.generation else {
+            await scheduleNextWake()
+            return
+        }
         for arm in state.snapshot.profile.armedLegs
         where arm.entryCondition.type == .event
             && arm.entryCondition.eventName == event.name {
@@ -175,12 +294,12 @@ actor DeviceLegService: DeviceLegServiceProtocol {
 
     func onAppWillEnterForeground() async {
         foreground = true
-        stateArmReceipts = Set(stateArmReceipts.filter {
-            $0.entryKind != DeviceLegEntryCondition.Kind.appForegrounded.rawValue
-        })
+        foregroundReceiptResetCustomers.removeAll()
+        await resetForegroundStateArmReceiptsIfNeeded()
     }
 
     func onAppBecameActive() async {
+        await resetForegroundStateArmReceiptsIfNeeded()
         guard initialized, let state = currentProfileState() else { return }
         await resumeParkedRuns(state: state, event: nil)
         await evaluateStateArms(state: state, kinds: nil)
@@ -191,16 +310,27 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         to newDistinctId: String
     ) async {
         cancelWake()
-        if journal?.distinctId == oldDistinctId, let journal {
-            await abandon(journal)
+        if let departing = journal,
+           departing.distinctId == oldDistinctId {
+            let retired = await abandon(departing)
+            if retired, journal?.distinctId == oldDistinctId {
+                journal = nil
+            }
         }
-        self.journal = nil
-        _ = profileFence.advance()
-        profileState = nil
-        stateArmReceipts.removeAll()
-        inFlightAttempts.removeAll()
+        if profileState?.distinctId == oldDistinctId {
+            _ = profileFence.advance()
+            profileState = nil
+            stateArmReceipts.removeAll()
+            inFlightAttempts.removeAll()
+        }
+        // IdentityService's own fence revokes the departing user's execution.
+        // Do not advance the global execution fence here: a queued transition
+        // may run after the new user's profile and journal are already live.
+        clearRetainedReleaseCache()
         guard initialized, identity.getDistinctId() == newDistinctId else { return }
-        await openJournal(for: newDistinctId)
+        await ensureJournal(for: newDistinctId)
+        await resetForegroundStateArmReceiptsIfNeeded()
+        await scheduleNextWake()
     }
 
     private func currentProfileState() -> ProfileState? {
@@ -216,13 +346,40 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     }
 
     private func retainReceipts(for snapshot: DeviceLegProfileCatalog.Snapshot) {
-        let current = Set(snapshot.profile.armedLegs.compactMap { arm in
-            arm.entryCondition.type == .event ? nil : StateArmKey(arm)
+        stateArmReceipts.retain(stateArmReceiptKeys(for: snapshot))
+    }
+
+    private func resetForegroundStateArmReceiptsIfNeeded() async {
+        let distinctId = identity.getDistinctId()
+        guard !foregroundReceiptResetCustomers.contains(distinctId) else {
+            return
+        }
+        let entryKind = DeviceLegEntryCondition.Kind.appForegrounded.rawValue
+        stateArmReceipts.remove { $0.entryKind == entryKind }
+        guard let journal, journal.distinctId == distinctId else { return }
+        do {
+            try await journal.clearStateArmReceipts(entryKind: entryKind)
+            foregroundReceiptResetCustomers.insert(distinctId)
+        } catch {
+            LogWarning("DeviceLegService: failed to reset foreground admission latch: \(error)")
+        }
+    }
+
+    private func stateArmReceiptKeys(
+        for snapshot: DeviceLegProfileCatalog.Snapshot
+    ) -> Set<DeviceLegStateArmReceipt> {
+        Set(snapshot.profile.armedLegs.compactMap { arm in
+            arm.entryCondition.type == .event
+                ? nil
+                : DeviceLegStateArmReceipt(arm)
         })
-        stateArmReceipts.formIntersection(current)
     }
 
     private func openJournal(for distinctId: String) async {
+        guard let storageScope else {
+            journal = nil
+            return
+        }
         guard let journalDirectory else {
             LogError("DeviceLegService: durable journal directory unavailable")
             journal = nil
@@ -231,12 +388,15 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         do {
             let opened = try DeviceLegRunJournal(
                 directory: journalDirectory,
-                distinctId: distinctId
+                distinctId: distinctId,
+                storageScope: storageScope
             )
+            clearRetainedReleaseCache()
             journal = opened
             _ = try await opened.recover(at: dateProvider.now())
             try await DeviceLegReporter(journal: opened, events: events)
                 .flushPending()
+            _ = try await opened.finalizeRevocation()
             await scheduleNextWake()
         } catch {
             LogError("DeviceLegService: durable journal recovery failed: \(error)")
@@ -245,29 +405,50 @@ actor DeviceLegService: DeviceLegServiceProtocol {
     }
 
     private func ensureJournal(for distinctId: String) async {
+        guard storageScope != nil else { return }
         // A new-user profile can outrun the queued identity transition. Retire
         // every journal displaced during that race before installing another.
         while let displaced = journal,
               displaced.distinctId != distinctId {
-            await abandon(displaced)
+            guard await abandon(displaced) else { return }
             guard identity.getDistinctId() == distinctId else { return }
             if journal?.distinctId == displaced.distinctId {
                 journal = nil
             }
+        }
+        if let current = journal,
+           current.distinctId == distinctId,
+           revokingCustomers.contains(distinctId) {
+            guard await abandon(current) else { return }
         }
         guard identity.getDistinctId() == distinctId,
               journal?.distinctId != distinctId else { return }
         await openJournal(for: distinctId)
     }
 
-    private func abandon(_ journal: DeviceLegRunJournal) async {
+    @discardableResult
+    private func abandon(_ journal: DeviceLegRunJournal) async -> Bool {
+        revokingCustomers.insert(journal.distinctId)
         do {
             try await journal.abandonAll(at: dateProvider.now())
+        } catch {
+            LogWarning("DeviceLegService: failed to durably revoke device-leg journal: \(error)")
+            return false
+        }
+        var finalized = false
+        do {
             try await DeviceLegReporter(journal: journal, events: events)
                 .flushPending()
+            finalized = try await journal.finalizeRevocation()
         } catch {
-            LogWarning("DeviceLegService: failed to abandon device-leg journal: \(error)")
+            // Every run is already terminal and the durable marker blocks new
+            // work. Recovery retries report delivery before clearing it.
+            LogWarning("DeviceLegService: device-leg revocation report remains pending: \(error)")
         }
+        if finalized {
+            revokingCustomers.remove(journal.distinctId)
+        }
+        return true
     }
 
     private func evaluateStateArms(
@@ -293,9 +474,13 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 || !stateArmReceipts.contains(stateKey),
               let journal,
               journal.distinctId == state.distinctId,
+              !revokingCustomers.contains(journal.distinctId),
               let release = state.snapshot.releasesByDigest[
                 arm.reference.descriptorSha256
-              ] else { return }
+              ], let releasePin = state.snapshot.profile.releases.first(where: {
+                $0.envelope.descriptorSha256
+                    == arm.reference.descriptorSha256
+              }) else { return }
 
         let attempt = AttemptKey(
             arm: stateKey,
@@ -346,14 +531,29 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             entryCondition: arm.entryCondition,
             context: context
         )
+        guard let profileFenceToken = profileFence.token(
+            ifCurrent: state.generation
+        ) else { return }
+        let executionFenceToken = executionFence.token()
         do {
             guard let run = try await journal.admit(
                 arm: admittedArm,
+                release: releasePin,
                 reentry: release.descriptor.leg.reentry,
                 entryStepId: release.descriptor.leg.entryStepId,
-                at: dateProvider.now()
+                at: dateProvider.now(),
+                profileFence: profileFence,
+                profileFenceToken: profileFenceToken,
+                stateArmReceipt: arm.entryCondition.type == .event
+                    ? nil
+                    : stateKey,
+                onAdmitted: { [stateArmReceipts] in
+                    guard arm.entryCondition.type != .event else { return }
+                    stateArmReceipts.insert(stateKey)
+                }
             ) else { return }
-            guard isCurrent(state), self.journal?.distinctId == state.distinctId else {
+            guard executionFence.isCurrent(executionFenceToken),
+                  isCurrentIdentity(journal: journal) else {
                 await finish(
                     run,
                     outcome: "abandoned",
@@ -361,9 +561,6 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     journal: journal
                 )
                 return
-            }
-            if arm.entryCondition.type != .event {
-                stateArmReceipts.insert(stateKey)
             }
             let reporter = DeviceLegReporter(journal: journal, events: events)
             try await reporter.flushPending()
@@ -374,6 +571,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 queued,
                 release: release,
                 state: state,
+                executionFenceToken: executionFenceToken,
                 signal: executorSignal(event),
                 checkpoint: nil,
                 journal: journal
@@ -433,14 +631,28 @@ actor DeviceLegService: DeviceLegServiceProtocol {
               event != nil || foreground,
               let journal else { return }
         do {
-            let now = dateProvider.now()
-            for parked in try await journal.runs() where parked.park != nil {
+            for parked in try await journal.runs()
+            where parked.park != nil && parked.completion == nil {
                 guard isCurrent(state),
-                      let release = state.snapshot.releasesByDigest[
-                        parked.reference.descriptorSha256
-                      ] else { continue }
+                      let profileFenceToken = profileFence.token(
+                        ifCurrent: state.generation
+                      ) else { return }
                 if event == nil {
-                    guard let wake = parked.park?.wakeAt, wake <= now else { continue }
+                    guard let wake = parked.park?.wakeAt,
+                          wake <= dateProvider.now() else { continue }
+                }
+                let executionFenceToken = executionFence.token()
+                guard let release = await release(
+                    for: parked,
+                    state: state,
+                    journal: journal,
+                    executionFenceToken: executionFenceToken
+                ) else { continue }
+                guard isCurrent(state),
+                      profileFence.isCurrent(profileFenceToken),
+                      executionFence.isCurrent(executionFenceToken),
+                      isCurrentIdentity(journal: journal) else {
+                    return
                 }
                 let checkpoint = parked.park.flatMap { park -> DeviceLegControlExecutor.Checkpoint? in
                     guard let wakeAt = park.wakeAt,
@@ -451,11 +663,16 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                         wakeAtMillis: wakeMillis
                     )
                 }
-                let resumed = try await journal.resumeParked(parked.id)
+                guard let resumed = try await journal.resumeParked(
+                    parked.id,
+                    profileFence: profileFence,
+                    profileFenceToken: profileFenceToken
+                ) else { return }
                 await execute(
                     resumed,
                     release: release,
                     state: state,
+                    executionFenceToken: executionFenceToken,
                     signal: executorSignal(event),
                     checkpoint: checkpoint,
                     journal: journal
@@ -467,10 +684,150 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         await scheduleNextWake()
     }
 
+    private func release(
+        for run: DeviceLegRun,
+        state: ProfileState,
+        journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> AuthenticatedDeviceLegRelease? {
+        if let current = state.snapshot.releasesByDigest[
+            run.reference.descriptorSha256
+        ] {
+            guard matches(current, reference: run.reference) else {
+                await abandon(run, journal: journal)
+                return nil
+            }
+            return current
+        }
+        if let cached = cachedRetainedRelease(
+            descriptorSHA256: run.reference.descriptorSha256
+        ) {
+            guard matches(cached, reference: run.reference) else {
+                removeCachedRetainedRelease(
+                    descriptorSHA256: run.reference.descriptorSha256
+                )
+                await abandon(run, journal: journal)
+                return nil
+            }
+            return cached
+        }
+        do {
+            guard executionFence.isCurrent(executionFenceToken),
+                  isCurrentIdentity(journal: journal) else { return nil }
+            guard let pin = try await journal.releasePin(
+                descriptorSHA256: run.reference.descriptorSha256
+            ) else {
+                throw DeviceLegJournalError.invalidState
+            }
+            guard executionFence.isCurrent(executionFenceToken),
+                  isCurrentIdentity(journal: journal) else { return nil }
+            let retained = try await pinnedReleaseAuthenticator(
+                pin,
+                run.reference
+            )
+            guard executionFence.isCurrent(executionFenceToken),
+                  isCurrentIdentity(journal: journal),
+                  matches(retained, reference: run.reference) else {
+                throw DeviceLegJournalError.invalidState
+            }
+            cacheRetainedRelease(retained)
+            return retained
+        } catch {
+            LogWarning(
+                "DeviceLegService: retained device-leg release rejected: \(error)"
+            )
+            if executionFence.isCurrent(executionFenceToken),
+               isCurrentIdentity(journal: journal) {
+                await abandon(run, journal: journal)
+            }
+            return nil
+        }
+    }
+
+    private func cachedRetainedRelease(
+        descriptorSHA256: String
+    ) -> AuthenticatedDeviceLegRelease? {
+        guard let release = retainedReleasesByDigest[descriptorSHA256] else {
+            return nil
+        }
+        retainedReleaseOrder.removeAll { $0 == descriptorSHA256 }
+        retainedReleaseOrder.append(descriptorSHA256)
+        return release
+    }
+
+    private func cacheRetainedRelease(
+        _ release: AuthenticatedDeviceLegRelease
+    ) {
+        let descriptorSHA256 = release.descriptorSHA256
+        let bytes = release.exactDescriptorBytes.count
+        guard bytes <= Self.retainedReleaseCacheByteLimit else { return }
+        removeCachedRetainedRelease(descriptorSHA256: descriptorSHA256)
+        while retainedReleasesByDigest.count
+                >= Self.retainedReleaseCacheCountLimit
+                || retainedReleaseBytes + bytes
+                    > Self.retainedReleaseCacheByteLimit {
+            guard let oldest = retainedReleaseOrder.first else { break }
+            removeCachedRetainedRelease(descriptorSHA256: oldest)
+        }
+        retainedReleasesByDigest[descriptorSHA256] = release
+        retainedReleaseOrder.append(descriptorSHA256)
+        retainedReleaseBytes += bytes
+    }
+
+    private func removeCachedRetainedRelease(
+        descriptorSHA256: String
+    ) {
+        if let removed = retainedReleasesByDigest.removeValue(
+            forKey: descriptorSHA256
+        ) {
+            retainedReleaseBytes -= removed.exactDescriptorBytes.count
+        }
+        retainedReleaseOrder.removeAll { $0 == descriptorSHA256 }
+    }
+
+    private func clearRetainedReleaseCache() {
+        retainedReleasesByDigest.removeAll(keepingCapacity: false)
+        retainedReleaseOrder.removeAll(keepingCapacity: false)
+        retainedReleaseBytes = 0
+    }
+
+    private func matches(
+        _ release: AuthenticatedDeviceLegRelease,
+        reference: ArmedDeviceLeg.Reference
+    ) -> Bool {
+        release.descriptorSHA256 == reference.descriptorSha256
+            && release.descriptor.identity.experienceId
+                == reference.experienceId
+            && release.descriptor.identity.experienceVersionId
+                == reference.versionId
+            && release.descriptor.leg.id == reference.legId
+    }
+
+    private func abandon(
+        _ run: DeviceLegRun,
+        journal: DeviceLegRunJournal
+    ) async {
+        do {
+            try await journal.complete(
+                run.id,
+                outcome: "abandoned",
+                at: dateProvider.now(),
+                responseOutputs: run.context.responses
+            )
+            try await DeviceLegReporter(journal: journal, events: events)
+                .flushPending()
+        } catch {
+            LogWarning(
+                "DeviceLegService: failed to abandon retained device leg: \(error)"
+            )
+        }
+    }
+
     private func execute(
         _ initial: DeviceLegRun,
         release: AuthenticatedDeviceLegRelease,
         state: ProfileState,
+        executionFenceToken: DeviceLegProfileFenceToken,
         signal: DeviceLegControlExecutor.Signal,
         checkpoint initialCheckpoint: DeviceLegControlExecutor.Checkpoint?,
         journal: DeviceLegRunJournal
@@ -488,7 +845,8 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         var checkpoint = initialCheckpoint
 
         for _ in 0..<10_000 {
-            guard isCurrent(state), isCurrentIdentity(journal: journal) else {
+            guard executionFence.isCurrent(executionFenceToken),
+                  isCurrentIdentity(journal: journal) else {
                 await finish(
                     run,
                     outcome: "abandoned",
@@ -555,9 +913,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 return
 
             case .dispatch(let stepId, let action):
-                guard let profileFenceToken = profileFence.token(
-                    ifCurrent: state.generation
-                ), let identityFence = identity.performWithCurrentIdentityFence(
+                guard let identityFence = identity.performWithCurrentIdentityFence(
                     journal.distinctId,
                     { _ in () }
                 ) else {
@@ -579,8 +935,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     LogWarning("DeviceLegService: failed to claim effect cursor: \(error)")
                     return
                 }
-                guard isCurrent(state),
-                      profileFence.isCurrent(profileFenceToken),
+                guard executionFence.isCurrent(executionFenceToken),
                       await isCurrentIdentity(
                     identityFence.token,
                     journal: journal
@@ -605,11 +960,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     effectId: effectId,
                     distinctId: journal.distinctId,
                     identityFence: identityFence.token,
-                    profileFence: profileFence,
-                    profileFenceToken: profileFenceToken
+                    executionFence: executionFence,
+                    executionFenceToken: executionFenceToken
                 ))
-                guard isCurrent(state),
-                      profileFence.isCurrent(profileFenceToken),
+                guard executionFence.isCurrent(executionFenceToken),
                       await isCurrentIdentity(
                     identityFence.token,
                     journal: journal
@@ -718,14 +1072,14 @@ actor DeviceLegService: DeviceLegServiceProtocol {
             ? "abandoned"
             : outcome
         do {
-            if let responses = projected?.responses, !responses.isEmpty {
-                try await journal.recordResponses(run.id, values: responses)
-            }
             try await journal.complete(
                 run.id,
                 outcome: finalOutcome,
                 at: dateProvider.now(),
-                eventOutputs: projected?.event ?? [:]
+                eventOutputs: projected?.event ?? [:],
+                responseOutputs: finalOutcome == "abandoned"
+                    ? run.context.responses
+                    : projected?.responses ?? [:]
             )
             try await DeviceLegReporter(journal: journal, events: events)
                 .flushPending()
@@ -779,9 +1133,7 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         do {
             let now = dateProvider.now()
             next = try await journal.runs().compactMap { run in
-                guard state.snapshot.releasesByDigest[
-                    run.reference.descriptorSha256
-                ] != nil,
+                guard run.completion == nil,
                       let wake = run.park?.wakeAt,
                       wake > now else { return nil }
                 return wake

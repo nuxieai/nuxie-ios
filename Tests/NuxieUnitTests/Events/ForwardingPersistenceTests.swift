@@ -453,7 +453,7 @@ final class ForwardingPersistenceTests: XCTestCase {
       "  public func commitPreparedTriggerEvent(\n    _ event: NuxieEvent",
       "  public func storePreparedEventInHistory(_ event: NuxieEvent) async",
       "  public func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async",
-      "  private func commit(_ event: NuxieEvent, routeToSubscribers: Bool) async",
+      "  private func commit(\n    _ event: NuxieEvent,\n    routeToSubscribers: Bool,\n    subscriberAdmissions:",
     ]
     for signature in ordinaryLanes {
       let body = try functionBody(in: source, startingWith: signature)

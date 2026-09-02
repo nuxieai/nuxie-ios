@@ -18,6 +18,28 @@ struct BatchError: Codable, Sendable {
 
 // MARK: - Profile Response
 
+/// App authority established by the authenticated profile transport. This is
+/// response metadata, never a field the profile body can nominate.
+struct ProfileDeliveryAuthority: Codable, Equatable, Sendable {
+    let appId: String
+    let environment: String
+
+    var isValid: Bool {
+        Self.valid(appId, maximumBytes: 256)
+            && Self.valid(environment, maximumBytes: 16)
+            && (environment == "live" || environment == "test")
+    }
+
+    private static func valid(_ value: String, maximumBytes: Int) -> Bool {
+        !value.isEmpty
+            && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+            && value.utf8.count <= maximumBytes
+            && !value.unicodeScalars.contains {
+                CharacterSet.controlCharacters.contains($0)
+            }
+    }
+}
+
 struct ProfileResponse: Codable, Sendable {
     /// Canonical device-plane delivery. Network decoding validates this from
     /// the exact response bytes before wrapping it for cache persistence.

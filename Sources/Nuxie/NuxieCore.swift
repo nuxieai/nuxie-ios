@@ -178,6 +178,10 @@ final class NuxieCore: @unchecked Sendable {
       supportedRuntime: ExperienceReleaseRuntime.current,
       highWaterStore: highWaterStore
     )
+    let profileStorageScope = ProfileStorageScope(
+      apiKey: configuration.apiKey,
+      environment: configuration.environment
+    )
     let deviceLegs: (any DeviceLegServiceProtocol)?
     if let timezones = SignedTimezoneBundle.installed {
       deviceLegs = DeviceLegService(
@@ -186,6 +190,9 @@ final class NuxieCore: @unchecked Sendable {
         dateProvider: dateProvider,
         sleepProvider: sleepProvider,
         journalDirectory: releasePaths.admission,
+        // The profile transport supplies the stable authenticated app scope.
+        // The publishable key is rotatable and must not address durable runs.
+        storageScope: nil,
         featureAccess: { featureId in
           await builtFeatureService.get().getCached(
             featureId: featureId,
@@ -197,6 +204,12 @@ final class NuxieCore: @unchecked Sendable {
           events: eventLog,
           appActionHandler: appActionHandler
         ),
+        pinnedReleaseAuthenticator: { entry, reference in
+          try await deviceLegProfiles.authenticatePinnedRelease(
+            entry,
+            reference: reference
+          )
+        },
         timezones: timezones
       )
     } else {
@@ -229,6 +242,7 @@ final class NuxieCore: @unchecked Sendable {
       dateProvider: dateProvider,
       sleepProvider: sleepProvider,
       localeProvider: localeProvider,
+      storageScope: profileStorageScope,
       customStoragePath: internalConfiguration.customStoragePath
     )
     let featureInfo = overrides.featureInfo ?? FeatureInfo()

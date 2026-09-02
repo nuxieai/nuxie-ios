@@ -215,6 +215,11 @@ private final class ProfileAdmissionGeneration: @unchecked Sendable {
 /// Profile execution fields follow `nuxie-dev/specs/experience-execution-model-spec.md`.
 internal actor ProfileService: ProfileServiceProtocol {
 
+    private enum ProfileAuthoritySource: Sendable {
+        case network
+        case cache
+    }
+
     /// Immutable authority claimed before any profile work suspends. Locale is
     /// intentionally re-read by `isCurrentAdmission` because runtime settings
     /// can change without first entering this actor.
@@ -236,6 +241,10 @@ internal actor ProfileService: ProfileServiceProtocol {
     
     // Disk cache for persistence
     private let diskCache: any CachedProfileStore
+    /// Credential-scoped app/environment binding persisted separately from a
+    /// mutable profile cache entry. Only authenticated network metadata may
+    /// establish it; offline cache admission can only match it.
+    private let authorityStore: any ProfileAuthorityBindingStore
     
     // Background refresh timer
     private var refreshTimer: Task<Void, Never>?
@@ -290,8 +299,9 @@ internal actor ProfileService: ProfileServiceProtocol {
     private let localeProvider: LocaleIdentifierProviding
 
     // Cache policy
-    /// Disk/memory cache validity window; also the background-refresh
-    /// threshold on user change.
+    /// Legacy profile validity window and background-refresh threshold on user
+    /// change. Authenticated canonical plane profiles have no offline age
+    /// cutoff and revalidate opportunistically after this interval.
     private let cacheTTL: TimeInterval = 24 * 60 * 60 // 24h
     private let backgroundRefreshAge: TimeInterval = 5 * 60 // 5 min
     private let refreshInterval: TimeInterval = 30 * 60    // 30 min - periodic refresh
@@ -310,6 +320,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
         localeProvider: LocaleIdentifierProviding,
+        storageScope: ProfileStorageScope,
         customStoragePath: URL? = nil
     ) {
         self.identityService = identity
@@ -332,12 +343,52 @@ internal actor ProfileService: ProfileServiceProtocol {
             let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             baseDir = caches.appendingPathComponent("nuxie", isDirectory: true)
         }
+
+        // The old cache was shared by every configured API credential. It has
+        // no trustworthy app binding and must not be imported into a scoped
+        // namespace. Remove it once instead of retaining cross-app profile data.
+        let legacyCache = baseDir.appendingPathComponent("profiles", isDirectory: true)
+        if FileManager.default.fileExists(atPath: legacyCache.path) {
+            do {
+                try FileManager.default.removeItem(at: legacyCache)
+            } catch {
+                LogWarning("Failed to remove unsafe legacy profile cache: \(error)")
+            }
+        }
+
+        let authorityBaseDir: URL
+        if let customPath = customStoragePath {
+            authorityBaseDir = customPath.appendingPathComponent(
+                "nuxie",
+                isDirectory: true
+            )
+        } else {
+            let support = FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first!
+            authorityBaseDir = support.appendingPathComponent(
+                "nuxie",
+                isDirectory: true
+            )
+        }
+        do {
+            authorityStore = try FileProfileAuthorityBindingStore(
+                baseDirectory: authorityBaseDir,
+                storageScope: storageScope
+            )
+        } catch {
+            LogWarning("Failed to initialize profile authority binding store: \(error)")
+            authorityStore = InMemoryProfileAuthorityBindingStore()
+        }
         
         let opts = DiskCacheOptions(
             baseDirectory: baseDir,
-            subdirectory: "profiles",
+            subdirectory: storageScope.cacheSubdirectory,
             defaultTTL: cacheTTL,
-            maxTotalBytes: 10 * 1024 * 1024,  // 10 MB cap (only one profile)
+            // Canonical profile transport permits 24 MiB. Leave room for the
+            // cache wrapper and metadata without admitting a second profile.
+            maxTotalBytes: 40 * 1024 * 1024,
             excludeFromBackup: true,
             fileProtection: .completeUntilFirstUserAuthentication
         )
@@ -370,7 +421,9 @@ internal actor ProfileService: ProfileServiceProtocol {
         eventLog: ProfileEventSink,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
-        localeProvider: LocaleIdentifierProviding
+        localeProvider: LocaleIdentifierProviding,
+        authorityStore: any ProfileAuthorityBindingStore =
+            InMemoryProfileAuthorityBindingStore()
     ) {
         self.identityService = identity
         self.api = api
@@ -383,6 +436,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.sleepProvider = sleepProvider
         self.localeProvider = localeProvider
         self.diskCache = cache
+        self.authorityStore = authorityStore
         self.initialDiskLoadNeeded = true
 
         // Kick off the startup disk load eagerly; idempotent with the lazy
@@ -434,7 +488,7 @@ internal actor ProfileService: ProfileServiceProtocol {
                 )
                 return
             }
-            guard isFresh(cached) else {
+            guard isFresh(cached) || cached.response.planeProfile != nil else {
                 LogDebug("Discarding expired cached profile before admission")
                 await discardInvalidCachedProfileAndRefresh(
                     admission: admission
@@ -445,7 +499,8 @@ internal actor ProfileService: ProfileServiceProtocol {
                 _ = try await admitProfile(
                     cached,
                     admission: admission,
-                    persistToDisk: false
+                    persistToDisk: false,
+                    authoritySource: .cache
                 )
             } catch {
                 LogError("Cached release profile authentication failed: \(error)")
@@ -454,6 +509,9 @@ internal actor ProfileService: ProfileServiceProtocol {
                     admission: admission
                 )
                 return
+            }
+            if !isFresh(cached), cached.response.planeProfile != nil {
+                await refreshInBackground(distinctId: distinctId)
             }
         }
     }
@@ -501,7 +559,8 @@ internal actor ProfileService: ProfileServiceProtocol {
                         locale: locale
                     ),
                     admission: admission,
-                    persistToDisk: true
+                    persistToDisk: true,
+                    authoritySource: .network
                 )
                 guard admitted else {
                     LogDebug("Discarding stale profile generation \(admission.generation) after authentication")
@@ -624,7 +683,8 @@ internal actor ProfileService: ProfileServiceProtocol {
     private func admitProfile(
         _ item: CachedProfile,
         admission: ProfileAdmission,
-        persistToDisk: Bool
+        persistToDisk: Bool,
+        authoritySource: ProfileAuthoritySource
     ) async throws -> Bool {
         let profile = item.response
         let distinctId = item.distinctId
@@ -634,10 +694,28 @@ internal actor ProfileService: ProfileServiceProtocol {
 
         let preparedDeviceProfile: DeviceLegProfileCatalog.Prepared?
         if let planeProfile = profile.planeProfile {
-            guard let deviceLegProfiles else {
+            guard let deviceLegProfiles,
+                  let deliveryAuthority = item.validator?.authority else {
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
             }
-            preparedDeviceProfile = try await deviceLegProfiles.prepare(planeProfile)
+            let authorityAccepted: Bool
+            switch authoritySource {
+            case .network:
+                authorityAccepted = try await authorityStore.bind(
+                    deliveryAuthority
+                )
+            case .cache:
+                authorityAccepted = try await authorityStore.authority()
+                    == deliveryAuthority
+            }
+            guard authorityAccepted,
+                  isCurrentAdmission(admission) else {
+                throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+            }
+            preparedDeviceProfile = try await deviceLegProfiles.prepare(
+                planeProfile,
+                authority: deliveryAuthority
+            )
         } else {
             preparedDeviceProfile = nil
         }
@@ -738,9 +816,10 @@ internal actor ProfileService: ProfileServiceProtocol {
         // startup disk admission may happen before runtime initialization;
         // the consumer stores this authenticated snapshot and evaluates it
         // only after its durable journal has recovered.
-        if let committedDeviceSnapshot {
+        if let committedDeviceSnapshot, let preparedDeviceProfile {
             await deviceLegRuntime?.profileDidCommit(
                 committedDeviceSnapshot,
+                authority: preparedDeviceProfile.authority,
                 distinctId: distinctId
             )
         } else {
@@ -802,10 +881,11 @@ internal actor ProfileService: ProfileServiceProtocol {
             await awaitInitialDiskLoad()
         }
 
-        // Return from memory if available and not too stale
+        // Canonical profiles remain usable offline after their refresh age;
+        // foreground still unconditionally revalidates them. TTL expiry must
+        // never revoke a device-owned parked leg.
         if let cached = cachedProfileForDistinctId(distinctId) {
-            let age = dateProvider.timeIntervalSince(cached.cachedAt)
-            if age < cacheTTL {
+            if isFresh(cached) || cached.response.planeProfile != nil {
                 return cached.response
             }
         }
@@ -818,7 +898,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         await awaitInitialDiskLoad()
         guard let cachedProfile,
               cachedProfile.distinctId == distinctId,
-              dateProvider.timeIntervalSince(cachedProfile.cachedAt) < cacheTTL else {
+              isFresh(cachedProfile)
+                || cachedProfile.response.planeProfile != nil else {
             return nil
         }
         return triggerAdmission?.effectiveExperienceReferences
@@ -830,7 +911,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         await awaitInitialDiskLoad()
         guard let cachedProfile,
               cachedProfile.distinctId == distinctId,
-              dateProvider.timeIntervalSince(cachedProfile.cachedAt) < cacheTTL else {
+              isFresh(cachedProfile)
+                || cachedProfile.response.planeProfile != nil else {
             return nil
         }
         return triggerAdmission?.activeExperienceReferences
@@ -847,7 +929,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         }
         guard let cachedProfile,
               cachedProfile.distinctId == distinctId,
-              dateProvider.timeIntervalSince(cachedProfile.cachedAt) < cacheTTL else {
+              isFresh(cachedProfile)
+                || cachedProfile.response.planeProfile != nil else {
             return nil
         }
         return triggerAdmission
@@ -891,8 +974,9 @@ internal actor ProfileService: ProfileServiceProtocol {
 
     @discardableResult
     func cleanupExpired() async -> Int {
-        // For memory-first approach, we only need to clean disk cache
-        // Memory cache is always current user's profile
+        // A canonical snapshot is durable offline authority for armed and
+        // parked legs. Its refresh age cannot make the disk copy disposable.
+        if cachedProfile?.response.planeProfile != nil { return 0 }
         return await diskCache.cleanupExpired()
     }
 
@@ -923,7 +1007,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         }
 
         let distinctId = identityService.getDistinctId()
-        guard isFresh(cached) else {
+        guard isFresh(cached) || cached.response.planeProfile != nil else {
             LogDebug("Discarding expired resident profile before refresh")
             let admission = beginProfileRequest(distinctId: distinctId)
             await discardInvalidCachedProfileAndRefresh(
@@ -1028,7 +1112,7 @@ internal actor ProfileService: ProfileServiceProtocol {
                 await refreshInBackground(distinctId: newDistinctId)
                 return
             }
-            guard isFresh(cached) else {
+            guard isFresh(cached) || cached.response.planeProfile != nil else {
                 LogDebug("Discarding expired cached profile before user-change admission")
                 await discardInvalidCachedProfileAndRefresh(
                     admission: admission
@@ -1039,7 +1123,8 @@ internal actor ProfileService: ProfileServiceProtocol {
                 let admitted = try await admitProfile(
                     cached,
                     admission: admission,
-                    persistToDisk: false
+                    persistToDisk: false,
+                    authoritySource: .cache
                 )
                 guard admitted else { return }
             } catch {

@@ -6,6 +6,36 @@ import XCTest
 #endif
 
 final class DeviceLegRunJournalTests: XCTestCase {
+    func testStorageScopeSurvivesCredentialRotationAndIsolatesAppAuthority() {
+        let authority = ProfileDeliveryAuthority(
+            appId: "app-a",
+            environment: "production"
+        )
+        // A replacement publishable key authenticating the same authority
+        // produces the same durable address because credentials never enter
+        // the scope constructor.
+        let beforeRotation = DeviceLegStorageScope(authority: authority)
+        let afterRotation = DeviceLegStorageScope(authority: authority)
+        XCTAssertEqual(
+            beforeRotation.customerDigest(distinctId: "customer"),
+            afterRotation.customerDigest(distinctId: "customer")
+        )
+        XCTAssertNotEqual(
+            beforeRotation.customerDigest(distinctId: "customer"),
+            DeviceLegStorageScope(authority: .init(
+                appId: "app-b",
+                environment: "production"
+            )).customerDigest(distinctId: "customer")
+        )
+        XCTAssertNotEqual(
+            beforeRotation.customerDigest(distinctId: "customer"),
+            DeviceLegStorageScope(authority: .init(
+                appId: "app-a",
+                environment: "development"
+            )).customerDigest(distinctId: "customer")
+        )
+    }
+
     func testSharedReportVectorsPreserveOutputsAndForwardLifecycleWithStableRetries() async throws {
         struct Vector: Decodable {
             let binding: ArmedDeviceLeg.Binding
@@ -35,7 +65,8 @@ final class DeviceLegRunJournalTests: XCTestCase {
             let run = try XCTUnwrap(admitted)
             try await journal.recordResponses(run.id, values: vector.outputs.responses)
             try await journal.complete(run.id, outcome: vector.outcome, at: date(vector.completedAtMillis / 1000),
-                                       eventOutputs: vector.outputs.event)
+                                       eventOutputs: vector.outputs.event,
+                                       responseOutputs: vector.outputs.responses)
             if mode == "accept_then_lost_receipt" {
                 try await DeviceLegReporter(journal: journal, events: LostCompletionAcknowledgement(events: log)).flushPending()
                 let retained = try await journal.runs()
@@ -95,6 +126,114 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let recovered = try DeviceLegRunJournal(directory: directory, distinctId: "../customer")
         let existing = try await recovered.runs()
         XCTAssertEqual(existing.map(\.id), admitted.map(\.id))
+    }
+
+    func testStateArmReceiptIsAtomicAcrossInstancesUntilLatchResetOrArmRetirement() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let second = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let candidate = arm()
+        let receipt = DeviceLegStateArmReceipt(candidate)
+        let retainedRelease = release(for: candidate.reference)
+        let policy = DeviceLeg.Reentry(type: .everyTime, windowSeconds: nil)
+
+        async let left = first.admit(
+            arm: candidate,
+            release: retainedRelease,
+            reentry: policy,
+            entryStepId: "step",
+            at: date(100),
+            stateArmReceipt: receipt
+        )
+        async let right = second.admit(
+            arm: candidate,
+            release: retainedRelease,
+            reentry: policy,
+            entryStepId: "step",
+            at: date(100),
+            stateArmReceipt: receipt
+        )
+        let admitted = try await [left, right].compactMap { $0 }
+
+        XCTAssertEqual(admitted.count, 1)
+        try await first.clearStateArmReceipts(entryKind: receipt.entryKind)
+        let readmittedAfterLatchReset = try await first.admit(
+            arm: candidate,
+            release: retainedRelease,
+            reentry: policy,
+            entryStepId: "step",
+            at: date(200),
+            stateArmReceipt: receipt
+        )
+        XCTAssertNotNil(readmittedAfterLatchReset)
+
+        try await first.retainStateArmReceipts([])
+        let readmittedAfterArmRetirement = try await first.admit(
+            arm: candidate,
+            release: retainedRelease,
+            reentry: policy,
+            entryStepId: "step",
+            at: date(300),
+            stateArmReceipt: receipt
+        )
+        XCTAssertNotNil(readmittedAfterArmRetirement)
+    }
+
+    func testAdmissionRecreatesAPinDirectoryRemovedBeforeItsRootTransaction() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-a"
+        )
+        let pinRoot = directory
+            .appendingPathComponent("device-leg-journal-v1", isDirectory: true)
+            .appendingPathComponent("release-pins", isDirectory: true)
+        let firstPinDirectory = pinRoot.appendingPathComponent(
+            DeviceLegStorageScope.testFixture.customerDigest(
+                distinctId: "customer-a"
+            ),
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: firstPinDirectory,
+            withIntermediateDirectories: true
+        )
+        let second = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-b"
+        )
+        let secondRun = try await second.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "step",
+            at: date(100)
+        )
+        XCTAssertNotNil(secondRun)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: firstPinDirectory.path),
+            "The other admission should remove the simulated orphan"
+        )
+
+        let firstRun = try await first.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "step",
+            at: date(101)
+        )
+        XCTAssertNotNil(firstRun)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: firstPinDirectory.path)
+        )
     }
 
     func testTerminalHostPrivacyDropStillFinishesTheRun() async throws {
@@ -182,7 +321,12 @@ final class DeviceLegRunJournalTests: XCTestCase {
             if vector.beforeDeath == "parked" {
                 try await journal.park(run.id, stepId: "wait", until: vector.wakeAtMillis.map { date($0 / 1000) })
             } else if vector.beforeDeath == "completed" {
-                try await journal.complete(run.id, outcome: "done", at: date(200))
+                try await journal.complete(
+                    run.id,
+                    outcome: "done",
+                    at: date(200),
+                    responseOutputs: vector.responses
+                )
             }
             let reopened = try DeviceLegRunJournal(directory: directory, distinctId: "customer")
             let resumable = try await reopened.recover(at: date(suite.reopenedAtMillis / 1000))
@@ -192,13 +336,21 @@ final class DeviceLegRunJournalTests: XCTestCase {
             XCTAssertEqual(recovered.completion?.outcome, vector.expectedOutcome, vector.name)
             XCTAssertEqual(recovered.completion?.at, vector.expectedCompletedAtMillis.map { date($0 / 1000) }, vector.name)
             let expected = try JSONEncoder().encode(vector.responses)
-            let actual = try JSONEncoder().encode(recovered.outputs.responses)
+            let retainedResponses = recovered.completion == nil
+                ? recovered.context.responses
+                : recovered.outputs.responses
+            let actual = try JSONEncoder().encode(retainedResponses)
             XCTAssertEqual(try JSONSerialization.jsonObject(with: expected) as? NSDictionary,
                            try JSONSerialization.jsonObject(with: actual) as? NSDictionary, vector.name)
             if vector.beforeDeath == "parked" {
                 XCTAssertEqual(resumable.map(\.id), [run.id], vector.name)
                 XCTAssertEqual(resumable.first?.park?.wakeAt, date(300))
-                _ = try await reopened.resumeParked(run.id)
+                let fence = DeviceLegProfileFence()
+                _ = try await reopened.resumeParked(
+                    run.id,
+                    profileFence: fence,
+                    profileFenceToken: fence.token()
+                )
                 // Consuming a park point is durable before the next action.
                 // Death after consumption must never replay that action.
                 let again = try DeviceLegRunJournal(directory: directory, distinctId: "customer")
@@ -240,6 +392,727 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let abandoned = try XCTUnwrap(remaining.first)
         XCTAssertEqual(abandoned.completion?.outcome, "abandoned")
         XCTAssertEqual(abandoned.completion?.at, date(200))
+    }
+
+    func testAuthorityRevocationSurvivesRelaunchAndBlocksAdmissionUntilReportingRetiresRuns() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let candidate = arm()
+        let admitted = try await journal.admit(
+            arm: candidate,
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.park(
+            run.id,
+            stepId: "wait",
+            until: date(300)
+        )
+        try await journal.abandonAll(at: date(200))
+
+        let reopened = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let resumable = try await reopened.recover(at: date(250))
+        let rows = try await reopened.runs()
+        let abandoned = try XCTUnwrap(rows.first)
+        XCTAssertTrue(resumable.isEmpty)
+        XCTAssertEqual(abandoned.completion?.outcome, "abandoned")
+        let finalizedBeforeReporting = try await reopened.finalizeRevocation()
+        XCTAssertFalse(finalizedBeforeReporting)
+        let blocked = try await reopened.admit(
+            arm: candidate,
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(260)
+        )
+        XCTAssertNil(blocked)
+
+        try await reopened.markCompletionQueued(abandoned)
+        let finalizedAfterReporting = try await reopened.finalizeRevocation()
+        XCTAssertTrue(finalizedAfterReporting)
+        let admittedAfterRetirement = try await reopened.admit(
+            arm: candidate,
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(270)
+        )
+        XCTAssertNotNil(admittedAfterRetirement)
+    }
+
+    func testCheckmarksRetireAfterDeliveryAndTheAuthoredReentryWindow() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let once = DeviceLeg.Reentry(type: .oneTime, windowSeconds: nil)
+        let admittedOnce = try await journal.admit(
+            arm: arm(),
+            reentry: once,
+            entryStepId: "step",
+            at: date(100)
+        )
+        let onceRun = try XCTUnwrap(admittedOnce)
+        try await finish(journal, run: onceRun, at: 110)
+        try await journal.retainCheckmarks(
+            liveExperiences: ["experience": once],
+            at: date(200)
+        )
+        try await journal.retainCheckmarks(
+            liveExperiences: [:],
+            at: date(201)
+        )
+        let retiredOnceCheckmark = try await journal.checkmark(
+            experienceId: "experience"
+        )
+        XCTAssertNil(retiredOnceCheckmark)
+        let onceReadmitted = try await journal.admit(
+            arm: arm(),
+            reentry: once,
+            entryStepId: "step",
+            at: date(202)
+        )
+        XCTAssertNotNil(onceReadmitted)
+
+        let windowArm = ArmedDeviceLeg(
+            reference: .init(
+                experienceId: "window-experience",
+                versionId: "version",
+                legId: String(repeating: "c", count: 64),
+                descriptorSha256: String(repeating: "d", count: 64)
+            ),
+            binding: .init(type: .new, journeyId: nil, generation: nil),
+            entryCondition: arm().entryCondition,
+            context: .init(event: [:], responses: [:])
+        )
+        let window = DeviceLeg.Reentry(
+            type: .oncePerWindow,
+            windowSeconds: 100
+        )
+        let admittedWindow = try await journal.admit(
+            arm: windowArm,
+            reentry: window,
+            entryStepId: "step",
+            at: date(300)
+        )
+        let windowRun = try XCTUnwrap(admittedWindow)
+        try await finish(journal, run: windowRun, at: 310)
+        try await journal.retainCheckmarks(
+            liveExperiences: ["window-experience": window],
+            at: date(400)
+        )
+        try await journal.retainCheckmarks(
+            liveExperiences: [:],
+            at: date(499)
+        )
+        let retainedWindowCheckmark = try await journal.checkmark(
+            experienceId: "window-experience"
+        )
+        XCTAssertNotNil(retainedWindowCheckmark)
+        try await journal.retainCheckmarks(
+            liveExperiences: [:],
+            at: date(500)
+        )
+        let retiredWindowCheckmark = try await journal.checkmark(
+            experienceId: "window-experience"
+        )
+        XCTAssertNil(retiredWindowCheckmark)
+    }
+
+    func testProfileReplacementCannotConsumeAParkWithAStaleToken() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.park(run.id, stepId: "wait", until: date(200))
+        let fence = DeviceLegProfileFence()
+        let stale = fence.token()
+        _ = fence.advance()
+
+        let resumed = try await journal.resumeParked(
+            run.id,
+            profileFence: fence,
+            profileFenceToken: stale
+        )
+
+        XCTAssertNil(resumed)
+        let retainedPark = try await journal.runs().first?.park
+        XCTAssertNotNil(retainedPark)
+    }
+
+    func testAdmissionPublishesItsStateReceiptInsideTheProfileFence() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let fence = DeviceLegProfileFence()
+        let token = fence.token()
+        let releaseReceipt = DispatchSemaphore(value: 0)
+        let receipt = LockedBoolean()
+        let advanceFinished = AsyncBoolean()
+        let candidate = arm()
+
+        let admission = Task {
+            try await journal.admit(
+                arm: candidate,
+                release: release(for: candidate.reference),
+                reentry: .init(type: .everyTime, windowSeconds: nil),
+                entryStepId: "wait",
+                at: date(100),
+                profileFence: fence,
+                profileFenceToken: token,
+                onAdmitted: {
+                    receipt.setTrue()
+                    releaseReceipt.wait()
+                }
+            )
+        }
+        for _ in 0..<200 where !receipt.value {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(receipt.value)
+        let replacement = Task {
+            _ = fence.advance()
+            await advanceFinished.setTrue()
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let advancedWhilePublishing = await advanceFinished.value()
+        XCTAssertFalse(advancedWhilePublishing)
+
+        releaseReceipt.signal()
+        let admitted = try await admission.value
+        XCTAssertNotNil(admitted)
+        await replacement.value
+        XCTAssertTrue(receipt.value)
+    }
+
+    func testAdmissionPinsReleaseUntilTheLastReferencingRunRetires() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let enrollmentArm = arm()
+        let pin = release(for: enrollmentArm.reference)
+        let admittedFirst = try await journal.admit(
+            arm: enrollmentArm,
+            release: pin,
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "step",
+            at: date(100)
+        )
+        let first = try XCTUnwrap(admittedFirst)
+        let continuationArm = arm(binding: .init(
+            type: .continuation,
+            journeyId: first.journeyId,
+            generation: 1
+        ))
+        let conflictingPin = DeviceLegReleaseProfileEntry(
+            locator: .init(
+                appId: pin.locator.appId,
+                environment: pin.locator.environment,
+                experienceId: pin.locator.experienceId,
+                experienceVersionId: pin.locator.experienceVersionId,
+                versionNumber: pin.locator.versionNumber,
+                buildId: "other-build",
+                publishedAt: pin.locator.publishedAt,
+                publishedAtSeq: pin.locator.publishedAtSeq,
+                legId: pin.locator.legId
+            ),
+            envelope: pin.envelope
+        )
+        do {
+            _ = try await journal.admit(
+                arm: continuationArm,
+                release: conflictingPin,
+                reentry: .init(type: .everyTime, windowSeconds: nil),
+                entryStepId: "step",
+                at: date(105)
+            )
+            XCTFail("Expected one digest to retain exactly one release")
+        } catch DeviceLegJournalError.invalidState {
+        } catch {
+            XCTFail("Unexpected release conflict error: \(error)")
+        }
+        let admittedSecond = try await journal.admit(
+            arm: continuationArm,
+            release: pin,
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "step",
+            at: date(110)
+        )
+        let second = try XCTUnwrap(admittedSecond)
+
+        let persistedPin = try await journal.releasePin(
+            descriptorSHA256: enrollmentArm.reference.descriptorSha256
+        )
+        let persisted = try XCTUnwrap(persistedPin)
+        XCTAssertEqual(
+            try ExactJSONCodec.encode(persisted),
+            try ExactJSONCodec.encode(pin)
+        )
+
+        try await finish(journal, run: first, at: 120)
+        let retainedAfterFirst = try await journal.releasePin(
+            descriptorSHA256: enrollmentArm.reference.descriptorSha256
+        )
+        XCTAssertNotNil(retainedAfterFirst)
+
+        try await finish(journal, run: second, at: 130)
+        let retainedAfterSecond = try await journal.releasePin(
+            descriptorSHA256: enrollmentArm.reference.descriptorSha256
+        )
+        XCTAssertNil(retainedAfterSecond)
+    }
+
+    func testAdmissionRetainsTheMaximumProfileDescriptorBudget() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let descriptorSize = ExperienceReleaseDescriptorLimits.descriptorBytes
+
+        for index in 0..<4 {
+            let descriptorBytes = Data(
+                repeating: UInt8(index + 1),
+                count: descriptorSize
+            )
+            let reference = ArmedDeviceLeg.Reference(
+                experienceId: "experience-\(index)",
+                versionId: "version-\(index)",
+                legId: String(repeating: String(format: "%x", index + 10), count: 64),
+                descriptorSha256: SHA256Provider.hexDigest(descriptorBytes)
+            )
+            let candidate = ArmedDeviceLeg(
+                reference: reference,
+                binding: .init(type: .new, journeyId: nil, generation: nil),
+                entryCondition: .init(
+                    type: .appForegrounded,
+                    eventName: nil,
+                    segmentId: nil,
+                    member: nil,
+                    condition: nil
+                ),
+                context: .init(event: [:], responses: [:])
+            )
+            let fixture = release(for: reference)
+            let retainedRelease = DeviceLegReleaseProfileEntry(
+                locator: fixture.locator,
+                envelope: .init(
+                    mediaType: fixture.envelope.mediaType,
+                    encoding: fixture.envelope.encoding,
+                    descriptorSha256: reference.descriptorSha256,
+                    descriptorSizeBytes: descriptorBytes.count,
+                    descriptorBytesBase64: descriptorBytes.base64EncodedString(),
+                    signature: fixture.envelope.signature
+                )
+            )
+
+            let admitted = try await journal.admit(
+                arm: candidate,
+                release: retainedRelease,
+                reentry: .init(type: .everyTime, windowSeconds: nil),
+                entryStepId: "wait",
+                at: date(Double(100 + index))
+            )
+            XCTAssertNotNil(admitted)
+        }
+
+        let retainedRuns = try await journal.runs()
+        XCTAssertEqual(retainedRuns.count, 4)
+    }
+
+    func testAdmissionRetainsAContextLargerThanTheLegacyJournalBudget() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let fixture = arm()
+        let candidate = ArmedDeviceLeg(
+            reference: fixture.reference,
+            binding: fixture.binding,
+            entryCondition: fixture.entryCondition,
+            context: .init(
+                event: [
+                    "payload": .string(String(
+                        repeating: "x",
+                        count: 17 * 1_024 * 1_024
+                    )),
+                ],
+                responses: [:]
+            )
+        )
+
+        let admitted = try await journal.admit(
+            arm: candidate,
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(100)
+        )
+
+        XCTAssertNotNil(admitted)
+    }
+
+    func testCompletionMovesMaximumSizeOutputsOutOfExecutionContext() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let fixture = arm()
+        let payload = String(repeating: "x", count: 21 * 1_024 * 1_024)
+        let candidate = ArmedDeviceLeg(
+            reference: fixture.reference,
+            binding: fixture.binding,
+            entryCondition: fixture.entryCondition,
+            context: .init(event: ["payload": .string(payload)], responses: [:])
+        )
+        let admitted = try await journal.admit(
+            arm: candidate,
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "complete",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+
+        try await journal.complete(
+            run.id,
+            outcome: "done",
+            at: date(200),
+            eventOutputs: ["payload": .string(payload)]
+        )
+
+        let completedRuns = try await journal.runs()
+        let completed = try XCTUnwrap(completedRuns.first)
+        XCTAssertTrue(completed.context.event.isEmpty)
+        guard case .string(let retainedPayload)? = completed.outputs.event["payload"] else {
+            return XCTFail("Expected retained terminal event output")
+        }
+        XCTAssertEqual(retainedPayload, payload)
+    }
+
+    func testLargeCollectedResponsesAreNotDuplicatedBeforeCompletion() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "survey",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        let answer = String(repeating: "y", count: 21 * 1_024 * 1_024)
+
+        try await journal.recordResponses(
+            run.id,
+            values: ["answer": .string(answer)]
+        )
+        let pendingRuns = try await journal.runs()
+        let pending = try XCTUnwrap(pendingRuns.first)
+        guard case .string(let pendingAnswer)? = pending.context.responses["answer"] else {
+            return XCTFail("Expected retained pending response")
+        }
+        XCTAssertEqual(pendingAnswer, answer)
+        XCTAssertTrue(pending.outputs.responses.isEmpty)
+
+        try await journal.complete(
+            run.id,
+            outcome: "done",
+            at: date(200),
+            responseOutputs: ["answer": .string(answer)]
+        )
+        let completedRuns = try await journal.runs()
+        let completed = try XCTUnwrap(completedRuns.first)
+        XCTAssertTrue(completed.context.responses.isEmpty)
+        guard case .string(let completedAnswer)? = completed.outputs.responses["answer"] else {
+            return XCTFail("Expected retained terminal response output")
+        }
+        XCTAssertEqual(completedAnswer, answer)
+    }
+
+    func testCompletionPublishesOnlyDeclaredResponseOutputs() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "survey",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.recordResponses(
+            run.id,
+            values: [
+                "declared": .string("publish"),
+                "private": .string("do-not-publish"),
+            ]
+        )
+
+        try await journal.complete(
+            run.id,
+            outcome: "done",
+            at: date(200),
+            responseOutputs: ["declared": .string("publish")]
+        )
+
+        let completedRuns = try await journal.runs()
+        let completed = try XCTUnwrap(completedRuns.first)
+        XCTAssertTrue(completed.context.responses.isEmpty)
+        XCTAssertEqual(
+            try ExactJSONCodec.encode(completed.outputs.responses),
+            try ExactJSONCodec.encode([
+                "declared": ExperienceReleaseJSONValue.string("publish"),
+            ])
+        )
+    }
+
+    func testReleasePinCleanupIsIsolatedByCustomer() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-a"
+        )
+        let second = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-b"
+        )
+        let candidate = arm()
+        let policy = DeviceLeg.Reentry(
+            type: .everyTime,
+            windowSeconds: nil
+        )
+        let admittedFirst = try await first.admit(
+            arm: candidate,
+            reentry: policy,
+            entryStepId: "wait",
+            at: date(100)
+        )
+        let firstRun = try XCTUnwrap(admittedFirst)
+        let admittedSecond = try await second.admit(
+            arm: candidate,
+            reentry: policy,
+            entryStepId: "wait",
+            at: date(100)
+        )
+        let secondRun = try XCTUnwrap(admittedSecond)
+
+        try await finish(first, run: firstRun, at: 110)
+
+        let retiredPin = try await first.releasePin(
+            descriptorSHA256: candidate.reference.descriptorSha256
+        )
+        let retainedPin = try await second.releasePin(
+            descriptorSHA256: candidate.reference.descriptorSha256
+        )
+        XCTAssertNil(retiredPin)
+        XCTAssertNotNil(retainedPin)
+
+        try await finish(second, run: secondRun, at: 120)
+    }
+
+    func testJournalAndReleasePinsAreIsolatedBySetupScope() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer",
+            storageScope: .init(
+                authority: .init(
+                    appId: "app-first",
+                    environment: "production"
+                )
+            )
+        )
+        let second = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer",
+            storageScope: .init(
+                authority: .init(
+                    appId: "app-second",
+                    environment: "production"
+                )
+            )
+        )
+        let candidate = arm()
+
+        let firstRun = try await first.admit(
+            arm: candidate,
+            reentry: .init(type: .oneTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(100)
+        )
+
+        XCTAssertNotNil(firstRun)
+        let secondRunsBeforeAdmission = try await second.runs()
+        XCTAssertTrue(secondRunsBeforeAdmission.isEmpty)
+        let secondRun = try await second.admit(
+            arm: candidate,
+            reentry: .init(type: .oneTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(100)
+        )
+        XCTAssertNotNil(secondRun)
+        let firstRuns = try await first.runs()
+        let secondRuns = try await second.runs()
+        XCTAssertEqual(firstRuns.count, 1)
+        XCTAssertEqual(secondRuns.count, 1)
+    }
+
+    func testAdmissionBoundsAggregateReleasePinBytes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let firstArm = arm()
+        let secondArm = ArmedDeviceLeg(
+            reference: .init(
+                experienceId: "experience-two",
+                versionId: "version-two",
+                legId: String(repeating: "c", count: 64),
+                descriptorSha256: String(repeating: "d", count: 64)
+            ),
+            binding: .init(type: .new, journeyId: nil, generation: nil),
+            entryCondition: firstArm.entryCondition,
+            context: firstArm.context
+        )
+        let firstRelease = release(for: firstArm.reference)
+        let secondRelease = release(for: secondArm.reference)
+        let aggregateBytes = try ExactJSONCodec.encode(firstRelease).count
+            + ExactJSONCodec.encode(secondRelease).count
+        let firstJournal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-a",
+            releasePinBudgetBytes: aggregateBytes - 1
+        )
+        let secondJournal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-b",
+            releasePinBudgetBytes: aggregateBytes - 1
+        )
+
+        let first = try await firstJournal.admit(
+            arm: firstArm,
+            release: firstRelease,
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(100)
+        )
+        XCTAssertNotNil(first)
+        do {
+            _ = try await secondJournal.admit(
+                arm: secondArm,
+                release: secondRelease,
+                reentry: .init(type: .everyTime, windowSeconds: nil),
+                entryStepId: "wait",
+                at: date(101)
+            )
+            XCTFail("Expected aggregate release-pin budget rejection")
+        } catch DeviceLegJournalError.storageLimit {
+        } catch {
+            XCTFail("Unexpected aggregate release-pin error: \(error)")
+        }
+        let firstRuns = try await firstJournal.runs()
+        let secondRuns = try await secondJournal.runs()
+        XCTAssertEqual(firstRuns.count, 1)
+        XCTAssertTrue(secondRuns.isEmpty)
+    }
+
+    func testRecoveryAbandonsAParkedRunWhoseReleasePinIsMissing() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let candidate = arm()
+        let admitted = try await journal.admit(
+            arm: candidate,
+            release: release(for: candidate.reference),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.park(
+            run.id,
+            stepId: "wait",
+            until: date(300)
+        )
+
+        let pinFile = directory
+            .appendingPathComponent("device-leg-journal-v1", isDirectory: true)
+            .appendingPathComponent("release-pins", isDirectory: true)
+            .appendingPathComponent(
+                DeviceLegStorageScope.testFixture.customerDigest(
+                    distinctId: "customer"
+                ),
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                "\(candidate.reference.descriptorSha256).json"
+            )
+        try FileManager.default.removeItem(at: pinFile)
+
+        let reopened = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let resumable = try await reopened.recover(at: date(200))
+        let recoveredRuns = try await reopened.runs()
+        let recovered = try XCTUnwrap(recoveredRuns.first)
+        XCTAssertTrue(resumable.isEmpty)
+        XCTAssertEqual(recovered.completion?.outcome, "abandoned")
+        XCTAssertEqual(recovered.completion?.at, date(200))
     }
 
     func testExecutorTransitionsAtomicallyPersistCursorContextAndFixedTimerAnchors() async throws {
@@ -296,7 +1169,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             FileManager.default.contentsOfDirectory(
                 at: root,
                 includingPropertiesForKeys: nil
-            ).first
+            ).first { $0.pathExtension == "json" }
         )
         var snapshot = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: file))
@@ -379,7 +1252,12 @@ final class DeviceLegRunJournalTests: XCTestCase {
                                                entryStepId: "survey", at: date(100))
         let run = try XCTUnwrap(admitted)
         try await journal.recordResponses(run.id, values: ["answer": .string("yes")])
-        try await journal.complete(run.id, outcome: "done", at: date(200))
+        try await journal.complete(
+            run.id,
+            outcome: "done",
+            at: date(200),
+            responseOutputs: ["answer": .string("yes")]
+        )
         let interrupted = DeviceLegReporter(journal: journal, events: LostCompletionAcknowledgement(events: firstLog))
         try await interrupted.flushPending()
         let pending = try await journal.runs()
@@ -517,7 +1395,75 @@ final class DeviceLegRunJournalTests: XCTestCase {
               context: .init(event: [:], responses: [:]))
     }
 
+    private func release(
+        for reference: ArmedDeviceLeg.Reference
+    ) -> DeviceLegReleaseProfileEntry {
+        testDeviceLegRelease(for: reference)
+    }
+
     private func date(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
+}
+
+private extension DeviceLegRunJournal {
+    func admit(
+        arm: ArmedDeviceLeg,
+        reentry: DeviceLeg.Reentry,
+        entryStepId: String,
+        at: Date
+    ) async throws -> DeviceLegRun? {
+        try await admit(
+            arm: arm,
+            release: testDeviceLegRelease(for: arm.reference),
+            reentry: reentry,
+            entryStepId: entryStepId,
+            at: at
+        )
+    }
+}
+
+private func testDeviceLegRelease(
+    for reference: ArmedDeviceLeg.Reference
+) -> DeviceLegReleaseProfileEntry {
+    .init(
+        locator: .init(
+            appId: "app",
+            environment: "test",
+            experienceId: reference.experienceId,
+            experienceVersionId: reference.versionId,
+            versionNumber: 1,
+            buildId: "build",
+            publishedAt: "2026-08-31T00:00:00.000Z",
+            publishedAtSeq: 1,
+            legId: reference.legId
+        ),
+        envelope: .init(
+            mediaType: DeviceLegReleaseDescriptor.mediaType,
+            encoding: "base64",
+            descriptorSha256: reference.descriptorSha256,
+            descriptorSizeBytes: 2,
+            descriptorBytesBase64: "e30=",
+            signature: .init(
+                version: 1,
+                algorithm: "ed25519",
+                keyId: "test",
+                signatureBase64: String(repeating: "A", count: 88)
+            )
+        )
+    )
+}
+
+private final class LockedBoolean: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+
+    var value: Bool { lock.withLock { stored } }
+    func setTrue() { lock.withLock { stored = true } }
+}
+
+private actor AsyncBoolean {
+    private var stored = false
+    func setTrue() { stored = true }
+    func value() -> Bool { stored }
 }
 
 private actor LostCompletionAcknowledgement: RoutedStableSystemEventCapturing {
@@ -541,6 +1487,23 @@ private actor LostCompletionAcknowledgement: RoutedStableSystemEventCapturing {
             properties: properties,
             eventId: eventId,
             distinctId: distinctId
+        )
+        return event == JourneyEvents.journeyLegCompleted ? nil : captured
+    }
+
+    func captureAndRouteSystemEvent(
+        _ event: String,
+        properties: sending [String: Any]?,
+        eventId: String,
+        distinctId: String,
+        admission: any StableEventCaptureCommitAdmission
+    ) async -> DurableTriggerCapture? {
+        let captured = await events.captureAndRouteSystemEvent(
+            event,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId,
+            admission: admission
         )
         return event == JourneyEvents.journeyLegCompleted ? nil : captured
     }
