@@ -40,10 +40,16 @@ cat >"$fake_xcrun" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$NUXIE_TEST_XCRUN_CALLS_FILE"
-if [[ "$NUXIE_TEST_XCTEST_SCENARIO" == "failure" ]]; then
-  echo "Executed 1 test, with 1 failure" >&2
-  exit 73
-fi
+case "$NUXIE_TEST_XCTEST_SCENARIO" in
+  failure)
+    echo "Executed 1 test, with 1 failure" >&2
+    exit 73
+    ;;
+  zero_tests)
+    echo "Executed 0 tests, with 0 failures"
+    exit 0
+    ;;
+esac
 echo "Executed 1419 tests, with 0 failures"
 SH
 chmod +x "$fake_xcrun"
@@ -97,6 +103,35 @@ run_case testmanagerd_failure success present \
   -only-testing:NuxieSDKMacUnitTests/AppActionEncodingTests/testEveryAppActionMatchesTheEncodingFixture \
   -only-testing:NuxieSDKMacUnitTests/ValueRefResolverTests/parseRefPath
 [[ "$(cat "$xcrun_calls_file")" == "xctest -XCTest AppActionEncodingTests/testEveryAppActionMatchesTheEncodingFixture,ValueRefResolverTests/parseRefPath $test_bundle_path" ]]
+
+run_case testmanagerd_failure success present \
+  -only-testing:NuxieSDKMacUnitTests
+[[ "$(cat "$xcrun_calls_file")" == "xctest $test_bundle_path" ]]
+
+set +e
+run_case testmanagerd_failure success present \
+  -only-testing:AnotherTarget/SomeTests/testSomething
+wrong_target_status="$?"
+set -e
+[[ "$wrong_target_status" == "65" ]]
+[[ ! -s "$xcrun_calls_file" ]]
+
+set +e
+run_case testmanagerd_failure success present \
+  -only-testing:NuxieSDKMacUnitTests/
+empty_selector_status="$?"
+set -e
+[[ "$empty_selector_status" == "65" ]]
+[[ ! -s "$xcrun_calls_file" ]]
+
+set +e
+run_case testmanagerd_failure zero_tests present \
+  -only-testing:NuxieSDKMacUnitTests/ValueRefResolverTests/parseRefPath
+zero_tests_status="$?"
+set -e
+[[ "$zero_tests_status" == "65" ]]
+[[ "$(cat "$xcrun_calls_file")" == "xctest -XCTest ValueRefResolverTests/parseRefPath $test_bundle_path" ]]
+[[ -f "$diagnostics_dir/testmanagerd-xctest-fallback.log" ]]
 
 set +e
 run_case testmanagerd_failure failure present

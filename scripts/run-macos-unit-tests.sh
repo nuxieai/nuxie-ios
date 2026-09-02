@@ -67,12 +67,28 @@ if [[ ! -d "$test_bundle_path" ]]; then
 fi
 
 selectors=()
+all_tests_selected=false
 for argument in "$@"; do
   case "$argument" in
     -only-testing:*)
       selector="${argument#-only-testing:}"
-      selector="${selector#"$test_target_name"/}"
-      selectors+=("$selector")
+      case "$selector" in
+        "$test_target_name")
+          all_tests_selected=true
+          ;;
+        "$test_target_name"/*)
+          selector="${selector#"$test_target_name"/}"
+          if [[ -z "$selector" ]]; then
+            echo "The direct XCTest fallback received an empty -only-testing selector." >&2
+            exit "$first_status"
+          fi
+          selectors+=("$selector")
+          ;;
+        *)
+          echo "The direct XCTest fallback only supports -only-testing selectors for $test_target_name." >&2
+          exit "$first_status"
+          ;;
+      esac
       ;;
     -skip-testing:*)
       echo "The direct XCTest fallback does not support -skip-testing selectors." >&2
@@ -82,7 +98,7 @@ for argument in "$@"; do
 done
 
 xctest_command=("$xcrun_bin" xctest)
-if ((${#selectors[@]} > 0)); then
+if [[ "$all_tests_selected" == false ]] && ((${#selectors[@]} > 0)); then
   selector_list="$(IFS=,; printf '%s' "${selectors[*]}")"
   xctest_command+=(-XCTest "$selector_list")
 fi
@@ -90,7 +106,11 @@ xctest_command+=("$test_bundle_path")
 
 echo "macOS xcodebuild could not reach its host test service; running the already-built XCTest bundle directly."
 if run_and_log "$fallback_log" "${xctest_command[@]}"; then
-  exit 0
+  if grep -Eq 'Executed [1-9][0-9]* tests?,' "$fallback_log"; then
+    exit 0
+  fi
+  echo "The direct XCTest fallback completed without executing any tests." >&2
+  fallback_status="$first_status"
 else
   fallback_status="$?"
 fi
