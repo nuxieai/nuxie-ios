@@ -49,6 +49,15 @@ private actor InteractiveDismissalSuspension {
 }
 
 final class ExperienceArtifactTelemetryTests: XCTestCase {
+    @MainActor
+    private func waitUntil(_ predicate: () -> Bool) async -> Bool {
+        for _ in 0..<300 {
+            if predicate() { return true }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return false
+    }
+
     #if canImport(UIKit)
     @MainActor
     func testSignedShimmerCoversTheShellAndReduceMotionKeepsItStatic() {
@@ -203,8 +212,9 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         _ = controller.view
         controller.markPresentationShellPresented(traceToken: nil)
         XCTAssertTrue(controller.errorView.isHidden)
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        let recoveryAppeared = await waitUntil { !controller.errorView.isHidden }
 
+        XCTAssertTrue(recoveryAppeared)
         XCTAssertFalse(controller.errorView.isHidden)
         XCTAssertFalse(controller.refreshButton.isHidden)
         #if canImport(UIKit)
