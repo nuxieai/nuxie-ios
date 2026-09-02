@@ -5,6 +5,10 @@ import Foundation
 /// presentation layer proves that its screen was visible.
 actor DeviceLegExperimentExposureCoordinator {
     private let events: any RoutedStableSystemEventCapturing
+    private let retryLoop = CancellationAwareExponentialRetryLoop(
+        initialDelayNanoseconds: 250_000_000,
+        maximumDelayNanoseconds: 2_000_000_000
+    )
     private var retryTasks: [String: Task<Void, Never>] = [:]
 
     init(events: any RoutedStableSystemEventCapturing) {
@@ -91,30 +95,33 @@ actor DeviceLegExperimentExposureCoordinator {
         key: String
     ) async {
         defer { retryTasks.removeValue(forKey: key) }
-        var delay: UInt64 = 250_000_000
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(nanoseconds: delay)
-            } catch {
-                return
-            }
-            do {
-                let settled = try await DeviceLegExperimentExposureReporter(
-                    journal: journal,
-                    events: events
-                ).flushPending()
-                try await DeviceLegReporter(journal: journal, events: events)
-                    .flushPending()
-                if settled {
-                    _ = try await journal.finalizeRevocation()
-                    return
-                }
-            } catch {
-                LogWarning(
-                    "DeviceLegExperimentExposureCoordinator: exposure retry remains pending: \(error)"
-                )
-            }
-            delay = min(delay &* 2, 2_000_000_000)
+        await retryLoop.run { [weak self] in
+            guard let self else { return .finished }
+            return await self.retryOnce(in: journal)
         }
+    }
+
+    private func retryOnce(
+        in journal: DeviceLegRunJournal
+    ) async -> CancellationAwareExponentialRetryLoop.IterationResult {
+        do {
+            let settled = try await DeviceLegExperimentExposureReporter(
+                journal: journal,
+                events: events
+            ).flushPending()
+            try await DeviceLegReporter(
+                journal: journal,
+                events: events
+            ).flushPending()
+            if settled {
+                _ = try await journal.finalizeRevocation()
+                return .finished
+            }
+        } catch {
+            LogWarning(
+                "DeviceLegExperimentExposureCoordinator: exposure retry remains pending: \(error)"
+            )
+        }
+        return .pending
     }
 }

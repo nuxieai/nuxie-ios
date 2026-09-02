@@ -2020,13 +2020,9 @@ private final class ShutdownObservingExperiencePresentationService {
     }
 
     func ownsDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) -> Bool {
-        base.ownsDeviceLegPresentation(
-            journeyId: journeyId,
-            ownerDistinctId: ownerDistinctId
-        )
+        base.ownsDeviceLegPresentation(owner: owner)
     }
 
     func presentDeviceLeg(
@@ -2036,55 +2032,45 @@ private final class ShutdownObservingExperiencePresentationService {
     }
 
     func navigateDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         screenId: String,
         transition: ExperienceReleaseJSONValue?
     ) async -> DeviceLegPresentationNavigationResult {
         await base.navigateDeviceLegPresentation(
-            journeyId: journeyId,
-            ownerDistinctId: ownerDistinctId,
+            owner: owner,
             screenId: screenId,
             transition: transition
         )
     }
 
     func resolveDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         source: ScreenEmissionSource?
     ) -> [String: ExperienceReleaseJSONValue]? {
         base.resolveDeviceLegPresentationAction(
-            journeyId: journeyId,
-            ownerDistinctId: ownerDistinctId,
+            owner: owner,
             action: action,
             source: source
         )
     }
 
     func dispatchDeviceLegPresentationAction(
-        journeyId: String,
-        ownerDistinctId: String,
+        owner: DeviceLegPresentationOwner,
         action: [String: ExperienceReleaseJSONValue],
         effectId: String
     ) async -> DeviceLegPresentationActionResult {
         await base.dispatchDeviceLegPresentationAction(
-            journeyId: journeyId,
-            ownerDistinctId: ownerDistinctId,
+            owner: owner,
             action: action,
             effectId: effectId
         )
     }
 
     func finishDeviceLegPresentation(
-        journeyId: String,
-        ownerDistinctId: String
+        owner: DeviceLegPresentationOwner
     ) async {
-        await base.finishDeviceLegPresentation(
-            journeyId: journeyId,
-            ownerDistinctId: ownerDistinctId
-        )
+        await base.finishDeviceLegPresentation(owner: owner)
     }
 
     func shutdownDeviceLegPresentation(ownerDistinctId: String) async {

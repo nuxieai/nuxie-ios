@@ -81,7 +81,9 @@ build step; runtime source and XCFramework production live in `nuxie-runtime`.
 ### Swift Style
 
 - Follow [Swift API Design Guidelines](https://swift.org/documentation/api-design-guidelines/)
-- Use 4 spaces for indentation (not tabs)
+- Use 4 spaces for indentation (not tabs) in new files. When editing a legacy
+  file that consistently uses another indentation width, preserve that file's
+  established convention; migrate whole files separately from behavior changes.
 - Keep line length under 120 characters when possible
 - Use clear, descriptive names for variables, functions, and types
 - Prefer `let` over `var` when possible

@@ -925,8 +925,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                 )
                 let ownsExistingPresentation = await presenter?
                     .ownsDeviceLegPresentation(
-                        journeyId: parked.journeyId,
-                        ownerDistinctId: state.distinctId
+                        owner: .init(
+                            journeyId: parked.journeyId,
+                            distinctId: state.distinctId
+                        )
                     ) ?? false
                 if presenter != nil,
                    !release.descriptor.leg.screens.isEmpty,
@@ -1122,8 +1124,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         let screenId = batch.source.screenId
         guard leg.screens.contains(where: { $0.id == screenId }),
               await presenter?.ownsDeviceLegPresentation(
-                journeyId: run.journeyId,
-                ownerDistinctId: journal.distinctId
+                owner: .init(
+                    journeyId: run.journeyId,
+                    distinctId: journal.distinctId
+                )
               ) == true else { return false }
         // Purchase and restore outcomes correlate to the effect receipt on the
         // current cursor. Another renderer batch must not transition that
@@ -2138,8 +2142,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                         return
                     }
                     switch await presenter.navigateDeviceLegPresentation(
-                        journeyId: run.journeyId,
-                        ownerDistinctId: journal.distinctId,
+                        owner: .init(
+                            journeyId: run.journeyId,
+                            distinctId: journal.distinctId
+                        ),
                         screenId: screenId,
                         transition: action["transition"]
                     ) {
@@ -2196,8 +2202,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                         release: release,
                         delivery: state.snapshot.profile.delivery,
                         screenId: screenId,
-                        journeyId: run.journeyId,
-                        ownerDistinctId: journal.distinctId,
+                        owner: .init(
+                            journeyId: run.journeyId,
+                            distinctId: journal.distinctId
+                        ),
                         reservation: reserved,
                         onScreenChanged: { [weak self] changedScreenId in
                             guard let self else { return false }
@@ -2298,16 +2306,20 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                    let actionType = DeviceLegActionType(action: action),
                    actionType.isPresentationOwned,
                    await presenter.ownsDeviceLegPresentation(
-                    journeyId: run.journeyId,
-                    ownerDistinctId: journal.distinctId
+                    owner: .init(
+                        journeyId: run.journeyId,
+                        distinctId: journal.distinctId
+                    )
                    ) {
                     guard let contextResolvedAction = resolvedPresentationAction(
                         action,
                         context: run.context
                     ), let resolvedAction = await presenter
                         .resolveDeviceLegPresentationAction(
-                            journeyId: run.journeyId,
-                            ownerDistinctId: journal.distinctId,
+                            owner: .init(
+                                journeyId: run.journeyId,
+                                distinctId: journal.distinctId
+                            ),
                             action: contextResolvedAction,
                             source: presentationSource
                         )
@@ -2341,8 +2353,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
                     }
                     let presentationResult = await presenter
                         .dispatchDeviceLegPresentationAction(
-                            journeyId: run.journeyId,
-                            ownerDistinctId: journal.distinctId,
+                            owner: .init(
+                                journeyId: run.journeyId,
+                                distinctId: journal.distinctId
+                            ),
                             action: resolvedAction,
                             effectId: effectId
                         )
@@ -2652,8 +2666,10 @@ actor DeviceLegService: DeviceLegServiceProtocol {
         pendingPresentationPurchasePlacements.removeValue(forKey: run.id)
         if dismissPresentation, let presenter {
             await presenter.finishDeviceLegPresentation(
-                journeyId: run.journeyId,
-                ownerDistinctId: journal.distinctId
+                owner: .init(
+                    journeyId: run.journeyId,
+                    distinctId: journal.distinctId
+                )
             )
         }
         await scheduleNextWake()

@@ -132,6 +132,10 @@ actor ExperienceLoader {
         AuthenticatedExperienceReleaseID: ExperienceReleaseResourceMetrics
     ] = [:]
     private var activePreloadAccounting: ActivePreloadAccounting?
+    /// Required device-leg objects remain pinned for the complete lifetime of
+    /// the admitted canonical profile, including after memory pressure drops
+    /// parsed runtime state.
+    private var activeDeviceLegArtifacts: PreparedDeviceLegArtifacts?
     private var warmLoadsPermanentlySuspended = false
     private var warmLoadsPausedForBackground = false
     private var latestProfileGeneration: UInt64 = 0
@@ -171,13 +175,29 @@ actor ExperienceLoader {
     }
 
     func prepareReleaseProfile(
-        _ profile: ExperienceReleaseProfile?
+        _ profile: ExperienceReleaseProfile?,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot? = nil
     ) async throws -> PreparedExperienceReleaseProfile {
-        guard let profile else {
-            return PreparedExperienceReleaseProfile(profile: nil, catalog: nil)
+        let catalog: AuthenticatedExperienceReleaseCatalog?
+        if let profile {
+            catalog = try await releaseStore.authenticateProfile(profile)
+        } else {
+            catalog = nil
         }
-        let catalog = try await releaseStore.authenticateProfile(profile)
-        return PreparedExperienceReleaseProfile(profile: profile, catalog: catalog)
+        let deviceLegArtifacts: PreparedDeviceLegArtifacts?
+        if let deviceLegSnapshot {
+            deviceLegArtifacts = try await releaseStore.prepareDeviceLegArtifacts(
+                for: deviceLegSnapshot
+            )
+        } else {
+            deviceLegArtifacts = nil
+        }
+        return PreparedExperienceReleaseProfile(
+            profile: profile,
+            catalog: catalog,
+            deviceLegSnapshot: deviceLegSnapshot,
+            deviceLegArtifacts: deviceLegArtifacts
+        )
     }
 
     func commitReleaseProfile(
@@ -251,6 +271,15 @@ actor ExperienceLoader {
         let productMappings = makeProductMappingCache(catalogReleases)
         guard generation == nil || generation == latestProfileGeneration,
               admission?() != false else { return nil }
+        if let deviceLegSnapshot = prepared.deviceLegSnapshot {
+            guard prepared.deviceLegArtifacts?.releaseDescriptorSHA256s
+                    == Set(deviceLegSnapshot.releasesByDigest.keys) else {
+                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+            }
+        } else if prepared.deviceLegArtifacts != nil {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
+        activeDeviceLegArtifacts = prepared.deviceLegArtifacts
         let authorityChanged = installProductAuthorityCatalog(
             makeProductAuthorityCatalog(catalogReleases)
         )
@@ -598,6 +627,7 @@ actor ExperienceLoader {
         productMappingsByReleaseAndID.removeAll()
         productMappingsByReleaseAndStoreID.removeAll()
         productCatalogReleases.removeAll()
+        activeDeviceLegArtifacts = nil
         preparedReleasesByVersion.removeAll()
         await interactivePreparationCache.removeAll()
         preloadMetricsByRelease.removeAll()
