@@ -1857,6 +1857,65 @@ final class DeviceLegServiceTests: XCTestCase {
         )
     }
 
+    func testRuntimeDelegateReportsInitialRevealAndLaterVisibleScreenChanges() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = try await authenticatedRenderedSnapshot(fixture)
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[
+            arm.reference.descriptorSha256
+        ])
+        let reveals = DeviceLegRevealRecorder()
+        let request = DeviceLegPresentationRequest(
+            release: release,
+            delivery: snapshot.profile.delivery,
+            screenId: "screen_welcome",
+            journeyId: "journey-reveal",
+            ownerDistinctId: "customer-reveal",
+            reservation: nil,
+            onScreenChanged: { _ in true },
+            onEmissionBatch: { _ in true },
+            onPresentationRevealed: {
+                await reveals.record()
+            },
+            onOutcome: { _, _ in true }
+        )
+        let delegate = await MainActor.run {
+            DeviceLegRuntimeDelegate(request: request)
+        }
+        let controller = await MainActor.run {
+            MockExperienceViewController(mockExperienceVersionId: "version_golden")
+        }
+
+        await delegate.experienceViewController(
+            controller,
+            didChangeScreen: "screen_welcome"
+        )
+        let revealsBeforePresentation = await reveals.count()
+        XCTAssertEqual(revealsBeforePresentation, 0)
+
+        await delegate.experienceViewControllerDidReveal(controller)
+        for _ in 0..<100 {
+            if await reveals.count() == 1 { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let revealsAfterPresentation = await reveals.count()
+        XCTAssertEqual(revealsAfterPresentation, 1)
+
+        await delegate.experienceViewController(
+            controller,
+            didChangeScreen: "screen_details"
+        )
+        let revealsAfterNavigation = await reveals.count()
+        XCTAssertEqual(revealsAfterNavigation, 2)
+
+        await delegate.experienceViewController(
+            controller,
+            didChangeScreen: "screen_details"
+        )
+        let revealsAfterRepeatedCallback = await reveals.count()
+        XCTAssertEqual(revealsAfterRepeatedCallback, 2)
+    }
+
     func testRuntimeDelegateResolvesDynamicPurchasePlacementFromActiveScreenState() async throws {
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = replacing(
@@ -3614,6 +3673,22 @@ final class DeviceLegServiceTests: XCTestCase {
                 "restored",
                 "restored"
             ),
+            (
+                "restore",
+                ["type": .string("restore")],
+                SystemEventNames.restoreFailed,
+                [:],
+                "failed",
+                "restore_failed"
+            ),
+            (
+                "restore",
+                ["type": .string("restore")],
+                SystemEventNames.restoreNoPurchases,
+                [:],
+                "noPurchases",
+                "restore_no_purchases"
+            ),
         ]
         let fixture = try DeviceLegPlaneProfileTestFixture.load(
             entryKey: "renderedEntry"
@@ -4710,6 +4785,75 @@ final class DeviceLegServiceTests: XCTestCase {
         await service.shutdown()
     }
 
+    func testNavigatedExperimentExposureWaitsForTheVisibleScreenCallback() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = renderedVisibleExperimentSnapshot(
+            try await authenticatedRenderedSnapshot(fixture),
+            assignment: .init(variantId: "variant_b", isHoldout: false)
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let presenter = await MainActor.run {
+            let value = RecordingDeviceLegPresenter()
+            value.navigationResult = .navigated
+            return value
+        }
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            presenter: presenter
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presentedRequest = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presentedRequest)
+        let accepted = await request.onEmissionBatch(presentationBatch(
+            request: request,
+            invocationId: "select-navigated-experiment",
+            emissions: [.init(
+                id: "00000000-0000-7000-8000-000000000306",
+                sequence: 0,
+                occurredAt: "2026-08-29T12:00:00Z",
+                name: "continue",
+                payload: [:]
+            )]
+        ))
+
+        XCTAssertTrue(accepted)
+        for _ in 0..<100 {
+            let navigationCount = await MainActor.run {
+                presenter.navigationScreenIds.count
+            }
+            if navigationCount == 2 { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertFalse(events.routedEvents.contains {
+            $0.name == JourneyEvents.experimentExposure
+        })
+
+        // Production invokes this callback from the target screen's active
+        // lifecycle boundary. Merely returning `.navigated` above must not
+        // count as an impression.
+        await request.onPresentationRevealed()
+        for _ in 0..<100 {
+            let exposureCount = events.routedEvents.filter {
+                $0.name == JourneyEvents.experimentExposure
+            }.count
+            if exposureCount == 1 { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let exposureCount = events.routedEvents.filter {
+            $0.name == JourneyEvents.experimentExposure
+        }.count
+        XCTAssertEqual(exposureCount, 1)
+    }
+
     func testUnfetchedExperimentReportsFallbackOnlyAfterDefaultVariantIsShown() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
@@ -5568,6 +5712,91 @@ final class DeviceLegServiceTests: XCTestCase {
         })
         XCTAssertEqual(
             abandoned.properties["outcome"] as? String,
+            "abandoned"
+        )
+    }
+
+    func testIdentitySwitchRetainsRevokedJournalUntilAbandonmentCaptureIsDurable() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entryStepId: "wait",
+            steps: [
+                .init(
+                    kind: .action,
+                    id: "wait",
+                    action: [
+                        "type": .string("delay"),
+                        "durationMs": .number(60_000),
+                    ],
+                    outlets: ["next": "report"],
+                    outcome: nil
+                ),
+                .init(
+                    kind: .complete,
+                    id: "report",
+                    action: nil,
+                    outlets: nil,
+                    outcome: "continue"
+                ),
+            ]
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            dateProvider: MockDateProvider(
+                initialDate: Date(timeIntervalSince1970: 1_000)
+            )
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer-a")
+        let oldJournal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer-a"
+        )
+        let initialRuns = try await oldJournal.runs()
+        XCTAssertEqual(initialRuns.count, 1)
+
+        // handleUserChange retries the displaced journal once through
+        // ensureJournal. Fail both attempts so the service must retain that
+        // journal rather than orphaning its unqueued completion.
+        events.routedCaptureFailuresRemaining = 2
+        identity.setDistinctId("customer-b")
+        await service.handleUserChange(
+            from: "customer-a",
+            to: "customer-b"
+        )
+
+        let pendingRuns = try await oldJournal.runs()
+        let pending = try XCTUnwrap(pendingRuns.first)
+        XCTAssertEqual(pending.completion?.outcome, "abandoned")
+        XCTAssertTrue(pending.startedQueued)
+        XCTAssertFalse(events.routedEvents.contains {
+            $0.distinctId == "customer-a"
+                && $0.name == JourneyEvents.journeyLegCompleted
+        })
+
+        // A later profile callback is the ordinary retry boundary. Once the
+        // old completion is in EventLog, the new customer's journal may open.
+        await service.profileDidCommit(snapshot, distinctId: "customer-b")
+
+        let retiredRuns = try await oldJournal.runs()
+        XCTAssertTrue(retiredRuns.isEmpty)
+        let abandonments = events.routedEvents.filter {
+            $0.distinctId == "customer-a"
+                && $0.name == JourneyEvents.journeyLegCompleted
+        }
+        XCTAssertEqual(abandonments.count, 1)
+        XCTAssertEqual(
+            abandonments.first?.properties["outcome"] as? String,
             "abandoned"
         )
     }
@@ -6796,6 +7025,16 @@ private actor DeviceLegOutcomeCallRecorder {
         guard values.count == 1 else { return nil }
         return values[0]
     }
+}
+
+private actor DeviceLegRevealRecorder {
+    private var value = 0
+
+    func record() {
+        value += 1
+    }
+
+    func count() -> Int { value }
 }
 
 private actor DeviceLegResponsePersistenceProbe {

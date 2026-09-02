@@ -538,14 +538,12 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 attemptGeneration: attemptGeneration,
                 fallbackWindow: window
             )
-            eventLog.track(
-                JourneyEvents.experienceShown,
+            trackExperienceShown(
                 properties: JourneyEvents.experienceShownProperties(
                     experienceVersion: experienceVersionId,
                     journey: state
                 ),
-                userProperties: nil,
-                userPropertiesSetOnce: nil
+                distinctId: state.distinctId
             )
             if let originEventId = await journey.getContext("_origin_event_id")?.value as? String {
                 try await requireOwnedPresentation(
@@ -561,16 +559,13 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 await triggerBroker.emit(eventId: originEventId, update: .decision(.experienceShown(ref)))
             }
         } else if let deviceLegContext {
-            eventLog.track(
-                JourneyEvents.experienceShown,
+            trackExperienceShown(
                 properties: [
                     "journey_id": deviceLegContext.journeyId,
                     "experience_id": deviceLegContext.experienceId,
                     "experience_version": experienceVersionId,
                 ],
-                userProperties: nil,
-                userPropertiesSetOnce: nil,
-                distinctIdOverride: deviceLegContext.distinctId
+                distinctId: deviceLegContext.distinctId
             )
         }
 
@@ -582,6 +577,19 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
 
         LogDebug("ExperiencePresentationService: Successfully presented experience \(experienceVersionId)")
         return experienceViewController
+    }
+
+    private func trackExperienceShown(
+        properties: [String: Any],
+        distinctId: String
+    ) {
+        eventLog.track(
+            JourneyEvents.experienceShown,
+            properties: properties,
+            userProperties: nil,
+            userPropertiesSetOnce: nil,
+            distinctIdOverride: distinctId
+        )
     }
 
     func reserveDeviceLegPresentation(
