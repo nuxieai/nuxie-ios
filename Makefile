@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -275,13 +275,16 @@ test-runtime-reference-ui: check-staged-runtime-xcframework generate
 
 test-macos-unit: generate
 	@echo "Running unit tests on macOS..."
-	@xcodebuild test \
+	@scripts/run-macos-unit-tests.sh \
 		-project "$(XCODEPROJ)" \
 		-scheme "$(SCHEME_MACOS_UNIT)" \
 		-configuration Debug \
 		-derivedDataPath "$(DERIVED_DATA)" \
 		-destination 'platform=macOS' \
 		$(XCODEBUILD_TEST_FLAGS)
+
+test-macos-unit-runner:
+	@bash scripts/test-run-macos-unit-tests.sh
 
 test-integration: SCHEME = $(SCHEME_INTEGRATION)
 test-integration: test-xcode
