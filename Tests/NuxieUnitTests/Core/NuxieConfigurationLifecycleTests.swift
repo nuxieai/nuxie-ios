@@ -227,23 +227,35 @@ private actor ForegroundPresentationAdmissionProbe {
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         artifacts: PreparedDeviceLegArtifacts?,
         authority: ProfileDeliveryAuthority,
+        admissionGeneration: UInt64,
         distinctId: String
     ) async {
         _ = snapshot
         _ = artifacts
         _ = authority
+        _ = admissionGeneration
         _ = distinctId
     }
 
     func profileDidWithdraw(
         authority: ProfileDeliveryAuthority?,
+        admissionGeneration: UInt64,
         distinctId: String
     ) async {
         _ = authority
+        _ = admissionGeneration
         _ = distinctId
     }
-    func profileDidClear(distinctId: String) async { _ = distinctId }
-    func profileDidClearAll() async {}
+    func profileDidClear(
+        distinctId: String,
+        admissionGeneration: UInt64
+    ) async {
+        _ = distinctId
+        _ = admissionGeneration
+    }
+    func profileDidClearAll(admissionGeneration: UInt64) async {
+        _ = admissionGeneration
+    }
 
     func waitForObservation() async -> Bool {
         if let observedOpenAdmission { return observedOpenAdmission }

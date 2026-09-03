@@ -119,13 +119,15 @@ actor DeviceLegPresentationPublicationCoordinator {
             ))
         }
 
-        var context = ArmedDeviceLeg.Context(
+        let context = ArmedDeviceLeg.Context(
             event: run.context.event,
             responses: responses
         )
         let publication = DeviceLegRun.PendingPresentationPublication(
             invocationId: batch.invocationId,
+            source: batch.source,
             context: context,
+            responsesChanged: responsesChanged,
             items: publicationItems
         )
         do {
@@ -146,7 +148,47 @@ actor DeviceLegPresentationPublicationCoordinator {
             return .rejected
         }
         stagedRun.context = context
+        return await settle(
+            publication,
+            for: stagedRun,
+            leg: leg,
+            in: journal,
+            executionFenceToken: executionFenceToken
+        )
+    }
 
+    /// Replays a renderer outbox through the same authenticated route and
+    /// transition path as a live invocation. The marker remains durable until
+    /// its event or response signal is applied to the owning run.
+    func recover(
+        _ run: DeviceLegRun,
+        leg: DeviceLeg,
+        in journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> BatchDisposition {
+        guard let publication = run.pendingPresentationPublication else {
+            return .accepted
+        }
+        return await settle(
+            publication,
+            for: run,
+            leg: leg,
+            in: journal,
+            executionFenceToken: executionFenceToken
+        )
+    }
+
+    private func settle(
+        _ publication: DeviceLegRun.PendingPresentationPublication,
+        for run: DeviceLegRun,
+        leg: DeviceLeg,
+        in journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> BatchDisposition {
+        let expectedStepId = run.stepId
+        let screenId = publication.source.screenId
+        var stagedRun = run
+        var context = publication.context
         guard let ordinaryItems = DeviceLegPresentationEventProjector
             .routedItems(
                 publication.items,
@@ -186,6 +228,8 @@ actor DeviceLegPresentationPublicationCoordinator {
                 $0.id == run.id
                     && $0.completion == nil
                     && $0.stepId == expectedStepId
+                    && $0.pendingPresentationPublication?.invocationId
+                        == publication.invocationId
             }) else {
                 return .publicationFailed(.init(
                     publishedOrdinaryEvents: publishedOrdinaryEvents,
@@ -213,7 +257,7 @@ actor DeviceLegPresentationPublicationCoordinator {
             }
             context = ArmedDeviceLeg.Context(
                 event: controlEvent.properties,
-                responses: responses
+                responses: publication.context.responses
             )
             do {
                 guard let admission = commitAdmission(
@@ -223,7 +267,7 @@ actor DeviceLegPresentationPublicationCoordinator {
                     run.id,
                     stepId: routeStepId,
                     context: context,
-                    clearingPresentationPublication: batch.invocationId,
+                    clearingPresentationPublication: publication.invocationId,
                     admission: admission
                 ) else {
                     return .publicationFailed(.init(
@@ -250,19 +294,22 @@ actor DeviceLegPresentationPublicationCoordinator {
                 run: stagedRun,
                 signal: .init(
                     event: controlEvent,
-                    responsesChanged: responsesChanged
+                    responsesChanged: publication.responsesChanged
                 ),
                 checkpoint: nil
             ))
         }
 
+        let retainsResponseSignal = publication.responsesChanged
+            && Self.stepAcceptsResponseChange(stagedRun.stepId, in: leg)
         do {
             guard let admission = commitAdmission(
                 in: journal,
                 executionFenceToken: executionFenceToken
             ), try await journal.clearPresentationPublication(
                 run.id,
-                invocationId: batch.invocationId,
+                invocationId: publication.invocationId,
+                retainingResponsesChanged: retainsResponseSignal,
                 admission: admission
             ) else {
                 return .publicationFailed(.init(
@@ -282,10 +329,8 @@ actor DeviceLegPresentationPublicationCoordinator {
             ))
         }
         stagedRun.pendingPresentationPublication = nil
-        guard responsesChanged,
-              Self.stepAcceptsResponseChange(stagedRun.stepId, in: leg) else {
-            return .accepted
-        }
+        guard retainsResponseSignal else { return .accepted }
+        stagedRun.park?.pendingResponsesChanged = true
         return .continueExecution(.init(
             run: stagedRun,
             signal: .init(responsesChanged: true),
@@ -353,7 +398,7 @@ actor DeviceLegPresentationPublicationCoordinator {
         for item in items {
             guard let capture = captures[item.request.eventId],
                   capture.routesLocally,
-                  capture.isNewlyCommitted else {
+                  capture.localRoutePending else {
                 removeDirectRoute(
                     eventId: item.request.eventId,
                     runId: runId
@@ -410,56 +455,6 @@ actor DeviceLegPresentationPublicationCoordinator {
             executionFenceToken: executionFenceToken
         ), publication.remainsAuthorized else { return nil }
         return publication.captures[eventId]
-    }
-
-    func flushPending(
-        in journal: DeviceLegRunJournal,
-        executionFenceToken: DeviceLegProfileFenceToken
-    ) async throws {
-        for run in try await journal.runs() {
-            guard let pending = run.pendingPresentationPublication else {
-                continue
-            }
-            guard let items = DeviceLegPresentationEventProjector.routedItems(
-                pending.items,
-                distinctId: journal.distinctId
-            ) else {
-                throw DeviceLegJournalError.invalidState
-            }
-            let admission: DeviceLegCommitAdmission
-            if items.isEmpty {
-                guard let identityFence = identity
-                    .performWithCurrentIdentityFence(
-                        journal.distinctId,
-                        { _ in () }
-                    ) else {
-                    throw DeviceLegJournalError.invalidState
-                }
-                admission = DeviceLegCommitAdmission(
-                    identity: identity,
-                    identityFenceToken: identityFence.token,
-                    executionFence: executionFence,
-                    executionFenceToken: executionFenceToken
-                )
-            } else {
-                guard let publication = await publish(
-                    items,
-                    forRunId: run.id,
-                    in: journal,
-                    executionFenceToken: executionFenceToken
-                ), publication.remainsAuthorized else {
-                    throw DeviceLegJournalError.invalidState
-                }
-                admission = publication.admission
-            }
-            guard try await journal.clearPresentationPublication(
-                run.id,
-                invocationId: pending.invocationId,
-                admission: admission
-            ) else {
-                throw DeviceLegJournalError.invalidState
-            }
-        }
     }
 
     private func removeDirectRoutes(

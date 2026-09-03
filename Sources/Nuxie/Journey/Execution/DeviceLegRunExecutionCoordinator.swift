@@ -132,6 +132,31 @@ struct DeviceLegRunExecutionCoordinator {
         )
     }
 
+    /// Associates every decision reached since the previous presentation
+    /// boundary with the next screen before that screen can become visible.
+    /// A callback from the screen being replaced therefore cannot expose a
+    /// decision that selected the destination screen.
+    mutating func bindExperimentExposures(
+        to screenId: String,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        guard run.experimentExposures.contains(where: {
+            !$0.queued && $0.shownAt == nil && $0.presentationScreenId == nil
+        }) else { return true }
+        guard try await journal.bindExperimentExposures(
+            run.id,
+            to: screenId,
+            admission: admission
+        ) else { return false }
+        for index in run.experimentExposures.indices
+        where !run.experimentExposures[index].queued
+            && run.experimentExposures[index].shownAt == nil
+            && run.experimentExposures[index].presentationScreenId == nil {
+            run.experimentExposures[index].presentationScreenId = screenId
+        }
+        return true
+    }
+
     /// Persists the selected action outlet and updates the in-memory cursor.
     /// A false result means the release exposed an outlet that its own control
     /// step does not define.
@@ -189,6 +214,7 @@ struct DeviceLegRunExecutionCoordinator {
             kind: kind,
             eventId: UUID.v7().uuidString.lowercased(),
             selectedAt: selectedAt,
+            presentationScreenId: nil,
             shownAt: nil,
             queued: false
         )

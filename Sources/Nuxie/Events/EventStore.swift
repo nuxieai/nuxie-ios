@@ -37,6 +37,19 @@ struct EventStoreInsertCommit: Sendable {
 struct StableEventCaptureCommit: Sendable {
   let outcome: StableEventCaptureOutcome
   let commitSequence: UInt64?
+  /// True while this canonical capture still owns local subscriber delivery.
+  /// The receipt is cleared only after every committed subscriber returns.
+  let localRoutePending: Bool
+
+  init(
+    outcome: StableEventCaptureOutcome,
+    commitSequence: UInt64?,
+    localRoutePending: Bool = false
+  ) {
+    self.outcome = outcome
+    self.commitSequence = commitSequence
+    self.localRoutePending = localRoutePending
+  }
 }
 
 struct StableEventCaptureRecord: Sendable {
@@ -103,6 +116,26 @@ protocol EventStoreProtocol: Sendable {
     assigningCommitSequence: Bool,
     admission: (any StableEventCaptureBatchCommitAdmission)?
   ) async throws -> [StableEventCaptureCommit]
+  /// Stable capture plus its local-route outbox insertion, committed as one
+  /// storage transaction. Replays return whether the existing outbox remains
+  /// pending so a new process can resume subscriber delivery.
+  func commitStableCaptureAndStageRoute(
+    eventId: String,
+    event: StoredEvent?,
+    recordedAt: Date,
+    ownership: JourneyEventOwnership?,
+    assigningCommitSequence: Bool,
+    admission: (any StableEventCaptureCommitAdmission)?
+  ) async throws -> StableEventCaptureCommit
+  func commitStableCaptureBatchAndStageRoutes(
+    _ records: [StableEventCaptureRecord],
+    assigningCommitSequence: Bool,
+    admission: (any StableEventCaptureBatchCommitAdmission)?
+  ) async throws -> [StableEventCaptureCommit]
+  func queryPendingStableRoutes(
+    distinctId: String
+  ) async throws -> [StoredEvent]
+  func markStableRouteDelivered(eventId: String) async throws
   /// Persist authoritative server evidence that this device no longer owns
   /// `journeyId` at `authoritativeEpoch` or any earlier epoch.
   func recordJourneyOwnershipLoss(
@@ -260,6 +293,14 @@ actor SQLiteEventStore: EventStoreProtocol {
     CREATE TABLE IF NOT EXISTS stable_event_drops (
       event_id TEXT PRIMARY KEY,
       created_at INTEGER NOT NULL
+    );
+    """
+
+  private let createStableEventRoutesSQL = """
+    CREATE TABLE IF NOT EXISTS stable_event_routes (
+      event_id TEXT PRIMARY KEY,
+      delivery_state INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
     );
     """
 
@@ -480,6 +521,11 @@ actor SQLiteEventStore: EventStoreProtocol {
         operation: "create stable_event_drops"
       )
       try executeSchemaSQL(
+        createStableEventRoutesSQL,
+        targetVersion: targetVersion,
+        operation: "create stable_event_routes"
+      )
+      try executeSchemaSQL(
         createHistoryMetadataSQL,
         targetVersion: targetVersion,
         operation: "create event_history_metadata"
@@ -546,6 +592,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     let version = targetVersion
     try verifyEventsTable(targetVersion: version)
     try verifyStableEventDropsTable(targetVersion: version)
+    try verifyStableEventRoutesTable(targetVersion: version)
     try verifyHistoryMetadataTable(targetVersion: version)
     let requiredIndexes: [(name: String, columns: [(String, Bool)])] = [
       ("idx_events_delivery", [("delivery_state", false), ("timestamp", false)]),
@@ -743,6 +790,42 @@ actor SQLiteEventStore: EventStoreProtocol {
         code: SQLITE_SCHEMA,
         message: "stable_event_drops must define event_id TEXT as its sole PRIMARY KEY "
           + "and created_at INTEGER NOT NULL"
+      )
+    }
+  }
+
+  private func verifyStableEventRoutesTable(targetVersion: Int32) throws {
+    guard try schemaObjectType(
+      named: "stable_event_routes",
+      targetVersion: targetVersion
+    ) == "table" else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify stable_event_routes",
+        code: SQLITE_SCHEMA,
+        message: "stable_event_routes is not a table"
+      )
+    }
+    let columns = try tableColumns(
+      named: "stable_event_routes",
+      targetVersion: targetVersion
+    )
+    guard columns.count == 2,
+          let eventId = columns["event_id"],
+          eventId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
+          eventId.primaryKeyPosition == 1,
+          columns.values.filter(\.isPrimaryKey).count == 1,
+          let deliveryState = columns["delivery_state"],
+          deliveryState.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
+          deliveryState.isNotNull,
+          deliveryState.defaultValue == "0"
+    else {
+      throw schemaError(
+        targetVersion: targetVersion,
+        operation: "verify stable_event_routes",
+        code: SQLITE_SCHEMA,
+        message: "stable_event_routes must define event_id TEXT PRIMARY KEY and "
+          + "delivery_state INTEGER NOT NULL DEFAULT 0"
       )
     }
   }
@@ -1179,6 +1262,80 @@ actor SQLiteEventStore: EventStoreProtocol {
     )
   }
 
+  public func commitStableCaptureAndStageRoute(
+    eventId: String,
+    event: StoredEvent?,
+    recordedAt: Date,
+    ownership: JourneyEventOwnership?,
+    assigningCommitSequence: Bool,
+    admission: (any StableEventCaptureCommitAdmission)?
+  ) throws -> StableEventCaptureCommit {
+    let operation = {
+      try self.commitStableCaptureAndStageRouteUnfenced(
+        eventId: eventId,
+        event: event,
+        recordedAt: recordedAt,
+        ownership: ownership,
+        assigningCommitSequence: assigningCommitSequence
+      )
+    }
+    if let admission {
+      guard let committed = try admission.commitIfCurrent(operation) else {
+        throw StableEventCaptureCommitAdmissionError.rejected
+      }
+      return committed
+    }
+    return try operation()
+  }
+
+  private func commitStableCaptureAndStageRouteUnfenced(
+    eventId: String,
+    event: StoredEvent?,
+    recordedAt: Date,
+    ownership: JourneyEventOwnership?,
+    assigningCommitSequence: Bool
+  ) throws -> StableEventCaptureCommit {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    let sequenceBeforeTransaction = nextCommitSequence
+    guard sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION;", nil, nil, nil)
+      == SQLITE_OK else {
+      throw EventStorageError.insertFailed(NSError(
+        domain: "Nuxie.EventStore",
+        code: 52,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+      ))
+    }
+    do {
+      let commit = try commitStableCaptureUnfenced(
+        eventId: eventId,
+        event: event,
+        recordedAt: recordedAt,
+        ownership: ownership,
+        assigningCommitSequence: assigningCommitSequence
+      )
+      let result = StableEventCaptureCommit(
+        outcome: commit.outcome,
+        commitSequence: commit.commitSequence,
+        localRoutePending: try stageStableRoute(
+          eventId: eventId,
+          outcome: commit.outcome
+        )
+      )
+      guard sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK else {
+        throw EventStorageError.insertFailed(NSError(
+          domain: "Nuxie.EventStore",
+          code: 53,
+          userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+        ))
+      }
+      return result
+    } catch {
+      _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+      nextCommitSequence = sequenceBeforeTransaction
+      throw error
+    }
+  }
+
   /// Commits an indivisible batch of stable event outcomes.
   ///
   /// - Parameters:
@@ -1196,7 +1353,29 @@ actor SQLiteEventStore: EventStoreProtocol {
     let operation = {
       try self.commitStableCaptureBatchUnfenced(
         records,
-        assigningCommitSequence: assigningCommitSequence
+        assigningCommitSequence: assigningCommitSequence,
+        stageRoutes: false
+      )
+    }
+    if let admission {
+      guard let committed = try admission.commitBatchIfCurrent(operation) else {
+        throw StableEventCaptureCommitAdmissionError.rejected
+      }
+      return committed
+    }
+    return try operation()
+  }
+
+  public func commitStableCaptureBatchAndStageRoutes(
+    _ records: [StableEventCaptureRecord],
+    assigningCommitSequence: Bool,
+    admission: (any StableEventCaptureBatchCommitAdmission)?
+  ) throws -> [StableEventCaptureCommit] {
+    let operation = {
+      try self.commitStableCaptureBatchUnfenced(
+        records,
+        assigningCommitSequence: assigningCommitSequence,
+        stageRoutes: true
       )
     }
     if let admission {
@@ -1210,7 +1389,8 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   private func commitStableCaptureBatchUnfenced(
     _ records: [StableEventCaptureRecord],
-    assigningCommitSequence: Bool
+    assigningCommitSequence: Bool,
+    stageRoutes: Bool
   ) throws -> [StableEventCaptureCommit] {
     guard !records.isEmpty else { return [] }
     guard let db else { throw EventStorageError.databaseNotInitialized }
@@ -1225,12 +1405,21 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
     do {
       let commits = try records.map { record in
-        try commitStableCaptureUnfenced(
+        let commit = try commitStableCaptureUnfenced(
           eventId: record.eventId,
           event: record.event,
           recordedAt: record.recordedAt,
           ownership: record.ownership,
           assigningCommitSequence: assigningCommitSequence
+        )
+        guard stageRoutes else { return commit }
+        return StableEventCaptureCommit(
+          outcome: commit.outcome,
+          commitSequence: commit.commitSequence,
+          localRoutePending: try stageStableRoute(
+            eventId: record.eventId,
+            outcome: commit.outcome
+          )
         )
       }
       guard sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK else {
@@ -1339,6 +1528,129 @@ actor SQLiteEventStore: EventStoreProtocol {
       outcome: .dropped,
       commitSequence: takeCommitSequence(if: assigningCommitSequence)
     )
+  }
+
+  private func stageStableRoute(
+    eventId: String,
+    outcome: StableEventCaptureOutcome
+  ) throws -> Bool {
+    guard case .captured = outcome else { return false }
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    var insert: OpaquePointer?
+    defer { sqlite3_finalize(insert) }
+    guard sqlite3_prepare_v2(
+      db,
+      "INSERT OR IGNORE INTO stable_event_routes (event_id) VALUES (?);",
+      -1,
+      &insert,
+      nil
+    ) == SQLITE_OK else {
+      throw EventStorageError.insertFailed(NSError(
+        domain: "Nuxie.EventStore",
+        code: 54,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+      ))
+    }
+    sqlite3_bind_text(insert, 1, eventId, -1, SQLITE_TRANSIENT)
+    guard sqlite3_step(insert) == SQLITE_DONE else {
+      throw EventStorageError.insertFailed(NSError(
+        domain: "Nuxie.EventStore",
+        code: 55,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+      ))
+    }
+
+    var query: OpaquePointer?
+    defer { sqlite3_finalize(query) }
+    guard sqlite3_prepare_v2(
+      db,
+      "SELECT delivery_state FROM stable_event_routes WHERE event_id = ? LIMIT 1;",
+      -1,
+      &query,
+      nil
+    ) == SQLITE_OK else {
+      throw EventStorageError.queryFailed(NSError(
+        domain: "Nuxie.EventStore",
+        code: 56,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+      ))
+    }
+    sqlite3_bind_text(query, 1, eventId, -1, SQLITE_TRANSIENT)
+    guard sqlite3_step(query) == SQLITE_ROW else {
+      throw EventStorageError.queryFailed(NSError(
+        domain: "Nuxie.EventStore",
+        code: 57,
+        userInfo: [NSLocalizedDescriptionKey: "Stable route receipt disappeared"]
+      ))
+    }
+    return sqlite3_column_int(query, 0) == EventDeliveryState.pending.rawValue
+  }
+
+  public func queryPendingStableRoutes(
+    distinctId: String
+  ) throws -> [StoredEvent] {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    let sql = """
+      SELECT events.id
+      FROM stable_event_routes
+      JOIN events ON events.id = stable_event_routes.event_id
+      WHERE stable_event_routes.delivery_state = ? AND events.user_id = ?
+      ORDER BY stable_event_routes.rowid ASC;
+      """
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw EventStorageError.queryFailed(NSError(
+        domain: "Nuxie.EventStore",
+        code: 58,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+      ))
+    }
+    sqlite3_bind_int(statement, 1, EventDeliveryState.pending.rawValue)
+    sqlite3_bind_text(statement, 2, distinctId, -1, SQLITE_TRANSIENT)
+    var eventIds: [String] = []
+    while true {
+      let result = sqlite3_step(statement)
+      if result == SQLITE_DONE { break }
+      guard result == SQLITE_ROW,
+            let bytes = sqlite3_column_text(statement, 0) else {
+        throw EventStorageError.queryFailed(NSError(
+          domain: "Nuxie.EventStore",
+          code: 59,
+          userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+        ))
+      }
+      eventIds.append(String(cString: bytes))
+    }
+    return try eventIds.compactMap { try queryEvent(id: $0) }
+  }
+
+  public func markStableRouteDelivered(eventId: String) throws {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(
+      db,
+      "UPDATE stable_event_routes SET delivery_state = ? WHERE event_id = ?;",
+      -1,
+      &statement,
+      nil
+    ) == SQLITE_OK else {
+      throw EventStorageError.updateFailed(NSError(
+        domain: "Nuxie.EventStore",
+        code: 60,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+      ))
+    }
+    sqlite3_bind_int(statement, 1, EventDeliveryState.delivered.rawValue)
+    sqlite3_bind_text(statement, 2, eventId, -1, SQLITE_TRANSIENT)
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw EventStorageError.updateFailed(NSError(
+        domain: "Nuxie.EventStore",
+        code: 61,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+      ))
+    }
   }
 
   private func takeCommitSequence(if requested: Bool) -> UInt64? {

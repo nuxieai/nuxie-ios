@@ -56,7 +56,7 @@ final class DeviceLegRuntimeDelegateTests: DeviceLegTestCase {
             reservation: nil,
             onScreenChanged: { _ in true },
             onEmissionBatch: { _ in true },
-            onPresentationRevealed: {
+            onPresentationRevealed: { _ in
                 await reveals.record()
             },
             onOutcome: { _, _ in true }
@@ -127,7 +127,7 @@ final class DeviceLegRuntimeDelegateTests: DeviceLegTestCase {
             ),
             reservation: nil,
             onEmissionBatch: { _ in true },
-            onPresentationRevealed: {
+            onPresentationRevealed: { _ in
                 await gate.suspend()
             },
             onOutcome: { _, _ in true }
