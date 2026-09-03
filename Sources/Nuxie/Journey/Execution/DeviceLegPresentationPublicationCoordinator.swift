@@ -178,6 +178,30 @@ actor DeviceLegPresentationPublicationCoordinator {
         )
     }
 
+    /// Publishes renderer events retained across a process break after the
+    /// owning run has already become terminal. The ordinary event pipeline
+    /// still observes the stable captures, while no screen route can mutate
+    /// the completed run.
+    func recoverObservability(
+        _ run: DeviceLegRun,
+        in journal: DeviceLegRunJournal,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) async -> Bool {
+        guard let publication = run.pendingPresentationPublication,
+              let ordinaryItems = DeviceLegPresentationEventProjector
+                .routedItems(
+                    publication.items,
+                    distinctId: journal.distinctId
+                ) else { return false }
+        guard !ordinaryItems.isEmpty else { return true }
+        return await publish(
+            ordinaryItems,
+            forRunId: run.id,
+            in: journal,
+            executionFenceToken: executionFenceToken
+        ) != nil
+    }
+
     private func settle(
         _ publication: DeviceLegRun.PendingPresentationPublication,
         for run: DeviceLegRun,

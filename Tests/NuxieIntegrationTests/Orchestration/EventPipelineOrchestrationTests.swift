@@ -282,6 +282,72 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 await relaunchService.close()
             }
 
+            it("replays an unacknowledged stable local route after relaunch exactly once") {
+                identity.setDistinctId("customer-a")
+                await eventLog.close()
+
+                // Simulate a process exit after the atomic event + route-receipt
+                // commit but before an in-memory subscriber can acknowledge it.
+                let seedStore = SQLiteEventStore()
+                try await seedStore.initialize(
+                    path: URL(fileURLWithPath: storagePath)
+                )
+                let event = try StoredEvent(
+                    id: "orchestration-stable-route-recovery",
+                    name: JourneyEvents.journeyMilestone,
+                    properties: ["journey_id": "journey-route-recovery"],
+                    timestamp: Date(timeIntervalSince1970: 1_000),
+                    distinctId: "customer-a"
+                )
+                let commit = try await seedStore.commitStableCaptureAndStageRoute(
+                    eventId: event.id,
+                    event: event,
+                    recordedAt: event.timestamp,
+                    ownership: nil,
+                    assigningCommitSequence: true,
+                    admission: nil
+                )
+                expect(commit.localRoutePending).to(beTrue())
+                await seedStore.close()
+
+                let replayRoutes = OrchestrationCommittedRecorder()
+                let relaunched = EventLog(
+                    identity: identity,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                eventLog = relaunched
+                await relaunched.subscribeCommitted { routed in
+                    await replayRoutes.record(routed)
+                }
+                try await relaunched.configure(configuration: config)
+
+                let replayed = await relaunched.replayPendingStableRoutes(
+                    distinctId: "customer-a"
+                )
+                expect(replayed).to(beTrue())
+                await expect { await replayRoutes.names() }
+                    .to(equal([JourneyEvents.journeyMilestone]))
+                await relaunched.close()
+
+                let secondReplayRoutes = OrchestrationCommittedRecorder()
+                let secondRelaunch = EventLog(
+                    identity: identity,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                eventLog = secondRelaunch
+                await secondRelaunch.subscribeCommitted { routed in
+                    await secondReplayRoutes.record(routed)
+                }
+                try await secondRelaunch.configure(configuration: config)
+
+                let alreadyAcknowledged = await secondRelaunch
+                    .replayPendingStableRoutes(distinctId: "customer-a")
+                expect(alreadyAcknowledged).to(beTrue())
+                await expect { await secondReplayRoutes.names() }.to(beEmpty())
+            }
+
             it("orders a real stable batch and deduplicates it across relaunch") {
                 identity.setDistinctId("customer-a")
                 guard let identityFence = identity.performWithCurrentIdentityFence(
