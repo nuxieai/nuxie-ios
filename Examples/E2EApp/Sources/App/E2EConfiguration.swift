@@ -3,22 +3,22 @@ import Foundation
 private struct E2EArtifact: Decodable {
   let publicApiKey: String?
   let ingestUrl: String?
-  let flowId: String?
+  let triggerEvent: String?
 }
 
 struct E2EConfiguration: Equatable {
   static let apiKeyEnvKey = "NUXIE_E2E_API_KEY"
   static let ingestUrlEnvKey = "NUXIE_E2E_INGEST_URL"
-  static let flowIdEnvKey = "NUXIE_E2E_FLOW_ID"
+  static let triggerEventEnvKey = "NUXIE_E2E_TRIGGER_EVENT"
   static let artifactEnvKey = "NUXIE_E2E_ARTIFACT_PATH"
 
   static let defaultApiKey = "pk_test_placeholder"
   static let defaultIngestUrlString = "http://localhost:8084"
-  static let defaultFlowId = "flow_placeholder"
+  static let defaultTriggerEvent = "nuxie_e2e_trigger"
 
   let apiKey: String
   let ingestUrl: URL
-  let flowId: String
+  let triggerEvent: String
 
   var ingestUrlString: String {
     ingestUrl.absoluteString
@@ -36,7 +36,7 @@ struct E2EConfiguration: Equatable {
   ) -> E2EConfiguration {
     let apiKeyOverride = nonEmpty(environment[apiKeyEnvKey])
     let ingestUrlOverride = nonEmpty(environment[ingestUrlEnvKey])
-    let flowIdOverride = nonEmpty(environment[flowIdEnvKey])
+    let triggerEventOverride = nonEmpty(environment[triggerEventEnvKey])
 
     var artifact: E2EArtifact?
     if let artifactPath = nonEmpty(environment[artifactEnvKey]),
@@ -52,14 +52,18 @@ struct E2EConfiguration: Equatable {
       ?? nonEmpty(artifact?.ingestUrl)
       ?? defaultIngestUrlString
 
-    let flowId = flowIdOverride
-      ?? nonEmpty(artifact?.flowId)
-      ?? defaultFlowId
+    let triggerEvent = triggerEventOverride
+      ?? nonEmpty(artifact?.triggerEvent)
+      ?? defaultTriggerEvent
 
     let ingestUrl = URL(string: ingestUrlString)
       ?? URL(string: defaultIngestUrlString)!
 
-    return E2EConfiguration(apiKey: apiKey, ingestUrl: ingestUrl, flowId: flowId)
+    return E2EConfiguration(
+      apiKey: apiKey,
+      ingestUrl: ingestUrl,
+      triggerEvent: triggerEvent
+    )
   }
 
   private static func nonEmpty(_ value: String?) -> String? {

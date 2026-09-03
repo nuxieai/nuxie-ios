@@ -17,10 +17,10 @@ final class E2EAppUITests: XCTestCase {
       app.launchEnvironment["NUXIE_E2E_INGEST_URL"] = "http://localhost:8084"
     }
 
-    if let flowId = env["NUXIE_E2E_FLOW_ID"], !flowId.isEmpty {
-      app.launchEnvironment["NUXIE_E2E_FLOW_ID"] = flowId
+    if let triggerEvent = env["NUXIE_E2E_TRIGGER_EVENT"], !triggerEvent.isEmpty {
+      app.launchEnvironment["NUXIE_E2E_TRIGGER_EVENT"] = triggerEvent
     } else {
-      app.launchEnvironment["NUXIE_E2E_FLOW_ID"] = "flow_test"
+      app.launchEnvironment["NUXIE_E2E_TRIGGER_EVENT"] = "journey_test"
     }
 
     if let artifactPath = env["NUXIE_E2E_ARTIFACT_PATH"], !artifactPath.isEmpty {
@@ -54,5 +54,10 @@ final class E2EAppUITests: XCTestCase {
     let readyPredicate = NSPredicate(format: "label == %@", "ready")
     expectation(for: readyPredicate, evaluatedWith: setupState)
     waitForExpectations(timeout: 15)
+
+    let triggerButton = app.buttons["trigger-journey-button"]
+    XCTAssertTrue(triggerButton.waitForExistence(timeout: 5))
+    XCTAssertTrue(triggerButton.isEnabled)
+    triggerButton.tap()
   }
 }
