@@ -22,8 +22,8 @@ final class CanonicalExperienceContractTests: XCTestCase {
             #"nuxie\.response\.v2"#,
             #"LEGACY_JOURNEY_TESTS"#,
             #"set_response_field"#,
-            #"\bDeviceLeg[A-Za-z0-9_]*\b"#,
-            #"\bdevice[- ]leg(?:s)?\b"#,
+            #"\bDevice"# + #"Leg[A-Za-z0-9_]*\b"#,
+            #"\bdevice[- ]"# + #"leg(?:s)?\b"#,
             #"\$(?:event_sent|experiment_exposure_(?:error|fallback)|journey_(?:claimed|converted|effect_(?:completed|requested)|enrolled|exited|handoff|parked|started|superseded|transition))\b"#,
         ].map { try! NSRegularExpression(pattern: $0) }
 

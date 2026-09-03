@@ -210,7 +210,7 @@ struct JourneyControlExecutor {
             }
             if nowMillis >= current.wakeAtMillis { return advance(outlets, outlet: "timeout", context: context) }
             return .park(stepId: step.id, checkpoint: current)
-        case .connectorAction, .grantEntitlement, .deviceAvailable:
+        case .connectorAction, .grantEntitlement:
             return .invalid
         default:
             return .dispatch(stepId: step.id, action: action)

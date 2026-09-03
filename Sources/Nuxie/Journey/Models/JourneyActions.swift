@@ -308,7 +308,6 @@ enum JourneyAction: Codable, Sendable {
     case waitUntil(WaitUntilAction)
     case condition(ConditionAction)
     case experiment(ExperimentAction)
-    case deviceAvailable(DeviceAvailableAction)
     case sendEvent(SendEventAction)
     case milestone(MilestoneAction)
     case updateCustomer(UpdateCustomerAction)
@@ -346,7 +345,6 @@ enum JourneyAction: Codable, Sendable {
         case waitUntil = "wait_until"
         case condition
         case experiment
-        case deviceAvailable = "device_available"
         case sendEvent = "send_event"
         case milestone
         case updateCustomer = "update_customer"
@@ -392,8 +390,6 @@ enum JourneyAction: Codable, Sendable {
             self = .condition(try ConditionAction(from: decoder))
         case .experiment:
             self = .experiment(try ExperimentAction(from: decoder))
-        case .deviceAvailable:
-            self = .deviceAvailable(try DeviceAvailableAction(from: decoder))
         case .sendEvent:
             self = .sendEvent(try SendEventAction(from: decoder))
         case .milestone:
@@ -467,8 +463,6 @@ enum JourneyAction: Codable, Sendable {
             try action.encode(to: encoder)
         case .experiment(let action):
             try action.encode(to: encoder)
-        case .deviceAvailable(let action):
-            try action.encode(to: encoder)
         case .sendEvent(let action):
             try action.encode(to: encoder)
         case .milestone(let action):
@@ -538,8 +532,6 @@ extension JourneyAction {
         case .condition(let action):
             return action.nodeId
         case .experiment(let action):
-            return action.nodeId
-        case .deviceAvailable(let action):
             return action.nodeId
         case .sendEvent(let action):
             return action.nodeId
@@ -948,50 +940,6 @@ struct ExperimentVariant: Codable, Sendable {
         try c.encode(percentage, forKey: .percentage)
         try c.encode(isHoldout, forKey: .isHoldout)
         try c.encode(program, forKey: .program)
-    }
-}
-
-struct DeviceAvailableAction: Codable, Sendable {
-    let type: String
-    let nodeId: String?
-    let claimWithinMs: Int
-    let onAvailable: [JourneyAction]
-    let onUnavailable: [JourneyAction]
-
-    init(
-        type: String = "device_available",
-        nodeId: String? = nil,
-        claimWithinMs: Int,
-        onAvailable: [JourneyAction],
-        onUnavailable: [JourneyAction]
-    ) {
-        self.type = type
-        self.nodeId = nodeId
-        self.claimWithinMs = claimWithinMs
-        self.onAvailable = onAvailable
-        self.onUnavailable = onUnavailable
-    }
-
-    private enum CodingKeys: String, CodingKey { case type, claimWithinMs, onAvailable, onUnavailable }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        type = try c.decode(String.self, forKey: .type)
-        guard type == "device_available" else {
-            throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "invalid device_available action")
-        }
-        nodeId = nil
-        claimWithinMs = try c.decode(Int.self, forKey: .claimWithinMs)
-        onAvailable = try c.decode([JourneyAction].self, forKey: .onAvailable)
-        onUnavailable = try c.decode([JourneyAction].self, forKey: .onUnavailable)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(type, forKey: .type)
-        try c.encode(claimWithinMs, forKey: .claimWithinMs)
-        try c.encode(onAvailable, forKey: .onAvailable)
-        try c.encode(onUnavailable, forKey: .onUnavailable)
     }
 }
 

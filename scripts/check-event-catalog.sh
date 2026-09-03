@@ -83,7 +83,7 @@ while IFS= read -r emitter; do
   fi
 done < <(jq -r '.[].emitters[]' "$catalog" | sort -u)
 
-forbidden='DeviceLeg|device[- ]leg|LegacyJourney|JourneyRunner|trackWithResponse|trackForTrigger|commitServerFacts|\$journey_(claimed|converted|effect_completed|effect_requested|enrolled|exited|handoff|parked|started|superseded|transition)|\$experiment_exposure_(error|fallback)|\$event_sent'
+forbidden='Device''Leg|device[- ]''leg|LegacyJourney|JourneyRunner|trackWithResponse|trackForTrigger|commitServerFacts|\$journey_(claimed|converted|effect_completed|effect_requested|enrolled|exited|handoff|parked|started|superseded|transition)|\$experiment_exposure_(error|fallback)|\$event_sent'
 for path in fixtures/events/catalog.json docs/events-catalog.md docs/forward-nuxie-activity.md docs/sdk-events.md; do
   [[ -f "$repo_root/$path" ]] || continue
   if rg -ni -- "$forbidden" "$repo_root/$path"; then
