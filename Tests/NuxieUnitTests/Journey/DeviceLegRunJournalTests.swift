@@ -1786,6 +1786,57 @@ final class DeviceLegRunJournalTests: XCTestCase {
         XCTAssertEqual(checklist?.outcome, "closed")
     }
 
+    func testRecoveryReturnsPersistedAbandonmentWhenReleasePinCleanupFails() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .oneTime, windowSeconds: nil),
+            entryStepId: "screen",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+
+        let customerDigest = DeviceLegStorageScope.testFixture.customerDigest(
+            distinctId: "customer"
+        )
+        let customerPins = directory
+            .appendingPathComponent("device-leg-journal-v1", isDirectory: true)
+            .appendingPathComponent("release-pins", isDirectory: true)
+            .appendingPathComponent(customerDigest, isDirectory: true)
+        let recoveryJournal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer",
+            beforePersist: {
+                try FileManager.default.removeItem(at: customerPins)
+                try Data("blocks-directory-enumeration".utf8).write(
+                    to: customerPins
+                )
+            }
+        )
+
+        let resumable = try await recoveryJournal.recover(at: date(200))
+
+        try FileManager.default.removeItem(at: customerPins)
+        try FileManager.default.createDirectory(
+            at: customerPins,
+            withIntermediateDirectories: true
+        )
+
+        XCTAssertTrue(resumable.isEmpty)
+        let recoveredRuns = try await recoveryJournal.runs()
+        let recovered = try XCTUnwrap(recoveredRuns.first)
+        XCTAssertEqual(recovered.completion?.outcome, "abandoned")
+        XCTAssertEqual(recovered.completion?.at, date(200))
+        XCTAssertTrue(recovered.startedQueued)
+    }
+
     private func eventLog(directory: URL, store: SQLiteEventStore, api: MockNuxieApiForQueue, dropEvents: Bool = false) async throws -> EventLog {
         let log = EventLog(identity: MockIdentityService(), dateProvider: MockDateProvider(initialDate: date(1000)),
                            apiClient: api, store: store)

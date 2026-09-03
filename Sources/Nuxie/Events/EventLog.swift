@@ -126,6 +126,17 @@ struct CommittedEventAdmissionReservation: Hashable, Sendable {
 private struct RoutedCommittedEvent: Sendable {
   let event: NuxieEvent
   let subscriberAdmissions: [UInt64: UInt64]
+  let stableRouteEventId: String?
+
+  init(
+    event: NuxieEvent,
+    subscriberAdmissions: [UInt64: UInt64],
+    stableRouteEventId: String? = nil
+  ) {
+    self.event = event
+    self.subscriberAdmissions = subscriberAdmissions
+    self.stableRouteEventId = stableRouteEventId
+  }
 }
 
 /// Admission providers must be callable from EventLog's synchronous,
@@ -183,10 +194,18 @@ struct DurableTriggerCapture: Sendable {
   /// Routing policy and whether this call established the canonical event row.
   let routesLocally: Bool
   let isNewlyCommitted: Bool
-  init(event: NuxieEvent, routesLocally: Bool = true, isNewlyCommitted: Bool = true) {
+  /// The durable local-route receipt remained pending when this call returned.
+  let localRoutePending: Bool
+  init(
+    event: NuxieEvent,
+    routesLocally: Bool = true,
+    isNewlyCommitted: Bool = true,
+    localRoutePending: Bool = false
+  ) {
     self.event = event
     self.routesLocally = routesLocally
     self.isNewlyCommitted = isNewlyCommitted
+    self.localRoutePending = localRoutePending
   }
 }
 
@@ -740,6 +759,13 @@ actor EventLog: EventLogProtocol {
   private var routeWorker: Task<Void, Never>?
   private var nextRouteSequenceToDeliver: UInt64 = 0
   private var pendingRouteResolutions: [UInt64: RouteResolution] = [:]
+  /// Prevents a retry from enqueueing the same durable local-route receipt
+  /// twice while its first subscriber pass is still in flight.
+  private var activeStableRouteIds: Set<String> = []
+  /// Subscriber delivery has completed for these routes, but retiring the
+  /// durable receipt failed. Keep them active so retries only reattempt the
+  /// acknowledgement instead of invoking subscribers a second time.
+  private var failedStableRouteAcknowledgementIds: Set<String> = []
   private nonisolated let forwardingContinuation:
     AsyncStream<ForwardingCommand>.Continuation
   private var forwardingWorker: Task<Void, Never>?
@@ -1618,17 +1644,30 @@ actor EventLog: EventLogProtocol {
 
   private func publishStableCapture(
     _ capture: DurableTriggerCapture?,
-    outcome: StableEventCaptureOutcome,
-    commitSequence: UInt64,
+    commit: StableEventCaptureCommit,
     forwardingAdmission: ForwardingAdmission?,
     routeToSubscribers: Bool,
     subscriberAdmissions: [UInt64: UInt64]
   ) {
+    guard let commitSequence = commit.commitSequence else {
+      LogError("EventLog: stable capture publication omitted commit sequence")
+      return
+    }
     let newlyDurableEvent: NuxieEvent?
-    if case .captured(_, isNew: true) = outcome {
+    if case .captured(_, isNew: true) = commit.outcome {
       newlyDurableEvent = capture?.event
     } else {
       newlyDurableEvent = nil
+    }
+    let routedEvent: NuxieEvent?
+    if routeToSubscribers,
+       capture?.routesLocally == true,
+       commit.localRoutePending,
+       let eventId = capture?.event.id,
+       activeStableRouteIds.insert(eventId).inserted {
+      routedEvent = capture?.event
+    } else {
+      routedEvent = nil
     }
     resolveForwarding(
       commitSequence,
@@ -1640,10 +1679,9 @@ actor EventLog: EventLogProtocol {
     }
     resolveRoute(
       commitSequence,
-      event: routeToSubscribers && capture?.routesLocally == true
-        ? newlyDurableEvent
-        : nil,
-      subscriberAdmissions: subscriberAdmissions
+      event: routedEvent,
+      subscriberAdmissions: subscriberAdmissions,
+      stableRouteEventId: routedEvent?.id
     )
   }
 
@@ -1689,10 +1727,43 @@ actor EventLog: EventLogProtocol {
       if let existing = try await store.queryStableCapture(
         id: request.eventId
       ) {
+        guard routeToSubscribers else {
+          guard let capture = durableCapture(
+            from: existing,
+            request: request
+          ) else { return .ownershipLost }
+          return .captured(capture)
+        }
+        let forwardingAdmission = forwardingAdmission(
+          receivedAt: attemptedTimestamp
+        )
+        let commit = try await store.commitStableCaptureAndStageRoute(
+          eventId: request.eventId,
+          event: nil,
+          recordedAt: attemptedTimestamp,
+          ownership: ownership,
+          assigningCommitSequence: true,
+          admission: admission
+        )
+        guard commit.commitSequence != nil else {
+          throw EventStorageError.insertFailed(NSError(
+            domain: "Nuxie.EventLog",
+            code: 49,
+            userInfo: [NSLocalizedDescriptionKey: "Stable route replay omitted its sequence"]
+          ))
+        }
         guard let capture = durableCapture(
-          from: existing,
-          request: request
+          from: commit.outcome,
+          request: request,
+          localRoutePending: commit.localRoutePending
         ) else { return .ownershipLost }
+        publishStableCapture(
+          capture,
+          commit: commit,
+          forwardingAdmission: forwardingAdmission,
+          routeToSubscribers: true,
+          subscriberAdmissions: subscriberAdmissions
+        )
         return .captured(capture)
       }
       if let ownership {
@@ -1722,15 +1793,28 @@ actor EventLog: EventLogProtocol {
         return .ownershipLost
       }
       let forwardingAdmission = forwardingAdmission(receivedAt: attemptedTimestamp)
-      let commit = try await store.commitStableCapture(
-        eventId: request.eventId,
-        event: transformedEvent.map(makeStoredEvent(from:)),
-        recordedAt: attemptedTimestamp,
-        ownership: ownership,
-        assigningCommitSequence: true,
-        admission: admission
-      )
-      guard let commitSequence = commit.commitSequence else {
+      let storedEvent = transformedEvent.map(makeStoredEvent(from:))
+      let commit: StableEventCaptureCommit
+      if routeToSubscribers {
+        commit = try await store.commitStableCaptureAndStageRoute(
+          eventId: request.eventId,
+          event: storedEvent,
+          recordedAt: attemptedTimestamp,
+          ownership: ownership,
+          assigningCommitSequence: true,
+          admission: admission
+        )
+      } else {
+        commit = try await store.commitStableCapture(
+          eventId: request.eventId,
+          event: storedEvent,
+          recordedAt: attemptedTimestamp,
+          ownership: ownership,
+          assigningCommitSequence: true,
+          admission: admission
+        )
+      }
+      guard commit.commitSequence != nil else {
         throw EventStorageError.insertFailed(NSError(
           domain: "Nuxie.EventLog",
           code: 49,
@@ -1742,12 +1826,12 @@ actor EventLog: EventLogProtocol {
       }
       guard let capture = durableCapture(
         from: commit.outcome,
-        request: request
+        request: request,
+        localRoutePending: commit.localRoutePending
       ) else {
         publishStableCapture(
           nil,
-          outcome: commit.outcome,
-          commitSequence: commitSequence,
+          commit: commit,
           forwardingAdmission: forwardingAdmission,
           routeToSubscribers: routeToSubscribers,
           subscriberAdmissions: subscriberAdmissions
@@ -1756,8 +1840,7 @@ actor EventLog: EventLogProtocol {
       }
       publishStableCapture(
         capture,
-        outcome: commit.outcome,
-        commitSequence: commitSequence,
+        commit: commit,
         forwardingAdmission: forwardingAdmission,
         routeToSubscribers: routeToSubscribers,
         subscriberAdmissions: subscriberAdmissions
@@ -1784,7 +1867,8 @@ actor EventLog: EventLogProtocol {
 
   private func durableCapture(
     from outcome: StableEventCaptureOutcome,
-    request: StableSystemEventCaptureRequest
+    request: StableSystemEventCaptureRequest,
+    localRoutePending: Bool = false
   ) -> DurableTriggerCapture? {
     switch outcome {
     case .captured(let storedEvent, let isNew):
@@ -1795,7 +1879,7 @@ actor EventLog: EventLogProtocol {
         distinctId: storedEvent.distinctId,
         properties: storedEvent.getPropertiesDict(),
         timestamp: storedEvent.timestamp
-      ), isNewlyCommitted: isNew)
+      ), isNewlyCommitted: isNew, localRoutePending: localRoutePending)
     case .dropped:
       return DurableTriggerCapture(
         event: NuxieEvent(
@@ -2584,10 +2668,12 @@ actor EventLog: EventLogProtocol {
         nextRouteSequenceToDeliver &+= 1
         guard case .event(let routed) = next else { continue }
         await routeToCommittedSubscribers(routed)
+        await acknowledgeStableRouteIfNeeded(routed.stableRouteEventId)
       }
 
     case .undurable(let routed):
       await routeToCommittedSubscribers(routed)
+      await acknowledgeStableRouteIfNeeded(routed.stableRouteEventId)
 
     case .barrier(let cont):
       cont.resume()
@@ -2607,6 +2693,35 @@ actor EventLog: EventLogProtocol {
         routed.subscriberAdmissions[subscriber.identifier]
       )
     }
+  }
+
+  private func acknowledgeStableRouteIfNeeded(_ eventId: String?) async {
+    guard let eventId else { return }
+    do {
+      try await store.markStableRouteDelivered(eventId: eventId)
+      failedStableRouteAcknowledgementIds.remove(eventId)
+      activeStableRouteIds.remove(eventId)
+    } catch {
+      failedStableRouteAcknowledgementIds.insert(eventId)
+      LogWarning(
+        "EventLog: failed to acknowledge stable local route \(eventId)"
+      )
+    }
+  }
+
+  private func retryFailedStableRouteAcknowledgements() async -> Bool {
+    for eventId in failedStableRouteAcknowledgementIds.sorted() {
+      do {
+        try await store.markStableRouteDelivered(eventId: eventId)
+        failedStableRouteAcknowledgementIds.remove(eventId)
+        activeStableRouteIds.remove(eventId)
+      } catch {
+        LogWarning(
+          "EventLog: failed to retry stable local route acknowledgement \(eventId)"
+        )
+      }
+    }
+    return failedStableRouteAcknowledgementIds.isEmpty
   }
 
   private func processForwarding(_ command: ForwardingCommand) async {
@@ -2700,14 +2815,16 @@ actor EventLog: EventLogProtocol {
   private func resolveRoute(
     _ commitSequence: UInt64,
     event: NuxieEvent?,
-    subscriberAdmissions: [UInt64: UInt64] = [:]
+    subscriberAdmissions: [UInt64: UInt64] = [:],
+    stableRouteEventId: String? = nil
   ) {
     routeContinuation.yield(.resolved(
       sequence: commitSequence,
       event.map {
         .event(RoutedCommittedEvent(
           event: $0,
-          subscriberAdmissions: subscriberAdmissions
+          subscriberAdmissions: subscriberAdmissions,
+          stableRouteEventId: stableRouteEventId
         ))
       } ?? .skipped
     ))
@@ -4116,6 +4233,11 @@ protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
   /// default no-op implementation below.
   @discardableResult
   func drainCommittedRouting() async -> Bool
+  /// Re-enqueues stable captures whose subscriber receipt survived a process
+  /// exit. Callers choose the customer boundary after its durable runtime
+  /// state is open, then wait for every recovered route to settle.
+  @discardableResult
+  func replayPendingStableRoutes(distinctId: String) async -> Bool
   func captureAndRouteSystemEvent(
     _ request: StableSystemEventCaptureRequest
   ) async -> DurableTriggerCapture?
@@ -4137,6 +4259,12 @@ protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
 extension RoutedStableSystemEventCapturing {
   @discardableResult
   func drainCommittedRouting() async -> Bool { true }
+
+  @discardableResult
+  func replayPendingStableRoutes(distinctId: String) async -> Bool {
+    _ = distinctId
+    return true
+  }
 
   func captureAndRouteSystemEvent(
     _ request: StableSystemEventCaptureRequest,
@@ -4160,7 +4288,43 @@ extension EventLog {
     // will route as soon as the current subscriber returns.
     guard !Self.isOnCommittedRouteWorker else { return false }
     await drainRouteWorker()
-    return true
+    return await retryFailedStableRouteAcknowledgements()
+  }
+
+  @discardableResult
+  func replayPendingStableRoutes(distinctId: String) async -> Bool {
+    guard !closeFlag.isClosed else { return false }
+    await ready.wait()
+    guard !closeFlag.isClosed else { return false }
+    do {
+      let admissions = committedAdmissionRegistry.capture()
+      for stored in try await store.queryPendingStableRoutes(
+        distinctId: distinctId
+      ) where activeStableRouteIds.insert(stored.id).inserted {
+        routeContinuation.yield(.undurable(RoutedCommittedEvent(
+          event: NuxieEvent(
+            id: stored.id,
+            name: stored.name,
+            distinctId: stored.distinctId,
+            properties: stored.getPropertiesDict(),
+            timestamp: stored.timestamp
+          ),
+          subscriberAdmissions: admissions,
+          stableRouteEventId: stored.id
+        )))
+      }
+      guard !Self.isOnCommittedRouteWorker else { return false }
+      await drainRouteWorker()
+      guard await retryFailedStableRouteAcknowledgements() else {
+        return false
+      }
+      return try await store.queryPendingStableRoutes(
+        distinctId: distinctId
+      ).isEmpty
+    } catch {
+      LogWarning("EventLog: failed to replay pending stable local routes")
+      return false
+    }
   }
 
   func captureAndRouteSystemEvent(
@@ -4239,83 +4403,66 @@ extension EventLog {
     let attemptedTimestamp = dateProvider.now()
 
     do {
-      var capturesByEventId: [String: DurableTriggerCapture] = [:]
-      capturesByEventId.reserveCapacity(items.count)
-      var pending: [(
+      var prepared: [(
         item: RoutedStableSystemEventBatchItem,
-        transformed: NuxieEvent?
+        event: NuxieEvent?
       )] = []
-      pending.reserveCapacity(items.count)
-
+      prepared.reserveCapacity(items.count)
       for item in items {
         let request = item.request
         if let existing = try await store.queryStableCapture(id: request.eventId) {
-          guard let capture = durableCapture(
-            from: existing,
-            request: request
-          ) else {
+          guard durableCapture(from: existing, request: request) != nil else {
             return nil
           }
-          capturesByEventId[request.eventId] = capture
-          continue
+          prepared.append((item: item, event: nil))
+        } else {
+          let transformed = try await prepareStableSystemEvent(
+            request,
+            occurredAt: item.occurredAt,
+            preparation: item.preparation
+          )
+          prepared.append((item: item, event: transformed))
         }
-
-        let transformedEvent = try await prepareStableSystemEvent(
-          request,
-          occurredAt: item.occurredAt,
-          preparation: item.preparation
-        )
-        pending.append((item: item, transformed: transformedEvent))
       }
 
       guard !closeFlag.isClosed else { return nil }
-      guard !pending.isEmpty else { return capturesByEventId }
       let forwardingAdmission = forwardingAdmission(
         receivedAt: attemptedTimestamp
       )
-      let commits = try await store.commitStableCaptureBatch(
-        pending.map { value in
-          StableEventCaptureRecord(
-            eventId: value.item.request.eventId,
-            event: value.transformed.map { makeStoredEvent(from: $0) },
-            recordedAt: attemptedTimestamp,
-            ownership: nil
-          )
-        },
+      let records = prepared.map { value in
+        StableEventCaptureRecord(
+          eventId: value.item.request.eventId,
+          event: value.event.map { makeStoredEvent(from: $0) },
+          recordedAt: attemptedTimestamp,
+          ownership: nil
+        )
+      }
+      let commits = try await store.commitStableCaptureBatchAndStageRoutes(
+        records,
         assigningCommitSequence: true,
         admission: admission
       )
-      guard commits.count == pending.count else {
+      guard commits.count == prepared.count,
+            commits.allSatisfy({ $0.commitSequence != nil }) else {
         LogError("EventLog: stable capture batch omitted commit metadata")
         await recordHistoryGap(at: attemptedTimestamp)
-        // The transaction already committed. A retry with the same stable IDs
-        // is safe and will observe every item as terminal.
         return nil
       }
-      var captures: [DurableTriggerCapture] = []
-      captures.reserveCapacity(commits.count)
-      for (value, commit) in zip(pending, commits) {
+
+      var capturesByEventId: [String: DurableTriggerCapture] = [:]
+      capturesByEventId.reserveCapacity(items.count)
+      for (value, commit) in zip(prepared, commits) {
         guard let capture = durableCapture(
           from: commit.outcome,
-          request: value.item.request
+          request: value.item.request,
+          localRoutePending: commit.localRoutePending
         ) else {
           return nil
         }
-        captures.append(capture)
         capturesByEventId[value.item.request.eventId] = capture
-      }
-      guard commits.allSatisfy({ $0.commitSequence != nil }) else {
-        LogError("EventLog: stable capture batch omitted commit metadata")
-        await recordHistoryGap(at: attemptedTimestamp)
-        return capturesByEventId
-      }
-
-      for ((_, commit), capture) in zip(zip(pending, commits), captures) {
-        guard let commitSequence = commit.commitSequence else { continue }
         publishStableCapture(
           capture,
-          outcome: commit.outcome,
-          commitSequence: commitSequence,
+          commit: commit,
           forwardingAdmission: forwardingAdmission,
           routeToSubscribers: true,
           subscriberAdmissions: subscriberAdmissions

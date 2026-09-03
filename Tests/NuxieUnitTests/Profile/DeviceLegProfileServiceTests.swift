@@ -76,27 +76,36 @@ private actor RecordingDeviceLegProfileConsumer: DeviceLegProfileConsuming {
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         artifacts: PreparedDeviceLegArtifacts?,
         authority: ProfileDeliveryAuthority,
+        admissionGeneration: UInt64,
         distinctId: String
     ) {
         _ = distinctId
         _ = artifacts
+        _ = admissionGeneration
         commits.append(snapshot)
         authorities.append(authority)
     }
 
     func profileDidWithdraw(
         authority: ProfileDeliveryAuthority?,
+        admissionGeneration: UInt64,
         distinctId: String
     ) {
         _ = authority
+        _ = admissionGeneration
         withdrawnDistinctIds.append(distinctId)
     }
 
-    func profileDidClear(distinctId: String) {
+    func profileDidClear(
+        distinctId: String,
+        admissionGeneration: UInt64
+    ) {
+        _ = admissionGeneration
         clearedDistinctIds.append(distinctId)
     }
 
-    func profileDidClearAll() {
+    func profileDidClearAll(admissionGeneration: UInt64) {
+        _ = admissionGeneration
         clearAllCount += 1
     }
 }

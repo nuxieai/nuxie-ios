@@ -14,15 +14,18 @@ struct DeviceLegRun {
         let wakeAt: Date?
         let anchorAt: Date?
         var pendingEvent: DeviceLegControlExecutor.Event?
+        var pendingResponsesChanged: Bool
 
         init(
             wakeAt: Date?,
             anchorAt: Date? = nil,
-            pendingEvent: DeviceLegControlExecutor.Event? = nil
+            pendingEvent: DeviceLegControlExecutor.Event? = nil,
+            pendingResponsesChanged: Bool = false
         ) {
             self.wakeAt = wakeAt
             self.anchorAt = anchorAt
             self.pendingEvent = pendingEvent
+            self.pendingResponsesChanged = pendingResponsesChanged
         }
     }
     struct Completion {
@@ -43,6 +46,9 @@ struct DeviceLegRun {
         let kind: Kind
         let eventId: String
         let selectedAt: Date
+        /// The authenticated screen activation that first made this selected
+        /// path visible. An unrelated later screen cannot expose it.
+        var presentationScreenId: String?
         var shownAt: Date?
         var queued: Bool
     }
@@ -56,7 +62,9 @@ struct DeviceLegRun {
         }
 
         let invocationId: String
+        let source: ScreenEmissionSource
         let context: ArmedDeviceLeg.Context
+        let responsesChanged: Bool
         let items: [Item]
     }
 
@@ -492,6 +500,7 @@ struct DeviceLegRunJournal {
     func clearPresentationPublication(
         _ id: String,
         invocationId: String,
+        retainingResponsesChanged: Bool = false,
         admission: DeviceLegCommitAdmission
     ) async throws -> Bool {
         let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
@@ -503,6 +512,13 @@ struct DeviceLegRunJournal {
             }
             guard pending.invocationId == invocationId else {
                 throw DeviceLegJournalError.invalidState
+            }
+            if retainingResponsesChanged {
+                guard var park = run.park else {
+                    throw DeviceLegJournalError.invalidState
+                }
+                park.pendingResponsesChanged = true
+                run.park = park
             }
             run.pendingPresentationPublication = nil
             state.runs[id] = run
@@ -559,8 +575,31 @@ struct DeviceLegRunJournal {
     }
 
     @discardableResult
+    func bindExperimentExposures(
+        _ id: String,
+        to screenId: String,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id], run.startedQueued,
+                  run.completion == nil else {
+                throw DeviceLegJournalError.invalidState
+            }
+            for index in run.experimentExposures.indices
+            where !run.experimentExposures[index].queued
+                && run.experimentExposures[index].shownAt == nil
+                && run.experimentExposures[index].presentationScreenId == nil {
+                run.experimentExposures[index].presentationScreenId = screenId
+            }
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
+    @discardableResult
     func markExperimentExposuresShown(
         _ id: String,
+        screenId: String,
         at: Date,
         admission: DeviceLegCommitAdmission
     ) async throws -> Bool {
@@ -570,8 +609,9 @@ struct DeviceLegRunJournal {
                 throw DeviceLegJournalError.invalidState
             }
             for index in run.experimentExposures.indices
-            where run.experimentExposures[index].shownAt == nil
-                    && !run.experimentExposures[index].queued {
+            where !run.experimentExposures[index].queued
+                && run.experimentExposures[index].presentationScreenId == screenId
+                && run.experimentExposures[index].shownAt == nil {
                 run.experimentExposures[index].shownAt = at
             }
             state.runs[id] = run
@@ -727,7 +767,16 @@ struct DeviceLegRunJournal {
             }
             try beforePersist?()
             try Self.persist(state, to: file)
-            try releasePins.removeUnreferenced(Self.pinReferences(state))
+            do {
+                try releasePins.removeUnreferenced(Self.pinReferences(state))
+            } catch {
+                // The recovered run state is already authoritative. Pin
+                // pruning is maintenance and must not prevent the caller from
+                // reporting newly persisted abandonment completions.
+                LogWarning(
+                    "DeviceLegRunJournal: failed to prune recovered release pins: \(error)"
+                )
+            }
             return state.runs.values.filter {
                 $0.park != nil && $0.completion == nil
             }

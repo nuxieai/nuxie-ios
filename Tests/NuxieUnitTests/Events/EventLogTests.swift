@@ -139,7 +139,11 @@ final class EventLogTests: AsyncSpec {
                                 distinctId: event.distinctId
                             )
                         )
-                        expect(committed).to(beTrue())
+                        // A nested capture cannot drain the route worker that
+                        // is currently invoking this subscriber. Its owner
+                        // must retain retry evidence until a later attempt can
+                        // observe the completed durable route receipt.
+                        expect(committed).to(beFalse())
                     }
                     try await log.configure(configuration: testConfig)
 
@@ -152,6 +156,89 @@ final class EventLogTests: AsyncSpec {
                     await log.drain()
 
                     await expect { await received.names }.to(equal(["outer", "nested"]))
+                    await expect { mockStore.pendingStableRouteIds }
+                        .toEventually(beEmpty())
+                }
+
+                it("replays a stable local route left pending by a prior process") {
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    try await log.configure(configuration: testConfig)
+                    let stored = try StoredEvent(
+                        id: "stable-route-from-prior-process",
+                        name: "recovered-local-route",
+                        properties: ["source": "recovery"],
+                        timestamp: Date(timeIntervalSince1970: 1_000),
+                        distinctId: "customer-a"
+                    )
+                    let committed = try await mockStore
+                        .commitStableCaptureAndStageRoute(
+                            eventId: stored.id,
+                            event: stored,
+                            recordedAt: stored.timestamp,
+                            ownership: nil,
+                            assigningCommitSequence: false,
+                            admission: nil
+                        )
+                    expect(committed.localRoutePending).to(beTrue())
+
+                    let replayed = await log.replayPendingStableRoutes(
+                        distinctId: "customer-a"
+                    )
+                    let replayedAgain = await log.replayPendingStableRoutes(
+                        distinctId: "customer-a"
+                    )
+
+                    expect(replayed).to(beTrue())
+                    expect(replayedAgain).to(beTrue())
+                    await expect { await received.names }.to(equal([
+                        "recovered-local-route",
+                    ]))
+                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                }
+
+                it("retries a failed stable-route acknowledgement without rerouting") {
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    try await log.configure(configuration: testConfig)
+                    mockStore.shouldFailMarkDelivered = true
+                    let request = StableSystemEventCaptureRequest(
+                        name: "route-with-transient-ack-failure",
+                        properties: nil,
+                        eventId: "stable-route-ack-retry",
+                        distinctId: "customer-a"
+                    )
+
+                    let first = await log.captureAndRouteSystemEvent(request)
+                    let firstDrain = await log.drainCommittedRouting()
+                    let duplicate = await log.captureAndRouteSystemEvent(request)
+                    let duplicateDrain = await log.drainCommittedRouting()
+
+                    expect(first?.isNewlyCommitted).to(beTrue())
+                    expect(first?.localRoutePending).to(beTrue())
+                    expect(firstDrain).to(beFalse())
+                    expect(duplicate?.isNewlyCommitted).to(beFalse())
+                    expect(duplicate?.localRoutePending).to(beTrue())
+                    expect(duplicateDrain).to(beFalse())
+                    await expect { await received.names }.to(equal([
+                        "route-with-transient-ack-failure",
+                    ]))
+                    expect(mockStore.pendingStableRouteIds).to(equal([
+                        request.eventId,
+                    ]))
+
+                    mockStore.shouldFailMarkDelivered = false
+                    let recovered = await log.drainCommittedRouting()
+
+                    expect(recovered).to(beTrue())
+                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                    await expect { await received.names }.to(equal([
+                        "route-with-transient-ack-failure",
+                    ]))
                 }
 
                 it("only announces events after they are persisted pending delivery") {

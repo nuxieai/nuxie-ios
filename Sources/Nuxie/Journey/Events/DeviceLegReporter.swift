@@ -89,7 +89,9 @@ struct DeviceLegExperimentExposureReporter: Sendable {
                     admission: admission
                 )
                 guard capture != nil else { return false }
-                await events.drainCommittedRouting()
+                guard await events.drainCommittedRouting() else {
+                    return false
+                }
                 try await journal.markExperimentExposureQueued(
                     run.id,
                     eventId: exposure.eventId

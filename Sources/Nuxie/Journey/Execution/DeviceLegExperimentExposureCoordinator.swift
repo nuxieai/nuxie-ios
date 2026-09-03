@@ -4,12 +4,20 @@ import Foundation
 /// execution. A selected experiment becomes publishable only after the
 /// presentation layer proves that its screen was visible.
 actor DeviceLegExperimentExposureCoordinator {
+    private struct PendingMark: Sendable {
+        let runId: String
+        let screenId: String
+        let shownAt: Date
+        let admission: DeviceLegCommitAdmission
+    }
+
     private let events: any RoutedStableSystemEventCapturing
     private let retryLoop = CancellationAwareExponentialRetryLoop(
         initialDelayNanoseconds: 250_000_000,
         maximumDelayNanoseconds: 2_000_000_000
     )
     private var retryTasks: [String: Task<Void, Never>] = [:]
+    private var pendingMarks: [String: [String: PendingMark]] = [:]
 
     init(events: any RoutedStableSystemEventCapturing) {
         self.events = events
@@ -21,34 +29,31 @@ actor DeviceLegExperimentExposureCoordinator {
 
     func markShown(
         forRunId runId: String,
+        screenId: String,
         in journal: DeviceLegRunJournal,
         at date: Date,
         admission: DeviceLegCommitAdmission
     ) async {
-        let runs: [DeviceLegRun]
-        do {
-            runs = try await journal.runs()
-        } catch {
-            LogWarning(
-                "DeviceLegExperimentExposureCoordinator: failed to read pending exposure: \(error)"
-            )
-            return
-        }
-        guard let run = runs.first(where: { $0.id == runId }),
-              run.experimentExposures.contains(where: {
-                $0.shownAt == nil && !$0.queued
-              }) else { return }
+        let mark = PendingMark(
+            runId: runId,
+            screenId: screenId,
+            shownAt: date,
+            admission: admission
+        )
         do {
             guard try await journal.markExperimentExposuresShown(
                 runId,
+                screenId: screenId,
                 at: date,
                 admission: admission
             ) else { return }
+            removePendingMark(mark, from: journal)
             try await flushPending(in: journal, admission: admission)
         } catch {
             LogWarning(
                 "DeviceLegExperimentExposureCoordinator: failed to queue shown exposure: \(error)"
             )
+            retainPendingMark(mark, in: journal)
             scheduleRetry(for: journal)
         }
     }
@@ -80,6 +85,7 @@ actor DeviceLegExperimentExposureCoordinator {
             await retry.value
         }
         retryTasks.removeAll()
+        pendingMarks.removeAll()
     }
 
     private func scheduleRetry(for journal: DeviceLegRunJournal) {
@@ -104,6 +110,25 @@ actor DeviceLegExperimentExposureCoordinator {
     private func retryOnce(
         in journal: DeviceLegRunJournal
     ) async -> CancellationAwareExponentialRetryLoop.IterationResult {
+        var markFailed = false
+        let journalKey = journal.distinctId
+        let marks = pendingMarks[journalKey].map { Array($0.values) } ?? []
+        for mark in marks {
+            do {
+                _ = try await journal.markExperimentExposuresShown(
+                    mark.runId,
+                    screenId: mark.screenId,
+                    at: mark.shownAt,
+                    admission: mark.admission
+                )
+                removePendingMark(mark, from: journal)
+            } catch {
+                markFailed = true
+                LogWarning(
+                    "DeviceLegExperimentExposureCoordinator: shown exposure mark remains pending: \(error)"
+                )
+            }
+        }
         do {
             let settled = try await DeviceLegExperimentExposureReporter(
                 journal: journal,
@@ -113,7 +138,8 @@ actor DeviceLegExperimentExposureCoordinator {
                 journal: journal,
                 events: events
             ).flushPending()
-            if settled {
+            if settled && !markFailed
+                    && pendingMarks[journalKey]?.isEmpty != false {
                 _ = try await journal.finalizeRevocation()
                 return .finished
             }
@@ -123,5 +149,29 @@ actor DeviceLegExperimentExposureCoordinator {
             )
         }
         return .pending
+    }
+
+    private func retainPendingMark(
+        _ mark: PendingMark,
+        in journal: DeviceLegRunJournal
+    ) {
+        pendingMarks[journal.distinctId, default: [:]][
+            pendingMarkKey(mark)
+        ] = mark
+    }
+
+    private func removePendingMark(
+        _ mark: PendingMark,
+        from journal: DeviceLegRunJournal
+    ) {
+        let journalKey = journal.distinctId
+        pendingMarks[journalKey]?.removeValue(forKey: pendingMarkKey(mark))
+        if pendingMarks[journalKey]?.isEmpty == true {
+            pendingMarks.removeValue(forKey: journalKey)
+        }
+    }
+
+    private func pendingMarkKey(_ mark: PendingMark) -> String {
+        "\(mark.runId)\u{0}\(mark.screenId)"
     }
 }

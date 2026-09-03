@@ -176,8 +176,7 @@ private actor StableSystemEventCaptureRetryQueue {
             // ownership until every subscriber admitted with that commit has
             // returned; DeviceLeg persists its correlated transition before
             // returning from the subscriber callback.
-            await routedEvents.drainCommittedRouting()
-            return true
+            return await routedEvents.drainCommittedRouting()
         }
         return await triggerProvider().captureSystemEvent(
             request.name,
