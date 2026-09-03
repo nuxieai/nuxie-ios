@@ -69,27 +69,17 @@ Instead of hardcoding when/where to show paywalls, MoodLog uses Nuxie's **flow s
 **How it works:**
 
 ```swift
-// User taps "Go Pro" button
+// User taps "Go Pro". The SDK captures the event, evaluates eligible
+// Journeys in order, and presents the selected Experience when appropriate.
 NuxieSDK.shared.trigger("upgrade_tapped", properties: [
     "source": "today_screen",
     "current_streak": streak
-]) { update in
-    switch update {
-    case .decision(.journeyStarted(let experience)):
-        print("Started journey for \(experience.experienceId)")
-    case .decision(.experienceShown(let experience)):
-        print("Presented \(experience.experienceId)")
-    case .decision(.noMatch):
-        break
-    case .decision(.suppressed(let reason)):
-        print("Journey suppressed: \(reason)")
-    case .journey(let journey):
-        print("Journey finished: \(journey.exitReason.rawValue)")
-    case .error(let error):
-        print("Trigger failed: \(error.message)")
-    }
-}
+])
 ```
+
+`trigger` is intentionally fire-and-forget. Apps do not branch on assignment,
+matching, or presentation outcomes; the Journey runtime owns recovery and
+presentation.
 
 **Key Events:**
 

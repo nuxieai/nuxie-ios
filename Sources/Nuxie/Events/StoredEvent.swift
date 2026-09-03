@@ -110,8 +110,7 @@ struct StoredEvent: Codable, Sendable {
         try getProperties().mapValues { $0.value }
     }
 
-    /// Canonical replay identity. Session is deliberately excluded because it
-    /// is a query index derived from properties, not part of the event bytes.
+    /// Canonical replay identity for durable event deduplication.
     func isByteEquivalent(to other: StoredEvent) -> Bool {
         id == other.id
             && name == other.name

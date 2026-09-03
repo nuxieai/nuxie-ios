@@ -169,11 +169,7 @@ struct HistoryView: View {
             NuxieSDK.shared.trigger(Constants.eventCSVExportGated, properties: [
                 "entry_count": moodStore.count,
                 "source": "history_toolbar"
-            ]) { update in
-                Task { @MainActor in
-                    handleTriggerUpdate(update)
-                }
-            }
+            ])
         }
     }
 
@@ -186,11 +182,7 @@ struct HistoryView: View {
             "visible_entries": entries.count,
             "total_entries": moodStore.count,
             "source": "history_screen"
-        ]) { update in
-            Task { @MainActor in
-                handleTriggerUpdate(update)
-            }
-        }
+        ])
     }
 
     /// Performs the actual CSV export
@@ -220,27 +212,6 @@ struct HistoryView: View {
         }
     }
 
-    // MARK: - Nuxie Flow Handling
-
-    /// Handles the result of a tracked event that may trigger a flow
-    private func handleTriggerUpdate(_ update: TriggerUpdate) {
-        switch update {
-        case .decision(.journeyStarted(let experience)):
-            print("[MoodLog] Journey started for experience \(experience.experienceId)")
-        case .decision(.experienceShown(let experience)):
-            print("[MoodLog] Experience shown: \(experience.experienceId)")
-        case .decision(.suppressed(let reason)):
-            print("[MoodLog] Journey suppressed: \(reason)")
-        case .decision(.noMatch):
-            errorMessage = "No upgrade experience is configured for this event."
-            showingError = true
-        case .journey(let journey):
-            print("[MoodLog] Journey \(journey.journeyId) finished: \(journey.exitReason.rawValue)")
-        case .error(let error):
-            errorMessage = error.message
-            showingError = true
-        }
-    }
 }
 
 // MARK: - Preview

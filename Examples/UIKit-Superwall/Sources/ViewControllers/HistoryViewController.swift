@@ -171,11 +171,7 @@ final class HistoryViewController: UIViewController {
             NuxieSDK.shared.trigger("csv_export_gated", properties: [
                 "entry_count": moodStore.count,
                 "source": "history_toolbar"
-            ]) { [weak self] update in
-                Task { @MainActor [weak self] in
-                    self?.handleTriggerUpdate(update)
-                }
-            }
+            ])
         }
     }
 
@@ -234,32 +230,9 @@ final class HistoryViewController: UIViewController {
             "visible_entries": entries.count,
             "total_entries": moodStore.count,
             "source": "history_screen"
-        ]) { [weak self] update in
-            Task { @MainActor [weak self] in
-                self?.handleTriggerUpdate(update)
-            }
-        }
+        ])
     }
 
-    // MARK: - Nuxie Flow Handling
-
-    /// Handles the result of a tracked event that may trigger a flow
-    private func handleTriggerUpdate(_ update: TriggerUpdate) {
-        switch update {
-        case .decision(.journeyStarted(let experience)):
-            print("[MoodLog] Journey started for experience \(experience.experienceId)")
-        case .decision(.experienceShown(let experience)):
-            print("[MoodLog] Experience shown: \(experience.experienceId)")
-        case .decision(.suppressed(let reason)):
-            print("[MoodLog] Journey suppressed: \(reason)")
-        case .decision(.noMatch):
-            showError("No upgrade experience is configured for this event.")
-        case .journey(let journey):
-            print("[MoodLog] Journey \(journey.journeyId) finished: \(journey.exitReason.rawValue)")
-        case .error(let error):
-            showError("Unable to load: \(error.message)")
-        }
-    }
 }
 
 // MARK: - UITableViewDataSource

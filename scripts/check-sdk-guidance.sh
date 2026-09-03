@@ -53,7 +53,12 @@ for removed_api in startNewSession endSession resetSession 'setSessionId('; do
   fi
 done
 
-for removed_trigger_surface in '.featureAccess(' '.allowedImmediate' '.deniedImmediate'; do
+for removed_trigger_surface in \
+  TriggerHandle \
+  TriggerUpdate \
+  '.featureAccess(' \
+  '.allowedImmediate' \
+  '.deniedImmediate'; do
   if grep -R -Fq "$removed_trigger_surface" Examples README.md docs/sdk-api-surface.md; then
     fail "public guidance mentions removed trigger surface: $removed_trigger_surface"
   fi

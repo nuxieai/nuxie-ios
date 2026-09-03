@@ -345,36 +345,12 @@ final class TodayViewController: UIViewController {
         /// Nuxie's backend decide whether to show a flow based on experiences
         /// configured in the dashboard.
         ///
-        /// The handler receives TriggerUpdate routing and journey-lifecycle events.
+        /// The SDK evaluates and presents the matching Journey asynchronously.
         NuxieSDK.shared.trigger("upgrade_tapped", properties: [
             "source": "today_screen",
             "current_streak": moodStore.calculateStreak(),
             "total_entries": moodStore.count
-        ]) { [weak self] update in
-            Task { @MainActor [weak self] in
-                self?.handleTriggerUpdate(update)
-            }
-        }
-    }
-
-    // MARK: - Nuxie Flow Handling
-
-    /// Handles the result of a tracked event that may trigger a flow
-    private func handleTriggerUpdate(_ update: TriggerUpdate) {
-        switch update {
-        case .decision(.journeyStarted(let experience)):
-            print("[MoodLog] Journey started for experience \(experience.experienceId)")
-        case .decision(.experienceShown(let experience)):
-            print("[MoodLog] Experience shown: \(experience.experienceId)")
-        case .decision(.suppressed(let reason)):
-            print("[MoodLog] Journey suppressed: \(reason)")
-        case .decision(.noMatch):
-            print("[MoodLog] No flow shown - configure an experience in Nuxie dashboard for 'upgrade_tapped' event")
-        case .journey(let journey):
-            print("[MoodLog] Journey \(journey.journeyId) finished: \(journey.exitReason.rawValue)")
-        case .error(let error):
-            showError("Unable to load: \(error.message)")
-        }
+        ])
     }
 
     @objc private func noteTextChanged() {
