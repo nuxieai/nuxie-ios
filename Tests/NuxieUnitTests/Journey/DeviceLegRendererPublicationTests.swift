@@ -233,7 +233,7 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
         ])
     }
 
-    func testPendingRendererPublicationReplaysItsRouteAfterRestart() async throws {
+    func testPendingRendererPublicationAbandonsAtProcessBreak() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -261,9 +261,6 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
                 defaultInstanceId: "welcome",
                 responseCaptures: ["plan"]
             )]
-        )
-        let retainedRelease = try XCTUnwrap(
-            snapshot.releasesByDigest.values.first
         )
         do {
             let identity = MockIdentityService()
@@ -338,8 +335,7 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
         let recoveryService = makeService(
             identity: recoveryIdentity,
             events: recoveryEvents,
-            directory: directory,
-            pinnedReleaseAuthenticator: { _, _ in retainedRelease }
+            directory: directory
         )
 
         await recoveryService.initialize()
@@ -348,14 +344,10 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
             $0.name == "continue"
         }
         XCTAssertEqual(replayed.count, 1)
-        XCTAssertEqual(
-            replayed.first?.id,
-            "00000000-0000-7000-8000-000000000338"
-        )
         let completion = try XCTUnwrap(recoveryEvents.routedEvents.first {
             $0.name == JourneyEvents.journeyLegCompleted
         })
-        XCTAssertEqual(completion.properties["outcome"] as? String, "continue")
+        XCTAssertEqual(completion.properties["outcome"] as? String, "abandoned")
         let outputs = try XCTUnwrap(
             completion.properties["outputs"] as? [String: Any]
         )

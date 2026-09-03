@@ -755,6 +755,8 @@ struct DeviceLegRunJournal {
                 if revoked || run.park == nil
                     || pin.map({ Self.pin($0, matches: run.reference) }) != true {
                     let eventOutputs = run.outputs.event
+                    let pendingPresentationPublication =
+                        run.pendingPresentationPublication
                     Self.finish(
                         &run,
                         outcome: "abandoned",
@@ -762,6 +764,13 @@ struct DeviceLegRunJournal {
                         eventOutputs: eventOutputs,
                         responseOutputs: run.context.responses
                     )
+                    // The process break terminates execution, but renderer
+                    // events staged before the break remain an ordinary-event
+                    // outbox. Startup publishes them before the terminal
+                    // report removes this run; their stable IDs make retries
+                    // idempotent without replaying the screen action.
+                    run.pendingPresentationPublication =
+                        pendingPresentationPublication
                     state.runs[id] = run
                 }
             }

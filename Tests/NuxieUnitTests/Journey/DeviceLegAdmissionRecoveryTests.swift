@@ -232,6 +232,58 @@ final class DeviceLegAdmissionRecoveryTests: DeviceLegTestCase {
         })
     }
 
+    func testDepartingClearAndReplacementProfileCanShareOneTransportGeneration() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entry: .init(
+                type: .event,
+                eventName: "replacement-profile-event",
+                segmentId: nil,
+                member: nil,
+                condition: nil
+            )
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory
+        )
+
+        await service.initialize()
+        identity.setDistinctId("customer-b")
+        await service.profileDidClear(
+            distinctId: "customer-a",
+            admissionGeneration: 5
+        )
+        await service.profileDidCommit(
+            snapshot,
+            artifacts: nil,
+            authority: fixture.deliveryAuthority,
+            admissionGeneration: 5,
+            distinctId: "customer-b"
+        )
+        await service.handleEvent(NuxieEvent(
+            id: "00000000-0000-7000-8000-000000000092",
+            name: "replacement-profile-event",
+            distinctId: "customer-b"
+        ))
+
+        XCTAssertEqual(events.routedEvents.map(\.name), [
+            JourneyEvents.journeyLegStarted,
+            JourneyEvents.journeyLegCompleted,
+        ])
+        XCTAssertTrue(events.routedEvents.allSatisfy {
+            $0.distinctId == "customer-b"
+        })
+    }
+
     func testEventArmsAreEdgesAndProjectOnlyDeclaredEventFields() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -860,6 +912,102 @@ final class DeviceLegAdmissionRecoveryTests: DeviceLegTestCase {
             abandonments.first?.properties["outcome"] as? String,
             "abandoned"
         )
+    }
+
+    func testWithdrawnFirstProfileOpensScopedJournalAndResumesDueParkedRun() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entryStepId: "wait",
+            steps: [
+                .init(
+                    kind: .action,
+                    id: "wait",
+                    action: [
+                        "type": .string("delay"),
+                        "durationMs": .number(1_000),
+                    ],
+                    outlets: ["next": "report"],
+                    outcome: nil
+                ),
+                .init(
+                    kind: .complete,
+                    id: "report",
+                    action: nil,
+                    outlets: nil,
+                    outcome: "continue"
+                ),
+            ]
+        )
+        let retainedRelease = try XCTUnwrap(
+            snapshot.releasesByDigest.values.first
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let storageScope = DeviceLegStorageScope(
+            authority: fixture.deliveryAuthority
+        )
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer",
+            storageScope: storageScope
+        )
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let releasePin = try XCTUnwrap(snapshot.profile.releases.first)
+        let admitted = try await journal.admit(
+            arm: arm,
+            release: releasePin,
+            executionSnapshot: .init(
+                delivery: snapshot.profile.delivery,
+                assignments: snapshot.profile.facts.assignments
+            ),
+            reentry: .init(type: .oneTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: Date(timeIntervalSince1970: 1_000)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await DeviceLegReporter(journal: journal, events: events)
+            .flushPending()
+        try await journal.transition(
+            run.id,
+            stepId: "wait",
+            context: run.context,
+            checkpoint: .init(
+                anchorAtMillis: 1_000_000,
+                wakeAtMillis: 1_001_000
+            )
+        )
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            storageScope: nil,
+            dateProvider: MockDateProvider(
+                initialDate: Date(timeIntervalSince1970: 1_002)
+            ),
+            pinnedReleaseAuthenticator: { _, _ in retainedRelease }
+        )
+
+        await service.initialize()
+        let beforeAuthority = try await journal.runs()
+        XCTAssertEqual(beforeAuthority.count, 1)
+
+        await service.profileDidWithdraw(
+            authority: fixture.deliveryAuthority,
+            admissionGeneration: 1,
+            distinctId: "customer"
+        )
+
+        let remaining = try await journal.runs()
+        XCTAssertTrue(remaining.isEmpty)
+        let completion = try XCTUnwrap(events.routedEvents.last {
+            $0.name == JourneyEvents.journeyLegCompleted
+        })
+        XCTAssertEqual(completion.properties["outcome"] as? String, "continue")
     }
 
     func testRecoveryResumesOnlyThePersistedDueParkPoint() async throws {
