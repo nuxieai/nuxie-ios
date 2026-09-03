@@ -21,8 +21,7 @@ if git ls-files | grep -Eq '^Runtime/.*\.(zip|xcframework)(/|$)'; then
 fi
 ownership_pattern='cargo (build|test)|rustup|build-runtime-xcframework|'
 ownership_pattern+='package-runtime-xcframework|native/Cargo|third_party/nuxie-runtime'
-if rg -n --glob '!docs/runtime-migration/**' --glob '!RUNTIME_MIGRATION_DECISION_MAP.md' \
-    --glob '!scripts/check-runtime-consumer-boundary.sh' \
+if rg -n --glob '!scripts/check-runtime-consumer-boundary.sh' \
     "${ownership_pattern}" \
     Makefile Package.swift .buildkite .github scripts README.md CONTRIBUTING.md CLAUDE.md 2>/dev/null; then
     echo "nuxie-ios still contains active Rust build or source-ownership instructions" >&2
