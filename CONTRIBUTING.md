@@ -173,8 +173,8 @@ Example:
 feat(journey): add support for custom node types
 
 Implements custom node type registration and execution
-for journey flows. This allows developers to extend
-the journey system with domain-specific nodes.
+for Journeys. This allows developers to extend
+Journey execution with domain-specific nodes.
 
 Closes #123
 ```

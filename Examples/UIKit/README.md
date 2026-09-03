@@ -60,11 +60,11 @@ try NuxieSDK.shared.setup(with: config)
 NuxieSDK.shared.identify(userId)
 ```
 
-#### 3. Event-Driven Paywalls with Nuxie Flows
+#### 3. Event-Driven Paywalls with Nuxie Journeys
 
 **This is the key feature demonstrated in this app!**
 
-Instead of hardcoding when/where to show paywalls, MoodLog uses Nuxie's **flow system** where the backend decides when to show upgrade prompts based on user behavior.
+Instead of hardcoding when or where to show paywalls, MoodLog uses Nuxie Journeys. The backend arms eligible Journey work from user state; the SDK evaluates the event trigger and presents the selected Experience.
 
 **How it works:**
 
@@ -87,9 +87,9 @@ presentation.
 |-------|---------------|-------------------|----------|
 | `mood_selected` | User taps mood emoji | `mood`, `mood_emoji`, `mood_label`, `has_existing_entry`, `current_streak` | Understand engagement, identify drop-off points |
 | `mood_saved` | User saves mood entry | `mood`, `mood_emoji`, `has_note`, `note_length`, `is_update`, `streak`, `total_entries` | Core engagement metric, conversion opportunities |
-| `upgrade_tapped` | "Go Pro" button tapped | `source`, `current_streak`, `total_entries` | Primary upgrade CTA (triggers flow) |
-| `unlock_history_tapped` | User wants unlimited history | `visible_entries`, `total_entries`, `source` | Feature-gated upsell (triggers flow) |
-| `csv_export_gated` | User tries Pro feature without access | `entry_count`, `source` | Just-in-time conversion (triggers flow) |
+| `upgrade_tapped` | "Go Pro" button tapped | `source`, `current_streak`, `total_entries` | Primary upgrade CTA (triggers Journey evaluation) |
+| `unlock_history_tapped` | User wants unlimited history | `visible_entries`, `total_entries`, `source` | Feature-gated upsell (triggers Journey evaluation) |
+| `csv_export_gated` | User tries Pro feature without access | `entry_count`, `source` | Just-in-time conversion (triggers Journey evaluation) |
 | `csv_export_completed` | User exports CSV (Pro) | `entry_count` | Pro feature usage tracking |
 | `history_viewed` | History screen opens | `entry_count`, `is_pro` | Navigation and engagement tracking |
 
@@ -100,7 +100,7 @@ User opens app
   → mood_selected (engagement)
     → mood_saved (core action)
       → [After 5 days] upgrade_tapped
-        → [Nuxie Flow Shown]
+        → [Nuxie Experience Shown]
           → purchase completed → User is now Pro!
 ```
 
@@ -109,7 +109,7 @@ User opens app
 1. **Backend-Configurable**: Change when/how paywalls show without releasing app updates
 2. **Frequency Capping**: Nuxie handles not annoying users with too many prompts
 3. **A/B Testing**: Test different paywall designs and triggers from dashboard
-4. **Targeting**: Show flows based on user segments, behavior patterns, etc.
+4. **Targeting**: Arm Journeys from user segments, behavior patterns, and other server facts
 5. **Analytics**: Track conversion funnels automatically
 6. **Funnel Analysis**: See drop-off rates (selected mood but didn't save, saw upgrade but didn't purchase, etc.)
 
@@ -158,7 +158,7 @@ config.purchaseDelegate = StoreKitManager.shared
 
 ## Setting Up Nuxie Experiences
 
-The app is fully functional without any dashboard configuration, but to see Nuxie's flow system in action, you'll want to create experiences:
+The app is fully functional without any dashboard configuration, but to see Nuxie's Journey system in action, you'll want to create experiences:
 
 ### 1. Create Your First Experience
 
@@ -167,9 +167,9 @@ The app is fully functional without any dashboard configuration, but to see Nuxi
 3. Set trigger event: `upgrade_tapped`
 4. Choose audience: "All Users" (for testing)
 
-### 2. Design Your Paywall Flow
+### 2. Design Your Paywall Experience
 
-1. Select **Flow Type**: Paywall
+1. Select **Experience Type**: Paywall
 2. Add your products (monthly/yearly subscriptions)
 3. Customize design:
    - Headline: "Unlock Pro Features"
@@ -186,7 +186,7 @@ The app is fully functional without any dashboard configuration, but to see Nuxi
 
 1. Run the app
 2. Tap "Go Pro" button
-3. Your configured flow should appear!
+3. Your configured Experience should appear!
 4. Complete purchase → app receives a verified purchase outcome
 
 ### 5. Create Additional Experiences
@@ -199,7 +199,7 @@ The app is fully functional without any dashboard configuration, but to see Nuxi
 
 **Soft Paywall Example** (History):
 - **Trigger**: `unlock_history_tapped`
-- **Flow**: Show benefits before paywall
+- **Journey behavior**: Present benefits before the paywall
 - **Frequency**: Twice per month
 
 ### Tips
@@ -218,7 +218,7 @@ Sources/
 │   ├── SceneDelegate.swift        # Window setup
 │   └── Info.plist                 # App configuration
 ├── ViewControllers/
-│   ├── TodayViewController.swift  # Main mood entry screen with Nuxie flow integration
+│   ├── TodayViewController.swift  # Main mood entry screen with Nuxie Journey integration
 │   └── HistoryViewController.swift # Past moods list with feature gating
 ├── Views/
 │   ├── MoodButton.swift           # Custom emoji button with animations
