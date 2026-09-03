@@ -7,7 +7,7 @@
 <div align="center">
   <strong>Nuxie Apple SDK</strong>
   <br />
-  Bring targeted in‑app flows, paywalls, and analytics to your iOS or macOS app.
+  Bring targeted in‑app Experiences, paywalls, and analytics to your iOS or macOS app.
   <br /><br />
   <a href="https://nuxie.ai" target="_blank" rel="noopener">Website</a>
 </div>
@@ -16,7 +16,7 @@
 
 ## What is Nuxie?
 
-Nuxie is a platform for running targeted in‑app experiences such as paywalls, upgrade prompts, surveys, and more — without shipping new app releases. This SDK connects your iOS or macOS app to Nuxie so you can track events, identify users, and automatically present experiences configured in the Nuxie dashboard. An experience holds the screens (Rive-rendered by the Nuxie Rust runtime) and the journey that drives them; journeys execute client-side from cached config.
+Nuxie is a platform for running targeted in‑app experiences such as paywalls, upgrade prompts, surveys, and more — without shipping new app releases. This SDK connects your iOS or macOS app to Nuxie so you can track events, identify users, and automatically present experiences configured in the Nuxie dashboard. An Experience holds the screens and authored route graph. At runtime, a Journey advances across device and server work; this SDK executes armed device work delivered by the authenticated profile.
 
 Learn more at https://nuxie.ai
 
@@ -24,13 +24,13 @@ Learn more at https://nuxie.ai
 
 - Event tracking: send custom events with properties and user traits.
 - User identity: anonymous IDs, `identify`, and event linking on login.
-- Experiences: server‑driven journeys + screens that present in‑app UI, executed client‑side from cached config.
+- Experiences: signed screens and armed Journey work that present in-app UI from the authenticated profile.
 - Session tracking: automatic idle/lifetime rotation.
 - Purchases: delegate‑based StoreKit integration for buy/restore.
 - Automatic lifecycle events: $app_installed, $app_updated, $app_opened, and $app_backgrounded are always captured; `beforeSend` can drop them.
 - Privacy & controls: sensitive-value log redaction and a `beforeSend` transform/drop hook.
-- Offline-first, precisely: committed events are normally persisted locally before observers run and re-sent after relaunch (deduplicated server-side); a history-write failure advances the durable completeness fence so local evaluation fails closed instead of silently reasoning across a gap. Journey enrollment and feature-access decisions evaluate from cached config, so network failure degrades freshness, never function.
-- Resilient Experiences: authenticated canonical plane profiles remain offline-usable without an age cutoff and revalidate opportunistically; legacy release profiles retain a 24-hour cache window. Verified release objects use a bounded 256 MiB disk LRU, speculative preparation respects Low Data Mode and app lifecycle, and StoreKit failures block only product-bound selected screens.
+- Offline-first, precisely: committed events are normally persisted locally before observers run and re-sent after relaunch (deduplicated server-side); a history-write failure advances the durable completeness fence so local evaluation fails closed instead of silently reasoning across a gap. Armed Journey work and feature-access reads use authenticated cached profile state, so network failure degrades freshness without discarding already-delivered behavior.
+- Resilient Experiences: authenticated canonical plane profiles remain offline-usable without an age cutoff and revalidate opportunistically. Verified Journey releases use a bounded 256 MiB disk LRU, speculative preparation respects Low Data Mode and app lifecycle, and StoreKit failures block only product-bound selected screens.
 
 ### Local event-history contract
 
