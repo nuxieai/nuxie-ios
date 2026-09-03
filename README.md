@@ -148,31 +148,13 @@ NuxieSDK.shared.identify(
 )
 ```
 
-Trigger events (optionally observe experience and journey updates):
+Trigger an event for ordered Journey evaluation:
 
 ```swift
 NuxieSDK.shared.trigger(
   "premium_feature_tapped",
   properties: ["feature": "pro_filters"]
 )
-
-Task {
-  NuxieSDK.shared.trigger(
-    "premium_feature_tapped",
-    properties: ["feature": "pro_filters"]
-  ) { update in
-    switch update {
-    case .decision(.journeyStarted(let experience)):
-      print("Started \(experience.experienceId)")
-    case .decision(.noMatch):
-      break
-    case .error(let error):
-      print("Trigger failed: \(error.message)")
-    default:
-      break
-    }
-  }
-}
 ```
 
 Logout / clear identity:
