@@ -124,6 +124,114 @@ final class DeviceLegAdmissionRecoveryTests: DeviceLegTestCase {
         )
     }
 
+    func testStaleSameCustomerWithdrawalCannotRevokeANewerProfile() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entry: .init(
+                type: .event,
+                eventName: "new-profile-event",
+                segmentId: nil,
+                member: nil,
+                condition: nil
+            )
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(
+            snapshot,
+            artifacts: nil,
+            authority: fixture.deliveryAuthority,
+            admissionGeneration: 2,
+            distinctId: "customer"
+        )
+        await service.profileDidWithdraw(
+            authority: fixture.deliveryAuthority,
+            admissionGeneration: 1,
+            distinctId: "customer"
+        )
+        await service.handleEvent(NuxieEvent(
+            id: "00000000-0000-7000-8000-000000000090",
+            name: "new-profile-event",
+            distinctId: "customer"
+        ))
+
+        XCTAssertEqual(events.routedEvents.map(\.name), [
+            JourneyEvents.journeyLegStarted,
+            JourneyEvents.journeyLegCompleted,
+        ])
+    }
+
+    func testDepartingCustomerWithdrawalCannotRevokeTheCurrentCustomer() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entry: .init(
+                type: .event,
+                eventName: "current-customer-event",
+                segmentId: nil,
+                member: nil,
+                condition: nil
+            )
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory
+        )
+
+        await service.initialize()
+        identity.setDistinctId("customer-b")
+        await service.handleUserChange(
+            from: "customer-a",
+            to: "customer-b"
+        )
+        await service.profileDidCommit(
+            snapshot,
+            artifacts: nil,
+            authority: fixture.deliveryAuthority,
+            admissionGeneration: 3,
+            distinctId: "customer-b"
+        )
+        // Even a numerically newer token cannot authorize a callback for an
+        // identity that has already departed.
+        await service.profileDidWithdraw(
+            authority: fixture.deliveryAuthority,
+            admissionGeneration: 4,
+            distinctId: "customer-a"
+        )
+        await service.handleEvent(NuxieEvent(
+            id: "00000000-0000-7000-8000-000000000091",
+            name: "current-customer-event",
+            distinctId: "customer-b"
+        ))
+
+        XCTAssertEqual(events.routedEvents.map(\.name), [
+            JourneyEvents.journeyLegStarted,
+            JourneyEvents.journeyLegCompleted,
+        ])
+        XCTAssertTrue(events.routedEvents.allSatisfy {
+            $0.distinctId == "customer-b"
+        })
+    }
+
     func testEventArmsAreEdgesAndProjectOnlyDeclaredEventFields() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

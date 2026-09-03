@@ -202,8 +202,9 @@ private final class ProfileAdmissionGeneration: @unchecked Sendable {
         }
     }
 
-    func invalidate() {
-        _ = claim()
+    @discardableResult
+    func invalidate() -> UInt64 {
+        claim()
     }
 
     func matches(_ generation: UInt64) -> Bool {
@@ -662,6 +663,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         if clearedDeviceProfile {
             await deviceLegRuntime?.profileDidWithdraw(
                 authority: try? await authorityStore.authority(),
+                admissionGeneration: admission.generation,
                 distinctId: admission.distinctId
             )
         }
@@ -837,11 +839,13 @@ internal actor ProfileService: ProfileServiceProtocol {
                 committedDeviceSnapshot,
                 artifacts: preparedReleaseProfile.deviceLegArtifacts,
                 authority: preparedDeviceProfile.authority,
+                admissionGeneration: admission.generation,
                 distinctId: distinctId
             )
         } else {
             await deviceLegRuntime?.profileDidWithdraw(
                 authority: try? await authorityStore.authority(),
+                admissionGeneration: admission.generation,
                 distinctId: distinctId
             )
         }
@@ -952,7 +956,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     func clearCache(distinctId: String) async {
-        invalidateProfileRequests()
+        let admissionGeneration = invalidateProfileRequests()
         invalidateMailboxRefresh()
         // Clear memory
         cachedProfile = nil
@@ -960,6 +964,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         await deviceLegProfiles?.clear(distinctId: distinctId)
         await deviceLegRuntime?.profileDidWithdraw(
             authority: try? await authorityStore.authority(),
+            admissionGeneration: admissionGeneration,
             distinctId: distinctId
         )
         
@@ -974,13 +979,15 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     func clearAllCache() async {
-        invalidateProfileRequests()
+        let admissionGeneration = invalidateProfileRequests()
         invalidateMailboxRefresh()
         // Clear memory
         cachedProfile = nil
         triggerAdmission = nil
         await deviceLegProfiles?.clearAll()
-        await deviceLegRuntime?.profileDidClearAll()
+        await deviceLegRuntime?.profileDidClearAll(
+            admissionGeneration: admissionGeneration
+        )
         
         // Clear disk
         await diskCache.clearAll()
@@ -1139,7 +1146,10 @@ internal actor ProfileService: ProfileServiceProtocol {
             admission: cacheStoreAdmission(for: admission)
         ) ?? true
         if clearedDeviceProfile {
-            await deviceLegRuntime?.profileDidClear(distinctId: oldDistinctId)
+            await deviceLegRuntime?.profileDidClear(
+                distinctId: oldDistinctId,
+                admissionGeneration: admission.generation
+            )
         }
         guard isCurrentAdmission(admission) else { return }
         refreshTimer?.cancel()
@@ -1243,7 +1253,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         )
     }
 
-    private func invalidateProfileRequests() {
+    @discardableResult
+    private func invalidateProfileRequests() -> UInt64 {
         profileAdmissionGeneration.invalidate()
     }
 

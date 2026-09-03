@@ -476,12 +476,18 @@ final class ForwardingPersistenceTests: XCTestCase {
       stableLane.components(separatedBy: "store.commitStableCapture(").count - 1,
       1
     )
+    XCTAssertEqual(
+      stableLane.components(separatedBy: "store.commitStableCaptureAndStageRoute(").count - 1,
+      2
+    )
     let stableBatchLane = try functionBody(
       in: source,
       startingWith: "  func captureAndRouteSystemEventBatch(\n    _ items: [RoutedStableSystemEventBatchItem],\n    admission: any StableEventCaptureBatchCommitAdmission\n  ) async -> [String: DurableTriggerCapture]? {"
     )
     XCTAssertEqual(
-      stableBatchLane.components(separatedBy: "store.commitStableCaptureBatch(").count - 1,
+      stableBatchLane.components(
+        separatedBy: "store.commitStableCaptureBatchAndStageRoutes("
+      ).count - 1,
       1
     )
     XCTAssertEqual(
@@ -490,7 +496,16 @@ final class ForwardingPersistenceTests: XCTestCase {
     )
     XCTAssertEqual(source.components(separatedBy: "store.insert(").count - 1, 1)
     XCTAssertEqual(source.components(separatedBy: "store.commitStableCapture(").count - 1, 1)
-    XCTAssertEqual(source.components(separatedBy: "store.commitStableCaptureBatch(").count - 1, 1)
+    XCTAssertEqual(
+      source.components(separatedBy: "store.commitStableCaptureAndStageRoute(").count - 1,
+      2
+    )
+    XCTAssertEqual(
+      source.components(
+        separatedBy: "store.commitStableCaptureBatchAndStageRoutes("
+      ).count - 1,
+      1
+    )
     let persistBody = try functionBody(in: source, startingWith: "  private func persist(")
     XCTAssertEqual(persistBody.components(separatedBy: "store.insert(").count - 1, 1)
 
@@ -509,7 +524,8 @@ final class ForwardingPersistenceTests: XCTestCase {
       "clearUnresolvedJourneyOwnershipResponse": 1,
       "close": 1,
       "commitStableCapture": 1,
-      "commitStableCaptureBatch": 1,
+      "commitStableCaptureAndStageRoute": 2,
+      "commitStableCaptureBatchAndStageRoutes": 1,
       "countEvents": 2,
       "deleteStableDropsOlderThan": 1,
       "getEventCount": 1,
@@ -523,9 +539,11 @@ final class ForwardingPersistenceTests: XCTestCase {
       "initialize": 1,
       "insert": 1,
       "markDelivered": 1,
+      "markStableRouteDelivered": 2,
       "pruneHistory": 1,
       "queryEventsForUser": 4,
       "queryPendingDelivery": 1,
+      "queryPendingStableRoutes": 2,
       "queryRecentEvents": 1,
       "queryStableCapture": 2,
       "queryUnresolvedJourneyOwnershipResponse": 2,

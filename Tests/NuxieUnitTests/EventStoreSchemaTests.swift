@@ -63,6 +63,20 @@ final class EventStoreSchemaTests: XCTestCase {
         )
         XCTAssertEqual(
             try scalarInt(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'stable_event_routes';",
+                in: database
+            ),
+            1
+        )
+        XCTAssertEqual(
+            try scalarInt(
+                "SELECT COUNT(*) FROM pragma_table_info('stable_event_routes');",
+                in: database
+            ),
+            2
+        )
+        XCTAssertEqual(
+            try scalarInt(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'event_history_metadata';",
                 in: database
             ),
@@ -272,6 +286,11 @@ final class EventStoreSchemaTests: XCTestCase {
             CREATE TABLE stable_event_drops (
               event_id TEXT PRIMARY KEY,
               created_at INTEGER NOT NULL
+            );
+            CREATE TABLE stable_event_routes (
+              event_id TEXT PRIMARY KEY,
+              delivery_state INTEGER NOT NULL DEFAULT 0,
+              FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
             );
             PRAGMA user_version = 1;
             """,

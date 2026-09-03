@@ -71,7 +71,7 @@ struct DeviceLegPresentationRequest: Sendable {
             UncheckedSendable<[String: Any]>
         ) -> Void
     let onPresentationRevealed:
-        @MainActor @Sendable () async -> Void
+        @MainActor @Sendable (String) async -> Void
     let onOutcome:
         @MainActor @Sendable (DeviceLegSurfaceOutcome, String?) async -> Bool
     let onPresentationFinished:
@@ -103,7 +103,7 @@ struct DeviceLegPresentationRequest: Sendable {
                 UncheckedSendable<[String: Any]>
             ) -> Void = { _, _ in },
         onPresentationRevealed:
-            @escaping @MainActor @Sendable () async -> Void = {},
+            @escaping @MainActor @Sendable (String) async -> Void = { _ in },
         onOutcome:
             @escaping @MainActor @Sendable (DeviceLegSurfaceOutcome, String?) async -> Bool,
         onPresentationFinished:
@@ -236,12 +236,13 @@ final class DeviceLegRuntimeDelegate {
     private let onProductsUnavailable:
         @MainActor @Sendable (String) async -> DeviceLegProductFailureResult
     private let onPresentationRevealed:
-        @MainActor @Sendable () async -> Void
+        @MainActor @Sendable (String) async -> Void
     private let onOutcome:
         @MainActor @Sendable (DeviceLegSurfaceOutcome, String?) async -> Bool
     private let onPresentationFinished:
         @MainActor @Sendable () -> Void
     private let viewModelState: ExperienceViewModelStateCoordinator?
+    private let initialScreenId: String
     private var activeScreenId: String?
     private var navigationHistory: [String] = []
     private var pendingBackNavigation: (target: String, history: [String])?
@@ -260,6 +261,7 @@ final class DeviceLegRuntimeDelegate {
             journeyId: request.owner.journeyId
         )
         journeyId = request.owner.journeyId
+        initialScreenId = request.screenId
         onScreenChanged = request.onScreenChanged
         onScreenDismissed = request.onScreenDismissed
         onProductsUnavailable = request.onProductsUnavailable
@@ -301,7 +303,7 @@ final class DeviceLegRuntimeDelegate {
             // Once the outer surface is revealed, screen activation is the
             // visibility boundary for later variants. The navigation request
             // result alone is only control-flow acknowledgement.
-            await onPresentationRevealed()
+            await onPresentationRevealed(screenId)
         }
         let committed = await onScreenChanged(screenId)
         guard !resolved, committed else {
@@ -537,7 +539,7 @@ final class DeviceLegRuntimeDelegate {
         _ = controller
         guard !presentationIsRevealed else { return }
         presentationIsRevealed = true
-        await onPresentationRevealed()
+        await onPresentationRevealed(activeScreenId ?? initialScreenId)
     }
 
     func experienceViewControllerDidRequestHostDismiss(

@@ -26,16 +26,37 @@ final class DeviceLegJournalPersistenceFailures: @unchecked Sendable {
 
     private let lock = NSLock()
     private var remaining = 0
+    private var successfulWritesBeforeFailure: Int?
 
     func failNext(_ count: Int) {
-        lock.withLock { remaining = max(count, 0) }
+        lock.withLock {
+            remaining = max(count, 0)
+            successfulWritesBeforeFailure = nil
+        }
+    }
+
+    func failAfterSuccessfulWrites(_ count: Int) {
+        lock.withLock {
+            remaining = 0
+            successfulWritesBeforeFailure = max(count, 0)
+        }
     }
 
     func beforePersist() throws {
         let shouldFail = lock.withLock {
-            guard remaining > 0 else { return false }
-            remaining -= 1
-            return true
+            if remaining > 0 {
+                remaining -= 1
+                return true
+            }
+            guard let writes = successfulWritesBeforeFailure else {
+                return false
+            }
+            if writes == 0 {
+                successfulWritesBeforeFailure = nil
+                return true
+            }
+            successfulWritesBeforeFailure = writes - 1
+            return false
         }
         if shouldFail {
             throw InjectedFailure.persist
@@ -1497,7 +1518,7 @@ final class RecordingDeviceLegPresenter {
         if resolvedResult == .shown {
             activeOwner = request.owner
             if automaticallyRevealsShownPresentation {
-                await request.onPresentationRevealed()
+                await request.onPresentationRevealed(request.screenId)
             }
         }
         return resolvedResult

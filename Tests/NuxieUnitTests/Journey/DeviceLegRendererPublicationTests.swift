@@ -233,27 +233,37 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
         ])
     }
 
-    func testPendingRendererPublicationReplaysAfterRestartBeforeAbandonment() async throws {
+    func testPendingRendererPublicationReplaysItsRouteAfterRestart() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try DeviceLegPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let base = try await authenticatedRenderedSnapshot(fixture)
+        let responseField: [String: ExperienceReleaseJSONValue] = [
+            "key": .string("plan"),
+            "type": .string("text"),
+            "required": .bool(false),
+        ]
         let snapshot = replacing(
             base,
             inputs: .init(
                 eventFields: [],
-                responseFields: [[
-                    "key": .string("plan"),
-                    "type": .string("string"),
-                    "required": .bool(false),
-                ]]
+                responseFields: [responseField]
             ),
+            completionOutputs: [
+                "continue": .init(
+                    eventFields: [],
+                    responseFields: [responseField]
+                ),
+            ],
             screens: [.init(
                 id: "screen_welcome",
                 defaultViewModelName: "WelcomeModel",
                 defaultInstanceId: "welcome",
                 responseCaptures: ["plan"]
             )]
+        )
+        let retainedRelease = try XCTUnwrap(
+            snapshot.releasesByDigest.values.first
         )
         do {
             let identity = MockIdentityService()
@@ -294,7 +304,7 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
                         id: "00000000-0000-7000-8000-000000000338",
                         sequence: 1,
                         occurredAt: "2026-08-29T12:00:00.121Z",
-                        name: "button_tapped",
+                        name: "continue",
                         payload: [:]
                     ),
                 ]
@@ -317,7 +327,7 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
             }
             XCTAssertEqual(response, "yearly")
             XCTAssertFalse(events.routedEvents.contains {
-                $0.name == "button_tapped"
+                $0.name == "continue"
             })
         }
 
@@ -328,13 +338,14 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
         let recoveryService = makeService(
             identity: recoveryIdentity,
             events: recoveryEvents,
-            directory: directory
+            directory: directory,
+            pinnedReleaseAuthenticator: { _, _ in retainedRelease }
         )
 
         await recoveryService.initialize()
 
         let replayed = recoveryEvents.routedEvents.filter {
-            $0.name == "button_tapped"
+            $0.name == "continue"
         }
         XCTAssertEqual(replayed.count, 1)
         XCTAssertEqual(
@@ -344,7 +355,7 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
         let completion = try XCTUnwrap(recoveryEvents.routedEvents.first {
             $0.name == JourneyEvents.journeyLegCompleted
         })
-        XCTAssertEqual(completion.properties["outcome"] as? String, "abandoned")
+        XCTAssertEqual(completion.properties["outcome"] as? String, "continue")
         let outputs = try XCTUnwrap(
             completion.properties["outputs"] as? [String: Any]
         )
@@ -354,6 +365,118 @@ final class DeviceLegRendererPublicationTests: DeviceLegTestCase {
             directory: directory,
             distinctId: "customer"
         )
+        let remainingRuns = try await journal.runs()
+        XCTAssertTrue(remainingRuns.isEmpty)
+        await recoveryService.shutdown()
+    }
+
+    func testPendingResponseChangeResumesItsWaitAfterRestart() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load(
+            entryKey: "renderedEntry"
+        )
+        let snapshot = renderedResponseWaitSnapshot(
+            try await authenticatedRenderedSnapshot(fixture)
+        )
+        let retainedRelease = try XCTUnwrap(
+            snapshot.releasesByDigest.values.first
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
+        let persistenceFailures = DeviceLegJournalPersistenceFailures()
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            presenter: presenter,
+            journalBeforePersist: { try persistenceFailures.beforePersist() }
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presentedRequest = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presentedRequest)
+        let routedToWait = await request.onEmissionBatch(presentationBatch(
+            request: request,
+            invocationId: "route-to-response-wait",
+            emissions: [.init(
+                id: "00000000-0000-7000-8000-000000000341",
+                sequence: 0,
+                occurredAt: "2026-08-29T12:00:00.120Z",
+                name: "continue",
+                payload: [:]
+            )]
+        ))
+        XCTAssertTrue(routedToWait)
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        for _ in 0..<200 {
+            let runs = try await journal.runs()
+            if runs.first?.stepId == "wait", runs.first?.park != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let waitingRuns = try await journal.runs()
+        let waitingRun = try XCTUnwrap(waitingRuns.first)
+        XCTAssertEqual(waitingRun.stepId, "wait")
+        XCTAssertNotNil(waitingRun.park)
+
+        // The response publication itself is durable, then the simulated
+        // process dies before its response-change signal can clear the outbox.
+        persistenceFailures.failAfterSuccessfulWrites(1)
+        let responseAccepted = await request.onEmissionBatch(presentationBatch(
+            request: request,
+            batchSequence: 1,
+            previousCommittedBatchSequence: 0,
+            invocationId: "response-before-restart",
+            emissions: [.init(
+                id: "00000000-0000-7000-8000-000000000342",
+                sequence: 0,
+                occurredAt: "2026-08-29T12:00:00.121Z",
+                name: SystemEventNames.responseSet,
+                payload: [
+                    "field": .string("consent"),
+                    "value": .bool(true),
+                ]
+            )]
+        ))
+        XCTAssertFalse(responseAccepted)
+        let stagedRuns = try await journal.runs()
+        let staged = try XCTUnwrap(stagedRuns.first)
+        XCTAssertEqual(
+            staged.pendingPresentationPublication?.invocationId,
+            "response-before-restart"
+        )
+
+        let recoveryIdentity = MockIdentityService()
+        recoveryIdentity.setDistinctId("customer")
+        let recoveryEvents = MockEventLog()
+        recoveryEvents.identity = recoveryIdentity
+        let recoveryService = makeService(
+            identity: recoveryIdentity,
+            events: recoveryEvents,
+            directory: directory,
+            pinnedReleaseAuthenticator: { _, _ in retainedRelease }
+        )
+
+        await recoveryService.initialize()
+
+        let completion = try XCTUnwrap(recoveryEvents.routedEvents.first {
+            $0.name == JourneyEvents.journeyLegCompleted
+        })
+        XCTAssertEqual(completion.properties["outcome"] as? String, "responded")
+        let outputs = try XCTUnwrap(
+            completion.properties["outputs"] as? [String: Any]
+        )
+        let responses = try XCTUnwrap(outputs["responses"] as? [String: Any])
+        XCTAssertEqual(responses["consent"] as? Bool, true)
         let remainingRuns = try await journal.runs()
         XCTAssertTrue(remainingRuns.isEmpty)
         await recoveryService.shutdown()

@@ -64,7 +64,7 @@ final class DeviceLegExperimentPresentationTests: DeviceLegTestCase {
         })
         let capturedRequest = await MainActor.run { presenter.request }
         let presentedRequest = try XCTUnwrap(capturedRequest)
-        await presentedRequest.onPresentationRevealed()
+        await presentedRequest.onPresentationRevealed("screen_welcome")
 
         let exposures = events.routedEvents.filter {
             $0.name == JourneyEvents.experimentExposure
@@ -97,6 +97,65 @@ final class DeviceLegExperimentPresentationTests: DeviceLegTestCase {
         XCTAssertEqual(events.routedEvents.filter {
             $0.name == JourneyEvents.experimentExposure
         }.count, 1)
+    }
+
+    func testVisibleExposureRetriesWhenItsFirstJournalWriteFails() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try DeviceLegPlaneProfileTestFixture.load(
+            entryKey: "renderedEntry"
+        )
+        let snapshot = renderedExperimentSnapshot(
+            try await authenticatedRenderedSnapshot(fixture),
+            assignment: .init(variantId: "variant_b", isHoldout: false)
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let presenter = await MainActor.run {
+            let value = RecordingDeviceLegPresenter()
+            value.automaticallyRevealsShownPresentation = false
+            return value
+        }
+        let persistenceFailures = DeviceLegJournalPersistenceFailures()
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            presenter: presenter,
+            journalBeforePersist: { try persistenceFailures.beforePersist() }
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presentedRequest = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presentedRequest)
+        persistenceFailures.failNext(1)
+
+        await request.onPresentationRevealed("screen_welcome")
+
+        for _ in 0..<300 {
+            if events.routedEvents.contains(where: {
+                $0.name == JourneyEvents.experimentExposure
+            }) { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let exposures = events.routedEvents.filter {
+            $0.name == JourneyEvents.experimentExposure
+        }
+        XCTAssertEqual(exposures.count, 1)
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let persistedRuns = try await journal.runs()
+        let persistedExposure = try XCTUnwrap(
+            persistedRuns.first?.experimentExposures.first
+        )
+        XCTAssertNotNil(persistedExposure.shownAt)
+        XCTAssertTrue(persistedExposure.queued)
+        await service.shutdown()
     }
 
     func testShutdownJoinsAnInFlightExperimentExposureRetry() async throws {
@@ -135,7 +194,7 @@ final class DeviceLegExperimentPresentationTests: DeviceLegTestCase {
         let presentedRequest = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(presentedRequest)
         events.routedCaptureFailuresRemaining = 1
-        await request.onPresentationRevealed()
+        await request.onPresentationRevealed("screen_welcome")
         for _ in 0..<200 {
             if await captureGate.isSuspended() { break }
             try? await Task.sleep(nanoseconds: 10_000_000)
@@ -299,10 +358,28 @@ final class DeviceLegExperimentPresentationTests: DeviceLegTestCase {
             $0.name == JourneyEvents.experimentExposure
         })
 
+        // The decision selected the destination screen. A late lifecycle
+        // callback from the screen being replaced must not expose it.
+        await request.onPresentationRevealed("screen_welcome")
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(events.routedEvents.contains {
+            $0.name == JourneyEvents.experimentExposure
+        })
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let boundRuns = try await journal.runs()
+        let boundExposure = try XCTUnwrap(
+            boundRuns.first?.experimentExposures.first
+        )
+        XCTAssertEqual(boundExposure.presentationScreenId, "screen_details")
+        XCTAssertNil(boundExposure.shownAt)
+
         // Production invokes this callback from the target screen's active
         // lifecycle boundary. Merely returning `.navigated` above must not
         // count as an impression.
-        await request.onPresentationRevealed()
+        await request.onPresentationRevealed("screen_details")
         for _ in 0..<100 {
             let exposureCount = events.routedEvents.filter {
                 $0.name == JourneyEvents.experimentExposure
