@@ -17,7 +17,6 @@ public enum NuxieError: LocalizedError, Sendable {
 }
 
 /// Engine-only failure used while persisting or routing a captured event.
-/// TriggerService translates it to the public TriggerError vocabulary.
 enum EventRoutingError: LocalizedError, Sendable {
     case eventRoutingFailed
 
@@ -27,7 +26,7 @@ enum EventRoutingError: LocalizedError, Sendable {
 }
 
 /// Internal terminal outcome for an event rejected by the host's beforeSend
-/// hook before it reaches persistence, delivery, or local trigger routing.
+/// hook before it reaches persistence, delivery, or local Journey routing.
 struct EventBeforeSendDropError: LocalizedError, Sendable {
     var errorDescription: String? {
         "Event dropped by beforeSend"

@@ -177,8 +177,8 @@ struct EvalContext {
     /// Current journey ID for goal scoping (when evaluating goal conditions)
     public let journeyId: String?
 
-    /// Exact run-owned snapshot. Evaluation never queries response transport.
-    public let responseSession: ResponseSessionSnapshot?
+    /// Values collected by the current Journey run.
+    public let responseValues: [String: ScreenEmissionValue]
 
     public init(
         now: Date,
@@ -188,7 +188,7 @@ struct EvalContext {
         features: IRFeatureQueries? = nil,
         event: NuxieEvent? = nil,
         journeyId: String? = nil,
-        responseSession: ResponseSessionSnapshot? = nil
+        responseValues: [String: ScreenEmissionValue] = [:]
     ) {
         self.now = now
         self.user = user
@@ -197,6 +197,6 @@ struct EvalContext {
         self.features = features
         self.event = event
         self.journeyId = journeyId
-        self.responseSession = responseSession
+        self.responseValues = responseValues
     }
 }

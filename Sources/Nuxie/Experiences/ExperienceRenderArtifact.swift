@@ -46,7 +46,7 @@ enum ExperienceArtifactSource: String, Sendable {
     case unknown
 }
 
-enum ExperienceReleaseResourceMetricOwner: Equatable, Sendable {
+enum JourneyReleaseResourceMetricOwner: Equatable, Sendable {
     case presentation
     case preload
 }
@@ -54,7 +54,7 @@ enum ExperienceReleaseResourceMetricOwner: Equatable, Sendable {
 /// Exact byte work performed while admitting and preparing one authenticated
 /// release. Qualification consumes this internal value; it is not customer
 /// telemetry or part of the wire contract.
-struct ExperienceReleaseResourceMetrics: Equatable, Sendable {
+struct JourneyReleaseResourceMetrics: Equatable, Sendable {
     let readBytes: Int
     let hashedBytes: Int
     let parsedBytes: Int
@@ -135,9 +135,9 @@ struct ExperienceReleaseResourceMetrics: Equatable, Sendable {
     }
 }
 
-struct ExperienceReleaseResourceFailure: Error {
+struct JourneyReleaseResourceFailure: Error {
     let underlying: Error
-    let resourceMetrics: ExperienceReleaseResourceMetrics
+    let resourceMetrics: JourneyReleaseResourceMetrics
 }
 
 /// Descriptor-authenticated RIV bytes and content-addressed external assets.
@@ -156,7 +156,7 @@ struct AcquiredExperienceArtifact: Sendable {
     let interactivePreparation: ExperienceInteractivePreparationHandle
     let products: [StoreProduct]
     let productsResolvedForScreenID: String?
-    let resourceMetrics: ExperienceReleaseResourceMetrics
+    let resourceMetrics: JourneyReleaseResourceMetrics
     let productResolver: (@Sendable (String) async throws -> [StoreProduct])?
 
     init(
@@ -169,7 +169,7 @@ struct AcquiredExperienceArtifact: Sendable {
         interactivePreparation: ExperienceInteractivePreparationHandle,
         products: [StoreProduct],
         productsResolvedForScreenID: String? = nil,
-        resourceMetrics: ExperienceReleaseResourceMetrics,
+        resourceMetrics: JourneyReleaseResourceMetrics,
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil
     ) {
         self.identity = identity

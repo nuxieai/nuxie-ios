@@ -84,30 +84,6 @@ final class ForwardedActivityEncodingTests: XCTestCase {
     XCTAssertTrue(cancelledInfo.isTestStore)
   }
 
-  func testJourneyUserDismissalAndGenuineCancellationRemainDistinct() throws {
-    let base: [String: Any] = [
-      "experience_id": "experience-1",
-      "experience_version": "version-1",
-      "journey_id": "journey-1",
-      "reason": "cancelled",
-    ]
-    let userDismissed = try XCTUnwrap(ActivityCuration.activity(
-      internalName: JourneyEvents.journeyExited,
-      properties: base.merging(["dismissed_by": "user"]) { _, new in new }
-    ))
-    let cancelled = try XCTUnwrap(ActivityCuration.activity(
-      internalName: JourneyEvents.journeyExited,
-      properties: base
-    ))
-
-    guard case .journeyEnded(_, let dismissedReason) = userDismissed,
-          case .journeyEnded(_, let cancelledReason) = cancelled else {
-      return XCTFail("Expected journeyEnded activities")
-    }
-    XCTAssertEqual(dismissedReason, .dismissed)
-    XCTAssertEqual(cancelledReason, .cancelled)
-  }
-
   private static let ref = ExperienceRef(
     experienceId: "experience-1",
     experienceVersion: "version-1",
@@ -140,12 +116,9 @@ final class ForwardedActivityEncodingTests: XCTestCase {
     "experienceShown": .experienceShown(ref),
     "experienceDismissed": .experienceDismissed(ref, reason: .user),
     "experienceErrored": .experienceErrored(ref, message: "failed"),
-    "journeyStarted": .journeyStarted(ref),
-    "journeyLegStarted": .journeyLegStarted(ref, legId: "leg-1", generation: 2),
-    "journeyLegCompleted": .journeyLegCompleted(ref, legId: "leg-1", generation: 2, outcome: "continue"),
+    "journeyStarted": .journeyStarted(ref, legId: "leg-1", generation: 2),
+    "journeyCompleted": .journeyCompleted(ref, legId: "leg-1", generation: 2, outcome: "continue"),
     "milestoneReached": .milestoneReached(ref, milestoneId: "milestone-1"),
-    "journeyConverted": .journeyConverted(ref, journeyId: "journey-1"),
-    "journeyEnded": .journeyEnded(ref, exitReason: .completed),
     "purchaseCompleted": .purchaseCompleted(purchase),
     "purchaseFailed": .purchaseFailed(unresolvedPurchase, message: "failed"),
     "purchaseCancelled": .purchaseCancelled(purchase),
@@ -165,11 +138,6 @@ final class ForwardedActivityEncodingTests: XCTestCase {
       experimentKey: "experiment-1",
       variantKey: "variant-1",
       isHoldout: false
-    ),
-    "experimentError": .experimentError(
-      ref,
-      experimentKey: "experiment-1",
-      message: "failed"
     ),
     "productsUnavailable": .productsUnavailable(ref, productIds: ["product-1"]),
     "screenShown": .screenShown(ref, screenId: "screen-1"),

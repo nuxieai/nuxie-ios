@@ -1,6 +1,6 @@
 import Foundation
 
-struct ArmedDeviceLeg {
+struct ArmedJourney {
     struct Reference {
         let experienceId: String
         let versionId: String
@@ -14,16 +14,16 @@ struct ArmedDeviceLeg {
         let generation: Int?
     }
     struct Context {
-        let event: ExactJSONObject<ExperienceReleaseJSONValue>
-        let responses: ExactJSONObject<ExperienceReleaseJSONValue>
+        let event: ExactJSONObject<JourneyReleaseJSONValue>
+        let responses: ExactJSONObject<JourneyReleaseJSONValue>
     }
     let reference: Reference
     let binding: Binding
-    let entryCondition: DeviceLegEntryCondition
+    let entryCondition: JourneyEntryCondition
     let context: Context
 }
 
-struct DeviceLegReleaseProfileEntry {
+struct JourneyReleaseProfileEntry {
     struct Locator {
         let appId: String
         let environment: String
@@ -35,7 +35,7 @@ struct DeviceLegReleaseProfileEntry {
         let releaseSequence: Int
         let legId: String
 
-        var identity: ExperienceReleaseIdentity {
+        var identity: JourneyReleaseIdentity {
             .init(appId: appId, environment: environment, experienceId: experienceId,
                   experienceVersionId: experienceVersionId, buildId: buildId,
                   versionNumber: versionNumber, releaseCreatedAt: releaseCreatedAt,
@@ -43,24 +43,24 @@ struct DeviceLegReleaseProfileEntry {
         }
     }
     let locator: Locator
-    let envelope: ExperienceReleaseDescriptorEnvelope
+    let envelope: JourneyReleaseEnvelope
 }
 
 /// Delivery state is separate from the immutable, authenticated local program.
 /// Membership values are opaque facts; no segment definitions can be decoded.
 struct JourneyPlaneProfile {
-    fileprivate struct ArmKey { let reference: ArmedDeviceLeg.Reference; let binding: ArmedDeviceLeg.Binding }
+    fileprivate struct ArmKey { let reference: ArmedJourney.Reference; let binding: ArmedJourney.Binding }
 
     let schemaVersion: String
     let status: String
-    let delivery: ExperienceReleaseDelivery
+    let delivery: JourneyReleaseDelivery
     let features: [Feature]
-    let facts: DeviceLegFactTable
-    let armedLegs: [ArmedDeviceLeg]
-    let releases: [DeviceLegReleaseProfileEntry]
+    let facts: JourneyFactTable
+    let armedLegs: [ArmedJourney]
+    let releases: [JourneyReleaseProfileEntry]
 
     static func decode(_ data: Data) throws -> Self {
-        guard data.count <= ExperienceReleaseDescriptorLimits.profileBytes else { throw invalid }
+        guard data.count <= JourneyReleaseLimits.profileBytes else { throw invalid }
         try StrictJSONDuplicateKeyValidator.validate(data, ordinalKeys: true)
         let root = try exact(JSONSerialization.jsonObject(with: data), ["schemaVersion", "status", "delivery", "features", "facts", "armedLegs", "releases"])
         guard root["schemaVersion"] as? String == "nuxie.journey-plane-profile.v1", root["status"] as? String == "ok" else { throw invalid }
@@ -72,12 +72,9 @@ struct JourneyPlaneProfile {
             _ = try exact(property, present ? ["present", "value"] : ["present"])
         }
         for (key, _) in try entries(facts["memberships"]) { try id(key) }
-        for (key, value) in try entries(facts["assignments"]) {
-            try id(key)
-            if value is NSNull { continue }
-            let assignment = try exact(value, ["variantId", "isHoldout"])
-            try id(assignment["variantId"])
-        }
+        // Assignment delivery is advisory. The decoder normalizes malformed
+        // entries to unfetched so an authored fallback variant still runs.
+        _ = try entries(facts["assignments"])
         for value in try list(root["armedLegs"]) {
             let arm = try exact(value, ["reference", "binding", "entryCondition", "context"])
             let reference = try exact(arm["reference"], ["experienceId", "versionId", "legId", "descriptorSha256"])
@@ -95,7 +92,7 @@ struct JourneyPlaneProfile {
                       (0...9_007_199_254_740_991).contains(generation.doubleValue) else { throw invalid }
             default: throw invalid
             }
-            try DeviceLegSchemaValidator.validateEntry(arm["entryCondition"])
+            try JourneyReleaseSchemaValidator.validateEntry(arm["entryCondition"])
             let context = try exact(arm["context"], ["event", "responses"])
             for key in ["event", "responses"] { for (name, _) in try entries(context[key]) { try id(name) } }
         }
@@ -112,7 +109,7 @@ struct JourneyPlaneProfile {
             let envelope = try exact(release["envelope"], ["mediaType", "encoding", "descriptorSha256", "descriptorSizeBytes", "descriptorBytesBase64", "signature"])
             try digest(envelope["descriptorSha256"])
             _ = try exact(envelope["signature"], ["version", "algorithm", "keyId", "signatureBase64"])
-            guard envelope["mediaType"] as? String == DeviceLegReleaseDescriptor.mediaType else { throw invalid }
+            guard envelope["mediaType"] as? String == JourneyReleaseDescriptor.mediaType else { throw invalid }
         }
         let profile = try ExactJSONCodec.decode(Self.self, from: data)
         guard profile.armedLegs.count <= 1024, profile.releases.count <= 1024 else { throw invalid }
@@ -123,11 +120,11 @@ struct JourneyPlaneProfile {
                   (url.query ?? "").isEmpty, (url.fragment ?? "").isEmpty,
                   url.path.isEmpty || url.path.hasSuffix("/") else { throw invalid }
         }
-        let verifier = ExperienceReleaseDescriptorVerifier()
-        var releases: [String: DeviceLegReleaseProfileEntry] = [:]
+        let verifier = JourneyReleaseVerifier()
+        var releases: [String: JourneyReleaseProfileEntry] = [:]
         for release in profile.releases {
             try verifier.validateIdentity(release.locator.identity)
-            try verifier.validateDeviceLegEnvelope(JSONEncoder().encode(release.envelope))
+            try verifier.validateJourneyEnvelope(JSONEncoder().encode(release.envelope))
             guard releases.updateValue(release, forKey: release.envelope.descriptorSha256) == nil else { throw invalid }
         }
         var armKeys = Set<ArmKey>(), referenced = Set<String>()
@@ -143,7 +140,7 @@ struct JourneyPlaneProfile {
         return profile
     }
 
-    private static var invalid: ExperienceReleaseDescriptorAuthenticationError { .invalidDescriptor }
+    private static var invalid: JourneyReleaseAuthenticationError { .invalidDescriptor }
     private static func entries(_ value: Any?) throws -> [(String, Any)] {
         guard let value = value as? NSDictionary else { throw invalid }
         return try value.map { key, value in
@@ -169,12 +166,12 @@ struct JourneyPlaneProfile {
     }
 }
 
-extension ArmedDeviceLeg: Codable, Sendable {}
-extension ArmedDeviceLeg.Reference: Codable, Equatable, Hashable, Sendable {}
-extension ArmedDeviceLeg.Binding: Codable, Equatable, Hashable, Sendable {}
-extension ArmedDeviceLeg.Binding.Kind: Codable, Sendable {}
-extension ArmedDeviceLeg.Context: Codable, Equatable, Sendable {}
-extension DeviceLegReleaseProfileEntry: Codable, Sendable {}
-extension DeviceLegReleaseProfileEntry.Locator: Codable, Sendable {}
+extension ArmedJourney: Codable, Sendable {}
+extension ArmedJourney.Reference: Codable, Equatable, Hashable, Sendable {}
+extension ArmedJourney.Binding: Codable, Equatable, Hashable, Sendable {}
+extension ArmedJourney.Binding.Kind: Codable, Sendable {}
+extension ArmedJourney.Context: Codable, Equatable, Sendable {}
+extension JourneyReleaseProfileEntry: Codable, Sendable {}
+extension JourneyReleaseProfileEntry.Locator: Codable, Sendable {}
 extension JourneyPlaneProfile: Codable, Sendable {}
 extension JourneyPlaneProfile.ArmKey: Hashable {}

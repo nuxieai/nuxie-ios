@@ -47,19 +47,12 @@ public enum NuxieActivity: Sendable {
   /// Experience execution failed.
   case experienceErrored(ExperienceRef, message: String)
 
-  /// A journey enrolled and began.
-  case journeyStarted(ExperienceRef)
-  /// This device started one leg of a pinned journey.
-  case journeyLegStarted(ExperienceRef, legId: String, generation: Int)
-  /// This device queued a leg completion; the server may continue the chain.
-  case journeyLegCompleted(ExperienceRef, legId: String, generation: Int, outcome: String)
+  /// A pinned Journey started.
+  case journeyStarted(ExperienceRef, legId: String, generation: Int)
+  /// A pinned Journey completed its local program.
+  case journeyCompleted(ExperienceRef, legId: String, generation: Int, outcome: String)
   /// A journey milestone was reached.
   case milestoneReached(ExperienceRef, milestoneId: String)
-  /// The server attributed a conversion to a journey.
-  case journeyConverted(ExperienceRef, journeyId: String)
-  /// A journey reached a terminal outcome.
-  case journeyEnded(ExperienceRef, exitReason: JourneyExitReason)
-
   /// A presentation-scoped purchase completed.
   case purchaseCompleted(PurchaseInfo)
   /// A presentation-scoped purchase failed.
@@ -86,15 +79,13 @@ public enum NuxieActivity: Sendable {
   /// A feature-use command was accepted authoritatively.
   case featureUsed(featureId: String, amount: Double, entityId: String?)
 
-  /// A real server-assigned experiment exposure occurred.
+  /// An authored experiment variant became visible.
   case experimentExposure(
     ExperienceRef,
     experimentKey: String,
     variantKey: String,
     isHoldout: Bool
   )
-  /// Experiment assignment failed.
-  case experimentError(ExperienceRef, experimentKey: String, message: String)
 
   /// Required products were unavailable for an experience.
   case productsUnavailable(ExperienceRef, productIds: [String])
@@ -192,11 +183,8 @@ extension NuxieActivity {
     case .experienceDismissed: "experience_dismissed"
     case .experienceErrored: "experience_errored"
     case .journeyStarted: "journey_started"
-    case .journeyLegStarted: "journey_leg_started"
-    case .journeyLegCompleted: "journey_leg_completed"
+    case .journeyCompleted: "journey_completed"
     case .milestoneReached: "milestone_reached"
-    case .journeyConverted: "journey_converted"
-    case .journeyEnded: "journey_ended"
     case .purchaseCompleted: "purchase_completed"
     case .purchaseFailed: "purchase_failed"
     case .purchaseCancelled: "purchase_cancelled"
@@ -207,7 +195,6 @@ extension NuxieActivity {
     case .purchaseSynced: "purchase_synced"
     case .featureUsed: "feature_used"
     case .experimentExposure: "experiment_exposure"
-    case .experimentError: "experiment_error"
     case .productsUnavailable: "products_unavailable"
     case .screenShown: "screen_shown"
     case .screenDismissed: "screen_dismissed"
@@ -223,13 +210,13 @@ extension NuxieActivity {
   var wireProperties: [String: NuxieActivityValue] {
     var properties: [String: NuxieActivityValue] = [:]
     switch self {
-    case .experienceShown(let ref), .journeyStarted(let ref):
+    case .experienceShown(let ref):
       properties.add(ref)
-    case .journeyLegStarted(let ref, let legId, let generation):
+    case .journeyStarted(let ref, let legId, let generation):
       properties.add(ref)
       properties["leg_id"] = .string(legId)
       properties["leg_generation"] = .int(generation)
-    case .journeyLegCompleted(let ref, let legId, let generation, let outcome):
+    case .journeyCompleted(let ref, let legId, let generation, let outcome):
       properties.add(ref)
       properties["leg_id"] = .string(legId)
       properties["leg_generation"] = .int(generation)
@@ -244,12 +231,6 @@ extension NuxieActivity {
     case .milestoneReached(let ref, let milestoneId):
       properties.add(ref)
       properties["milestone_id"] = .string(milestoneId)
-    case .journeyConverted(let ref, let journeyId):
-      properties.add(ref)
-      properties["journey_id"] = .string(journeyId)
-    case .journeyEnded(let ref, let exitReason):
-      properties.add(ref)
-      properties["exit_reason"] = .string(exitReason.rawValue)
     case .purchaseCompleted(let info),
          .purchaseCancelled(let info),
          .purchasePending(let info):
@@ -286,10 +267,6 @@ extension NuxieActivity {
       properties["experiment_key"] = .string(experimentKey)
       properties["variant_key"] = .string(variantKey)
       properties["is_holdout"] = .bool(isHoldout)
-    case .experimentError(let ref, let experimentKey, let message):
-      properties.add(ref)
-      properties["experiment_key"] = .string(experimentKey)
-      properties["message"] = .string(message)
     case .productsUnavailable(let ref, let productIds):
       properties.add(ref)
       properties["product_ids"] = .string(productIds.joined(separator: ","))

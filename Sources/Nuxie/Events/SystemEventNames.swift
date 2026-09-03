@@ -1,8 +1,7 @@
 import Foundation
 
-/// Canonical names for `$`-prefixed system events and runtime controls.
-/// Durable journey observability facts live in `JourneyEvents`; runtime
-/// control inputs such as `$journey_started` live here.
+/// Canonical names for `$`-prefixed system events and local controls.
+/// Durable Journey observability facts live in `JourneyEvents`.
 ///
 /// Naming convention: `$<domain>_<past_tense_verb>` with snake_case
 /// property keys. All `$`-event emissions must reference these constants
@@ -20,8 +19,6 @@ enum SystemEventNames {
     static let appOpened = "$app_opened"
     static let appBackgrounded = "$app_backgrounded"
 
-    // Journey runtime control (an input, not a durable lifecycle fact)
-    static let journeyStarted = "$journey_started"
     /// Authored pre-presentation branch when required live store products
     /// cannot be resolved. No commercial renderer has been attached yet.
     static let productsUnavailable = "$products_unavailable"
@@ -51,7 +48,4 @@ enum SystemEventNames {
     static let trackingAuthorized = "$tracking_authorized"
     static let trackingDenied = "$tracking_denied"
 
-    // Response collection
-    static let responseSet = "$response_set"
-    static let responseUnset = "$response_unset"
 }

@@ -17,16 +17,16 @@ final class PresentationStatesBrowserViewController: UITableViewController {
 
     private struct Row {
         let scenario: Scenario
-        let condition: ExperiencePresentationStateHost.Condition
+        let condition: JourneyPresentationStateHost.Condition
     }
 
     private let scenarios: [Scenario]
     private var rows: [Row] { scenarios.flatMap { scenario in
-        ExperiencePresentationStateHost.Condition.allCases.map {
+        JourneyPresentationStateHost.Condition.allCases.map {
             Row(scenario: scenario, condition: $0)
         }
     } }
-    private var presentation: ExperiencePresentationStateHost.Presentation?
+    private var presentation: JourneyPresentationStateHost.Presentation?
     private var didPresentLaunchArgumentScenario = false
 
     init() {
@@ -61,7 +61,7 @@ final class PresentationStatesBrowserViewController: UITableViewController {
         }
         didPresentLaunchArgumentScenario = true
         let condition = Self.argument(named: "--nuxie-presentation-condition")
-            .flatMap(ExperiencePresentationStateHost.Condition.init(rawValue:))
+            .flatMap(JourneyPresentationStateHost.Condition.init(rawValue:))
             ?? .normal
         Task { await present(scenario: scenario, condition: condition) }
     }
@@ -91,7 +91,7 @@ final class PresentationStatesBrowserViewController: UITableViewController {
         _ tableView: UITableView,
         numberOfRowsInSection section: Int
     ) -> Int {
-        ExperiencePresentationStateHost.Condition.allCases.count
+        JourneyPresentationStateHost.Condition.allCases.count
     }
 
     override func tableView(
@@ -100,7 +100,7 @@ final class PresentationStatesBrowserViewController: UITableViewController {
     ) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "state", for: indexPath)
         let scenario = scenarios[indexPath.section]
-        let condition = ExperiencePresentationStateHost.Condition.allCases[indexPath.row]
+        let condition = JourneyPresentationStateHost.Condition.allCases[indexPath.row]
         var content = cell.defaultContentConfiguration()
         content.text = Self.label(for: condition)
         content.secondaryText = Self.detail(for: condition)
@@ -113,14 +113,14 @@ final class PresentationStatesBrowserViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         let scenario = scenarios[indexPath.section]
-        let condition = ExperiencePresentationStateHost.Condition.allCases[indexPath.row]
+        let condition = JourneyPresentationStateHost.Condition.allCases[indexPath.row]
         Task { await present(scenario: scenario, condition: condition) }
     }
 
     @MainActor
     private func present(
         scenario: Scenario,
-        condition: ExperiencePresentationStateHost.Condition
+        condition: JourneyPresentationStateHost.Condition
     ) async {
         guard let fixtureBaseURL = Self.stateFixturesRoot?
             .appendingPathComponent(scenario.id, isDirectory: true) else {
@@ -140,7 +140,7 @@ final class PresentationStatesBrowserViewController: UITableViewController {
         await presentation?.dismiss()
         presentation = nil
         do {
-            presentation = try await ExperiencePresentationStateHost.present(
+            presentation = try await JourneyPresentationStateHost.present(
                 .init(
                     fixtureBaseURL: fixtureBaseURL,
                     cacheRootURL: cacheRoot,
@@ -161,7 +161,7 @@ final class PresentationStatesBrowserViewController: UITableViewController {
     }
 
     private static func label(
-        for condition: ExperiencePresentationStateHost.Condition
+        for condition: JourneyPresentationStateHost.Condition
     ) -> String {
         switch condition {
         case .normal: "Cold present"
@@ -172,7 +172,7 @@ final class PresentationStatesBrowserViewController: UITableViewController {
     }
 
     private static func detail(
-        for condition: ExperiencePresentationStateHost.Condition
+        for condition: JourneyPresentationStateHost.Condition
     ) -> String {
         switch condition {
         case .normal: "Loading shell, then reveal"

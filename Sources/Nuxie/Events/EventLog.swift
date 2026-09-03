@@ -102,12 +102,6 @@ struct DurableForwardingEvent: Sendable {
   let receivedAt: Date
 }
 
-enum EventFlushStrategy: Equatable, Sendable {
-  case none
-  case eventLog
-  case networkQueue
-}
-
 /// A committed-event subscriber callback. Invoked in commit order, after the
 /// event is persisted (pending delivery) and staged for the network.
 typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
@@ -178,17 +172,6 @@ private struct ForwardingSubscriber: Sendable {
   let handler: ForwardingEventHandler
 }
 
-/// An exact, durably committed trigger event plus its independently running
-/// server round trip. Callers can route the committed event locally without
-/// waiting for transport, then reconcile the eventual response (for example,
-/// a gate plan) afterward.
-struct PreparedTriggerCommit: Sendable {
-  let event: NuxieEvent
-  let response: Task<EventResponse, Never>
-  /// Monotonic order assigned where the direct-delivery tail is linked.
-  let sequence: UInt64
-}
-
 struct DurableTriggerCapture: Sendable {
   let event: NuxieEvent
   /// Routing policy and whether this call established the canonical event row.
@@ -233,23 +216,6 @@ struct RoutedStableSystemEventBatchItem: @unchecked Sendable {
   }
 }
 
-/// Result of committing a journey-authored stable event whose ownership can
-/// be revoked by an authoritative event response while capture is suspended.
-enum DurableOwnedTriggerCaptureResult: Sendable {
-  case captured(DurableTriggerCapture)
-  case ownershipLost
-  case failed
-}
-
-/// Durable ownership lookup result. `unavailable` is intentionally distinct
-/// from confirmed loss: callers must fail closed without deleting the only
-/// retry record when storage is transiently unreadable.
-enum JourneyEventOwnershipState: Equatable, Sendable {
-  case owned
-  case ownershipLost
-  case unavailable
-}
-
 protocol EventCapturing: AnyObject, Sendable {
   func track(
     _ event: String,
@@ -281,100 +247,6 @@ protocol StableSystemEventCapturing: AnyObject, Sendable {
     eventId: String,
     distinctId: String
   ) async -> DurableTriggerCapture?
-}
-
-protocol EventTriggerTracking: StableSystemEventCapturing {
-  func captureOwnedJourneySystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
-    ownership: JourneyEventOwnership
-  ) async -> DurableOwnedTriggerCaptureResult
-  func journeyEventOwnershipState(
-    _ ownership: JourneyEventOwnership
-  ) async -> JourneyEventOwnershipState
-  func prepareTriggerProperties(
-    _ properties: sending [String: Any]?
-  ) async -> sending [String: Any]
-  func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent?
-  @discardableResult
-  func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool
-  func commitPreparedTriggerEvent(_ event: NuxieEvent) async -> PreparedTriggerCommit
-  func trackForTrigger(
-    _ event: String,
-    properties: sending [String: Any]?,
-    persistToHistory: Bool,
-    distinctIdOverride: String?,
-    applyBeforeSend: Bool
-  ) async throws -> (NuxieEvent, EventResponse)
-  func trackForTrigger(
-    _ event: String,
-    properties: sending [String: Any]?
-  ) async throws -> (NuxieEvent, EventResponse)
-  func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]?
-  ) async throws -> EventResponse
-  func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]?,
-    flushStrategy: EventFlushStrategy
-  ) async throws -> EventResponse
-  func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]?,
-    flushStrategy: EventFlushStrategy,
-    distinctIdOverride: String?
-  ) async throws -> EventResponse
-}
-
-extension EventTriggerTracking {
-  /// Convenience admission check. Durable recovery code should inspect the
-  /// tri-state result directly so unavailability is not mistaken for loss.
-  func canAuthorJourneyEvents(
-    _ ownership: JourneyEventOwnership
-  ) async -> Bool {
-    if case .owned = await journeyEventOwnershipState(ownership) {
-      return true
-    }
-    return false
-  }
-
-  func captureSystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String
-  ) async -> DurableTriggerCapture? {
-    guard let tracked = try? await trackForTrigger(
-      event,
-      properties: properties,
-      persistToHistory: true,
-      distinctIdOverride: distinctId,
-      applyBeforeSend: false
-    ) else { return nil }
-    return DurableTriggerCapture(event: tracked.0)
-  }
-
-  /// Test adapters that do not own durable event storage retain their existing
-  /// capture behavior. EventLog overrides this with the ownership-fenced path.
-  func captureOwnedJourneySystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
-    ownership: JourneyEventOwnership
-  ) async -> DurableOwnedTriggerCaptureResult {
-    guard let capture = await captureSystemEvent(
-      event,
-      properties: properties,
-      eventId: eventId,
-      distinctId: distinctId
-    ) else { return .failed }
-    return .captured(capture)
-  }
-
 }
 
 protocol EventHistoryReading: AnyObject, Sendable {
@@ -414,39 +286,13 @@ protocol EventIdentityMigrating: AnyObject, Sendable {
   func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int
 }
 
-protocol ProfileEventSink: AnyObject, Sendable {
-  func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async
-  func setMailboxPendingHandler(_ handler: (@Sendable () async -> Void)?) async
-}
-
-protocol JourneyRunnerEventAccess: EventCapturing, EventTriggerTracking {
-  func drain() async
-}
-
-protocol JourneyEventAccess:
-  JourneyRunnerEventAccess,
-  EventHistoryReading
-{
-  /// Cancel in-flight prepared response deliveries so shutdown can join
-  /// response wrappers that await their values.
-  func cancelPreparedResponseDeliveries(for distinctId: String?) async
-
-  func setJourneyOwnershipRejectedHandler(
-    _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
-  ) async
-  func setJourneyHandoffDeliveredHandler(
-    _ handler: (@Sendable (_ journeyId: String) async -> Void)?
-  ) async
-}
-
 /// Protocol for the unified event log: capture → enrich → persist → deliver → query.
 protocol EventLogProtocol:
   EventQuerySource,
   EventQueueLifecycle,
   EventIdentityMigrating,
-  ProfileEventSink,
-  JourneyEventAccess,
-  JourneyRunnerEventAccess, RoutedStableSystemEventCapturing
+  EventCapturing,
+  RoutedStableSystemEventCapturing
 {
   /// Configure the log from the immutable setup snapshot. Builds enrichment
   /// and delivery settings and opens storage.
@@ -501,63 +347,20 @@ protocol EventLogProtocol:
     userPropertiesSetOnce: [String: Any]?
   )
 
-  /// Build the enriched trigger properties that local journey evaluation should use before the
-  /// synchronous trigger tracking round trip completes.
-  func prepareTriggerProperties(
+  /// Build the enriched event properties used by Journey evaluation and by
+  /// callers that persist a fully prepared event.
+  func prepareEventProperties(
     _ properties: sending [String: Any]?
   ) async -> sending [String: Any]
 
-  /// Persist a fully prepared trigger event into local history without re-enqueuing it.
+  /// Apply the host's privacy and transformation hook to a fully prepared
+  /// event. Callers that persist prebuilt events use this boundary so the hook
+  /// cannot be bypassed through protocol-extension dispatch.
+  func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent?
+
+  /// Persist a fully prepared event into local history without re-enqueuing it.
   @discardableResult
   func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool
-
-  /// Commit server-born facts into local history without uploading them.
-  /// Newly committed facts are routed through the committed-event subscriber lane.
-  func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async
-
-  /// Register the profile-refresh hook used by event-response mailbox hints.
-  func setMailboxPendingHandler(
-    _ handler: (@Sendable () async -> Void)?
-  ) async
-
-  /// Register the owner that discards a local run after an epoch CAS reject.
-  func setJourneyOwnershipRejectedHandler(
-    _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
-  ) async
-
-  /// Register the owner that terminates a local run after a handoff is accepted.
-  func setJourneyHandoffDeliveredHandler(
-    _ handler: (@Sendable (_ journeyId: String) async -> Void)?
-  ) async
-
-  /// Track an event and return both the enriched event and server response
-  func trackForTrigger(
-    _ event: String,
-    properties: sending [String: Any]?,
-    persistToHistory: Bool,
-    distinctIdOverride: String?,
-    applyBeforeSend: Bool
-  ) async throws -> (NuxieEvent, EventResponse)
-
-  /// Track an event synchronously and wait for server response
-  func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]?
-  ) async throws -> EventResponse
-
-  /// Track an event synchronously, optionally flushing queued events before the round trip.
-  func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]?,
-    flushPendingEvents: Bool
-  ) async throws -> EventResponse
-
-  /// Track an event synchronously, using an explicit pending-event flush strategy.
-  func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]?,
-    flushStrategy: EventFlushStrategy
-  ) async throws -> EventResponse
 
   /// Reassign events from one user to another (for anonymous → identified transitions)
   func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int
@@ -572,10 +375,6 @@ protocol EventLogProtocol:
 
   /// Close the event log and its underlying storage
   func close() async
-
-  /// Cancel in-flight prepared response deliveries without closing the log,
-  /// so shutdown can join response wrappers that await their values.
-  func cancelPreparedResponseDeliveries(for distinctId: String?) async
 
   /// Wait until all previously enqueued commands (capture + committed routing)
   /// are processed. Useful in tests for determinism.
@@ -657,7 +456,7 @@ extension EventLogProtocol {
     return Array(events.prefix(limit))
   }
 
-  func prepareTriggerProperties(
+  func prepareEventProperties(
     _ properties: sending [String: Any]? = nil
   ) async -> sending [String: Any] {
     properties ?? [:]
@@ -667,43 +466,6 @@ extension EventLogProtocol {
     event
   }
 
-  func trackForTrigger(
-    _ event: String,
-    properties: sending [String: Any]? = nil
-  ) async throws -> (NuxieEvent, EventResponse) {
-    try await trackForTrigger(
-      event,
-      properties: properties,
-      persistToHistory: true,
-      distinctIdOverride: nil,
-      applyBeforeSend: true
-    )
-  }
-
-  func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]?,
-    flushPendingEvents: Bool
-  ) async throws -> EventResponse {
-    try await trackWithResponse(
-      event,
-      properties: properties,
-      flushStrategy: flushPendingEvents ? .eventLog : .none
-    )
-  }
-
-  func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]?,
-    flushStrategy: EventFlushStrategy
-  ) async throws -> EventResponse {
-    try await trackWithResponse(
-      event,
-      properties: properties,
-      flushStrategy: flushStrategy,
-      distinctIdOverride: nil
-    )
-  }
 }
 
 /// The unified event log actor. Owns capture → enrich (session stamp, context,
@@ -733,21 +495,6 @@ actor EventLog: EventLogProtocol {
   private var volatileHistoryCoverageStart: Date?
   private static let irQueryLimit = 10_000
   private static let stableDropRetention: TimeInterval = 90 * 24 * 60 * 60
-  private var mailboxPendingHandler: (@Sendable () async -> Void)?
-  private var journeyOwnershipRejectedHandler:
-    (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
-  private var journeyHandoffDeliveredHandler:
-    (@Sendable (_ journeyId: String) async -> Void)?
-  /// Immediate process-local fence. The SQLite fence is authoritative across
-  /// relaunch; this mirror also blocks capture when persisting the response
-  /// fence itself fails or is still suspended.
-  private var journeyOwnershipFences: [String: Int] = [:]
-  /// Response-scoped ownership losses that have not yet reached the durable
-  /// fence. Keeping their source association prevents a retry response that
-  /// omits an already-returned signal from acknowledging or poison-dropping
-  /// that source while this process remains alive.
-  private var unresolvedJourneyOwnershipBySource:
-    [String: [JourneyEventOwnership]] = [:]
 
   // MARK: - Capture pipeline
 
@@ -805,23 +552,6 @@ actor EventLog: EventLogProtocol {
     var baseRetryDelay: TimeInterval = 5
   }
 
-  private struct PreparedDeliveryResult: Sendable {
-    let response: EventResponse
-    let shouldHandleResponseSignals: Bool
-  }
-
-  private enum OwnershipFenceCommitResult {
-    case durable
-    case retryable
-    case unavailable
-  }
-
-  /// Fence persistence is retried locally before exposing the durable source
-  /// to ordinary recovery. This is deliberately short: the pending source is
-  /// the durable retry record once these attempts are exhausted.
-  private static let ownershipFenceRetryAttempts = 3
-  private static let ownershipFenceRetryBaseDelayNanoseconds: UInt64 = 50_000_000
-
   private var deliveryConfig = DeliveryConfig()
   private var deliveryQueue: [NuxieEvent] = []
   private var isCurrentlyFlushing = false
@@ -831,27 +561,10 @@ actor EventLog: EventLogProtocol {
   private var deliveryState = DeliveryState()
   private var isPaused = false
   private var flushTimerTask: Task<Void, Never>?
-  private var activeDirectDeliveryIds: Set<String> = []
-  /// A persisted direct source remains reserved while an ownership fence is
-  /// temporarily unavailable. These tasks are cancelled and joined by close
-  /// before the shared store is closed.
-  private var ownershipFenceRetryTasks: [String: Task<Void, Never>] = [:]
-  /// Direct sources whose transport attempt failed terminally but whose
-  /// history-row acknowledgement has not yet succeeded. They remain reserved
-  /// from delivery-window refill so an ack failure cannot turn a synchronous
-  /// enrollment failure into a delayed journey decision in this process.
-  private var terminalDirectDeliveryIds: Set<String> = []
-  private var isTriggerDeliveryHeld = false
-  private var triggerDeliveryWaiters: [CheckedContinuation<Void, Never>] = []
+  private var isStableCaptureCommitHeld = false
+  private var stableCaptureCommitWaiters: [CheckedContinuation<Void, Never>] = []
   private var activeDurableCommitCount = 0
   private var durableCommitDrainWaiters: [CheckedContinuation<Void, Never>] = []
-  private var preparedDeliveryTasks: [UUID: Task<EventResponse, Never>] = [:]
-  private var preparedDeliveryEvents: [UUID: NuxieEvent] = [:]
-  private var preparedDeliveryBoundaryTasks:
-    [UUID: Task<PreparedDeliveryResult, Never>] = [:]
-  private var preparedDeliveryBoundaryTail:
-    (id: UUID, task: Task<PreparedDeliveryResult, Never>)?
-  private var nextPreparedDeliverySequence: UInt64 = 0
   private var nonDurableDeliveryIds: Set<String> = []
   private var isRefillingDeliveryWindow = false
   private var deliveryWindowRefillRequested = false
@@ -903,8 +616,6 @@ actor EventLog: EventLogProtocol {
     routeWorker?.cancel()
     forwardingWorker?.cancel()
     flushTimerTask?.cancel()
-    ownershipFenceRetryTasks.values.forEach { $0.cancel() }
-    terminalRetirementRetryTasks.values.forEach { $0.cancel() }
   }
 
   private func startWorkers(
@@ -1149,370 +860,6 @@ actor EventLog: EventLogProtocol {
     )))
   }
 
-  public func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]? = nil
-  ) async throws -> EventResponse {
-    try await trackWithResponse(
-      event,
-      properties: properties,
-      flushPendingEvents: true
-    )
-  }
-
-  public func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]? = nil,
-    flushStrategy: EventFlushStrategy
-  ) async throws -> EventResponse {
-    try await trackWithResponse(
-      event,
-      properties: properties,
-      flushStrategy: flushStrategy,
-      distinctIdOverride: nil
-    )
-  }
-
-  func trackWithResponse(
-    _ event: String,
-    properties: sending [String: Any]? = nil,
-    flushStrategy: EventFlushStrategy,
-    distinctIdOverride: String?
-  ) async throws -> EventResponse {
-    guard !event.isEmpty else {
-      throw NuxieError.invalidConfiguration("Event name cannot be empty")
-    }
-    assert(
-      event.hasPrefix("$"),
-      "trackWithResponse is reserved for platform-authored journey facts"
-    )
-
-    // Wait for initialization
-    await ready.wait()
-
-    switch flushStrategy {
-    case .none:
-      break
-    case .eventLog:
-      // Flush pending capture commands first to ensure ordering.
-      _ = await flushEvents()
-    case .networkQueue:
-      let drained = await deliveryFlushAll()
-      guard drained else {
-        throw EventRoutingError.eventRoutingFailed
-      }
-    }
-
-    // Get current distinct ID
-    let distinctId = distinctIdOverride ?? identityService.getDistinctId()
-
-    // Boxed so the same snapshot can cross into the API client while
-    // remaining readable here (each load is a fresh disconnected region).
-    var scopedProperties = await buildTriggerProperties(
-      properties
-    )
-    scopedProperties["sdk_version"] = SDKVersion.current
-    scopedProperties["platform"] = currentPlatform()
-    if scopedProperties["device_model"] == nil {
-      scopedProperties["device_model"] = deviceModelIdentifier()
-    }
-    if scopedProperties["os_version"] == nil {
-      scopedProperties["os_version"] = osVersionString()
-    }
-    scopedProperties["$distinct_id"] = distinctId
-    let finalProperties = UncheckedSendable(scopedProperties)
-
-    let historyTimestamp = dateProvider.now()
-    // The direct request and every recovery attempt share one stable identity.
-    // Reserve it before the store await so refill cannot put the same row on
-    // the delivery lane while this request owns its first send.
-    let localEvent = NuxieEvent(
-      name: event,
-      distinctId: distinctId,
-      properties: finalProperties.value,
-      timestamp: historyTimestamp
-    )
-    activeDirectDeliveryIds.insert(localEvent.id)
-    var wasPersisted = false
-    do {
-      _ = try await persist(
-        localEvent,
-        deliveryState: .pending,
-        receivedAt: localEvent.timestamp
-      )
-      wasPersisted = true
-      try await performCleanupIfNeeded()
-    } catch {
-      LogWarning("Failed to store event locally: \(error)")
-      await recordHistoryGap(at: historyTimestamp)
-      // Continue - server tracking is more important for journey events
-    }
-
-    let response: EventResponse
-    do {
-      response = try await apiClient.trackEvent(localEvent)
-    } catch {
-      switch deliveryDisposition(for: error) {
-      case .split, .terminalPoison:
-        if wasPersisted {
-          await completeTerminalDirectDelivery(ids: [localEvent.id])
-        } else {
-          activeDirectDeliveryIds.remove(localEvent.id)
-        }
-      case .unhealthyAuthentication:
-        _ = scheduleAuthenticationRetry()
-        await retainFailedDirectDelivery(
-          localEvent,
-          wasPersisted: wasPersisted,
-          retainNonDurable: true
-        )
-      case .retry(let retryAfter):
-        _ = scheduleRetry(retryAfter: retryAfter)
-        await retainFailedDirectDelivery(
-          localEvent,
-          wasPersisted: wasPersisted,
-          retainNonDurable: true
-        )
-      }
-      throw error
-    }
-
-    // If the response cannot be made durable, its pending source remains the
-    // retry record and the decision lane replays it directly with the same
-    // idempotency key.
-    installVolatileJourneyOwnershipLosses(in: response)
-    let ownershipFenceCommit = await persistJourneyOwnershipLosses(
-      in: response,
-      sourceEventId: localEvent.id
-    )
-    await commitServerFacts(response.facts ?? [], distinctId: distinctId)
-
-    // A successful direct delivery proves transport and auth are working;
-    // restore health exactly like the prepared, decision, and batch paths.
-    deliveryState.health = .healthy
-
-    await acquireTriggerDelivery()
-    await handleJourneyOwnershipResponseSignals(response)
-    switch ownershipFenceCommit {
-    case .durable:
-      if wasPersisted {
-        await completeDirectDelivery(ids: [localEvent.id])
-      } else {
-        activeDirectDeliveryIds.remove(localEvent.id)
-      }
-    case .retryable:
-      activeDirectDeliveryIds.remove(localEvent.id)
-      if wasPersisted {
-        await enqueueForDelivery(localEvent, isPersisted: true)
-      }
-    case .unavailable:
-      if wasPersisted {
-        scheduleOwnershipFenceRetry(response: response, source: localEvent)
-      } else {
-        activeDirectDeliveryIds.remove(localEvent.id)
-      }
-    }
-    releaseTriggerDelivery()
-
-    await handleMailboxResponseSignal(response)
-    guard case .durable = ownershipFenceCommit else {
-      throw EventRoutingError.eventRoutingFailed
-    }
-    return response
-  }
-
-  /// Track an event and return the enriched event plus server response.
-  ///
-  /// Local-first: when `persistToHistory` is true the event is persisted
-  /// PENDING in SQLite before the network round trip, so it is durable and
-  /// redeliverable no matter what the transport does. A successful `/i/event`
-  /// round trip acks the row; a failed round trip leaves it pending, stages
-  /// it on the delivery queue, and returns a degraded offline response
-  /// with no server decision fields so callers route journeys/segments from
-  /// the local event and cached config — network failure degrades freshness,
-  /// never function.
-  public func trackForTrigger(
-    _ event: String,
-    properties: sending [String: Any]? = nil,
-    persistToHistory: Bool = true,
-    distinctIdOverride: String? = nil,
-    applyBeforeSend: Bool = false
-  ) async throws -> (NuxieEvent, EventResponse) {
-    guard !event.isEmpty else {
-      throw NuxieError.invalidConfiguration("Event name cannot be empty")
-    }
-
-    await acquireTriggerDelivery()
-    var ownsTriggerDelivery = true
-    defer {
-      if ownsTriggerDelivery {
-        releaseTriggerDelivery()
-      }
-    }
-
-    await ready.wait()
-    await waitForPreparedTriggerDeliveries()
-
-    // An ordinary user trigger must not overtake accepted events or identity
-    // changes captured before this call. When a predecessor exists, keep that
-    // durable trigger on the same batch lane and route locally instead of
-    // issuing the old /batch + /event pair. Internal control events and
-    // non-persistent scoped events still require the direct-response path.
-    await drainCaptureWorker()
-    var hasPredecessors = true
-    do {
-      hasPredecessors = try await store.getPendingDeliveryCount()
-        + nonDurableDeliveryIds.count
-        > 0
-    } catch {
-      LogWarning("Failed to establish the trigger predecessor boundary: \(error)")
-    }
-
-    let distinctId = distinctIdOverride ?? identityService.getDistinctId()
-
-    // Boxed so the same snapshot can cross into the API client while
-    // remaining readable here (each load is a fresh disconnected region).
-    var scopedProperties = await buildTriggerProperties(
-      properties
-    )
-    scopedProperties["$distinct_id"] = distinctId
-    let finalProperties = UncheckedSendable(scopedProperties)
-
-    // The canonical local event exists before anything else observes it. Its
-    // UUIDv7 id is the durable-delivery idempotency key if the row later
-    // rides the batch queue.
-    let originalEvent = NuxieEvent(
-      name: event,
-      distinctId: distinctId,
-      properties: finalProperties.value
-    )
-    let localEvent: NuxieEvent
-    if applyBeforeSend, let beforeSend = configuration?.beforeSend {
-      guard let transformed = beforeSend(originalEvent) else {
-        LogDebug("Event '\(event)' terminally dropped by beforeSend hook")
-        throw EventBeforeSendDropError()
-      }
-      // The log owns identity. Hosts may redact properties or rename the
-      // event, but the scoped identity, the durable idempotency key, and the
-      // capture timestamp must survive the transform so the trigger response
-      // and local journey evaluation stay attributed to the scoped user.
-      var transformedProperties = transformed.properties
-      transformedProperties["$distinct_id"] = distinctId
-      localEvent = NuxieEvent(
-        id: originalEvent.id,
-        name: transformed.name,
-        forwardingName: originalEvent.forwardingName,
-        distinctId: distinctId,
-        properties: transformedProperties,
-        timestamp: originalEvent.timestamp
-      )
-    } else {
-      localEvent = originalEvent
-    }
-
-    var wasPersisted = false
-    if persistToHistory {
-      // Reserve the id before the store await. EventLog is reentrant while
-      // SQLite runs, so refill must already know this row belongs to the
-      // direct request rather than the batch lane.
-      activeDirectDeliveryIds.insert(localEvent.id)
-      do {
-        _ = try await persist(
-          localEvent,
-          deliveryState: .pending,
-          receivedAt: localEvent.timestamp
-        )
-        wasPersisted = true
-        try await performCleanupIfNeeded()
-      } catch {
-        LogWarning("Failed to store event locally: \(error)")
-        await recordHistoryGap(at: localEvent.timestamp)
-      }
-    }
-
-    if hasPredecessors, persistToHistory, !localEvent.name.hasPrefix("$") {
-      activeDirectDeliveryIds.remove(localEvent.id)
-      await enqueueForDelivery(localEvent, isPersisted: wasPersisted)
-      let stagedForRetry = wasPersisted
-        || deliveryQueue.contains { $0.id == localEvent.id }
-        || nonDurableDeliveryIds.contains(localEvent.id)
-      guard stagedForRetry else {
-        throw EventRoutingError.eventRoutingFailed
-      }
-      return (
-        localEvent,
-        EventResponse(status: "offline", eventId: localEvent.id)
-      )
-    }
-
-    do {
-      let response = try await apiClient.trackEvent(localEvent)
-      installVolatileJourneyOwnershipLosses(in: response)
-      let ownershipFenceCommit = await persistJourneyOwnershipLosses(
-        in: response,
-        sourceEventId: localEvent.id
-      )
-      await commitServerFacts(response.facts ?? [], distinctId: distinctId)
-      await handleJourneyOwnershipResponseSignals(response)
-
-      if persistToHistory {
-        switch ownershipFenceCommit {
-        case .durable:
-          // Never acknowledge an ownership-changing response before its fence
-          // is durable. Otherwise a relaunch could recover a stale host exit
-          // after the source decision row was already retired.
-          await completeDirectDelivery(ids: [localEvent.id])
-        case .retryable:
-          activeDirectDeliveryIds.remove(localEvent.id)
-          await enqueueForDelivery(localEvent, isPersisted: wasPersisted)
-        case .unavailable:
-          if wasPersisted {
-            scheduleOwnershipFenceRetry(response: response, source: localEvent)
-          } else {
-            activeDirectDeliveryIds.remove(localEvent.id)
-          }
-        }
-      }
-
-      // Mailbox refresh may synchronously track a claim, so release only after
-      // authoritative ownership callbacks have finished.
-      ownsTriggerDelivery = false
-      releaseTriggerDelivery()
-      await handleMailboxResponseSignal(response)
-
-      let enrichedEvent = NuxieEvent(
-        id: response.eventId ?? localEvent.id,
-        name: localEvent.name,
-        distinctId: localEvent.distinctId,
-        properties: localEvent.properties,
-        timestamp: localEvent.timestamp
-      )
-      return (enrichedEvent, response)
-    } catch {
-      // Transport failure: keep the row pending and stage it for durable
-      // batch delivery (next flush/timer/launch; the server dedupes on the
-      // event-id idempotency key). Degrade to local evaluation instead of
-      // failing the trigger.
-      if event == JourneyEvents.journeyClaimed {
-        if persistToHistory {
-          await completeDirectDelivery(ids: [localEvent.id])
-        }
-        throw error
-      }
-      if persistToHistory {
-        activeDirectDeliveryIds.remove(localEvent.id)
-        await enqueueForDelivery(localEvent, isPersisted: wasPersisted)
-      }
-      if event == JourneyEvents.journeyHandoff {
-        throw error
-      }
-      LogWarning(
-        "trackForTrigger round trip failed for '\(event)'; continuing local-first: \(error)")
-      let offlineResponse = EventResponse(status: "offline", eventId: localEvent.id)
-      return (localEvent, offlineResponse)
-    }
-  }
-
   /// Durably capture an SDK-authored system event under a stable identity.
   /// Replays acknowledge the existing row and return the same event identity
   /// so local routing can resume after a process death without duplicating the
@@ -1523,30 +870,6 @@ actor EventLog: EventLogProtocol {
     eventId: String,
     distinctId: String
   ) async -> DurableTriggerCapture? {
-    switch await captureStableSystemEvent(
-      .init(
-        name: event,
-        properties: properties,
-        eventId: eventId,
-        distinctId: distinctId
-      ),
-      ownership: nil,
-      routeToSubscribers: false
-    ) {
-    case .captured(let capture):
-      return capture
-    case .ownershipLost, .failed:
-      return nil
-    }
-  }
-
-  func captureOwnedJourneySystemEvent(
-    _ event: String,
-    properties: sending [String: Any]?,
-    eventId: String,
-    distinctId: String,
-    ownership: JourneyEventOwnership
-  ) async -> DurableOwnedTriggerCaptureResult {
     await captureStableSystemEvent(
       .init(
         name: event,
@@ -1554,48 +877,15 @@ actor EventLog: EventLogProtocol {
         eventId: eventId,
         distinctId: distinctId
       ),
-      ownership: ownership,
       routeToSubscribers: false
     )
-  }
-
-  func journeyEventOwnershipState(
-    _ ownership: JourneyEventOwnership
-  ) async -> JourneyEventOwnershipState {
-    guard !closeFlag.isClosed else { return .unavailable }
-    await ready.wait()
-    guard !closeFlag.isClosed else { return .unavailable }
-    guard !hasVolatileJourneyOwnershipLoss(ownership) else {
-      return .ownershipLost
-    }
-    do {
-      let persistentlyLost = try await store.hasJourneyOwnershipLoss(ownership)
-      if persistentlyLost || hasVolatileJourneyOwnershipLoss(ownership) {
-        return .ownershipLost
-      }
-      let unresolved = try await store.hasUnresolvedJourneyOwnershipResponse(
-        ownership
-      )
-      if hasVolatileJourneyOwnershipLoss(ownership) {
-        return .ownershipLost
-      }
-      if unresolved {
-        return .unavailable
-      }
-      return .owned
-    } catch {
-      LogError(
-        "EventLog: failed to verify ownership for journey \(ownership.journeyId); refusing restoration"
-      )
-      return .unavailable
-    }
   }
 
   private func prepareStableSystemEvent(
     _ request: StableSystemEventCaptureRequest,
     occurredAt: Date,
     preparation: RoutedStableSystemEventPreparation = .unprepared,
-    preservesJourneyLegOutputs: Bool = false
+    preservesJourneyCompletionOutputs: Bool = false
   ) async throws -> NuxieEvent? {
     if case .prepared(let prepared) = preparation {
       return prepared
@@ -1604,12 +894,12 @@ actor EventLog: EventLogProtocol {
     // Declared leg outputs are already JSON, not arbitrary analytics values.
     // Preserve their exact values through generic sanitization; the host's
     // beforeSend privacy hook still runs below.
-    let legOutputs = preservesJourneyLegOutputs
+    let legOutputs = preservesJourneyCompletionOutputs
       ? try request.properties?["outputs"].map {
         try JSONSerialization.data(withJSONObject: $0)
       }
       : nil
-    var scopedProperties = await buildTriggerProperties(request.properties)
+    var scopedProperties = await buildEventProperties(request.properties)
     if let legOutputs {
       scopedProperties["outputs"] = try JSONSerialization.jsonObject(
         with: legOutputs
@@ -1687,52 +977,36 @@ actor EventLog: EventLogProtocol {
 
   private func captureStableSystemEvent(
     _ request: StableSystemEventCaptureRequest,
-    ownership: JourneyEventOwnership?,
     routeToSubscribers: Bool,
     occurredAt: Date? = nil,
     admission: (any StableEventCaptureCommitAdmission)? = nil
-  ) async -> DurableOwnedTriggerCaptureResult {
-    guard !request.name.isEmpty else { return .failed }
-    guard !closeFlag.isClosed else { return .failed }
+  ) async -> DurableTriggerCapture? {
+    guard !request.name.isEmpty else { return nil }
+    guard !closeFlag.isClosed else { return nil }
     let subscriberAdmissions = routeToSubscribers
       ? committedAdmissionRegistry.capture()
       : [:]
-    await acquireTriggerDelivery()
-    defer { releaseTriggerDelivery() }
+    await acquireStableCaptureCommit()
+    defer { releaseStableCaptureCommit() }
 
     await ready.wait()
-    guard !closeFlag.isClosed else { return .failed }
+    guard !closeFlag.isClosed else { return nil }
     // A stable capture participates in the same commit sequence as accepted
     // fire-and-forget capture commands. Drain those predecessors before this
     // lane asks the store to assign its sequence.
     await drainCaptureWorker()
-    guard !closeFlag.isClosed else { return .failed }
+    guard !closeFlag.isClosed else { return nil }
     activeDurableCommitCount += 1
     defer { durableCommitDidFinish() }
     let attemptedTimestamp = dateProvider.now()
     do {
-      if let ownership {
-        switch await journeyEventOwnershipState(ownership) {
-        case .owned:
-          break
-        case .ownershipLost:
-          return .ownershipLost
-        case .unavailable:
-          return .failed
-        }
-      }
       // Stable identity is policy-terminal. Replays return the canonical
-      // captured/drop outcome before enrichment or invoking a changed hook,
-      // but only while this epoch is still owned.
+      // captured/drop outcome before enrichment or invoking a changed hook.
       if let existing = try await store.queryStableCapture(
         id: request.eventId
       ) {
         guard routeToSubscribers else {
-          guard let capture = durableCapture(
-            from: existing,
-            request: request
-          ) else { return .ownershipLost }
-          return .captured(capture)
+          return durableCapture(from: existing, request: request)
         }
         let forwardingAdmission = forwardingAdmission(
           receivedAt: attemptedTimestamp
@@ -1741,7 +1015,6 @@ actor EventLog: EventLogProtocol {
           eventId: request.eventId,
           event: nil,
           recordedAt: attemptedTimestamp,
-          ownership: ownership,
           assigningCommitSequence: true,
           admission: admission
         )
@@ -1752,11 +1025,11 @@ actor EventLog: EventLogProtocol {
             userInfo: [NSLocalizedDescriptionKey: "Stable route replay omitted its sequence"]
           ))
         }
-        guard let capture = durableCapture(
+        let capture = durableCapture(
           from: commit.outcome,
           request: request,
           localRoutePending: commit.localRoutePending
-        ) else { return .ownershipLost }
+        )
         publishStableCapture(
           capture,
           commit: commit,
@@ -1764,34 +1037,16 @@ actor EventLog: EventLogProtocol {
           routeToSubscribers: true,
           subscriberAdmissions: subscriberAdmissions
         )
-        return .captured(capture)
-      }
-      if let ownership {
-        if hasVolatileJourneyOwnershipLoss(ownership) {
-          return .ownershipLost
-        }
-        // An unresolved response is not proof of ownership loss, so preserve
-        // the recovery record and fail closed instead of terminally dropping
-        // it. A storage error is equally non-authoritative.
-        let hasUnresolvedResponse =
-          try await store.hasUnresolvedJourneyOwnershipResponse(ownership)
-        guard !hasUnresolvedResponse else { return .failed }
-        if hasVolatileJourneyOwnershipLoss(ownership) {
-          return .ownershipLost
-        }
+        return capture
       }
 
       let transformedEvent = try await prepareStableSystemEvent(
         request,
         occurredAt: occurredAt ?? attemptedTimestamp,
-        preservesJourneyLegOutputs:
-          request.name == JourneyEvents.journeyLegCompleted
+        preservesJourneyCompletionOutputs:
+          request.name == JourneyEvents.journeyCompleted
       )
-      guard !closeFlag.isClosed else { return .failed }
-      if let ownership,
-         hasVolatileJourneyOwnershipLoss(ownership) {
-        return .ownershipLost
-      }
+      guard !closeFlag.isClosed else { return nil }
       let forwardingAdmission = forwardingAdmission(receivedAt: attemptedTimestamp)
       let storedEvent = transformedEvent.map(makeStoredEvent(from:))
       let commit: StableEventCaptureCommit
@@ -1800,7 +1055,6 @@ actor EventLog: EventLogProtocol {
           eventId: request.eventId,
           event: storedEvent,
           recordedAt: attemptedTimestamp,
-          ownership: ownership,
           assigningCommitSequence: true,
           admission: admission
         )
@@ -1809,7 +1063,6 @@ actor EventLog: EventLogProtocol {
           eventId: request.eventId,
           event: storedEvent,
           recordedAt: attemptedTimestamp,
-          ownership: ownership,
           assigningCommitSequence: true,
           admission: admission
         )
@@ -1824,20 +1077,11 @@ actor EventLog: EventLogProtocol {
       if transformedEvent == nil {
         LogDebug("Event '\(request.name)' terminally dropped by beforeSend hook")
       }
-      guard let capture = durableCapture(
+      let capture = durableCapture(
         from: commit.outcome,
         request: request,
         localRoutePending: commit.localRoutePending
-      ) else {
-        publishStableCapture(
-          nil,
-          commit: commit,
-          forwardingAdmission: forwardingAdmission,
-          routeToSubscribers: routeToSubscribers,
-          subscriberAdmissions: subscriberAdmissions
-        )
-        return .ownershipLost
-      }
+      )
       publishStableCapture(
         capture,
         commit: commit,
@@ -1852,16 +1096,16 @@ actor EventLog: EventLogProtocol {
         // not turn a committed capture/drop back into a retryable failure.
         LogWarning("EventLog: stable capture retention cleanup failed")
       }
-      return .captured(capture)
+      return capture
     } catch StableEventCaptureCommitAdmissionError.rejected {
       // Revocation is an expected fail-closed outcome. No history mutation
       // was attempted, so coverage remains exactly as authoritative as it was
       // before this capture began.
-      return .failed
+      return nil
     } catch {
       LogError("EventLog: failed to durably capture system event")
       await recordHistoryGap(at: attemptedTimestamp)
-      return .failed
+      return nil
     }
   }
 
@@ -1869,7 +1113,7 @@ actor EventLog: EventLogProtocol {
     from outcome: StableEventCaptureOutcome,
     request: StableSystemEventCaptureRequest,
     localRoutePending: Bool = false
-  ) -> DurableTriggerCapture? {
+  ) -> DurableTriggerCapture {
     switch outcome {
     case .captured(let storedEvent, let isNew):
       return DurableTriggerCapture(event: NuxieEvent(
@@ -1889,316 +1133,14 @@ actor EventLog: EventLogProtocol {
         ),
         routesLocally: false
       )
-    case .ownershipLost:
-      return nil
     }
   }
 
-  /// Persist an already-enriched trigger event under its existing id, then
-  /// start its direct server round trip independently of the caller's local
-  /// journey dispatch. This is the authored-runtime path: the exact persisted
-  /// id is also the conversion source fact and delivery idempotency key.
-  public func commitPreparedTriggerEvent(
-    _ event: NuxieEvent
-  ) async -> PreparedTriggerCommit {
-    await acquireTriggerDelivery()
-    defer { releaseTriggerDelivery() }
-
-    await ready.wait()
-    guard !closeFlag.isClosed else { return offlinePreparedCommit(for: event) }
-
-    // Preserve capture order without coupling local authored-event routing to
-    // network latency. Reaching this barrier means every earlier fire-and-
-    // forget capture is durably committed and available to journey queries.
-    await drainCaptureWorker()
-    guard !closeFlag.isClosed else { return offlinePreparedCommit(for: event) }
-
-    // Teardown waits for this whole durable-commit phase. Register before the
-    // first store await so close cannot snapshot an empty delivery-task set,
-    // close storage, and strand a commit that has not created its task yet.
-    activeDurableCommitCount += 1
-    defer { durableCommitDidFinish() }
-
-    extractUserProperties(from: event)
-    activeDirectDeliveryIds.insert(event.id)
-    var wasPersisted = false
-    do {
-      _ = try await persist(
-        event,
-        deliveryState: .pending,
-        receivedAt: event.timestamp
-      )
-      wasPersisted = true
-      try await performCleanupIfNeeded()
-    } catch {
-      LogWarning("Failed to store prepared trigger event locally: \(error)")
-      await recordHistoryGap(at: event.timestamp)
-    }
-    guard !closeFlag.isClosed else {
-      activeDirectDeliveryIds.remove(event.id)
-      return offlinePreparedCommit(for: event)
-    }
-
-    let taskID = UUID()
-    let sequence = nextPreparedDeliverySequence
-    nextPreparedDeliverySequence += 1
-    let previousDelivery = preparedDeliveryBoundaryTail?.task
-    let delivery = Task { [weak self] in
-      _ = await previousDelivery?.value
-      guard let self else {
-        return PreparedDeliveryResult(
-          response: EventResponse(status: "offline", eventId: event.id),
-          shouldHandleResponseSignals: false
-        )
-      }
-      let result: PreparedDeliveryResult
-      if Task.isCancelled {
-        await self.retainCancelledPreparedDelivery(
-          event,
-          wasPersisted: wasPersisted
-        )
-        result = PreparedDeliveryResult(
-          response: EventResponse(status: "offline", eventId: event.id),
-          shouldHandleResponseSignals: false
-        )
-      } else {
-        result = await self.deliverPreparedTriggerEvent(
-          event,
-          wasPersisted: wasPersisted
-        )
-      }
-      await self.preparedDeliveryBoundaryDidFinish(taskID)
-      return result
-    }
-    let response = Task { [weak self] in
-      let result = await delivery.value
-      if result.shouldHandleResponseSignals, !Task.isCancelled {
-        // The delivery boundary has already been retired. Mailbox refresh may
-        // reenter trackForTrigger, so it must run after waiters on that older
-        // prepared delivery are free to advance.
-        await self?.handleMailboxResponseSignal(result.response)
-      }
-      await self?.preparedDeliveryDidFinish(taskID)
-      return result.response
-    }
-    preparedDeliveryBoundaryTasks[taskID] = delivery
-    preparedDeliveryBoundaryTail = (taskID, delivery)
-    preparedDeliveryTasks[taskID] = response
-    preparedDeliveryEvents[taskID] = event
-    return PreparedTriggerCommit(event: event, response: response, sequence: sequence)
-  }
-
-  private func offlinePreparedCommit(for event: NuxieEvent) -> PreparedTriggerCommit {
-    let sequence = nextPreparedDeliverySequence
-    nextPreparedDeliverySequence += 1
-    return PreparedTriggerCommit(
-      event: event,
-      response: Task { EventResponse(status: "offline", eventId: event.id) },
-      sequence: sequence
-    )
-  }
-
-  private func durableCommitDidFinish() {
-    activeDurableCommitCount -= 1
-    guard activeDurableCommitCount == 0 else { return }
-    let waiters = durableCommitDrainWaiters
-    durableCommitDrainWaiters.removeAll()
-    waiters.forEach { $0.resume() }
-  }
-
-  private func waitForDurableCommitsToFinish() async {
-    guard activeDurableCommitCount > 0 else { return }
-    await withCheckedContinuation { durableCommitDrainWaiters.append($0) }
-  }
-
-  private func preparedDeliveryBoundaryDidFinish(_ taskID: UUID) {
-    _ = preparedDeliveryBoundaryTasks.removeValue(forKey: taskID)
-    if preparedDeliveryBoundaryTail?.id == taskID {
-      preparedDeliveryBoundaryTail = nil
-    }
-  }
-
-  private func preparedDeliveryDidFinish(_ taskID: UUID) {
-    _ = preparedDeliveryTasks.removeValue(forKey: taskID)
-    _ = preparedDeliveryEvents.removeValue(forKey: taskID)
-  }
-
-  private func waitForPreparedTriggerDeliveries() async {
-    guard let pending = preparedDeliveryBoundaryTail?.task else { return }
-    _ = await pending.value
-  }
-
-  private func deliverPreparedTriggerEvent(
-    _ event: NuxieEvent,
-    wasPersisted: Bool
-  ) async -> PreparedDeliveryResult {
-    let olderEventsDrained = await deliveryFlushAll()
-    guard olderEventsDrained else {
-      activeDirectDeliveryIds.remove(event.id)
-      await enqueueForDelivery(event, isPersisted: wasPersisted)
-      LogWarning(
-        "Deferred prepared trigger '\(event.name)' because older pending delivery did not drain"
-      )
-      return PreparedDeliveryResult(
-        response: EventResponse(status: "offline", eventId: event.id),
-        shouldHandleResponseSignals: false
-      )
-    }
-    guard !Task.isCancelled else {
-      await retainCancelledPreparedDelivery(event, wasPersisted: wasPersisted)
-      return PreparedDeliveryResult(
-        response: EventResponse(status: "offline", eventId: event.id),
-        shouldHandleResponseSignals: false
-      )
-    }
-    do {
-      let response = try await apiClient.trackEvent(event)
-      deliveryState.health = .healthy
-      installVolatileJourneyOwnershipLosses(in: response)
-      let ownershipFenceCommit = await persistJourneyOwnershipLosses(
-        in: response,
-        sourceEventId: event.id
-      )
-      await commitServerFacts(response.facts ?? [], distinctId: event.distinctId)
-
-      // Keep the authoritative callback on the prepared-delivery boundary,
-      // before acknowledgement and before waiters on that boundary resume.
-      // The volatile + durable fences already make any concurrently queued
-      // owned capture ineligible; acquiring the trigger lane here would form
-      // a cycle with trackForTrigger, which holds that lane while awaiting
-      // older prepared deliveries.
-      await handleJourneyOwnershipResponseSignals(response)
-      switch ownershipFenceCommit {
-      case .durable:
-        await completeDirectDelivery(ids: [event.id])
-      case .retryable:
-        activeDirectDeliveryIds.remove(event.id)
-        await enqueueForDelivery(event, isPersisted: wasPersisted)
-      case .unavailable:
-        if wasPersisted {
-          scheduleOwnershipFenceRetry(response: response, source: event)
-        } else {
-          activeDirectDeliveryIds.remove(event.id)
-        }
-      }
-      return PreparedDeliveryResult(
-        response: response,
-        shouldHandleResponseSignals: true
-      )
-    } catch {
-      guard !Task.isCancelled else {
-        await retainCancelledPreparedDelivery(event, wasPersisted: wasPersisted)
-        return PreparedDeliveryResult(
-          response: EventResponse(status: "offline", eventId: event.id),
-          shouldHandleResponseSignals: false
-        )
-      }
-      switch deliveryDisposition(for: error) {
-      case .split, .terminalPoison:
-        if wasPersisted {
-          await completeTerminalDirectDelivery(ids: [event.id])
-        } else {
-          activeDirectDeliveryIds.remove(event.id)
-        }
-        LogError("Terminal prepared journey fact dropped: \(error)")
-      case .unhealthyAuthentication:
-        _ = scheduleAuthenticationRetry()
-        await retainFailedDirectDelivery(
-          event,
-          wasPersisted: wasPersisted,
-          retainNonDurable: true
-        )
-      case .retry(let retryAfter):
-        _ = scheduleRetry(retryAfter: retryAfter)
-        await retainFailedDirectDelivery(
-          event,
-          wasPersisted: wasPersisted,
-          retainNonDurable: true
-        )
-      }
-      LogWarning(
-        "Prepared trigger round trip failed for '\(event.name)'; continuing local-first: \(error)"
-      )
-      return PreparedDeliveryResult(
-        response: EventResponse(status: "offline", eventId: event.id),
-        shouldHandleResponseSignals: false
-      )
-    }
-  }
-
-  /// Retries a response-scoped ownership fence without replaying the source
-  /// over the network. The source stays reserved until the fence is durable
-  /// or the bounded local retry budget hands it back to durable delivery.
-  private func scheduleOwnershipFenceRetry(
-    response: EventResponse,
-    source: NuxieEvent
-  ) {
-    guard !closeFlag.isClosed,
-          ownershipFenceRetryTasks[source.id] == nil
-    else { return }
-
-    let sourceId = source.id
-    ownershipFenceRetryTasks[sourceId] = Task { [weak self] in
-      for attempt in 0..<Self.ownershipFenceRetryAttempts {
-        let delay = Self.ownershipFenceRetryBaseDelayNanoseconds << UInt64(attempt)
-        do {
-          try await Task.sleep(nanoseconds: delay)
-        } catch {
-          break
-        }
-        guard !Task.isCancelled, let self else { break }
-        if await self.retryOwnershipFencePersistence(response: response, source: source) {
-          await self.ownershipFenceRetryDidFinish(sourceId)
-          return
-        }
-      }
-
-      guard !Task.isCancelled, let self else { return }
-      await self.exhaustOwnershipFenceRetry(source)
-      await self.ownershipFenceRetryDidFinish(sourceId)
-    }
-  }
-
-  /// Returns whether the source reached a terminal retry transition.
-  private func retryOwnershipFencePersistence(
-    response: EventResponse,
-    source: NuxieEvent
-  ) async -> Bool {
-    guard !closeFlag.isClosed, !Task.isCancelled else { return true }
-
-    switch await persistJourneyOwnershipLosses(in: response, sourceEventId: source.id) {
-    case .durable:
-      guard !closeFlag.isClosed, !Task.isCancelled else { return true }
-      await completeDirectDelivery(ids: [source.id])
-      return true
-    case .retryable:
-      guard !closeFlag.isClosed, !Task.isCancelled else { return true }
-      activeDirectDeliveryIds.remove(source.id)
-      await enqueueForDelivery(source, isPersisted: true)
-      return true
-    case .unavailable:
-      return false
-    }
-  }
-
-  private func exhaustOwnershipFenceRetry(_ source: NuxieEvent) async {
-    guard !closeFlag.isClosed, !Task.isCancelled else { return }
-    activeDirectDeliveryIds.remove(source.id)
-    await enqueueForDelivery(source, isPersisted: true)
-    LogWarning(
-      "Ownership fence remained unavailable for direct source \(source.id); returning it to durable delivery"
-    )
-  }
-
-  private func ownershipFenceRetryDidFinish(_ sourceId: String) {
-    _ = ownershipFenceRetryTasks.removeValue(forKey: sourceId)
-  }
-
-  public func prepareTriggerProperties(
+  public func prepareEventProperties(
     _ properties: sending [String: Any]?
   ) async -> sending [String: Any] {
     await ready.wait()
-    return await buildTriggerProperties(properties)
+    return await buildEventProperties(properties)
   }
 
   public func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent? {
@@ -2233,309 +1175,6 @@ actor EventLog: EventLogProtocol {
     }
   }
 
-  public func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async {
-    guard !facts.isEmpty else { return }
-    let subscriberAdmissions = committedAdmissionRegistry.capture()
-    await ready.wait()
-
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let receivedAt = dateProvider.now()
-
-    for fact in facts {
-      var properties: [String: Any]
-      let eventTimestamp: Date
-      switch fact.properties {
-      case .converted(let converted):
-        eventTimestamp = converted.at
-        properties = [
-          "journey_id": converted.journeyId,
-          "experience_id": converted.experienceId,
-          "experience_version": converted.experienceVersion,
-          "at": formatter.string(from: converted.at),
-          "source_fact_ref": converted.sourceFactRef,
-        ]
-      case .effectCompleted(let completed):
-        eventTimestamp = fact.timestamp
-        properties = [
-          "journey_id": completed.journeyId,
-          "node_id": completed.nodeId,
-          "invocation_id": completed.invocationId,
-          "status": completed.status,
-        ]
-        if let result = completed.result {
-          properties["result"] = result.value
-        }
-        if let error = completed.error {
-          properties["error"] = error.value
-        }
-      case .superseded(let superseded):
-        eventTimestamp = fact.timestamp
-        properties = [
-          "journey_id": superseded.journeyId,
-        ]
-        if let winnerJourneyId = superseded.winnerJourneyId {
-          properties["winner_journey_id"] = winnerJourneyId
-        }
-      }
-      properties["$server_fact_id"] = fact.id
-      properties[StoredEvent.originProperty] = StoredEventOrigin.server.rawValue
-      let event = NuxieEvent(
-        id: fact.id,
-        name: fact.event.rawValue,
-        distinctId: distinctId,
-        properties: properties,
-        timestamp: eventTimestamp
-      )
-
-      do {
-        let inserted = try await persist(
-          event,
-          deliveryState: .delivered,
-          receivedAt: receivedAt,
-          origin: .server,
-          routeToSubscribers: true,
-          subscriberAdmissions: subscriberAdmissions
-        )
-        if inserted {
-          try await performCleanupIfNeeded()
-        }
-      } catch {
-        LogWarning("Failed to commit server fact \(fact.id): \(error)")
-        await recordHistoryGap(at: event.timestamp)
-      }
-    }
-  }
-
-  public func setMailboxPendingHandler(
-    _ handler: (@Sendable () async -> Void)?
-  ) async {
-    mailboxPendingHandler = handler
-  }
-
-  public func setJourneyOwnershipRejectedHandler(
-    _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
-  ) async {
-    journeyOwnershipRejectedHandler = handler
-  }
-
-  public func setJourneyHandoffDeliveredHandler(
-    _ handler: (@Sendable (_ journeyId: String) async -> Void)?
-  ) async {
-    journeyHandoffDeliveredHandler = handler
-  }
-
-  private func journeyOwnershipLosses(
-    in response: EventResponse
-  ) -> [JourneyEventOwnership] {
-    var highestEpochByJourneyId: [String: Int] = [:]
-    if let ownership = response.journeyClaim,
-       !ownership.accepted {
-      highestEpochByJourneyId[ownership.journeyId] = ownership.epoch
-    }
-    if let ownership = response.journeyOwnership {
-      highestEpochByJourneyId[ownership.journeyId] = max(
-        highestEpochByJourneyId[ownership.journeyId] ?? Int.min,
-        ownership.epoch
-      )
-    }
-    return highestEpochByJourneyId.map {
-      JourneyEventOwnership(journeyId: $0.key, epoch: $0.value)
-    }
-  }
-
-  /// Install the process-local half of the fence synchronously at the
-  /// transport response boundary. No actor reentrancy is possible between
-  /// observing the server response and making stale capture ineligible.
-  private func installVolatileJourneyOwnershipLosses(
-    in response: EventResponse
-  ) {
-    installVolatileJourneyOwnershipLosses(
-      journeyOwnershipLosses(in: response)
-    )
-  }
-
-  private func installVolatileJourneyOwnershipLosses(
-    _ ownerships: [JourneyEventOwnership]
-  ) {
-    for ownership in ownerships {
-      journeyOwnershipFences[ownership.journeyId] = max(
-        journeyOwnershipFences[ownership.journeyId] ?? Int.min,
-        ownership.epoch
-      )
-    }
-  }
-
-  /// Make the response fence durable before its source is acknowledged.
-  /// Capture checks the already-installed process-local copy too, so a
-  /// transient SQLite failure cannot reopen the same-process race.
-  @discardableResult
-  private func persistJourneyOwnershipLosses(
-    in response: EventResponse,
-    sourceEventId: String
-  ) async -> OwnershipFenceCommitResult {
-    let responseLosses = journeyOwnershipLosses(in: response)
-    let processUnresolvedLosses =
-      unresolvedJourneyOwnershipBySource[sourceEventId] ?? []
-
-    let durableUnresolvedLosses: [JourneyEventOwnership]
-    do {
-      durableUnresolvedLosses =
-        try await store.queryUnresolvedJourneyOwnershipResponse(
-          sourceEventId: sourceEventId
-        )
-    } catch {
-      var highestEpochByJourneyId: [String: Int] = [:]
-      for ownership in responseLosses + processUnresolvedLosses {
-        highestEpochByJourneyId[ownership.journeyId] = max(
-          highestEpochByJourneyId[ownership.journeyId] ?? Int.min,
-          ownership.epoch
-        )
-      }
-      let unresolvedLosses = highestEpochByJourneyId.map {
-        JourneyEventOwnership(journeyId: $0.key, epoch: $0.value)
-      }
-      if !unresolvedLosses.isEmpty {
-        unresolvedJourneyOwnershipBySource[sourceEventId] = unresolvedLosses
-        installVolatileJourneyOwnershipLosses(unresolvedLosses)
-      }
-      LogError(
-        "EventLog: failed to query unresolved ownership response \(sourceEventId)"
-      )
-      return .unavailable
-    }
-
-    var highestEpochByJourneyId: [String: Int] = [:]
-    for ownership in responseLosses
-      + durableUnresolvedLosses
-      + processUnresolvedLosses
-    {
-      highestEpochByJourneyId[ownership.journeyId] = max(
-        highestEpochByJourneyId[ownership.journeyId] ?? Int.min,
-        ownership.epoch
-      )
-    }
-    let losses = highestEpochByJourneyId.map {
-      JourneyEventOwnership(journeyId: $0.key, epoch: $0.value)
-    }
-    guard !losses.isEmpty else { return .durable }
-    unresolvedJourneyOwnershipBySource[sourceEventId] = losses
-    installVolatileJourneyOwnershipLosses(losses)
-    let recordedAt = dateProvider.now()
-
-    // Crash-safe ordering: every loss is durably recorded as an unresolved
-    // marker BEFORE any fence is written. A crash at any point leaves either
-    // the full marker set or the fences (both idempotent upserts), so no loss
-    // can exist with neither a fence nor a marker; recovery replays markers
-    // into fences at startup, and the pending source remains the retry record
-    // of last resort.
-    for ownership in losses {
-      do {
-        try await store.recordUnresolvedJourneyOwnershipResponse(
-          sourceEventId: sourceEventId,
-          ownership: ownership,
-          recordedAt: recordedAt
-        )
-      } catch {
-        LogError(
-          "EventLog: failed to persist unresolved ownership response for journey \(ownership.journeyId)"
-        )
-        return .unavailable
-      }
-    }
-
-    var fencesFullyPersisted = true
-    for ownership in losses {
-      do {
-        try await store.recordJourneyOwnershipLoss(
-          ownership,
-          recordedAt: recordedAt
-        )
-      } catch {
-        fencesFullyPersisted = false
-        LogError(
-          "EventLog: failed to persist ownership fence for journey \(ownership.journeyId)"
-        )
-      }
-    }
-    guard fencesFullyPersisted else {
-      // Markers are durable, so the losses are recoverable; the bounded
-      // in-process retry (or startup recovery) re-runs this idempotently.
-      return .retryable
-    }
-
-    do {
-      try await store.clearUnresolvedJourneyOwnershipResponse(
-        sourceEventId: sourceEventId
-      )
-    } catch {
-      // The durable fence is authoritative; a stale unresolved marker is
-      // conservative and can be cleaned by another idempotent replay.
-      LogWarning(
-        "EventLog: ownership fence persisted but unresolved source marker could not be cleared"
-      )
-    }
-    unresolvedJourneyOwnershipBySource.removeValue(forKey: sourceEventId)
-    return .durable
-  }
-
-  /// A decision source may be retired without another response only when it
-  /// is not carrying an ownership signal whose fence remains unresolved.
-  /// Query failures fail closed and leave the source pending.
-  private func canRetireJourneyDecisionWithoutDelivery(
-    sourceEventId: String
-  ) async -> Bool {
-    guard unresolvedJourneyOwnershipBySource[sourceEventId] == nil else {
-      return false
-    }
-    do {
-      return try await store.queryUnresolvedJourneyOwnershipResponse(
-        sourceEventId: sourceEventId
-      ).isEmpty
-    } catch {
-      LogError(
-        "EventLog: failed to verify ownership response before retiring \(sourceEventId)"
-      )
-      return false
-    }
-  }
-
-  private func hasVolatileJourneyOwnershipLoss(
-    _ ownership: JourneyEventOwnership
-  ) -> Bool {
-    (journeyOwnershipFences[ownership.journeyId] ?? Int.min)
-      >= ownership.epoch
-  }
-
-  private func handleJourneyOwnershipResponseSignals(
-    _ response: EventResponse
-  ) async {
-    if let ownership = response.journeyClaim,
-       !ownership.accepted,
-       let journeyOwnershipRejectedHandler {
-      await journeyOwnershipRejectedHandler(
-        ownership.journeyId,
-        ownership.epoch
-      )
-    }
-    if let ownership = response.journeyOwnership {
-      if ownership.accepted {
-        await journeyHandoffDeliveredHandler?(ownership.journeyId)
-      } else {
-        await journeyOwnershipRejectedHandler?(
-          ownership.journeyId,
-          ownership.epoch
-        )
-      }
-    }
-  }
-
-  private func handleMailboxResponseSignal(_ response: EventResponse) async {
-    if response.mailboxPending == true, let mailboxPendingHandler {
-      await mailboxPendingHandler()
-    }
-  }
-
   public func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int {
     await ready.wait()
     let reassignedCount = try await store.reassignEvents(from: fromUserId, to: toUserId)
@@ -2549,18 +1188,17 @@ actor EventLog: EventLogProtocol {
 
   // MARK: - Close
 
-  public func cancelPreparedResponseDeliveries(for distinctId: String?) async {
-    let taskIDs = Set(preparedDeliveryEvents.compactMap { taskID, event in
-      distinctId == nil || event.distinctId == distinctId ? taskID : nil
-    })
-    let boundaries = preparedDeliveryBoundaryTasks.compactMap {
-      taskIDs.contains($0.key) ? $0.value : nil
-    }
-    let deliveries = preparedDeliveryTasks.compactMap {
-      taskIDs.contains($0.key) ? $0.value : nil
-    }
-    boundaries.forEach { $0.cancel() }
-    deliveries.forEach { $0.cancel() }
+  private func durableCommitDidFinish() {
+    activeDurableCommitCount -= 1
+    guard activeDurableCommitCount == 0 else { return }
+    let waiters = durableCommitDrainWaiters
+    durableCommitDrainWaiters.removeAll()
+    waiters.forEach { $0.resume() }
+  }
+
+  private func waitForDurableCommitsToFinish() async {
+    guard activeDurableCommitCount > 0 else { return }
+    await withCheckedContinuation { durableCommitDrainWaiters.append($0) }
   }
 
   public func close() async {
@@ -2569,34 +1207,9 @@ actor EventLog: EventLogProtocol {
     // Unblock any in-flight work waiting on storage init (e.g. tests that never called setup()).
     await ready.open()
 
-    // A stable system capture or prepared event may already own an in-flight
-    // store operation. Settle every durable phase before collecting delivery
-    // tasks and closing their shared store.
+    // A stable system capture may already own an in-flight store operation.
+    // Settle every durable phase before closing the shared store.
     await waitForDurableCommitsToFinish()
-
-    // A prepared authored event owns an independent direct request. Cancel
-    // and settle every such request while its durable store is still open;
-    // no response callback or fallback queue mutation may outlive teardown.
-    let preparedDeliveryBoundaries = Array(preparedDeliveryBoundaryTasks.values)
-    let preparedDeliveries = Array(preparedDeliveryTasks.values)
-    preparedDeliveryBoundaries.forEach { $0.cancel() }
-    preparedDeliveries.forEach { $0.cancel() }
-    for delivery in preparedDeliveries {
-      _ = await delivery.value
-    }
-    preparedDeliveryBoundaryTasks.removeAll()
-    preparedDeliveryTasks.removeAll()
-    preparedDeliveryBoundaryTail = nil
-
-    // Ownership-fence retries are the only direct-delivery work that remains
-    // after the response boundary. Cancel and settle them while the store is
-    // open so they cannot write after shutdown.
-    let ownershipFenceRetries = Array(ownershipFenceRetryTasks.values)
-    ownershipFenceRetries.forEach { $0.cancel() }
-    for retry in ownershipFenceRetries {
-      _ = await retry.value
-    }
-    ownershipFenceRetryTasks.removeAll()
 
     // Stop accepting new commands and ask the workers to stop.
     captureContinuation.yield(.shutdown)
@@ -2641,9 +1254,6 @@ actor EventLog: EventLogProtocol {
         cont.resume(returning: false)
         return
       }
-      // A pending row owned by an active direct request is not batch work.
-      // Refill first so the return value describes work this flush can
-      // actually initiate, rather than merely observing the direct row.
       await refillDeliveryWindow()
       let hadEvents = !deliveryQueue.isEmpty
       let ok = await deliveryFlushAll()
@@ -2925,7 +1535,7 @@ actor EventLog: EventLogProtocol {
     return nuxieEvent
   }
 
-  private func buildTriggerProperties(
+  private func buildEventProperties(
     _ properties: sending [String: Any]?
   ) async -> sending [String: Any] {
     await enrich(properties ?? [:])
@@ -3039,92 +1649,6 @@ actor EventLog: EventLogProtocol {
     }
   }
 
-  /// Direct-send events are not already in the working set. If their store
-  /// ack fails, stage them from pending state immediately instead of waiting
-  /// for a relaunch to recover them.
-  private func completeDirectDelivery(ids: [String]) async {
-    _ = await markDelivered(ids: ids)
-    activeDirectDeliveryIds.subtract(ids)
-    await refillDeliveryWindow()
-  }
-
-  private func retainFailedDirectDelivery(
-    _ event: NuxieEvent,
-    wasPersisted: Bool,
-    retainNonDurable: Bool = false
-  ) async {
-    activeDirectDeliveryIds.remove(event.id)
-    guard wasPersisted || retainNonDurable else { return }
-    await enqueueForDelivery(event, isPersisted: wasPersisted)
-  }
-
-  private func retainCancelledPreparedDelivery(
-    _ event: NuxieEvent,
-    wasPersisted: Bool
-  ) async {
-    activeDirectDeliveryIds.remove(event.id)
-    guard !closeFlag.isClosed else { return }
-    _ = scheduleRetry()
-    await enqueueForDelivery(event, isPersisted: wasPersisted)
-  }
-
-  private func completeTerminalDirectDelivery(ids: [String]) async {
-    if await markDelivered(ids: ids) {
-      activeDirectDeliveryIds.subtract(ids)
-      terminalDirectDeliveryIds.subtract(ids)
-      await refillDeliveryWindow()
-    } else {
-      terminalDirectDeliveryIds.formUnion(ids)
-      LogError(
-        "EventLog: retaining \(ids.count) terminal direct source reservation after acknowledgement failure"
-      )
-      // The in-memory reservation dies with the process, after which the
-      // still-pending rows would replay a terminally failed send on
-      // relaunch. Retry the durable retirement with the same bounded
-      // policy as ownership fences so the acknowledgement outlives this
-      // call whenever the store recovers.
-      scheduleTerminalRetirementRetry(ids: ids)
-    }
-  }
-
-  private var terminalRetirementRetryTasks: [String: Task<Void, Never>] = [:]
-
-  private func scheduleTerminalRetirementRetry(ids: [String]) {
-    let key = ids.sorted().joined(separator: "\u{1f}")
-    guard !closeFlag.isClosed,
-          terminalRetirementRetryTasks[key] == nil
-    else { return }
-    terminalRetirementRetryTasks[key] = Task { [weak self] in
-      for attempt in 0..<Self.ownershipFenceRetryAttempts {
-        let delay = Self.ownershipFenceRetryBaseDelayNanoseconds << UInt64(attempt)
-        do {
-          try await Task.sleep(nanoseconds: delay)
-        } catch {
-          break
-        }
-        guard !Task.isCancelled, let self else { break }
-        if await self.retryTerminalRetirement(ids: ids) {
-          break
-        }
-      }
-      guard let self else { return }
-      await self.terminalRetirementRetryDidFinish(key)
-    }
-  }
-
-  private func retryTerminalRetirement(ids: [String]) async -> Bool {
-    guard !closeFlag.isClosed else { return true }
-    guard await markDelivered(ids: ids) else { return false }
-    activeDirectDeliveryIds.subtract(ids)
-    terminalDirectDeliveryIds.subtract(ids)
-    await refillDeliveryWindow()
-    return true
-  }
-
-  private func terminalRetirementRetryDidFinish(_ key: String) {
-    terminalRetirementRetryTasks.removeValue(forKey: key)
-  }
-
   /// Remove rows from the working set only after the store ack attempt. This
   /// keeps the window full while the actor is reentrant, so a newly captured
   /// event cannot jump ahead of older durable rows. If the ack fails, refill
@@ -3152,32 +1676,17 @@ actor EventLog: EventLogProtocol {
     isRefillingDeliveryWindow = true
     defer { isRefillingDeliveryWindow = false }
 
-    if !terminalDirectDeliveryIds.isEmpty {
-      let terminalIds = Array(terminalDirectDeliveryIds)
-      if await markDelivered(ids: terminalIds) {
-        terminalDirectDeliveryIds.subtract(terminalIds)
-        activeDirectDeliveryIds.subtract(terminalIds)
-      }
-    }
-
     let capacity = max(1, deliveryConfig.maxQueueSize)
     repeat {
       deliveryWindowRefillRequested = false
       guard deliveryQueue.count < capacity else { return }
 
-      let pending = await loadPendingDelivery(
-        limit: Self.pendingDeliveryQueryLimit(
-          queueCapacity: capacity,
-          activeDirectDeliveryCount: activeDirectDeliveryIds.count
-        )
-      )
+      let pending = await loadPendingDelivery(limit: capacity)
       guard !closeFlag.isClosed else { return }
 
       let existing = Set(deliveryQueue.map(\.id))
       let fresh = pending
-        .filter {
-          !existing.contains($0.id) && !activeDirectDeliveryIds.contains($0.id)
-        }
+        .filter { !existing.contains($0.id) }
         .prefix(capacity - deliveryQueue.count)
       if !fresh.isEmpty {
         deliveryQueue.append(contentsOf: fresh)
@@ -3186,19 +1695,6 @@ actor EventLog: EventLogProtocol {
         )
       }
     } while deliveryWindowRefillRequested && deliveryQueue.count < capacity
-  }
-
-  /// Direct deliveries are present in durable pending state but excluded from
-  /// the delivery window. Ask storage for enough rows to fill around them
-  /// without allowing adversarial counts to overflow `Int`.
-  static func pendingDeliveryQueryLimit(
-    queueCapacity: Int,
-    activeDirectDeliveryCount: Int
-  ) -> Int {
-    let (limit, overflow) = queueCapacity.addingReportingOverflow(
-      activeDirectDeliveryCount
-    )
-    return overflow ? Int.max : limit
   }
 
   /// Stage a newly captured event in the bounded working set. Production
@@ -3280,12 +1776,6 @@ actor EventLog: EventLogProtocol {
       LogWarning("Failed to count pending-delivery events: \(error)")
       return deliveryQueue.count
     }
-  }
-
-  /// Internal synchronization diagnostic used by deterministic ordering
-  /// regressions. This is not part of EventLogProtocol or the SDK surface.
-  func triggerDeliveryIsHeld() -> Bool {
-    isTriggerDeliveryHeld
   }
 
   public func pauseEventQueue() {
@@ -3379,35 +1869,9 @@ actor EventLog: EventLogProtocol {
     isCurrentlyFlushing = true
     deliveryState.didRepartitionLastFlush = false
 
-    if let decision = deliveryQueue.first,
-      isJourneyDecisionEvent(decision.name) {
-      if decision.name == JourneyEvents.journeyClaimed,
-         await canRetireJourneyDecisionWithoutDelivery(
-           sourceEventId: decision.id
-         ) {
-        let removed = await retireDelivered(ids: [decision.id])
-        if removed {
-          retryCount = 0
-          nextRetryDate = nil
-        }
-        finishCurrentFlush()
-        LogWarning(
-          "Dropped pending journey claim \(decision.id); mailbox refresh must retry claims with their offer"
-        )
-        if removed {
-          await flushIfOverThreshold()
-        }
-        return true
-      }
-      await deliverJourneyDecision(decision)
-      return true
-    }
-
-    // Never let a decision-lane event leak into a batch behind accepted events.
     let batch = Array(
       deliveryQueue
         .prefix(deliveryState.adaptiveBatchSize ?? deliveryConfig.maxBatchSize)
-        .prefix { !isJourneyDecisionEvent($0.name) }
     )
 
     LogInfo("[EventLog] Flushing \(batch.count) events to server")
@@ -3440,95 +1904,6 @@ actor EventLog: EventLogProtocol {
     return true
   }
 
-  private func isJourneyDecisionEvent(_ name: String) -> Bool {
-    switch name {
-    case JourneyEvents.journeyEnrolled,
-      JourneyEvents.journeyTransition,
-      JourneyEvents.journeyMilestone,
-      JourneyEvents.journeyConverted,
-      JourneyEvents.journeyExited,
-      JourneyEvents.journeyEffectRequested,
-      JourneyEvents.journeyClaimed,
-      JourneyEvents.journeyHandoff,
-      JourneyEvents.journeyParked:
-      return true
-    default:
-      return false
-    }
-  }
-
-  private func deliverJourneyDecision(_ event: NuxieEvent) async {
-    do {
-      let response = try await apiClient.trackEvent(event)
-      deliveryState.health = .healthy
-      installVolatileJourneyOwnershipLosses(in: response)
-      let ownershipFenceCommit = await persistJourneyOwnershipLosses(
-        in: response,
-        sourceEventId: event.id
-      )
-      await commitServerFacts(response.facts ?? [], distinctId: event.distinctId)
-
-      // The callback must precede acknowledgement, but must not reacquire the
-      // trigger lane. A prepared delivery can be flushing this decision while
-      // a later trackForTrigger owns that lane and waits for the prepared
-      // boundary; reacquiring here would make those two tasks wait forever.
-      // The response fence above already prevents concurrent journey-authored
-      // capture for the relinquished epoch.
-      await handleJourneyOwnershipResponseSignals(response)
-      let removed: Bool
-      if case .durable = ownershipFenceCommit {
-        removed = await retireDelivered(ids: [event.id])
-      } else {
-        removed = false
-      }
-      await handleMailboxResponseSignal(response)
-      if removed {
-        retryCount = 0
-        nextRetryDate = nil
-      }
-      finishCurrentFlush()
-      LogInfo(
-        "Successfully delivered journey decision \(event.name) (queue size: \(deliveryQueue.count))"
-      )
-      if removed {
-        await flushIfOverThreshold()
-      }
-    } catch {
-      if [.terminalPoison, .split].contains(deliveryDisposition(for: error)),
-         await canRetireJourneyDecisionWithoutDelivery(
-           sourceEventId: event.id
-         ) {
-        let removed = await retireDelivered(ids: [event.id])
-        if removed {
-          retryCount = 0
-          nextRetryDate = nil
-        }
-        LogWarning(
-          "Permanent journey decision failure; dropped \(event.id): \(error)"
-        )
-        finishCurrentFlush()
-        return
-      }
-
-      let disposition = deliveryDisposition(for: error)
-      let backoffDelay: TimeInterval
-      if disposition == .unhealthyAuthentication {
-        backoffDelay = scheduleAuthenticationRetry()
-      } else {
-        let retryAfter: TimeInterval? = if case .retry(let retryAfter) = disposition {
-          retryAfter
-        } else {
-          nil
-        }
-        backoffDelay = scheduleRetry(retryAfter: retryAfter)
-      }
-      LogWarning(
-        "Journey decision delivery failed; keeping \(event.id) pending for direct retry in \(backoffDelay)s: \(error)"
-      )
-      finishCurrentFlush()
-    }
-  }
-
   private func waitForCurrentFlush() async {
     guard isCurrentlyFlushing else { return }
 
@@ -3537,22 +1912,22 @@ actor EventLog: EventLogProtocol {
     }
   }
 
-  private func acquireTriggerDelivery() async {
-    guard isTriggerDeliveryHeld else {
-      isTriggerDeliveryHeld = true
+  private func acquireStableCaptureCommit() async {
+    guard isStableCaptureCommitHeld else {
+      isStableCaptureCommitHeld = true
       return
     }
     await withCheckedContinuation { continuation in
-      triggerDeliveryWaiters.append(continuation)
+      stableCaptureCommitWaiters.append(continuation)
     }
   }
 
-  private func releaseTriggerDelivery() {
-    guard !triggerDeliveryWaiters.isEmpty else {
-      isTriggerDeliveryHeld = false
+  private func releaseStableCaptureCommit() {
+    guard !stableCaptureCommitWaiters.isEmpty else {
+      isStableCaptureCommitHeld = false
       return
     }
-    triggerDeliveryWaiters.removeFirst().resume()
+    stableCaptureCommitWaiters.removeFirst().resume()
   }
 
   private func finishCurrentFlush() {
@@ -4224,7 +2599,7 @@ actor EventLog: EventLogProtocol {
   }
 }
 
-/// Stable captures that feed local trigger processing commit and enqueue their
+/// Stable captures that feed local Journey processing commit and enqueue their
 /// ordered route resolution before returning to the caller. Recovery-only
 /// captures continue to use `captureSystemEvent` and never enter this lane.
 protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
@@ -4330,33 +2705,21 @@ extension EventLog {
   func captureAndRouteSystemEvent(
     _ request: StableSystemEventCaptureRequest
   ) async -> DurableTriggerCapture? {
-    switch await captureStableSystemEvent(
+    await captureStableSystemEvent(
       request,
-      ownership: nil,
       routeToSubscribers: true
-    ) {
-    case .captured(let capture):
-      return capture
-    case .ownershipLost, .failed:
-      return nil
-    }
+    )
   }
 
   func captureAndRouteSystemEvent(
     _ request: StableSystemEventCaptureRequest,
     admission: any StableEventCaptureCommitAdmission
   ) async -> DurableTriggerCapture? {
-    switch await captureStableSystemEvent(
+    await captureStableSystemEvent(
       request,
-      ownership: nil,
       routeToSubscribers: true,
       admission: admission
-    ) {
-    case .captured(let capture):
-      return capture
-    case .ownershipLost, .failed:
-      return nil
-    }
+    )
   }
 
   func captureAndRouteSystemEvent(
@@ -4364,18 +2727,12 @@ extension EventLog {
     occurredAt: Date,
     admission: any StableEventCaptureCommitAdmission
   ) async -> DurableTriggerCapture? {
-    switch await captureStableSystemEvent(
+    await captureStableSystemEvent(
       request,
-      ownership: nil,
       routeToSubscribers: true,
       occurredAt: occurredAt,
       admission: admission
-    ) {
-    case .captured(let capture):
-      return capture
-    case .ownershipLost, .failed:
-      return nil
-    }
+    )
   }
 
   func captureAndRouteSystemEventBatch(
@@ -4389,8 +2746,8 @@ extension EventLog {
     guard !items.isEmpty else { return [:] }
     guard !closeFlag.isClosed else { return nil }
     let subscriberAdmissions = committedAdmissionRegistry.capture()
-    await acquireTriggerDelivery()
-    defer { releaseTriggerDelivery() }
+    await acquireStableCaptureCommit()
+    defer { releaseStableCaptureCommit() }
 
     await ready.wait()
     guard !closeFlag.isClosed else { return nil }
@@ -4411,9 +2768,7 @@ extension EventLog {
       for item in items {
         let request = item.request
         if let existing = try await store.queryStableCapture(id: request.eventId) {
-          guard durableCapture(from: existing, request: request) != nil else {
-            return nil
-          }
+          _ = durableCapture(from: existing, request: request)
           prepared.append((item: item, event: nil))
         } else {
           let transformed = try await prepareStableSystemEvent(
@@ -4433,8 +2788,7 @@ extension EventLog {
         StableEventCaptureRecord(
           eventId: value.item.request.eventId,
           event: value.event.map { makeStoredEvent(from: $0) },
-          recordedAt: attemptedTimestamp,
-          ownership: nil
+          recordedAt: attemptedTimestamp
         )
       }
       let commits = try await store.commitStableCaptureBatchAndStageRoutes(
@@ -4452,13 +2806,11 @@ extension EventLog {
       var capturesByEventId: [String: DurableTriggerCapture] = [:]
       capturesByEventId.reserveCapacity(items.count)
       for (value, commit) in zip(prepared, commits) {
-        guard let capture = durableCapture(
+        let capture = durableCapture(
           from: commit.outcome,
           request: value.item.request,
           localRoutePending: commit.localRoutePending
-        ) else {
-          return nil
-        }
+        )
         capturesByEventId[value.item.request.eventId] = capture
         publishStableCapture(
           capture,

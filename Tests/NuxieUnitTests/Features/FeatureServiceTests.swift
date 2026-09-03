@@ -541,11 +541,6 @@ final class FeatureServiceTests: AsyncSpec {
     }
 
     private static func makeProfileResponse(feature: Feature) -> ProfileResponse {
-        ProfileResponse(
-            segments: [],
-            userProperties: nil,
-            experiments: nil,
-            features: [feature]
-        )
+        TestJourneyProfile.response(features: [feature])
     }
 }

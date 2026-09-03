@@ -84,31 +84,3 @@ extension IRExpr {
 extension IREnvelope {
   var referencedSegmentIds: Set<String> { expr.referencedSegmentIds }
 }
-
-extension Experience {
-  /// Every segment id this experience can observe: the trigger condition,
-  /// plus goal configuration (segment goals and IR filters).
-  var referencedSegmentIds: Set<String> {
-    var ids = Set<String>()
-    if let trigger {
-      switch trigger {
-      case .event(let config):
-        if let condition = config.condition {
-          ids.formUnion(condition.referencedSegmentIds)
-        }
-      }
-    }
-    if let goal {
-      if let segmentId = goal.segmentId {
-        ids.insert(segmentId)
-      }
-      if let eventFilter = goal.eventFilter {
-        ids.formUnion(eventFilter.referencedSegmentIds)
-      }
-      if let attributeExpr = goal.attributeExpr {
-        ids.formUnion(attributeExpr.referencedSegmentIds)
-      }
-    }
-    return ids
-  }
-}

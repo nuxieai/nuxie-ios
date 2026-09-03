@@ -376,10 +376,10 @@ struct ExperiencePresentationTraceContext: Sendable {
     }
 
     static func errorCode(for error: Error) -> String {
-        if let error = error as? ExperienceReleaseAcquisitionError {
+        if let error = error as? JourneyReleaseAcquisitionError {
             return error.contractCode
         }
-        if let error = error as? ExperienceReleaseDescriptorAuthenticationError {
+        if let error = error as? JourneyReleaseAuthenticationError {
             return error.contractCode
         }
         if let error = error as? StoreKitError {
@@ -398,7 +398,7 @@ struct ExperiencePresentationTraceContext: Sendable {
         if let categorized = error as? ExperiencePresentationFailureCategorizing {
             return categorized.presentationFailureCategory
         }
-        if let error = error as? ExperienceReleaseDescriptorAuthenticationError {
+        if let error = error as? JourneyReleaseAuthenticationError {
             switch error {
             case .invalidAuthorizationKeys, .unknownKey, .invalidSignature:
                 return .trust
@@ -722,120 +722,6 @@ struct ExperiencePresentationQualificationEvent: Codable, Equatable, Sendable {
             durationMilliseconds = nil
             errorCode = nil
             attributes = [:]
-        }
-    }
-}
-
-enum ExperiencePresentationAttemptJourneyContext {
-    private static let idKey = "_presentation_attempt_id"
-    private static let triggerEventKey = "_presentation_attempt_trigger_event"
-    private static let startedAtKey = "_presentation_attempt_started_at"
-    private static let startedAtMonotonicTimeKey = "_presentation_attempt_started_at_monotonic"
-    private static let bootSessionIdKey = "_presentation_attempt_boot_session_id"
-
-    static func store(
-        _ attempt: ExperiencePresentationAttempt,
-        in journey: Journey,
-        at now: Date
-    ) async {
-        await journey.update { state in
-            store(attempt, in: &state, at: now)
-        }
-    }
-
-    static func store(
-        _ attempt: ExperiencePresentationAttempt,
-        in state: inout JourneySnapshot,
-        at now: Date
-    ) {
-        store(
-            attempt,
-            in: &state,
-            at: now,
-            bootSessionId: currentBootSessionId()
-        )
-    }
-
-    static func store(
-        _ attempt: ExperiencePresentationAttempt,
-        in state: inout JourneySnapshot,
-        at now: Date,
-        bootSessionId: String?
-    ) {
-        state.context[idKey] = AnyCodable(attempt.id)
-        state.context[triggerEventKey] = AnyCodable(attempt.triggerEvent)
-        state.context[startedAtKey] = AnyCodable(attempt.startedAt.timeIntervalSince1970)
-        if let startedAtMonotonicTime = attempt.startedAtMonotonicTime,
-           let bootSessionId {
-            state.context[startedAtMonotonicTimeKey] = AnyCodable(startedAtMonotonicTime)
-            state.context[bootSessionIdKey] = AnyCodable(bootSessionId)
-        } else {
-            state.context.removeValue(forKey: startedAtMonotonicTimeKey)
-            state.context.removeValue(forKey: bootSessionIdKey)
-        }
-        state.updatedAt = now
-    }
-
-    static func load(from journey: Journey) async -> ExperiencePresentationAttempt? {
-        load(from: await journey.snapshot())
-    }
-
-    static func load(from state: JourneySnapshot) -> ExperiencePresentationAttempt? {
-        load(from: state, bootSessionId: currentBootSessionId())
-    }
-
-    static func load(
-        from state: JourneySnapshot,
-        bootSessionId: String?
-    ) -> ExperiencePresentationAttempt? {
-        guard let id = state.context[idKey]?.value as? String,
-              let triggerEvent = state.context[triggerEventKey]?.value as? String,
-              let startedAt = timeInterval(state.context[startedAtKey]?.value) else {
-            return nil
-        }
-        let storedBootSessionId = state.context[bootSessionIdKey]?.value as? String
-        let persistedMonotonicTime = timeInterval(
-            state.context[startedAtMonotonicTimeKey]?.value
-        )
-        return ExperiencePresentationAttempt(
-            id: id,
-            triggerEvent: triggerEvent,
-            startedAt: Date(timeIntervalSince1970: startedAt),
-            startedAtMonotonicTime: storedBootSessionId == bootSessionId
-                ? persistedMonotonicTime
-                : nil
-        )
-    }
-
-    private static func currentBootSessionId() -> String? {
-        #if canImport(Darwin)
-        var bootTime = timeval()
-        var size = MemoryLayout<timeval>.size
-        guard sysctlbyname("kern.boottime", &bootTime, &size, nil, 0) == 0 else {
-            return nil
-        }
-        return "\(bootTime.tv_sec):\(bootTime.tv_usec)"
-        #else
-        return nil
-        #endif
-    }
-
-    private static func timeInterval(_ value: Any?) -> TimeInterval? {
-        switch value {
-        case let value as Double:
-            value
-        case let value as Float:
-            TimeInterval(value)
-        case let value as Int:
-            TimeInterval(value)
-        case let value as Int64:
-            TimeInterval(value)
-        case let value as UInt:
-            TimeInterval(value)
-        case let value as UInt64:
-            TimeInterval(value)
-        default:
-            nil
         }
     }
 }

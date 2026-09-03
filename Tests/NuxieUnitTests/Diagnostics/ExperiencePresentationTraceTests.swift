@@ -101,104 +101,6 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             expect(presentedAt).to(equal(observedAt))
         }
 
-        it("creates the attempt before trigger work and passes the same identity into TriggerService") {
-            var harness = try SDKTestHarness.make(prefix: "presentation_attempt")
-            let triggerService = MockTriggerService()
-            let recorder = InMemoryExperiencePresentationTrace()
-            harness.overrides.triggers = triggerService
-            harness.overrides.presentationTrace = recorder
-            try harness.setupSDK()
-
-            _ = await NuxieSDK.shared.triggerAndWait("upgrade_tapped")
-
-            let received = await triggerService.presentationAttempts()
-            let accepted = recorder.events().filter { event in
-                event.stage == .triggerAccepted
-            }
-            let routingStarted = recorder.events().filter { event in
-                guard case .workStarted(_, .triggerRouting, _) = event.stage else {
-                    return false
-                }
-                return true
-            }
-            expect(received).to(haveCount(1))
-            expect(accepted).to(haveCount(1))
-            expect(routingStarted).to(haveCount(1))
-            expect(received.first?.id).to(equal(accepted.first?.attempt.id))
-            expect(routingStarted.first?.attempt.id).to(equal(accepted.first?.attempt.id))
-            expect(received.first?.triggerEvent).to(equal("upgrade_tapped"))
-            expect(accepted.first?.occurredAt).to(equal(received.first?.startedAt))
-            expect(routingStarted.first?.occurredAt).to(equal(accepted.first?.occurredAt))
-
-            await NuxieSDK.shared.shutdown()
-            harness.cleanup()
-        }
-
-        it("round-trips the attempt through persisted journey context") {
-            let attempt = ExperiencePresentationAttempt(
-                id: "attempt-journey",
-                triggerEvent: "onboarding_started",
-                startedAt: Date(timeIntervalSince1970: 1_234.5),
-                startedAtMonotonicTime: 456.75
-            )
-            let journey = TestJourneyBuilder().build()
-
-            await ExperiencePresentationAttemptJourneyContext.store(
-                attempt,
-                in: journey,
-                at: Date(timeIntervalSince1970: 2_000)
-            )
-
-            let loadedAttempt = await ExperiencePresentationAttemptJourneyContext.load(from: journey)
-            expect(loadedAttempt).to(equal(attempt))
-        }
-
-        it("round-trips whole-second attempt timestamps through journey JSON") {
-            let attempt = ExperiencePresentationAttempt(
-                id: "attempt-integral-timestamps",
-                triggerEvent: "onboarding_started",
-                startedAt: Date(timeIntervalSince1970: 1_234),
-                startedAtMonotonicTime: 456
-            )
-            let journey = TestJourneyBuilder().build()
-            await ExperiencePresentationAttemptJourneyContext.store(
-                attempt,
-                in: journey,
-                at: Date(timeIntervalSince1970: 2_000)
-            )
-
-            let encoded = try await JSONEncoder().encode(journey.snapshot())
-            let decoded = try JSONDecoder().decode(JourneySnapshot.self, from: encoded)
-
-            expect(ExperiencePresentationAttemptJourneyContext.load(from: decoded))
-                .to(equal(attempt))
-        }
-
-        it("drops a persisted monotonic start when the device has rebooted") {
-            let attempt = ExperiencePresentationAttempt(
-                id: "attempt-before-reboot",
-                triggerEvent: "onboarding_started",
-                startedAt: Date(timeIntervalSince1970: 1_234),
-                startedAtMonotonicTime: 456
-            )
-            var state = TestJourneyBuilder().buildSnapshot()
-
-            ExperiencePresentationAttemptJourneyContext.store(
-                attempt,
-                in: &state,
-                at: Date(timeIntervalSince1970: 2_000),
-                bootSessionId: "boot-a"
-            )
-
-            let loaded = ExperiencePresentationAttemptJourneyContext.load(
-                from: state,
-                bootSessionId: "boot-b"
-            )
-            expect(loaded?.id).to(equal(attempt.id))
-            expect(loaded?.startedAt).to(equal(attempt.startedAt))
-            expect(loaded?.startedAtMonotonicTime).to(beNil())
-        }
-
         it("exports correlated work spans with terminal duration and failure attribution") {
             let recorder = InMemoryExperiencePresentationTrace()
             let attempt = ExperiencePresentationAttempt(
@@ -229,7 +131,7 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             let authentication = context.begin(.descriptorAuthentication)
             context.fail(
                 authentication,
-                error: ExperienceReleaseDescriptorAuthenticationError.invalidSignature,
+                error: JourneyReleaseAuthenticationError.invalidSignature,
                 at: ExperiencePresentationTimestamp(
                     wallClock: Date(timeIntervalSince1970: 22),
                     monotonicTime: 202.5
@@ -250,7 +152,7 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             expect(snapshot.events[1].attributes["source"]).to(equal("download"))
             expect(snapshot.events[3].work).to(equal("descriptor_authentication"))
             expect(snapshot.events[3].durationMilliseconds).to(equal(2_500))
-            expect(snapshot.events[3].errorCode).to(equal("experience_release.signature.bad_signature"))
+            expect(snapshot.events[3].errorCode).to(equal("journey_release.signature.bad_signature"))
         }
 
         it("classifies every resilience failure outcome for qualification telemetry") {
@@ -263,10 +165,10 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
                 (ExperiencePresentationWork, Error, ExperiencePresentationFailureCategory)
             ] = [
                 (.descriptorAuthentication,
-                 ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor,
+                 JourneyReleaseAuthenticationError.invalidDescriptor,
                  .descriptor),
                 (.descriptorAuthentication,
-                 ExperienceReleaseDescriptorAuthenticationError.invalidSignature,
+                 JourneyReleaseAuthenticationError.invalidSignature,
                  .trust),
                 (.artifactAcquisition, URLError(.notConnectedToInternet), .network),
                 (.artifactAcquisition, QualificationCacheFailure(), .cache),

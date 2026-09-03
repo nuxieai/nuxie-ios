@@ -1,89 +1,48 @@
 import Foundation
 
-// MARK: - Experience
-
-/// Hydrated domain model projected from an authenticated release descriptor.
-struct Experience: Codable, Sendable {
-    private enum CodingKeys: String, CodingKey {
-        case id, versionId, buildId, artifactContentHash, authenticatedReleaseID
-        case behaviorPresentation
-        case behaviorPresentationScreens, assetBaseURL, name, reentry, releaseCreatedAt
-        case trigger, goal, exitPolicy, conversionAnchor, timeLimitSeconds
-        case experienceType, journey, products
-    }
-
-    /// Stable experience definition identifier.
+/// Renderer input projected from one authenticated Journey release.
+struct Experience: Sendable {
     let id: String
-    /// Published version identifier used by journeys and version fetches.
     let versionId: String
-    /// Immutable release build identity authenticated by the native runtime.
     let buildId: String
-    /// Verified delivery content digest used by artifact telemetry.
     let artifactContentHash: String?
-    let authenticatedReleaseID: AuthenticatedExperienceReleaseID?
+    let authenticatedReleaseID: AuthenticatedJourneyReleaseID?
     let behaviorPresentation: ExperienceBehaviorPresentation
     let behaviorPresentationScreens: [String: ExperienceBehaviorScreenGeometry]
+    let assetBaseURL: URL
+    let journey: JourneyDocument
+    let definition: ExperienceDefinition?
+    var products: [StoreProduct]
+    var introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
+
     var behaviorPresentationStyle: ExperienceBehaviorPresentationStyle {
         behaviorPresentation.style
     }
-    /// Base URL used to resolve content-addressed external assets.
-    let assetBaseURL: URL
-    /// Customer-authored display name.
-    let name: String
-    /// Re-enrollment policy supplied by the server.
-    let reentry: ExperienceReentry
-    /// ISO-8601 creation time of the immutable signed release artifact.
-    let releaseCreatedAt: String
-    /// Optional event enrollment trigger.
-    let trigger: ExperienceTrigger?
-    /// Optional conversion goal.
-    let goal: GoalConfig?
-    /// Optional early-exit policy.
-    let exitPolicy: ExitPolicy?
-    /// Wire conversion-anchor token.
-    let conversionAnchor: String?
-    /// Optional maximum journey duration.
-    let timeLimitSeconds: Int?
-    /// Optional server-defined experience category.
-    let experienceType: String?
-    /// Authenticated execution content from the package journey member.
-    let journey: JourneyDocument
-    let definition: ExperienceDefinition?
-    /// StoreKit products resolved only after descriptor authentication.
-    var products: [StoreProduct]
-    /// Server-owned Journey authority used only while resolving live purchases.
-    var introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
-
-    /// Descriptor-authenticated screen and action document.
     var screens: JourneyDocument { journey }
-    /// Identifier retained by renderer-facing APIs for the published version.
     var screensId: String { versionId }
+
     init(
-        behavior: ExperienceBehaviorDefinition,
-        journey: JourneyDocument,
-        definition: ExperienceDefinition? = nil,
+        id: String,
+        versionId: String,
+        buildId: String,
+        artifactContentHash: String?,
+        authenticatedReleaseID: AuthenticatedJourneyReleaseID?,
+        behaviorPresentation: ExperienceBehaviorPresentation,
+        behaviorPresentationScreens: [String: ExperienceBehaviorScreenGeometry],
         assetBaseURL: URL,
-        authenticatedReleaseID: AuthenticatedExperienceReleaseID? = nil,
+        journey: JourneyDocument,
+        definition: ExperienceDefinition?,
         products: [StoreProduct] = [],
         introEligibilityAuthorization: IntroEligibilityAuthorizationContext? = nil
     ) {
-        id = behavior.reference.experienceId
-        versionId = behavior.reference.versionId
-        buildId = behavior.buildId
-        artifactContentHash = behavior.artifactContentHash
+        self.id = id
+        self.versionId = versionId
+        self.buildId = buildId
+        self.artifactContentHash = artifactContentHash
         self.authenticatedReleaseID = authenticatedReleaseID
-        behaviorPresentation = behavior.presentation
-        behaviorPresentationScreens = behavior.presentationScreens
+        self.behaviorPresentation = behaviorPresentation
+        self.behaviorPresentationScreens = behaviorPresentationScreens
         self.assetBaseURL = assetBaseURL
-        name = behavior.name
-        reentry = behavior.reentry
-        releaseCreatedAt = behavior.releaseCreatedAt
-        trigger = behavior.trigger
-        goal = behavior.goal
-        exitPolicy = behavior.exitPolicy
-        conversionAnchor = behavior.conversionAnchor
-        timeLimitSeconds = behavior.timeLimitSeconds
-        experienceType = behavior.experienceType
         self.journey = journey
         self.definition = definition
         self.products = products
@@ -100,76 +59,6 @@ struct Experience: Codable, Sendable {
         return scoped
     }
 
-    init(
-        id: String,
-        versionId: String,
-        buildId: String = "test-build",
-        name: String,
-        reentry: ExperienceReentry,
-        releaseCreatedAt: String,
-        trigger: ExperienceTrigger?,
-        goal: GoalConfig?,
-        exitPolicy: ExitPolicy?,
-        conversionAnchor: String?,
-        timeLimitSeconds: Int? = nil,
-        experienceType: String?,
-        journey: JourneyDocument = .empty,
-        assetBaseURL: URL = URL(string: "https://assets.nuxie.ai/")!,
-        products: [StoreProduct] = []
-    ) {
-        self.id = id
-        self.versionId = versionId
-        self.buildId = buildId
-        artifactContentHash = String(repeating: "0", count: 64)
-        authenticatedReleaseID = nil
-        behaviorPresentation = .fullScreenDefault
-        behaviorPresentationScreens = [:]
-        self.assetBaseURL = assetBaseURL
-        self.name = name
-        self.reentry = reentry
-        self.releaseCreatedAt = releaseCreatedAt
-        self.trigger = trigger
-        self.goal = goal
-        self.exitPolicy = exitPolicy
-        self.conversionAnchor = conversionAnchor
-        self.timeLimitSeconds = timeLimitSeconds
-        self.experienceType = experienceType
-        self.journey = journey
-        definition = nil
-        self.products = products
-        introEligibilityAuthorization = nil
-    }
-
-    /// Rehydrates authenticated metadata with a decoded journey document in tests and
-    /// descriptor-native orchestration seams without recreating a wire model.
-    init(
-        metadata: Experience,
-        journey: JourneyDocument,
-        assetBaseURL: URL? = nil
-    ) {
-        id = metadata.id
-        versionId = metadata.versionId
-        buildId = metadata.buildId
-        artifactContentHash = metadata.artifactContentHash
-        authenticatedReleaseID = metadata.authenticatedReleaseID
-        behaviorPresentation = metadata.behaviorPresentation
-        behaviorPresentationScreens = metadata.behaviorPresentationScreens
-        self.assetBaseURL = assetBaseURL ?? metadata.assetBaseURL
-        name = metadata.name
-        reentry = metadata.reentry
-        releaseCreatedAt = metadata.releaseCreatedAt
-        trigger = metadata.trigger
-        goal = metadata.goal
-        exitPolicy = metadata.exitPolicy
-        conversionAnchor = metadata.conversionAnchor
-        timeLimitSeconds = metadata.timeLimitSeconds
-        experienceType = metadata.experienceType
-        self.journey = journey
-        definition = metadata.definition
-        products = metadata.products
-        introEligibilityAuthorization = metadata.introEligibilityAuthorization
-    }
-
     func shellContract(screenId: String?) -> ExperienceShellContract? {
         guard let screenId = screenId
                 ?? (behaviorPresentationScreens.count == 1
@@ -178,107 +67,32 @@ struct Experience: Codable, Sendable {
               let screen = behaviorPresentationScreens[screenId] else {
             return nil
         }
-        return ExperienceShellContract(presentation: behaviorPresentation, screen: screen)
-    }
-
-    /// Decodes the canonical persisted Experience projection.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        versionId = try container.decode(String.self, forKey: .versionId)
-        buildId = try container.decode(String.self, forKey: .buildId)
-        artifactContentHash = try container.decodeIfPresent(
-            String.self,
-            forKey: .artifactContentHash
+        return ExperienceShellContract(
+            presentation: behaviorPresentation,
+            screen: screen
         )
-        authenticatedReleaseID = try container.decodeIfPresent(
-            AuthenticatedExperienceReleaseID.self,
-            forKey: .authenticatedReleaseID
-        )
-        behaviorPresentation = try container.decode(
-            ExperienceBehaviorPresentation.self,
-            forKey: .behaviorPresentation
-        )
-        behaviorPresentationScreens = try container.decodeIfPresent(
-            [String: ExperienceBehaviorScreenGeometry].self,
-            forKey: .behaviorPresentationScreens
-        ) ?? [:]
-        assetBaseURL = try container.decode(URL.self, forKey: .assetBaseURL)
-        name = try container.decode(String.self, forKey: .name)
-        reentry = try container.decode(ExperienceReentry.self, forKey: .reentry)
-        releaseCreatedAt = try container.decode(String.self, forKey: .releaseCreatedAt)
-        trigger = try container.decodeIfPresent(ExperienceTrigger.self, forKey: .trigger)
-        goal = try container.decodeIfPresent(GoalConfig.self, forKey: .goal)
-        exitPolicy = try container.decodeIfPresent(ExitPolicy.self, forKey: .exitPolicy)
-        conversionAnchor = try container.decodeIfPresent(
-            String.self,
-            forKey: .conversionAnchor
-        )
-        timeLimitSeconds = try container.decodeIfPresent(
-            Int.self,
-            forKey: .timeLimitSeconds
-        )
-        experienceType = try container.decodeIfPresent(
-            String.self,
-            forKey: .experienceType
-        )
-        journey = try container.decode(JourneyDocument.self, forKey: .journey)
-        definition = nil
-        products = try container.decodeIfPresent(
-            [StoreProduct].self,
-            forKey: .products
-        ) ?? []
-        introEligibilityAuthorization = nil
-    }
-
-    /// Encodes the authenticated experience projection for durable reuse.
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(versionId, forKey: .versionId)
-        try container.encode(buildId, forKey: .buildId)
-        try container.encodeIfPresent(artifactContentHash, forKey: .artifactContentHash)
-        try container.encodeIfPresent(authenticatedReleaseID, forKey: .authenticatedReleaseID)
-        try container.encode(behaviorPresentation, forKey: .behaviorPresentation)
-        try container.encode(behaviorPresentationScreens, forKey: .behaviorPresentationScreens)
-        try container.encode(assetBaseURL, forKey: .assetBaseURL)
-        try container.encode(name, forKey: .name)
-        try container.encode(reentry, forKey: .reentry)
-        try container.encode(releaseCreatedAt, forKey: .releaseCreatedAt)
-        try container.encodeIfPresent(trigger, forKey: .trigger)
-        try container.encodeIfPresent(goal, forKey: .goal)
-        try container.encodeIfPresent(exitPolicy, forKey: .exitPolicy)
-        try container.encodeIfPresent(conversionAnchor, forKey: .conversionAnchor)
-        try container.encodeIfPresent(timeLimitSeconds, forKey: .timeLimitSeconds)
-        try container.encodeIfPresent(experienceType, forKey: .experienceType)
-        try container.encode(journey, forKey: .journey)
-        try container.encode(products, forKey: .products)
     }
 }
-
-// MARK: - Close Reason
 
 enum CloseReason: Equatable, Sendable {
     case userDismissed
     case goalMet
     case hostDismissed
     case error(Error)
-    
+
     static func == (lhs: CloseReason, rhs: CloseReason) -> Bool {
         switch (lhs, rhs) {
         case (.userDismissed, .userDismissed),
              (.goalMet, .goalMet),
              (.hostDismissed, .hostDismissed):
             return true
-        case let (.error(e1), .error(e2)):
-            return (e1 as NSError) == (e2 as NSError)
+        case let (.error(lhs), .error(rhs)):
+            return (lhs as NSError) == (rhs as NSError)
         default:
             return false
         }
     }
 }
-
-// MARK: - Product Period
 
 public enum ProductPeriod: String, Codable, Equatable, Sendable {
     case day
@@ -286,16 +100,4 @@ public enum ProductPeriod: String, Codable, Equatable, Sendable {
     case month
     case year
     case lifetime
-}
-
-// MARK: - Experience Cache Key
-
-/// Cache key for experiences (plain screens id — variant/segment dimensions
-/// were never used)
-struct ExperienceCacheKey: Hashable, Sendable {
-    public let id: String
-
-    public init(id: String) {
-        self.id = id
-    }
 }

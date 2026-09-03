@@ -1,38 +1,7 @@
 import Foundation
 
-/// Protocol for presenting experiences in dedicated windows
+/// Host control for the single Journey-owned presentation surface.
 protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
-    /// Present a experience by ID in a dedicated window
-    @discardableResult
-    @MainActor func presentExperience(_ experienceVersionId: String, from journey: Journey?, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController
-
-    /// Present a experience by ID in a dedicated window
-    @discardableResult
-    @MainActor func presentExperience(
-        _ experienceVersionId: String,
-        from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?,
-        colorSchemeMode: ExperienceColorSchemeMode
-    ) async throws -> ExperienceViewController
-
-    @MainActor func presentExperience(
-        _ experienceVersionId: String,
-        from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?,
-        colorSchemeMode: ExperienceColorSchemeMode,
-        initialScreenID: String?
-    ) async throws -> ExperienceViewController
-
-    /// Presents the exact authenticated screen commit selected and persisted
-    /// by journey control before renderer acquisition begins.
-    @MainActor func presentExperience(
-        _ experienceVersionId: String,
-        from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?,
-        colorSchemeMode: ExperienceColorSchemeMode,
-        commit: JourneyPendingPresentation
-    ) async throws -> ExperienceViewController
-    
     /// Dismiss the currently presented experience
     @MainActor func dismissCurrentExperience() async
     @MainActor func dismissCurrentExperience(reason: CloseReason) async
@@ -51,7 +20,7 @@ protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
 }
 
 @MainActor
-private final class DeviceLegReservation {
+private final class JourneyReservation {
     let id: UUID
     let ownerDistinctId: String
     private let service: ExperiencePresentationService
@@ -67,22 +36,22 @@ private final class DeviceLegReservation {
     }
 
     func release() {
-        service.releaseDeviceLegReservation(id: id)
+        service.releaseJourneyReservation(id: id)
     }
 }
 
-extension DeviceLegReservation: DeviceLegPresentationReservation {}
+extension JourneyReservation: JourneyPresentationReservation {}
 
 /// Service for presenting experiences in dedicated windows over the entire app
 @MainActor
 final class ExperiencePresentationService {
 
-    private struct DeviceLegPresentationContext {
-        let owner: DeviceLegPresentationOwner
+    private struct JourneyPresentationContext {
+        let owner: JourneyPresentationOwner
         let experienceId: String
     }
 
-    private enum DeviceLegPresentationAdmission<Prepared> {
+    private enum JourneyPresentationAdmission<Prepared> {
         case admitted(
             presentationID: UUID,
             controller: ExperienceViewController,
@@ -93,7 +62,7 @@ final class ExperiencePresentationService {
         case rejected
     }
 
-    private struct PendingDeviceLegReservation {
+    private struct PendingJourneyReservation {
         let id: UUID
         let ownerDistinctId: String
         var wasContended: Bool
@@ -102,16 +71,14 @@ final class ExperiencePresentationService {
     private struct PresentationOperationState {
         var presentationID: UUID?
         var owner: PresentationOwner?
-        var deviceLegOwnerDistinctId: String?
+        var journeyOwnerDistinctId: String?
     }
 
     /// Production presentations are owned by the Journey identity. The owner
     /// remains occupied until the attempt finishes; screen movement for that
     /// owner uses the dedicated navigation seam instead of another present.
     private enum PresentationOwner: Equatable {
-        case journey(String)
-        case deviceLeg(DeviceLegPresentationOwner)
-        case direct
+        case journey(JourneyPresentationOwner)
     }
 
     /// State retained after host surface control has synchronously detached a
@@ -121,8 +88,7 @@ final class ExperiencePresentationService {
         let id: UUID
         let window: PresentationWindowProtocol?
         let experienceVersionId: String
-        let journey: Journey?
-        let deviceLegContext: DeviceLegPresentationContext?
+        let journeyContext: JourneyPresentationContext?
         let viewController: ExperienceViewController
         let runtimeDelegate: ExperienceRuntimeDelegate?
         let runtimeDelegateTraceToken: ExperiencePresentationTraceToken?
@@ -132,18 +98,15 @@ final class ExperiencePresentationService {
     
     private let experienceService: ExperienceServiceProtocol
     private let eventLog: EventCapturing
-    private let triggerBroker: TriggerBrokerProtocol
-    private let dateProvider: DateProviderProtocol
     private let windowProvider: WindowProviderProtocol
     
     // MARK: - State
     
     internal var currentWindow: PresentationWindowProtocol?
     internal var currentExperienceId: String?
-    internal var currentJourney: Journey?
     internal var currentExperienceViewController: ExperienceViewController?
     private var currentRuntimeDelegate: ExperienceRuntimeDelegate?
-    private var currentDeviceLegContext: DeviceLegPresentationContext?
+    private var currentJourneyContext: JourneyPresentationContext?
     private var currentRuntimeDelegateTraceToken: ExperiencePresentationTraceToken?
     private var currentPresentationID: UUID?
     private var presentationOwner: PresentationOwner?
@@ -154,20 +117,20 @@ final class ExperiencePresentationService {
     private var detachedHostDismissalTasks: [UUID: Task<Void, Never>] = [:]
     private var presentationTeardownIDs: Set<UUID> = []
     private var activePresentationOperations: [UUID: PresentationOperationState] = [:]
-    private var pendingDeviceLegReservation: PendingDeviceLegReservation?
-    private var deviceLegPresentationAvailabilityHandler:
+    private var pendingJourneyReservation: PendingJourneyReservation?
+    private var journeyPresentationAvailabilityHandler:
         (@MainActor @Sendable () -> Void)?
-    private var deviceLegPresentationCapacityWasAvailable = true
+    private var journeyPresentationCapacityWasAvailable = true
     private var presentationOperationWaiters:
         [UUID: [CheckedContinuation<Void, Never>]] = [:]
-    private var deviceLegPresentationOperationWaiters:
+    private var journeyPresentationOperationWaiters:
         [String: [CheckedContinuation<Void, Never>]] = [:]
     private var allPresentationOperationWaiters: [CheckedContinuation<Void, Never>] = []
-    private var deviceLegForegroundAuthorityWaiters: [
+    private var journeyForegroundAuthorityWaiters: [
         UUID: [CheckedContinuation<Bool, Never>]
     ] = [:]
     private var appIsForeground = true
-    private var deviceLegForegroundAuthorityReady = true
+    private var journeyForegroundAuthorityReady = true
     
     // MARK: - Grace Period
     
@@ -181,15 +144,11 @@ final class ExperiencePresentationService {
     nonisolated init(
         windowProvider: WindowProviderProtocol? = nil,
         experiences: ExperienceServiceProtocol,
-        eventLog: EventCapturing,
-        triggerBroker: TriggerBrokerProtocol,
-        dateProvider: DateProviderProtocol
+        eventLog: EventCapturing
     ) {
         self.windowProvider = windowProvider ?? DefaultWindowProvider()
         self.experienceService = experiences
         self.eventLog = eventLog
-        self.triggerBroker = triggerBroker
-        self.dateProvider = dateProvider
     }
     
     // MARK: - Public API
@@ -199,119 +158,33 @@ final class ExperiencePresentationService {
     }
 
     var presentedJourneyId: String? {
-        currentJourney?.id
+        currentJourneyContext?.owner.journeyId
     }
 
-    @discardableResult
-    func presentExperience(
+    private func presentJourneyExperience(
         _ experienceVersionId: String,
-        from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?
-    ) async throws -> ExperienceViewController {
-        try await presentExperience(
-            experienceVersionId,
-            from: journey,
-            runtimeDelegate: runtimeDelegate,
-            colorSchemeMode: .system
-        )
-    }
-
-    @discardableResult
-    func presentExperience(
-        _ experienceVersionId: String,
-        from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?,
-        colorSchemeMode: ExperienceColorSchemeMode = .system
-    ) async throws -> ExperienceViewController {
-        try await presentExperience(
-            experienceVersionId,
-            from: journey,
-            runtimeDelegate: runtimeDelegate,
-            colorSchemeMode: colorSchemeMode,
-            initialScreenID: nil
-        )
-    }
-
-    @discardableResult
-    func presentExperience(
-        _ experienceVersionId: String,
-        from journey: Journey?,
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode,
-        initialScreenID: String?
-    ) async throws -> ExperienceViewController {
-        try await presentExperience(
-            experienceVersionId,
-            from: journey,
-            runtimeDelegate: runtimeDelegate,
-            colorSchemeMode: colorSchemeMode,
-            initialScreenID: initialScreenID,
-            expectedCommit: nil
-        )
-    }
-
-    @discardableResult
-    func presentExperience(
-        _ experienceVersionId: String,
-        from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?,
-        colorSchemeMode: ExperienceColorSchemeMode,
-        commit: JourneyPendingPresentation
-    ) async throws -> ExperienceViewController {
-        guard commit.experienceVersionId == experienceVersionId else {
-            throw ExperiencePresentationError.presentationSuperseded
-        }
-        return try await presentExperience(
-            experienceVersionId,
-            from: journey,
-            runtimeDelegate: runtimeDelegate,
-            colorSchemeMode: colorSchemeMode,
-            initialScreenID: commit.screenId,
-            expectedCommit: commit
-        )
-    }
-
-    private func presentExperience(
-        _ experienceVersionId: String,
-        from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?,
-        colorSchemeMode: ExperienceColorSchemeMode,
-        initialScreenID: String?,
-        expectedCommit: JourneyPendingPresentation?,
-        owner suppliedOwner: PresentationOwner? = nil,
-        deviceLegContext: DeviceLegPresentationContext? = nil,
-        deviceLegReservation: DeviceLegReservation? = nil,
+        initialScreenID: String,
+        owner: PresentationOwner,
+        journeyContext: JourneyPresentationContext,
+        journeyReservation: JourneyReservation? = nil,
         viewControllerProvider:
-            (@MainActor () async throws -> ExperienceViewController)? = nil
+            @MainActor () async throws -> ExperienceViewController
     ) async throws -> ExperienceViewController {
         let presentationOperationID = beginPresentationOperation()
         defer { finishPresentationOperation(presentationOperationID) }
-        let requestedOwner = suppliedOwner
-            ?? journey.map { .journey($0.id) }
-            ?? .direct
         try claimPresentationOwnership(
-            requestedOwner,
+            owner,
             operationID: presentationOperationID,
-            deviceLegReservation: deviceLegReservation,
-            requiresDeviceLegReservation: deviceLegContext != nil,
-            deviceLegOwnerDistinctId: deviceLegContext?.owner.distinctId
+            journeyReservation: journeyReservation,
+            requiresJourneyReservation: true,
+            journeyOwnerDistinctId: journeyContext.owner.distinctId
         )
         let shutdownGeneration = presentationShutdownGeneration
         try Task.checkCancellation()
         guard presentationShutdownGeneration == shutdownGeneration else {
             throw CancellationError()
-        }
-        // Validate the commit BEFORE advancing the attempt generation: an
-        // invalid request must not supersede a valid suspended presentation.
-        // The operation stays registered above either way, so shutdown still
-        // joins this call.
-        if let expectedCommit {
-            guard await experienceService.validatesPresentationCommit(expectedCommit) else {
-                throw ExperiencePresentationError.presentationSuperseded
-            }
-            guard presentationShutdownGeneration == shutdownGeneration else {
-                throw CancellationError()
-            }
         }
         presentationAttemptGeneration &+= 1
         let attemptGeneration = presentationAttemptGeneration
@@ -335,34 +208,14 @@ final class ExperiencePresentationService {
             throw ExperiencePresentationError.noActiveScene
         }
         
-        // 2. Get experience view controller from ExperienceService
+        // 2. Build the controller from the exact release selected by Journey.
         let traceContext = (
             runtimeDelegate as? any ExperiencePresentationTraceContextProviding
         )?.presentationTraceContext
-        let experienceViewController: ExperienceViewController
-        if let viewControllerProvider {
-            experienceViewController = try await viewControllerProvider()
-        } else {
-            experienceViewController = try await experienceService.viewController(
-                for: experienceVersionId,
-                runtimeDelegate: runtimeDelegate,
-                colorSchemeMode: colorSchemeMode,
-                presentationTraceContext: traceContext,
-                initialScreenID: initialScreenID
-            )
-        }
+        let experienceViewController = try await viewControllerProvider()
         try requireCurrentPresentationAttempt(attemptGeneration)
-        if let expectedCommit,
-           await !experienceService.validatesPresentationCommit(expectedCommit) {
-            throw ExperiencePresentationError.presentationSuperseded
-        }
-        try requireCurrentPresentationAttempt(attemptGeneration)
-        let resolvedInitialScreenID = initialScreenID
-            ?? (experienceViewController.experience.behaviorPresentationScreens.count == 1
-                ? experienceViewController.experience.behaviorPresentationScreens.keys.first
-                : nil)
-        if experienceViewController.experience.authenticatedReleaseID != nil,
-           resolvedInitialScreenID == nil {
+        guard experienceViewController.experience
+                .behaviorPresentationScreens[initialScreenID] != nil else {
             throw ExperiencePresentationError.presentationSuperseded
         }
         
@@ -388,10 +241,9 @@ final class ExperiencePresentationService {
         // 5. Store state before presenting to avoid race conditions
         self.currentWindow = window
         self.currentExperienceId = experienceVersionId
-        self.currentJourney = journey
         self.currentExperienceViewController = experienceViewController
         self.currentRuntimeDelegate = runtimeDelegate
-        self.currentDeviceLegContext = deviceLegContext
+        self.currentJourneyContext = journeyContext
         self.currentRuntimeDelegateTraceToken = (
             runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate
         )?.activePresentationTraceToken
@@ -405,56 +257,31 @@ final class ExperiencePresentationService {
         // rebuild presentation geometry and behavior from the currently
         // authenticated release carried by the loaded Experience.
         let shell = experienceViewController.experience.shellContract(
-            screenId: resolvedInitialScreenID
+            screenId: initialScreenID
         )
-        let warmReservation = await experienceService
-            .reserveMemoryWarmPresentation(for: experienceViewController.experience)
-        do {
-            try await requireOwnedPresentation(
-                presentationID,
-                attemptGeneration: attemptGeneration,
-                fallbackWindow: window
-            )
-        } catch {
-            warmReservation?.release()
-            throw error
-        }
+        try await requireOwnedPresentation(
+            presentationID,
+            attemptGeneration: attemptGeneration,
+            fallbackWindow: window
+        )
         experienceViewController.configurePresentationShell(
             shell,
-            suppressLoadingTreatment: warmReservation != nil,
-            warmReservation: warmReservation
+            suppressLoadingTreatment: false,
+            warmReservation: nil
         )
 
         // Every presentation owns freshly opened interactive screens, even
         // when ExperienceService returns a cached view controller.
         await experienceViewController.prepareForPresentation(
             traceToken: currentRuntimeDelegateTraceToken,
-            initialScreenID: resolvedInitialScreenID
+            initialScreenID: initialScreenID
         )
-        if let expectedCommit,
-           await !experienceService.validatesPresentationCommit(expectedCommit) {
-            await finishPresentation(
-                id: presentationID,
-                reason: nil,
-                dismissWindow: true
-            )
-            throw ExperiencePresentationError.presentationSuperseded
-        }
         try await requireOwnedPresentation(
             presentationID,
             attemptGeneration: attemptGeneration,
             fallbackWindow: window
         )
         // 6. Present experience
-        if let expectedCommit,
-           await !experienceService.validatesPresentationCommit(expectedCommit) {
-            await finishPresentation(
-                id: presentationID,
-                reason: nil,
-                dismissWindow: true
-            )
-            throw ExperiencePresentationError.presentationSuperseded
-        }
         let shellPresentationSpan = traceContext?.begin(
             .displayPresentation,
             attributes: ["phase": "shell"]
@@ -486,48 +313,13 @@ final class ExperiencePresentationService {
             )
         }
 
-        if let journey = journey {
-            await journey.markExperienceShown(at: dateProvider.now())
-            try await requireOwnedPresentation(
-                presentationID,
-                attemptGeneration: attemptGeneration,
-                fallbackWindow: window
-            )
-            let state = await journey.snapshot()
-            try await requireOwnedPresentation(
-                presentationID,
-                attemptGeneration: attemptGeneration,
-                fallbackWindow: window
-            )
-            trackExperienceShown(
-                properties: JourneyEvents.experienceShownProperties(
-                    experienceVersion: experienceVersionId,
-                    journey: state
-                ),
-                distinctId: state.distinctId
-            )
-            if let originEventId = await journey.getContext("_origin_event_id")?.value as? String {
-                try await requireOwnedPresentation(
-                    presentationID,
-                    attemptGeneration: attemptGeneration,
-                    fallbackWindow: window
-                )
-                let ref = ExperienceRef(
-                    experienceId: journey.experienceId,
-                    experienceVersion: journey.experienceVersion,
-                    journeyId: journey.id
-                )
-                await triggerBroker.emit(eventId: originEventId, update: .decision(.experienceShown(ref)))
-            }
-        } else if let deviceLegContext {
-            trackExperienceShown(
-                properties: deviceLegExperienceProperties(
-                    experienceVersionId: experienceVersionId,
-                    context: deviceLegContext
-                ),
-                distinctId: deviceLegContext.owner.distinctId
-            )
-        }
+        trackExperienceShown(
+            properties: journeyExperienceProperties(
+                experienceVersionId: experienceVersionId,
+                context: journeyContext
+            ),
+            distinctId: journeyContext.owner.distinctId
+        )
 
         try await requireOwnedPresentation(
             presentationID,
@@ -552,55 +344,55 @@ final class ExperiencePresentationService {
         )
     }
 
-    func reserveDeviceLegPresentation(
+    func reserveJourneyPresentation(
         ownerDistinctId: String
-    ) -> (any DeviceLegPresentationReservation)? {
+    ) -> (any JourneyPresentationReservation)? {
         guard !ownerDistinctId.isEmpty else { return nil }
-        if pendingDeviceLegReservation != nil {
-            pendingDeviceLegReservation?.wasContended = true
+        if pendingJourneyReservation != nil {
+            pendingJourneyReservation?.wasContended = true
             return nil
         }
         guard appIsForeground,
-              deviceLegForegroundAuthorityReady,
+              journeyForegroundAuthorityReady,
               windowProvider.canPresentWindow(),
               presentationOwner == nil,
               currentPresentationID == nil,
               activePresentationOperations.isEmpty else {
             return nil
         }
-        let reservation = PendingDeviceLegReservation(
+        let reservation = PendingJourneyReservation(
             id: UUID(),
             ownerDistinctId: ownerDistinctId,
             wasContended: false
         )
-        pendingDeviceLegReservation = reservation
-        refreshDeviceLegPresentationCapacity()
-        return DeviceLegReservation(
+        pendingJourneyReservation = reservation
+        refreshJourneyPresentationCapacity()
+        return JourneyReservation(
             id: reservation.id,
             ownerDistinctId: ownerDistinctId,
             service: self
         )
     }
 
-    func setDeviceLegPresentationAvailabilityHandler(
+    func setJourneyPresentationAvailabilityHandler(
         _ handler: (@MainActor @Sendable () -> Void)?
     ) {
-        deviceLegPresentationAvailabilityHandler = handler
-        deviceLegPresentationCapacityWasAvailable =
-            deviceLegPresentationCapacityIsAvailable
+        journeyPresentationAvailabilityHandler = handler
+        journeyPresentationCapacityWasAvailable =
+            journeyPresentationCapacityIsAvailable
     }
 
-    func ownsDeviceLegPresentation(
-        owner: DeviceLegPresentationOwner
+    func ownsJourneyPresentation(
+        owner: JourneyPresentationOwner
     ) -> Bool {
-        ownsCurrentDeviceLegPresentation(owner)
+        ownsCurrentJourneyPresentation(owner)
     }
 
-    func presentDeviceLeg(
-        _ request: DeviceLegPresentationRequest
-    ) async -> DeviceLegPresentationResult {
+    func presentJourney(
+        _ request: JourneyPresentationRequest
+    ) async -> JourneyPresentationResult {
         guard appIsForeground,
-              deviceLegForegroundAuthorityReady else {
+              journeyForegroundAuthorityReady else {
             request.reservation?.release()
             return .declined
         }
@@ -610,7 +402,7 @@ final class ExperiencePresentationService {
             request.reservation?.release()
             return .failed
         }
-        let reservation = request.reservation as? DeviceLegReservation
+        let reservation = request.reservation as? JourneyReservation
         guard request.reservation == nil || reservation != nil,
               reservation?.ownerDistinctId == request.owner.distinctId
                 || reservation == nil else {
@@ -618,24 +410,22 @@ final class ExperiencePresentationService {
             return .declined
         }
         defer { reservation?.release() }
-        let runtimeDelegate = DeviceLegRuntimeDelegate(request: request)
+        let runtimeDelegate = JourneyRuntimeDelegate(request: request)
         do {
-            _ = try await presentExperience(
+            _ = try await presentJourneyExperience(
                 request.release.descriptor.identity.experienceVersionId,
-                from: nil,
                 runtimeDelegate: runtimeDelegate,
                 colorSchemeMode: .system,
                 initialScreenID: request.screenId,
-                expectedCommit: nil,
-                owner: .deviceLeg(request.owner),
-                deviceLegContext: .init(
+                owner: .journey(request.owner),
+                journeyContext: .init(
                     owner: request.owner,
                     experienceId: request.release.descriptor.identity.experienceId
                 ),
-                deviceLegReservation: reservation,
+                journeyReservation: reservation,
                 viewControllerProvider: { [experienceService] in
                     try await experienceService.viewController(
-                        forDeviceLeg: request.release,
+                        forJourney: request.release,
                         delivery: request.delivery,
                         pinnedArtifacts: request.pinnedArtifacts,
                         runtimeDelegate: runtimeDelegate,
@@ -649,7 +439,7 @@ final class ExperiencePresentationService {
         } catch ExperiencePresentationError.presentationSuperseded {
             return .declined
         } catch is CancellationError {
-            return appIsForeground && deviceLegForegroundAuthorityReady
+            return appIsForeground && journeyForegroundAuthorityReady
                 ? .failed
                 : .declined
         } catch {
@@ -657,12 +447,12 @@ final class ExperiencePresentationService {
         }
     }
 
-    func navigateDeviceLegPresentation(
-        owner: DeviceLegPresentationOwner,
+    func navigateJourneyPresentation(
+        owner: JourneyPresentationOwner,
         screenId: String,
-        transition: ExperienceReleaseJSONValue?
-    ) async -> DeviceLegPresentationNavigationResult {
-        let admission = await admitDeviceLegPresentation(
+        transition: JourneyReleaseJSONValue?
+    ) async -> JourneyPresentationNavigationResult {
+        let admission = await admitJourneyPresentation(
             owner: owner,
             prepare: { () }
         )
@@ -681,9 +471,9 @@ final class ExperiencePresentationService {
         }
         let navigationResult = await controller.navigateAndWaitResult(
             to: screenId,
-            transition: deviceLegFoundationValue(transition)
+            transition: journeyFoundationValue(transition)
         )
-        guard ownsCurrentDeviceLegPresentation(
+        guard ownsCurrentJourneyPresentation(
             owner,
             presentationID: presentationID
         ) else {
@@ -701,18 +491,18 @@ final class ExperiencePresentationService {
         }
     }
 
-    func resolveDeviceLegPresentationAction(
-        owner: DeviceLegPresentationOwner,
-        action: [String: ExperienceReleaseJSONValue],
+    func resolveJourneyPresentationAction(
+        owner: JourneyPresentationOwner,
+        action: [String: JourneyReleaseJSONValue],
         source: ScreenEmissionSource?
-    ) -> [String: ExperienceReleaseJSONValue]? {
-        guard ownsCurrentDeviceLegPresentation(owner),
-              let type = DeviceLegActionType(action: action) else {
+    ) -> [String: JourneyReleaseJSONValue]? {
+        guard ownsCurrentJourneyPresentation(owner),
+              let type = JourneyActionType(action: action) else {
             return nil
         }
         guard type == .purchase else { return action }
         guard let placementValue = action["placementId"],
-              let delegate = currentRuntimeDelegate as? DeviceLegRuntimeDelegate,
+              let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,
               let placementId = delegate.resolvePresentationString(
                 placementValue,
                 source: source
@@ -724,16 +514,16 @@ final class ExperiencePresentationService {
         return resolved
     }
 
-    func dispatchDeviceLegPresentationAction(
-        owner: DeviceLegPresentationOwner,
-        action: [String: ExperienceReleaseJSONValue],
+    func dispatchJourneyPresentationAction(
+        owner: JourneyPresentationOwner,
+        action: [String: JourneyReleaseJSONValue],
         effectId: String
-    ) async -> DeviceLegPresentationActionResult {
-        let admission: DeviceLegPresentationAdmission<DeviceLegActionType> =
-            await admitDeviceLegPresentation(
+    ) async -> JourneyPresentationActionResult {
+        let admission: JourneyPresentationAdmission<JourneyActionType> =
+            await admitJourneyPresentation(
                 owner: owner,
                 prepare: {
-                    guard let type = DeviceLegActionType(action: action),
+                    guard let type = JourneyActionType(action: action),
                           type.isPresentationOwned else {
                         return nil
                     }
@@ -742,7 +532,7 @@ final class ExperiencePresentationService {
             )
         let presentationID: UUID
         let controller: ExperienceViewController
-        let type: DeviceLegActionType
+        let type: JourneyActionType
         switch admission {
         case .admitted(
             let admittedID,
@@ -759,7 +549,7 @@ final class ExperiencePresentationService {
         case .rejected:
             return .failed
         }
-        let result: DeviceLegPresentationActionResult
+        let result: JourneyPresentationActionResult
         switch type {
         case .back:
             let steps: Int
@@ -774,13 +564,13 @@ final class ExperiencePresentationService {
             } else {
                 return .failed
             }
-            guard let delegate = currentRuntimeDelegate as? DeviceLegRuntimeDelegate,
+            guard let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,
                   let target = delegate.prepareBackNavigation(steps: steps) else {
                 return .failed
             }
             switch await controller.navigateAndWaitResult(
                 to: target,
-                transition: deviceLegFoundationValue(action["transition"])
+                transition: journeyFoundationValue(action["transition"])
             ) {
             case .navigated, .alreadyActive:
                 result = .handled
@@ -794,7 +584,7 @@ final class ExperiencePresentationService {
 
         case .purchase:
             guard let placementValue = action["placementId"],
-                  let delegate = currentRuntimeDelegate as? DeviceLegRuntimeDelegate,
+                  let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,
                   let placementId = delegate.resolvePresentationString(
                     placementValue,
                     source: nil
@@ -820,7 +610,7 @@ final class ExperiencePresentationService {
         case .requestNotifications:
             result = .permissionResolved(
                 outlet: "next",
-                event: await controller.resolveDeviceLegNotificationPermissionEvent(
+                event: await controller.resolveJourneyNotificationPermissionEvent(
                     journeyId: owner.journeyId
                 )
             )
@@ -832,7 +622,7 @@ final class ExperiencePresentationService {
             }
             result = .permissionResolved(
                 outlet: "next",
-                event: await controller.resolveDeviceLegRequestPermissionEvent(
+                event: await controller.resolveJourneyRequestPermissionEvent(
                     permissionType: permissionType,
                     journeyId: owner.journeyId
                 )
@@ -841,7 +631,7 @@ final class ExperiencePresentationService {
         case .requestTracking:
             result = .permissionResolved(
                 outlet: "next",
-                event: await controller.resolveDeviceLegTrackingPermissionEvent(
+                event: await controller.resolveJourneyTrackingPermissionEvent(
                     journeyId: owner.journeyId
                 )
             )
@@ -863,7 +653,7 @@ final class ExperiencePresentationService {
             return .failed
         }
 
-        guard ownsCurrentDeviceLegPresentation(
+        guard ownsCurrentJourneyPresentation(
             owner,
             presentationID: presentationID
         ) else {
@@ -872,11 +662,11 @@ final class ExperiencePresentationService {
         return result
     }
 
-    func finishDeviceLegPresentation(
-        owner: DeviceLegPresentationOwner
+    func finishJourneyPresentation(
+        owner: JourneyPresentationOwner
     ) async {
         guard let presentationID = currentPresentationID,
-              ownsCurrentDeviceLegPresentation(
+              ownsCurrentJourneyPresentation(
                 owner,
                 presentationID: presentationID
               ) else {
@@ -890,26 +680,26 @@ final class ExperiencePresentationService {
         )
     }
 
-    func shutdownDeviceLegPresentation(ownerDistinctId: String) async {
+    func shutdownJourneyPresentation(ownerDistinctId: String) async {
         let ownsPendingReservation =
-            pendingDeviceLegReservation?.ownerDistinctId == ownerDistinctId
+            pendingJourneyReservation?.ownerDistinctId == ownerDistinctId
         let ownsInFlightOperation = activePresentationOperations.values.contains(where: {
-            $0.deviceLegOwnerDistinctId == ownerDistinctId
+            $0.journeyOwnerDistinctId == ownerDistinctId
         })
         let ownedCurrentPresentationID =
-            currentDeviceLegContext?.owner.distinctId == ownerDistinctId
+            currentJourneyContext?.owner.distinctId == ownerDistinctId
                 ? currentPresentationID
                 : nil
         let detachedTasks = detachedHostPresentations.compactMap {
             id, presentation -> Task<Void, Never>? in
-            guard presentation.deviceLegContext?.owner.distinctId
+            guard presentation.journeyContext?.owner.distinctId
                     == ownerDistinctId else {
                 return nil
             }
             return detachedHostDismissalTasks[id]
         }
         if ownsPendingReservation {
-            pendingDeviceLegReservation = nil
+            pendingJourneyReservation = nil
         }
         if ownsInFlightOperation || ownedCurrentPresentationID != nil {
             presentationAttemptGeneration &+= 1
@@ -922,29 +712,29 @@ final class ExperiencePresentationService {
                 dismissWindow: true
             )
         }
-        await waitForDeviceLegPresentationOperationsToFinish(
+        await waitForJourneyPresentationOperationsToFinish(
             ownerDistinctId: ownerDistinctId
         )
         for task in detachedTasks {
             await task.value
         }
         releasePresentationOwnershipIfIdle()
-        refreshDeviceLegPresentationCapacity()
+        refreshJourneyPresentationCapacity()
     }
 
-    fileprivate func releaseDeviceLegReservation(id: UUID) {
-        guard let reservation = pendingDeviceLegReservation,
+    fileprivate func releaseJourneyReservation(id: UUID) {
+        guard let reservation = pendingJourneyReservation,
               reservation.id == id else { return }
-        pendingDeviceLegReservation = nil
+        pendingJourneyReservation = nil
         if reservation.wasContended {
-            refreshDeviceLegPresentationCapacity()
+            refreshJourneyPresentationCapacity()
         } else {
             // Releasing an uncontended reservation is part of unwinding the
             // current admission attempt. Publishing a callback here would
             // immediately retry the same state arm before its eligibility can
             // change.
-            deviceLegPresentationCapacityWasAvailable =
-                deviceLegPresentationCapacityIsAvailable
+            journeyPresentationCapacityWasAvailable =
+                journeyPresentationCapacityIsAvailable
         }
     }
     
@@ -995,7 +785,7 @@ final class ExperiencePresentationService {
     }
 
     func shutdownCurrentExperience() async {
-        pendingDeviceLegReservation = nil
+        pendingJourneyReservation = nil
         presentationShutdownGeneration &+= 1
         presentationAttemptGeneration &+= 1
         let detachedTasks = Array(detachedHostDismissalTasks.values)
@@ -1027,8 +817,7 @@ final class ExperiencePresentationService {
             id: presentationID,
             window: currentWindow,
             experienceVersionId: currentExperienceId ?? "unknown",
-            journey: currentJourney,
-            deviceLegContext: currentDeviceLegContext,
+            journeyContext: currentJourneyContext,
             viewController: experienceViewController,
             runtimeDelegate: currentRuntimeDelegate,
             runtimeDelegateTraceToken: currentRuntimeDelegateTraceToken
@@ -1040,15 +829,14 @@ final class ExperiencePresentationService {
         // The presentation slot remains occupied until Journey, commerce, and
         // renderer teardown all settle.
         presentationTeardownIDs.insert(presentationID)
-        resumeDeviceLegForegroundAuthorityWaiters(
+        resumeJourneyForegroundAuthorityWaiters(
             presentationID: presentationID,
             authorized: false
         )
         currentPresentationID = nil
         currentWindow = nil
         currentExperienceId = nil
-        currentJourney = nil
-        currentDeviceLegContext = nil
+        currentJourneyContext = nil
         currentExperienceViewController = nil
         currentRuntimeDelegate = nil
         currentRuntimeDelegateTraceToken = nil
@@ -1071,7 +859,7 @@ final class ExperiencePresentationService {
             self.detachedHostDismissalTasks.removeValue(forKey: presentationID)
             self.presentationTeardownIDs.remove(presentationID)
             self.releasePresentationOwnershipIfIdle()
-            self.refreshDeviceLegPresentationCapacity()
+            self.refreshJourneyPresentationCapacity()
         }
         detachedHostPresentations[presentationID] = presentation
         detachedHostDismissalTasks[presentationID] = completionTask
@@ -1082,37 +870,37 @@ final class ExperiencePresentationService {
         guard !appIsForeground else { return }
         LogDebug("ExperiencePresentationService: App became active, starting grace period")
         appIsForeground = true
-        deviceLegForegroundAuthorityReady = false
+        journeyForegroundAuthorityReady = false
         // Set grace period end time
         gracePeriodEndTime = Date().addingTimeInterval(foregroundGracePeriod)
-        refreshDeviceLegPresentationCapacity()
+        refreshJourneyPresentationCapacity()
     }
 
-    func deviceLegProfileRefreshDidComplete() {
+    func journeyProfileRefreshDidComplete() {
         guard appIsForeground else { return }
-        deviceLegForegroundAuthorityReady = true
+        journeyForegroundAuthorityReady = true
         if let currentPresentationID {
-            resumeDeviceLegForegroundAuthorityWaiters(
+            resumeJourneyForegroundAuthorityWaiters(
                 presentationID: currentPresentationID,
                 authorized: true
             )
         }
-        refreshDeviceLegPresentationCapacity()
+        refreshJourneyPresentationCapacity()
     }
     
     func onAppDidEnterBackground() {
         LogDebug("ExperiencePresentationService: App entered background, clearing grace period")
         appIsForeground = false
-        deviceLegForegroundAuthorityReady = false
-        pendingDeviceLegReservation = nil
+        journeyForegroundAuthorityReady = false
+        pendingJourneyReservation = nil
         if activePresentationOperations.values.contains(where: {
-            $0.deviceLegOwnerDistinctId != nil
+            $0.journeyOwnerDistinctId != nil
         }) {
             presentationAttemptGeneration &+= 1
         }
         // Clear grace period when going to background
         gracePeriodEndTime = nil
-        refreshDeviceLegPresentationCapacity()
+        refreshJourneyPresentationCapacity()
     }
     
     // MARK: - Private Methods
@@ -1150,8 +938,7 @@ final class ExperiencePresentationService {
         let window = currentWindow
         let experienceViewController = currentExperienceViewController
         let experienceVersionId = currentExperienceId ?? "unknown"
-        let journey = currentJourney
-        let deviceLegContext = currentDeviceLegContext
+        let journeyContext = currentJourneyContext
         let runtimeDelegate = currentRuntimeDelegate
         let runtimeDelegateTraceToken = currentRuntimeDelegateTraceToken
 
@@ -1164,15 +951,14 @@ final class ExperiencePresentationService {
 
         // Revoke ownership before suspension so callbacks from this
         // presentation become stale immediately.
-        resumeDeviceLegForegroundAuthorityWaiters(
+        resumeJourneyForegroundAuthorityWaiters(
             presentationID: presentationID,
             authorized: false
         )
         currentPresentationID = nil
         currentWindow = nil
         currentExperienceId = nil
-        currentJourney = nil
-        currentDeviceLegContext = nil
+        currentJourneyContext = nil
         currentExperienceViewController = nil
         currentRuntimeDelegate = nil
         currentRuntimeDelegateTraceToken = nil
@@ -1180,17 +966,11 @@ final class ExperiencePresentationService {
 
         if let reason {
             LogInfo("ExperiencePresentationService: Experience \(experienceVersionId) dismissed with reason: \(reason)")
-            if let journey {
-                await trackDismissal(
+            if let journeyContext {
+                trackJourneyDismissal(
                     reason,
                     experienceVersionId: experienceVersionId,
-                    journey: journey
-                )
-            } else if let deviceLegContext {
-                trackDeviceLegDismissal(
-                    reason,
-                    experienceVersionId: experienceVersionId,
-                    context: deviceLegContext
+                    context: journeyContext
                 )
             }
         }
@@ -1222,7 +1002,7 @@ final class ExperiencePresentationService {
         }
         presentationTeardownIDs.remove(presentationID)
         releasePresentationOwnershipIfIdle()
-        refreshDeviceLegPresentationCapacity()
+        refreshJourneyPresentationCapacity()
     }
 
     private func requireCurrentPresentationAttempt(_ generation: UInt64) throws {
@@ -1276,17 +1056,11 @@ final class ExperiencePresentationService {
             LogInfo(
                 "ExperiencePresentationService: Experience \(experienceVersionId) host dismissed"
             )
-            if let journey = presentation.journey {
-                await trackDismissal(
+            if let journeyContext = presentation.journeyContext {
+                trackJourneyDismissal(
                     .hostDismissed,
                     experienceVersionId: presentation.experienceVersionId,
-                    journey: journey
-                )
-            } else if let deviceLegContext = presentation.deviceLegContext {
-                trackDeviceLegDismissal(
-                    .hostDismissed,
-                    experienceVersionId: presentation.experienceVersionId,
-                    context: deviceLegContext
+                    context: journeyContext
                 )
             }
         }
@@ -1310,32 +1084,32 @@ final class ExperiencePresentationService {
         activePresentationOperations[operationID] = PresentationOperationState(
             presentationID: nil,
             owner: nil,
-            deviceLegOwnerDistinctId: nil
+            journeyOwnerDistinctId: nil
         )
-        refreshDeviceLegPresentationCapacity()
+        refreshJourneyPresentationCapacity()
         return operationID
     }
 
     private func claimPresentationOwnership(
         _ requestedOwner: PresentationOwner,
         operationID: UUID,
-        deviceLegReservation: DeviceLegReservation? = nil,
-        requiresDeviceLegReservation: Bool = false,
-        deviceLegOwnerDistinctId: String? = nil
+        journeyReservation: JourneyReservation? = nil,
+        requiresJourneyReservation: Bool = false,
+        journeyOwnerDistinctId: String? = nil
     ) throws {
         if presentationOwner != nil || !presentationTeardownIDs.isEmpty {
             throw ExperiencePresentationError.presentationDeclined
         }
-        if presentationOwner == nil, requiresDeviceLegReservation {
-            guard let deviceLegReservation,
-                  pendingDeviceLegReservation?.id == deviceLegReservation.id,
-                  pendingDeviceLegReservation?.ownerDistinctId
-                    == deviceLegReservation.ownerDistinctId else {
+        if presentationOwner == nil, requiresJourneyReservation {
+            guard let journeyReservation,
+                  pendingJourneyReservation?.id == journeyReservation.id,
+                  pendingJourneyReservation?.ownerDistinctId
+                    == journeyReservation.ownerDistinctId else {
                 throw ExperiencePresentationError.presentationDeclined
             }
-            pendingDeviceLegReservation = nil
-        } else if let pendingDeviceLegReservation,
-                  pendingDeviceLegReservation.id != deviceLegReservation?.id {
+            pendingJourneyReservation = nil
+        } else if let pendingJourneyReservation,
+                  pendingJourneyReservation.id != journeyReservation?.id {
             throw ExperiencePresentationError.presentationDeclined
         }
         presentationOwner = requestedOwner
@@ -1343,7 +1117,7 @@ final class ExperiencePresentationService {
             throw CancellationError()
         }
         operation.owner = requestedOwner
-        operation.deviceLegOwnerDistinctId = deviceLegOwnerDistinctId
+        operation.journeyOwnerDistinctId = journeyOwnerDistinctId
         activePresentationOperations[operationID] = operation
     }
 
@@ -1355,11 +1129,11 @@ final class ExperiencePresentationService {
                 $0.owner == presentationOwner
               }) else { return }
         self.presentationOwner = nil
-        refreshDeviceLegPresentationCapacity()
+        refreshJourneyPresentationCapacity()
     }
 
-    private func ownsCurrentDeviceLegPresentation(
-        _ owner: DeviceLegPresentationOwner,
+    private func ownsCurrentJourneyPresentation(
+        _ owner: JourneyPresentationOwner,
         presentationID expectedPresentationID: UUID? = nil
     ) -> Bool {
         guard let currentPresentationID,
@@ -1367,32 +1141,32 @@ final class ExperiencePresentationService {
                 || expectedPresentationID == currentPresentationID else {
             return false
         }
-        return currentDeviceLegContext?.owner == owner
-            && presentationOwner == .deviceLeg(owner)
+        return currentJourneyContext?.owner == owner
+            && presentationOwner == .journey(owner)
     }
 
-    private func admitDeviceLegPresentation<Prepared>(
-        owner: DeviceLegPresentationOwner,
+    private func admitJourneyPresentation<Prepared>(
+        owner: JourneyPresentationOwner,
         prepare: () -> Prepared?
-    ) async -> DeviceLegPresentationAdmission<Prepared> {
+    ) async -> JourneyPresentationAdmission<Prepared> {
         guard let presentationID = currentPresentationID,
-              let context = currentDeviceLegContext,
+              let context = currentJourneyContext,
               let controller = currentExperienceViewController else {
             return .noPresentation
         }
         guard context.owner == owner,
-              ownsCurrentDeviceLegPresentation(owner) else {
+              ownsCurrentJourneyPresentation(owner) else {
             return .declined
         }
         guard let prepared = prepare() else {
             return .rejected
         }
-        guard await waitForDeviceLegForegroundAuthority(
+        guard await waitForJourneyForegroundAuthority(
             presentationID: presentationID
         ) else {
             return .noPresentation
         }
-        guard ownsCurrentDeviceLegPresentation(
+        guard ownsCurrentJourneyPresentation(
             owner,
             presentationID: presentationID
         ) else {
@@ -1428,11 +1202,11 @@ final class ExperiencePresentationService {
                 presentationID: presentationID
             )
         }
-        if let ownerDistinctId = operation?.deviceLegOwnerDistinctId,
+        if let ownerDistinctId = operation?.journeyOwnerDistinctId,
            !activePresentationOperations.values.contains(where: {
-               $0.deviceLegOwnerDistinctId == ownerDistinctId
+               $0.journeyOwnerDistinctId == ownerDistinctId
            }) {
-            let waiters = deviceLegPresentationOperationWaiters
+            let waiters = journeyPresentationOperationWaiters
                 .removeValue(forKey: ownerDistinctId) ?? []
             waiters.forEach { $0.resume() }
         }
@@ -1442,28 +1216,28 @@ final class ExperiencePresentationService {
             waiters.forEach { $0.resume() }
         }
         releasePresentationOwnershipIfIdle()
-        refreshDeviceLegPresentationCapacity()
+        refreshJourneyPresentationCapacity()
     }
 
-    private var deviceLegPresentationCapacityIsAvailable: Bool {
+    private var journeyPresentationCapacityIsAvailable: Bool {
         appIsForeground
-            && deviceLegForegroundAuthorityReady
+            && journeyForegroundAuthorityReady
             && windowProvider.canPresentWindow()
             && presentationOwner == nil
             && currentPresentationID == nil
             && presentationTeardownIDs.isEmpty
-            && pendingDeviceLegReservation == nil
+            && pendingJourneyReservation == nil
             && activePresentationOperations.isEmpty
     }
 
-    private func refreshDeviceLegPresentationCapacity() {
-        let isAvailable = deviceLegPresentationCapacityIsAvailable
-        guard isAvailable != deviceLegPresentationCapacityWasAvailable else {
+    private func refreshJourneyPresentationCapacity() {
+        let isAvailable = journeyPresentationCapacityIsAvailable
+        guard isAvailable != journeyPresentationCapacityWasAvailable else {
             return
         }
-        deviceLegPresentationCapacityWasAvailable = isAvailable
+        journeyPresentationCapacityWasAvailable = isAvailable
         if isAvailable {
-            deviceLegPresentationAvailabilityHandler?()
+            journeyPresentationAvailabilityHandler?()
         }
     }
 
@@ -1474,25 +1248,25 @@ final class ExperiencePresentationService {
         }
     }
 
-    private func waitForDeviceLegPresentationOperationsToFinish(
+    private func waitForJourneyPresentationOperationsToFinish(
         ownerDistinctId: String
     ) async {
         guard activePresentationOperations.values.contains(where: {
-            $0.deviceLegOwnerDistinctId == ownerDistinctId
+            $0.journeyOwnerDistinctId == ownerDistinctId
         }) else { return }
         await withCheckedContinuation { continuation in
-            deviceLegPresentationOperationWaiters[
+            journeyPresentationOperationWaiters[
                 ownerDistinctId,
                 default: []
             ].append(continuation)
         }
     }
 
-    private func waitForDeviceLegForegroundAuthority(
+    private func waitForJourneyForegroundAuthority(
         presentationID: UUID
     ) async -> Bool {
         guard currentPresentationID == presentationID else { return false }
-        if appIsForeground && deviceLegForegroundAuthorityReady {
+        if appIsForeground && journeyForegroundAuthorityReady {
             return true
         }
         return await withCheckedContinuation { continuation in
@@ -1500,18 +1274,18 @@ final class ExperiencePresentationService {
                 continuation.resume(returning: false)
                 return
             }
-            deviceLegForegroundAuthorityWaiters[
+            journeyForegroundAuthorityWaiters[
                 presentationID,
                 default: []
             ].append(continuation)
         }
     }
 
-    private func resumeDeviceLegForegroundAuthorityWaiters(
+    private func resumeJourneyForegroundAuthorityWaiters(
         presentationID: UUID,
         authorized: Bool
     ) {
-        let waiters = deviceLegForegroundAuthorityWaiters
+        let waiters = journeyForegroundAuthorityWaiters
             .removeValue(forKey: presentationID) ?? []
         waiters.forEach { $0.resume(returning: authorized) }
     }
@@ -1560,46 +1334,12 @@ final class ExperiencePresentationService {
         }
     }
 
-    private func trackDismissal(
+    private func trackJourneyDismissal(
         _ reason: CloseReason,
         experienceVersionId: String,
-        journey: Journey
-    ) async {
-        let state = await journey.snapshot()
-
-        switch reason {
-        case .userDismissed, .goalMet, .hostDismissed:
-            eventLog.track(
-                JourneyEvents.experienceDismissed,
-                properties: JourneyEvents.experienceDismissedProperties(
-                    experienceVersion: experienceVersionId,
-                    journey: state,
-                    reason: reason
-                ),
-                userProperties: nil,
-                userPropertiesSetOnce: nil,
-                distinctIdOverride: journey.distinctId
-            )
-        case .error(let error):
-            eventLog.track(
-                JourneyEvents.experienceErrored,
-                properties: JourneyEvents.experienceErroredProperties(
-                    experienceVersion: experienceVersionId,
-                    journey: state,
-                    errorMessage: error.localizedDescription
-                ),
-                userProperties: nil,
-                userPropertiesSetOnce: nil
-            )
-        }
-    }
-
-    private func trackDeviceLegDismissal(
-        _ reason: CloseReason,
-        experienceVersionId: String,
-        context: DeviceLegPresentationContext
+        context: JourneyPresentationContext
     ) {
-        var properties = deviceLegExperienceProperties(
+        var properties = journeyExperienceProperties(
             experienceVersionId: experienceVersionId,
             context: context
         )
@@ -1630,9 +1370,9 @@ final class ExperiencePresentationService {
         )
     }
 
-    private func deviceLegExperienceProperties(
+    private func journeyExperienceProperties(
         experienceVersionId: String,
-        context: DeviceLegPresentationContext
+        context: JourneyPresentationContext
     ) -> [String: Any] {
         [
             "journey_id": context.owner.journeyId,
@@ -1643,7 +1383,7 @@ final class ExperiencePresentationService {
 }
 
 extension ExperiencePresentationService: ExperiencePresentationServiceProtocol {}
-extension ExperiencePresentationService: DeviceLegPresenting {}
+extension ExperiencePresentationService: JourneyPresenting {}
 
 // MARK: - Errors
 

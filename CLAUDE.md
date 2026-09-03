@@ -8,11 +8,11 @@ document and the conformance fixtures as repository-local contracts.
 ## What this SDK does
 
 Connects iOS/macOS apps to Nuxie: tracks events (SQLite-backed local history +
-batched network delivery), identifies users, evaluates segments/goals/journey
-conditions client-side via a compiled IR, executes server-configured experience
-journeys, and renders Nuxie Runtime-backed experiences (paywalls, onboarding,
-surveys). Releases authenticate and admit an inline signed descriptor, then
-acquire its standalone content-addressed RIV, assets, and scripts.
+batched network delivery), identifies users, admits signed Journey plane
+profiles, executes their on-device regions, and renders Nuxie Runtime-backed
+experiences (paywalls, onboarding, surveys). Journey releases authenticate an
+inline signed descriptor, then acquire standalone content-addressed RIV,
+assets, and scripts.
 
 ## Project structure (actual)
 
@@ -25,17 +25,15 @@ Sources/Nuxie/
 ├── Events/                 # EventLog actor (capture → enrich → persist →
 │                           #   durable batched delivery → query, committed-
 │                           #   events subscriptions), SQLiteEventStore,
-│                           #   TriggerService/TriggerBroker (journey routing),
 │                           #   NuxieContextBuilder, EventSanitizer
-├── Profile/                # ProfileService (/profile fetch + cache + apply)
-├── Segments/               # SegmentService (IR-evaluated membership)
-├── Journey/                # JourneyService (orchestration), GoalEvaluator,
-│   ├── Execution/          #   JourneyRunner (action sequencing)
-│   ├── Models/             #   Journey, JourneyStatus, GoalModels
-│   ├── Events/             #   $journey_* event builders
-│   └── Storage/            #   JourneyStore (file persistence)
-├── IR/                     # IRInterpreter/IRValue/IRModels + Runtime adapters
-├── Experiences/            # Inline descriptor authentication/admission,
+├── Profile/                # Signed Journey profile fetch, cache, and admission
+├── Journey/                # Sole Journey runtime
+│   ├── Execution/          #   action sequencing, effects, and presentation
+│   ├── Models/             #   Journey and action models
+│   ├── Events/             #   Journey lifecycle and exposure facts
+│   └── Storage/            #   durable run journals and release pins
+├── IR/                     # IRInterpreter/IRValue/IRModels
+├── Experiences/            # Journey release authentication/admission,
 │                           #   standalone RIV/assets/scripts acquisition,
 │                           #   shared content-addressed artifact caches and
 │                           #   immutable prepared-RIV/session reuse,
@@ -53,7 +51,7 @@ Tests/
 ├── NuxieUnitTests/         # Quick/Nimble AsyncSpec + XCTest
 ├── NuxieIntegrationTests/  # incl. Orchestration/ (real services, mock transport)
 ├── NuxieTestSupport/       # shared mocks (MockFactory, Mock* services)
-└── ExperienceRuntimeHostApp/     # neutral descriptor-release runtime UI host
+└── ExperienceRuntimeHostApp/     # neutral Journey-release runtime UI host
 
 fixtures/                   # language-neutral conformance vectors — the
                             # cross-SDK contract (see fixtures/README.md)

@@ -1,248 +1,169 @@
 # Nuxie iOS SDK — Public API Surface
 
-This document is the prose companion to the executable contracts in
-`fixtures/`, the customer API allowlists (`api/public-api.txt` and
-`api/public-api-ios.txt`), and the separate SPI allowlists (`api/spi-api.txt`
-and `api/spi-api-ios.txt`). The conformance vectors are authoritative for
-semantics; the platform API allowlists are authoritative for exported
-declarations; this file explains the surface. The public surface below is the
-**wrapper contract**: React Native, Flutter, Unity, and Unreal bind to exactly
-these entry points, so every addition or change here fans out across six
-platforms. Pre-1.0, breaking changes are allowed and are batched so integrators
-break once.
+This document explains the customer-facing SDK contract. The declaration
+inventories in `api/public-api.txt` and `api/public-api-ios.txt` are the
+executable source of truth for exported API. The corresponding `spi-api`
+inventories cover test and companion SPI only.
 
-All entry points live on the `NuxieSDK.shared` singleton facade.
+The SDK is pre-1.0. The current API intentionally exposes one Journey system;
+there is no compatibility surface for the deleted runtime.
 
 ## Module boundary
 
-The supported public contract is the facade; configuration and delegates;
-feature and trigger-result values; the presentation types returned by the
-facade; and the purchase types used by the purchase seam. Signed release-wire,
-journey-document, view-model, and IR representations are internal alongside
-networking clients and response DTOs, persistence stores, service protocols,
-query adapters, evaluators, clocks, and mutable journey runtime state. Tests
-use `@testable import Nuxie` when they need those seams; applications must not
-construct or depend on them.
+Applications configure and use the `NuxieSDK.shared` facade. Journey profiles,
+signed Journey releases, fact tables, execution plans, journals, render models,
+network DTOs, and persistence stores are internal implementation details.
+Applications do not construct Journey objects or select release versions.
 
-`make check-public-api` builds the macOS and iOS modules and applies two
-platform checks: an exact declaration inventory plus Swift API Digester's
-native source-compatibility diagnosis. The native baselines preserve details
-such as protocol conformances and default arguments that declaration names do
-not capture. Customer inventories and digester baselines exclude every
-`@_spi` declaration. SPI declarations are tracked in their own platform
-inventories so SPI growth remains visible, but SPI is not a supported customer
-contract; native source-compatibility diagnosis therefore applies to the
-customer digest only. An intentional API change requires both code review and
-an explicit baseline update with `scripts/check-public-api.sh --update`.
-
-Published releases carry behavior through authenticated routes, execution
-plans, screen behaviors, and response sessions. The SDK authenticates and
-decodes that wire format internally; applications interact with the resulting
-behavior only through the supported facade and delegate seams.
+`make check-public-api` builds the macOS and iOS modules, compares the exact
+declaration inventories, and runs Swift API Digester against the checked-in
+customer baselines. Intentional API changes update those baselines with
+`scripts/check-public-api.sh --update` after review.
 
 ## Lifecycle
 
 | Entry point | Semantics |
 | --- | --- |
-| `setup(with: NuxieConfiguration) throws` | Builds the composition root and starts the SDK. Must be called before anything else; throws on invalid configuration, including an empty API key. Calling twice is a warning no-op. |
-| `shutdown() async` | Drains queued identity transitions, shuts down journeys, closes the event log (workers drain deterministically), and drops the object graph. Normally unnecessary. |
-| `delegate: NuxieDelegate?` | Main-actor feature-access, activity-forwarding, and Run App Action callbacks. |
-| `isSetup: Bool` | Whether `setup(with:)` has completed and the facade has a live composition root. |
+| `setup(with: NuxieConfiguration) throws` | Validates configuration, builds the object graph, restores durable work, and starts profile, event, feature, purchase, and Journey services. Calling it again while configured is a warning no-op. |
+| `shutdown() async` | Stops Journey execution, drains SDK-owned work, closes persistence, and drops the object graph. Most applications do not call it. |
+| `delegate: NuxieDelegate?` | Receives feature changes, curated SDK activity, and authored Run App Action requests. |
+| `isSetup: Bool` | Whether the facade has a live object graph. |
 | `version: String` | SDK version. |
 
-## Events & triggers
+## Events
 
-The single user-facing event entry point is `trigger` — it tracks the event
-(durably: persisted pending before anything else observes it), evaluates
-matching experiences, and may present UI.
-
-| Entry point | Semantics |
-| --- | --- |
-| `trigger(_:properties:handler:)` | Fire-and-forget. The optional handler observes progressive `TriggerUpdate`s (experience decisions and journey lifecycle) for this trigger only. |
-| `triggerAndWait(_:properties:progress:) async -> TriggerResult` | Same, awaiting the terminal result. Its Testing-SPI wire encoding is pinned by `fixtures/encodings/trigger-result.json`. |
-
-`ExperienceRef` carries `experienceId`, `experienceVersion`, and an optional
-`journeyId`; `JourneyUpdate` carries the completed journey identity.
-`TriggerResult` reports `.noMatch`, `.journeyCompleted`, or `.error` for the
-current journey-routing path.
-`TriggerError.code` is a typed `TriggerError.Code`.
+`trigger(_:properties:)` is the only customer event entry point. It is
+fire-and-forget: the event is durably committed to the ordered EventLog and the
+Journey service evaluates that committed event. There is no per-trigger result,
+progress callback, or synchronous decision API.
 
 Designer-authored Run App Action steps arrive through
 `NuxieDelegate.nuxie(_:didRequestAppAction:)`; see
-[Run App Action](run-app-action.md).
-
-Durably captured, curated SDK activity arrives through
+[Run App Action](run-app-action.md). Curated SDK activity arrives through
 `NuxieDelegate.nuxieDidEmit(_:)`; see
 [Forward Nuxie activity to your analytics tool](forward-nuxie-activity.md).
 
-Event names starting with `$` are reserved for the SDK ($identify,
-$app_opened, $journey_*, $experience_*, $purchase_*). The canonical machine
-catalog, covering when each internal event fires, its properties, and delivery
-guarantees, is `fixtures/events/catalog.json`; its human-readable view is
-`docs/events-catalog.md`.
+Names beginning with `$` are reserved for SDK events. The canonical event list,
+properties, emitter, and delivery semantics live in
+`fixtures/events/catalog.json`, with a prose view in
+[`events-catalog.md`](events-catalog.md).
 
-The local event database is not a lifetime analytics store. Delivered history
-is retention-bounded, and authored lifetime conditions that require an exact
-answer fail closed when only that retained window is available. Lower-bounded
-conditions are deterministic only when their complete window is inside the
-reported durable, monotonic horizon. Retention deletion advances that horizon
-in the same transaction; failed history writes fence the gap, while corrupt
-property payloads, query saturation, or storage failure also fail closed. See
-`docs/event-history-semantics.md` for the query-by-query contract and current
-v1 schema guidance.
+Delivered event history is retention-bounded. Exact lifetime queries fail
+closed if retained history cannot prove an answer; bounded queries are valid
+only inside the durable coverage horizon. See
+[`event-history-semantics.md`](event-history-semantics.md).
 
-## Identity & sessions
+## Identity
 
 | Entry point | Semantics |
 | --- | --- |
-| `identify(_:userProperties:userPropertiesSetOnce:)` | Transition to a known user. Transitions are strictly FIFO and uncancellable; local event history migrates on anonymous→identified. Same-id identify is a no-op. |
-| `reset(keepAnonymousId: Bool = false)` | Log out. Rotates the anonymous id by default. |
-| `getDistinctId()` / `getAnonymousId()` / `isIdentified` | Current identity accessors. |
+| `identify(_:userProperties:userPropertiesSetOnce:)` | Enqueues a FIFO transition to a known user. Anonymous event history migrates during the transition. Re-identifying the current distinct ID is a no-op. |
+| `reset(keepAnonymousId: Bool = false)` | Logs out and normally rotates the anonymous ID. |
+| `getDistinctId()` / `getAnonymousId()` / `isIdentified` | Read the current identity. |
 
-## Experiences
+## Journeys
 
-An **Experience** is the server-configured unit the SDK runs: the journey
-definition plus the screens (riv bundle) plus StoreKit product enrichment. A
-**Journey** is a runtime run of an experience for a user. Journeys execute
-client-side from cached config after the synchronous `$journey_enrolled` fact
-is accepted. If that decision request fails, the SDK does not create a local
-run whose server ledger is missing.
+A Journey is the sole client-side experience program and runtime. The server
+delivers one exact `nuxie.journey-plane-profile.v1` document containing:
 
-The experience engine owns presentation. Trigger matching and journey execution
-decide when an experience is shown; applications do not obtain an experience
-view controller or present an experience by version ID.
+- the complete fact table required by the delivered programs;
+- enrollment arms and exact continuation bindings;
+- inline signed Journey releases; and
+- render and asset base URLs.
+
+The SDK validates the whole profile before publishing any part of it. It then
+authenticates each signed release, verifies every arm-to-release reference, and
+admits the snapshot atomically for one app, environment, and identity. A
+previously authenticated snapshot remains the offline execution authority
+without an age cutoff while refresh is unavailable.
+
+Committed events may start eligible Journeys from their authored entry
+conditions. Each run pins its authenticated release and durable journal. A
+Journey executes local conditions, timers, controls, effects, presentation,
+and outputs without a second routing system. Only authored park points survive
+process death; an interrupted active run otherwise closes from its durable
+state. Stable `$journey_leg_started` and `$journey_leg_completed` facts report
+the client-owned execution boundary to the server.
+
+Experiments always choose an authored outcome. A valid assignment selects its
+variant. A missing, malformed, or unavailable assignment selects the signed
+`fallbackVariantId`; it never skips the experiment or abandons the Journey.
+Exposure is emitted only when the selected variant is actually revealed.
+
+The presentation engine owns Journey UI. Applications do not receive an
+experience view controller or request a release by version.
 
 | Entry point | Semantics |
 | --- | --- |
-| `dismiss() async` | Callable from any task. Dismiss the presented experience; no-op if none is presented. It waits for that experience's in-flight purchase or restore without interrupting StoreKit, abandons its in-progress server-effect wait, then exits the journey as dismissed. `$journey_exited` carries `reason: "dismissed"` and `dismissed_by: "host"`; a pending `triggerAndWait` resolves to `TriggerResult.journeyCompleted` with `JourneyUpdate.exitReason == .dismissed`. |
+| `dismiss() async` | Dismisses the currently presented Journey UI, if any. It waits for in-flight purchase work that must finish safely and then lets the Journey continue through its authored dismissal outcome. |
 
-## Features (feature access)
+## Features
 
 | Entry point | Semantics |
 | --- | --- |
-| `features: FeatureInfo` | Observable (SwiftUI-friendly) feature-access snapshot. |
-| `FeatureInfo.state` | Snapshot readiness: `.unknown` before a profile is admitted, `.reconciling` while verified StoreKit evidence widens visible access, and `.ready` once no optimistic purchase overlay remains. |
-| `hasFeature(_:requiredBalance:entityId:policy:)` | Check access. `FeatureCheckPolicy.cacheFirst` answers locally and never blocks on the network; `.remote` forces a round trip. |
-| `useFeature(...)` / `useFeatureAndWait(...)` | Record consumption of a metered feature. Ordinary `useFeatureAndWait` persists a stable command before sending and reuses its operation id across same-process and relaunch retry. During an active optimistic purchase overlay it always uses that durable command journal, and any local decrement affects only the visible joined value. Without an active overlay, exactly one pending native purchase can instead submit verification, grant, and first use as one idempotent command. A product that grants a credit system can fund a mapped metered feature; the SDK selects only from the authenticated release's signed direct and credit-schema targets, while the server independently verifies the current product and credit-system relationship. |
+| `features: FeatureInfo` | Observable, SwiftUI-friendly feature snapshot. |
+| `FeatureInfo.state` | `.unknown` before profile admission, `.reconciling` while verified purchase evidence affects the visible projection, and `.ready` after reconciliation. |
+| `hasFeature(_:requiredBalance:entityId:policy:)` | Checks access. `.cacheFirst` reads admitted local state; `.remote` requests current server authority. |
+| `useFeature(...)` | Starts an authoritative metered-usage command in the background. |
+| `useFeatureAndWait(...)` | Persists the command, waits for its authoritative result, and returns `FeatureUsageResult`. |
 
-`FeatureUsageResult.success` means the usage command committed. It does not
-mean that another use remains available. For an atomic purchase-backed use,
-`authoritativeAccess` is the post-use state, so consuming the final finite
-credit returns `success == true` together with
-`authoritativeAccess.allowed == false` and a zero balance. Ordinary usage
-responses leave `authoritativeAccess` nil.
+Feature-use commands keep a stable operation ID across ambiguous delivery and
+relaunch recovery. Commands for the same feature and optional entity reconcile
+in capture order. `FeatureUsageResult.success` means the command committed; it
+does not promise that another unit remains available.
 
-An ambiguous ordinary usage result remains in the command journal. Relaunch or
-an explicit retry sends the same operation id, and an accepted durable result
-is reconciled into `$feature_used` history once. Its balance projection is
-applied only when it is at least as fresh as the latest admitted profile
-snapshot. Commands for the same feature and optional entity apply in capture
-order. A retryable older command defers younger local projection for that target
-without blocking its delivery or caller completion; other targets are
-independent. A feature-not-found response retires the command, surfaces the
-server's 404 outcome, and is not replayed. The journal is scoped to the host app
-and selected Nuxie environment.
-
-Atomic purchase-backed failures retain the scoped receipt evidence and retry
-with the same purchase-use event identity. A decoded successful response
-retires the evidence before emitting one `$purchase_synced`; it does not fall
-back to an ordinary post-request feature-use event.
+When one pending native purchase can fund the requested feature, the SDK may
+verify the purchase, grant access, and consume the first unit as one idempotent
+command. Signed Journey product mappings constrain the client choice and the
+server verifies the relationship independently.
 
 ## Configuration
 
-`NuxieConfiguration` carries only customer-facing functional options: `apiKey`
-(supplied to `init(apiKey:)`), `environment` (`.production` or `.development`),
-`logLevel`, `enableConsoleLogging`, `redactSensitiveData`, `localeIdentifier`,
-`beforeSend`, `testStoreEnabled`, `purchaseDelegate`, and
-`purchaseHandlingMode` (`.full` default / `.observer` — observer mode never
-finishes transactions the host app owns). For development-only purchase
-qualification, `testStoreEnabled` requires a `pk_test_` key and `.development`
-environment; it uses Nuxie's isolated no-charge Test Store instead of StoreKit
-or a purchase delegate.
+`NuxieConfiguration` is a mutable setup builder. `setup(with:)` snapshots it;
+later mutations do not reconfigure a running SDK.
 
-A configured `purchaseDelegate` is the billing ownership boundary. Each
-delegate `.purchased` callback is reported once as a `$purchase_completed`
-external declaration with the authenticated Product mapping and immediately
-advances the Journey. It creates no StoreKit evidence or optimistic overlay.
-A delegate `.restored` is also an external declaration; neither delegate path
-invokes Nuxie's native entitlement scanner or finishes a StoreKit transaction.
+Customer options are:
 
-Application lifecycle events are always captured. `beforeSend` is the escape
-hatch for applications that need to transform or drop those events before
-they are persisted and delivered.
+- `apiKey` and `environment`;
+- `logLevel`, `enableConsoleLogging`, and `redactSensitiveData`;
+- `localeIdentifier`;
+- `beforeSend` for transforming or dropping events before persistence;
+- `testStoreEnabled` for isolated development purchase qualification;
+- `purchaseDelegate`; and
+- `purchaseHandlingMode` (`.full` or `.observer`).
 
-`setLocaleIdentifier(_:) async throws` changes the runtime locale, refreshes
-the profile, and synchronizes feature state. It completes with `Void`.
+`setLocaleIdentifier(_:)` changes the runtime locale, invalidates the old
+locale claim, refreshes the canonical profile, and synchronizes feature state.
+`setPurchaseDelegate(_:)` and `setPurchaseHandlingMode(_:)` update future
+purchase behavior.
 
-Console logging treats every interpolated value as sensitive by default. With
-`redactSensitiveData` enabled, identifiers, response bodies, paths,
-caller-supplied values, and error descriptions are replaced by stable
-HMAC-SHA-256 summaries for the life of the process. Error types and explicitly
-annotated structure such as HTTP status codes remain visible. Setting
-`redactSensitiveData` to `false` is an explicit diagnostic opt-in that can emit
-those raw values.
+A configured purchase delegate owns its checkout flow. Its completed and
+restored callbacks become external purchase declarations; those paths do not
+create StoreKit evidence or finish StoreKit transactions. In native StoreKit
+mode, `.full` lets Nuxie finish verified transactions after durable sync and
+`.observer` leaves finishing to the host.
 
-## Delivery guarantees (what "offline-first" means precisely)
+Application lifecycle events are captured by default. `beforeSend` may
+transform or drop any event, including SDK-authored lifecycle events. Identity
+fields are pinned by the SDK and cannot be changed by the hook.
 
-- Every tracked event is persisted to SQLite marked pending **before** the
-  network, journeys, or segments observe it; delivery acks flip it to
-  delivered. Kill the app at any point and undelivered events send on next
-  launch, deduplicated server-side by the event's UUIDv7 idempotency key.
-- Ordinary trigger events remain durable while offline. Journey enrollment
-  and feature-access decisions use the synchronous decision lane; segment
-  membership is an authoritative server mirror delivered by profile snapshots.
+With sensitive-data redaction enabled, interpolated identifiers, payloads,
+paths, caller values, and error descriptions become process-stable keyed
+digests in console output. Disabling redaction is an explicit diagnostic opt-in.
 
-## Experiences: enrollment and profile state
+## Offline and delivery guarantees
 
-Journey execution events are internal analytics protocol details; no
-application-facing tracking API changed. Profile down-facts and server-owned
-segment membership seeds are decoded and applied internally.
+- EventLog commits accepted events locally before network delivery or Journey
+  evaluation. Pending events retry after relaunch with their stable event IDs.
+- A fully authenticated canonical Journey profile can execute offline. The SDK
+  revalidates opportunistically and atomically replaces it only after the new
+  profile passes transport authority, exact-shape, signature, linkage, and
+  replay checks.
+- Content-addressed render, asset, and script objects are hash-verified and
+  cached on disk. A Journey pins the release it started with.
+- Journey outcomes are buffered durably and reported through stable completion
+  facts. Network failure does not create a second local execution path.
 
-The internal profile release set is the sole experience-delivery authority.
-The SDK authenticates and admits every exact inline descriptor envelope before
-behavior can participate in routing, then acquires the standalone RIV and every
-referenced content-addressed asset or script. Active entries are eligible for
-enrollment; pinned entries remain available only for exact persisted or mailbox
-restoration. The authored time limit is preserved on the internal hydrated
-experience model.
-
-Descriptor delivery follows a fixed resilience policy:
-
-- A fully authenticated canonical plane profile may launch offline without an
-  age cutoff. The SDK revalidates stale snapshots opportunistically, while the
-  last authenticated snapshot remains the device's offline execution
-  authority. Legacy release profiles retain a 24-hour window and are evicted
-  on expiry before their release behavior is installed.
-- Content-addressed RIV, asset, and listener-script objects are retained in a
-  256 MiB on-disk LRU. Verified cache hits refresh recency. Pruning runs under
-  the cache's root transaction and protects every object in the release being
-  assembled; memory pressure drops decoded/prepared state before verified disk
-  objects.
-- Profile warming is speculative: it does not opt into constrained networking,
-  is cancelled while the application is backgrounded, and is rearmed on the
-  next active transition. A foreground presentation may retry failed preload
-  work with presentation network policy.
-- StoreKit lookup is deferred until the signed journey has selected a screen.
-  It blocks reveal only when that screen's authenticated root view model binds
-  product data; current StoreKit name, price, and period replace publisher-time
-  catalog display values before the native runtime opens.
-
-The internal reentry-window wire preserves publisher-authored whole-second
-`once_per_window` durations without rounding.
-
-Response-capture networking identifies the run as `journeyId` and sends
-`journey_id`; `ResponseRecordPayload` exposes the same `journeyId`. The removed
-`journeySessionId` / `journey_session_id` shape is not dual-supported.
-
-## Experiences: server effects
-
-There is no new application-facing API. Published experiences may contain server-effect actions. The SDK durably emits `$journey_effect_requested`, keeps the current screen presented while it waits, and consumes `$journey_effect_completed` from the ordinary event/profile down-fact channel. Completion properties are available to authored result bindings; failure and no-answer are distinct authored outcomes. Effect payloads support the normal structured value references plus persisted journey-context references shaped as `{ "ref": { "kind": "context", "path": "customer.email" } }`.
-
-## Experiences: server-owned runs and handoff
-
-The internal hydrated experience trigger is optional. Profiles include
-server-owned experiences so the SDK can render a
-mailbox-claimed device region, but omit their server-only webhook or API
-trigger configuration. A missing trigger means the experience cannot enroll
-from a local SDK event; it may still start after the server offers and
-acknowledges a mailbox claim.
+There is no legacy profile decoder, legacy Journey runtime, alternate trigger
+service, ownership mailbox, response session, or compatibility alias in the
+SDK.

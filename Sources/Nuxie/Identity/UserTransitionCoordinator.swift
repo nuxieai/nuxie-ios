@@ -28,31 +28,24 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     }
 
     // Constructor-injected collaborators (Phase 4c composition root).
-    // Note: journeyService stays lazily resolved in run(_:) to avoid the
-    // JourneyService cycle until the final 4c slice.
     private let profileService: ProfileServiceProtocol
     private let eventLog: EventIdentityMigrating
     private let featureService: FeatureServiceProtocol
     private let experienceService: ExperienceServiceProtocol
-    private let deviceLegService: (any DeviceLegServiceProtocol)?
-    /// Provider: JourneyService is registered after the coordinator in some
-    /// test graphs; call-time resolution keeps that order working.
-    private let journeysProvider: @Sendable () -> JourneyServiceProtocol
+    private let journeyService: (any JourneyServiceProtocol)?
 
     init(
         profile: ProfileServiceProtocol,
         eventLog: EventIdentityMigrating,
         features: FeatureServiceProtocol,
         experiences: ExperienceServiceProtocol,
-        deviceLegs: (any DeviceLegServiceProtocol)? = nil,
-        journeysProvider: @escaping @Sendable () -> JourneyServiceProtocol
+        journeys: (any JourneyServiceProtocol)? = nil
     ) {
         self.profileService = profile
         self.eventLog = eventLog
         self.featureService = features
         self.experienceService = experiences
-        self.deviceLegService = deviceLegs
-        self.journeysProvider = journeysProvider
+        self.journeyService = journeys
     }
 
     /// FIFO chain: each enqueued transition awaits the previous one.
@@ -100,7 +93,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         // 2. Per-user state transitions, in dependency order, uncancellable.
         // Retire the old flat-leg journal while its distinct id is still
         // explicit, before profile admission can publish replacement arms.
-        await deviceLegService?.handleUserChange(
+        await journeyService?.handleUserChange(
             from: transition.from,
             to: transition.to
         )
@@ -108,7 +101,6 @@ final class UserTransitionCoordinator: @unchecked Sendable {
             await profileService.clearCache(distinctId: transition.from)
         }
         await profileService.handleUserChange(from: transition.from, to: transition.to)
-        await journeysProvider().handleUserChange(from: transition.from, to: transition.to)
 
         switch transition.kind {
         case .identify:

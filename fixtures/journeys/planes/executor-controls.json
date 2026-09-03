@@ -1,5 +1,5 @@
 {
-  "suite": "device-leg-control-executor-v1",
+  "suite": "journey-control-executor-v1",
   "context": {
     "event": {},
     "responses": {
@@ -72,6 +72,7 @@
         "action": {
           "type": "experiment",
           "experimentId": "experiment_assigned",
+          "fallbackVariantId": "variant_a",
           "variants": [
             { "id": "variant_a", "isHoldout": false },
             { "id": "variant_b", "isHoldout": false }
@@ -90,6 +91,7 @@
         "action": {
           "type": "experiment",
           "experimentId": "experiment_new",
+          "fallbackVariantId": "default",
           "variants": [
             { "id": "default", "isHoldout": true },
             { "id": "other", "isHoldout": false }

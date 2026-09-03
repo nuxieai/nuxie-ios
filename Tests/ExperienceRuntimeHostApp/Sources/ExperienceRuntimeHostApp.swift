@@ -246,7 +246,7 @@ private final class ExperienceRuntimeHostRootViewController: UIViewController {
             let cacheRoot = FileManager.default.temporaryDirectory
                 .appendingPathComponent("nuxie-experience-runtime-host", isDirectory: true)
                 .appendingPathComponent(fixtureName, isDirectory: true)
-            let child = try ExperienceReleaseFixtureHost.makeViewController(
+            let child = try JourneyFixtureHost.makeViewController(
                 fixtureBaseURL: fixtureURL,
                 cacheRootURL: cacheRoot,
                 initialScreenID: configuration.initialScreenID,
@@ -317,7 +317,7 @@ private enum ExperienceRuntimeHostError: LocalizedError {
         case .missingResourceRoot:
             "Experience runtime host could not resolve Bundle.main.resourceURL"
         case .missingFixture(let fixture):
-            "Signed experience release fixture is missing: \(fixture)"
+            "Signed Journey release fixture is missing: \(fixture)"
         }
     }
 }

@@ -109,48 +109,6 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                     }.toEventually(equal(10), timeout: .seconds(3))
                 }
 
-                it("cancels speculative Experience warming on background") {
-                    NotificationCenter.default.post(
-                        name: NuxieSystemNotifications.appDidEnterBackground,
-                        object: nil
-                    )
-
-                    await expect {
-                        MockFactory.shared.experienceService
-                            .backgroundPreparationPauseCallCount
-                    }.toEventually(equal(1), timeout: .seconds(2))
-
-                    NotificationCenter.default.post(
-                        name: NuxieSystemNotifications.appDidBecomeActive,
-                        object: nil
-                    )
-                    await expect {
-                        MockFactory.shared.experienceService
-                            .foregroundPreparationResumeCallCount
-                    }.toEventually(equal(1), timeout: .seconds(2))
-                }
-
-                it("expires resident profile authority before rearming speculative warming") {
-                    let recorder = LifecycleServiceOrderRecorder()
-                    MockFactory.shared.profileService.onAppBecameActiveHandler = {
-                        await recorder.append("profile")
-                    }
-                    MockFactory.shared.experienceService.onAppBecameActiveHandler = {
-                        await recorder.append("experience")
-                    }
-
-                    NotificationCenter.default.post(
-                        name: NuxieSystemNotifications.appDidBecomeActive,
-                        object: nil
-                    )
-
-                    await expect {
-                        await recorder.values
-                    }.toEventually(
-                        equal(["profile", "experience"]),
-                        timeout: .seconds(2)
-                    )
-                }
             }
 
             // MARK: - Event Queue Backgrounding

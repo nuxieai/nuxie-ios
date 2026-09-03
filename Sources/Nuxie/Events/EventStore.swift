@@ -8,19 +8,11 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 enum StableEventCaptureOutcome: Sendable {
   case captured(StoredEvent, isNew: Bool)
   case dropped
-  case ownershipLost
 }
 
 enum EventDeliveryState: Int32, Sendable {
   case pending = 0
   case delivered = 2
-}
-
-/// The device ownership that must still be current when an SDK-authored
-/// journey fact is durably committed.
-struct JourneyEventOwnership: Hashable, Sendable {
-  let journeyId: String
-  let epoch: Int
 }
 
 struct EventHistoryPruneResult: Equatable, Sendable {
@@ -56,7 +48,6 @@ struct StableEventCaptureRecord: Sendable {
   let eventId: String
   let event: StoredEvent?
   let recordedAt: Date
-  let ownership: JourneyEventOwnership?
 }
 
 enum StableEventCaptureCommitAdmissionError: Error {
@@ -107,7 +98,6 @@ protocol EventStoreProtocol: Sendable {
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,
-    ownership: JourneyEventOwnership?,
     assigningCommitSequence: Bool,
     admission: (any StableEventCaptureCommitAdmission)?
   ) async throws -> StableEventCaptureCommit
@@ -123,7 +113,6 @@ protocol EventStoreProtocol: Sendable {
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,
-    ownership: JourneyEventOwnership?,
     assigningCommitSequence: Bool,
     admission: (any StableEventCaptureCommitAdmission)?
   ) async throws -> StableEventCaptureCommit
@@ -136,32 +125,6 @@ protocol EventStoreProtocol: Sendable {
     distinctId: String
   ) async throws -> [StoredEvent]
   func markStableRouteDelivered(eventId: String) async throws
-  /// Persist authoritative server evidence that this device no longer owns
-  /// `journeyId` at `authoritativeEpoch` or any earlier epoch.
-  func recordJourneyOwnershipLoss(
-    _ ownership: JourneyEventOwnership,
-    recordedAt: Date
-  ) async throws
-  func hasJourneyOwnershipLoss(
-    _ ownership: JourneyEventOwnership
-  ) async throws -> Bool
-  /// Records a response source whose authoritative ownership fence could not
-  /// yet be committed. Matching persisted journeys must not restore until the
-  /// source is replayed and the fence becomes durable.
-  func recordUnresolvedJourneyOwnershipResponse(
-    sourceEventId: String,
-    ownership: JourneyEventOwnership,
-    recordedAt: Date
-  ) async throws
-  func hasUnresolvedJourneyOwnershipResponse(
-    _ ownership: JourneyEventOwnership
-  ) async throws -> Bool
-  func queryUnresolvedJourneyOwnershipResponse(
-    sourceEventId: String
-  ) async throws -> [JourneyEventOwnership]
-  func clearUnresolvedJourneyOwnershipResponse(
-    sourceEventId: String
-  ) async throws
   @discardableResult
   func deleteStableDropsOlderThan(_ olderThan: Date) async throws -> Int
 
@@ -217,8 +180,6 @@ extension EventStoreProtocol {
     ).newlyDurable
   }
 
-  /// Preserve the existing generic stable-capture interface. Only
-  /// journey-authored captures opt into the ownership fence.
   func commitStableCapture(
     eventId: String,
     event: StoredEvent?,
@@ -228,23 +189,6 @@ extension EventStoreProtocol {
       eventId: eventId,
       event: event,
       recordedAt: recordedAt,
-      ownership: nil,
-      assigningCommitSequence: false,
-      admission: nil
-    ).outcome
-  }
-
-  func commitStableCapture(
-    eventId: String,
-    event: StoredEvent?,
-    recordedAt: Date,
-    ownership: JourneyEventOwnership?
-  ) async throws -> StableEventCaptureOutcome {
-    try await commitStableCapture(
-      eventId: eventId,
-      event: event,
-      recordedAt: recordedAt,
-      ownership: ownership,
       assigningCommitSequence: false,
       admission: nil
     ).outcome
@@ -257,7 +201,7 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Properties
 
-  private static let currentSchemaVersion: Int32 = 1
+  private static let currentSchemaVersion: Int32 = 2
 
   // nonisolated(unsafe): accessed from the actor's methods (isolated) and
   // from deinit, which has exclusive access to the last reference.
@@ -286,7 +230,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     "CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);",
     "CREATE INDEX IF NOT EXISTS idx_events_user_name_time ON events(user_id, name, timestamp DESC);",
     "CREATE INDEX IF NOT EXISTS idx_events_user_time ON events(user_id, timestamp DESC);",
-    "CREATE INDEX IF NOT EXISTS idx_unresolved_ownership_journey_epoch ON unresolved_journey_ownership_responses(journey_id, authoritative_epoch);",
   ]
 
   private let createStableCaptureOutcomesSQL = """
@@ -308,24 +251,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     CREATE TABLE IF NOT EXISTS event_history_metadata (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       coverage_start_ms INTEGER NOT NULL
-    );
-    """
-
-  private let createJourneyOwnershipFencesSQL = """
-    CREATE TABLE IF NOT EXISTS journey_ownership_fences (
-      journey_id TEXT PRIMARY KEY,
-      authoritative_epoch INTEGER NOT NULL,
-      recorded_at INTEGER NOT NULL
-    );
-    """
-
-  private let createUnresolvedJourneyOwnershipResponsesSQL = """
-    CREATE TABLE IF NOT EXISTS unresolved_journey_ownership_responses (
-      source_event_id TEXT NOT NULL,
-      journey_id TEXT NOT NULL,
-      authoritative_epoch INTEGER NOT NULL,
-      recorded_at INTEGER NOT NULL,
-      PRIMARY KEY (source_event_id, journey_id, authoritative_epoch)
     );
     """
 
@@ -422,8 +347,8 @@ actor SQLiteEventStore: EventStoreProtocol {
     LogInfo("Event database initialized at: \(dbPath)")
   }
 
-  /// Install a fresh current schema or advance the transactional v1 schema
-  /// through its single additive v2 step. Unversioned layouts are rejected.
+  /// Install the sole current schema. Pre-GA layouts from the retired runtime
+  /// and unknown future versions are rejected without mutation.
   private func prepareCurrentSchema() throws {
     let version = try readUserVersion(targetVersion: nil)
 
@@ -438,15 +363,11 @@ actor SQLiteEventStore: EventStoreProtocol {
         )
       }
       try installCurrentSchema()
-      LogInfo("Event store schema v1 installed")
+      LogInfo("Event store schema v2 installed")
 
 
-    // Pre-GA posture (UNIV-2573 precedent): v1 is redefined in place when
-    // the schema evolves and there is no migration path. A store that
-    // reports v1 but lacks the current required tables fails closed here,
-    // exactly as it would for any other required-object mismatch. Devices
-    // with stores from before this change reinstall; there are no
-    // production users. Revisit only at GA (migration policy).
+    // Pre-GA hard cut: old event stores are deliberately unsupported. There
+    // is no migration path from the retired journey ownership protocol.
     case Self.currentSchemaVersion:
       try verifyCurrentSchema()
 
@@ -455,7 +376,7 @@ actor SQLiteEventStore: EventStoreProtocol {
         targetVersion: version,
         operation: "validate user_version",
         code: SQLITE_SCHEMA,
-        message: "Event-store schema v\(version) is unsupported; expected v1"
+        message: "Event-store schema v\(version) is unsupported; expected v2"
       )
     }
   }
@@ -530,16 +451,6 @@ actor SQLiteEventStore: EventStoreProtocol {
         targetVersion: targetVersion,
         operation: "create event_history_metadata"
       )
-      try executeSchemaSQL(
-        createJourneyOwnershipFencesSQL,
-        targetVersion: targetVersion,
-        operation: "create journey_ownership_fences"
-      )
-      try executeSchemaSQL(
-        createUnresolvedJourneyOwnershipResponsesSQL,
-        targetVersion: targetVersion,
-        operation: "create unresolved_journey_ownership_responses"
-      )
       for indexSQL in createIndexSQL {
         try executeSchemaSQL(
           indexSQL,
@@ -578,17 +489,10 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   private func verifyCurrentSchema() throws {
     let version = Self.currentSchemaVersion
-    try verifyV1Schema(targetVersion: version)
-    try verifyJourneyOwnershipFencesTable(targetVersion: version)
-    try verifyUnresolvedJourneyOwnershipResponsesTable(targetVersion: version)
-    try verifyIndex(
-      named: "idx_unresolved_ownership_journey_epoch",
-      expectedColumns: [("journey_id", false), ("authoritative_epoch", false)],
-      targetVersion: version
-    )
+    try verifySchemaObjects(targetVersion: version)
   }
 
-  private func verifyV1Schema(targetVersion: Int32) throws {
+  private func verifySchemaObjects(targetVersion: Int32) throws {
     let version = targetVersion
     try verifyEventsTable(targetVersion: version)
     try verifyStableEventDropsTable(targetVersion: version)
@@ -861,80 +765,6 @@ actor SQLiteEventStore: EventStoreProtocol {
         code: SQLITE_SCHEMA,
         message: "event_history_metadata must define id INTEGER as its sole PRIMARY KEY "
           + "and coverage_start_ms INTEGER NOT NULL"
-      )
-    }
-  }
-
-  private func verifyJourneyOwnershipFencesTable(targetVersion: Int32) throws {
-    guard try schemaObjectType(named: "journey_ownership_fences", targetVersion: targetVersion)
-      == "table"
-    else {
-      throw schemaError(
-        targetVersion: targetVersion,
-        operation: "verify journey_ownership_fences",
-        code: SQLITE_SCHEMA,
-        message: "journey_ownership_fences is not a table"
-      )
-    }
-    let columns = try tableColumns(named: "journey_ownership_fences", targetVersion: targetVersion)
-    guard columns.count == 3,
-          let journeyId = columns["journey_id"],
-          journeyId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
-          journeyId.primaryKeyPosition == 1,
-          let epoch = columns["authoritative_epoch"],
-          epoch.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
-          epoch.isNotNull,
-          let recordedAt = columns["recorded_at"],
-          recordedAt.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
-          recordedAt.isNotNull
-    else {
-      throw schemaError(
-        targetVersion: targetVersion,
-        operation: "verify journey_ownership_fences",
-        code: SQLITE_SCHEMA,
-        message: "journey_ownership_fences has an invalid v2 layout"
-      )
-    }
-  }
-
-  private func verifyUnresolvedJourneyOwnershipResponsesTable(targetVersion: Int32) throws {
-    guard try schemaObjectType(
-      named: "unresolved_journey_ownership_responses",
-      targetVersion: targetVersion
-    ) == "table" else {
-      throw schemaError(
-        targetVersion: targetVersion,
-        operation: "verify unresolved_journey_ownership_responses",
-        code: SQLITE_SCHEMA,
-        message: "unresolved_journey_ownership_responses is not a table"
-      )
-    }
-    let columns = try tableColumns(
-      named: "unresolved_journey_ownership_responses",
-      targetVersion: targetVersion
-    )
-    guard columns.count == 4,
-          let sourceEventId = columns["source_event_id"],
-          sourceEventId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
-          sourceEventId.isNotNull,
-          sourceEventId.primaryKeyPosition == 1,
-          let journeyId = columns["journey_id"],
-          journeyId.type.caseInsensitiveCompare("TEXT") == .orderedSame,
-          journeyId.isNotNull,
-          journeyId.primaryKeyPosition == 2,
-          let epoch = columns["authoritative_epoch"],
-          epoch.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
-          epoch.isNotNull,
-          epoch.primaryKeyPosition == 3,
-          let recordedAt = columns["recorded_at"],
-          recordedAt.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
-          recordedAt.isNotNull
-    else {
-      throw schemaError(
-        targetVersion: targetVersion,
-        operation: "verify unresolved_journey_ownership_responses",
-        code: SQLITE_SCHEMA,
-        message: "unresolved_journey_ownership_responses has an invalid v2 layout"
       )
     }
   }
@@ -1235,7 +1065,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,
-    ownership: JourneyEventOwnership?,
     assigningCommitSequence: Bool,
     admission: (any StableEventCaptureCommitAdmission)?
   ) throws -> StableEventCaptureCommit {
@@ -1245,7 +1074,6 @@ actor SQLiteEventStore: EventStoreProtocol {
           eventId: eventId,
           event: event,
           recordedAt: recordedAt,
-          ownership: ownership,
           assigningCommitSequence: assigningCommitSequence
         )
       }) else {
@@ -1257,7 +1085,6 @@ actor SQLiteEventStore: EventStoreProtocol {
       eventId: eventId,
       event: event,
       recordedAt: recordedAt,
-      ownership: ownership,
       assigningCommitSequence: assigningCommitSequence
     )
   }
@@ -1266,7 +1093,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,
-    ownership: JourneyEventOwnership?,
     assigningCommitSequence: Bool,
     admission: (any StableEventCaptureCommitAdmission)?
   ) throws -> StableEventCaptureCommit {
@@ -1275,7 +1101,6 @@ actor SQLiteEventStore: EventStoreProtocol {
         eventId: eventId,
         event: event,
         recordedAt: recordedAt,
-        ownership: ownership,
         assigningCommitSequence: assigningCommitSequence
       )
     }
@@ -1292,7 +1117,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,
-    ownership: JourneyEventOwnership?,
     assigningCommitSequence: Bool
   ) throws -> StableEventCaptureCommit {
     guard let db else { throw EventStorageError.databaseNotInitialized }
@@ -1310,7 +1134,6 @@ actor SQLiteEventStore: EventStoreProtocol {
         eventId: eventId,
         event: event,
         recordedAt: recordedAt,
-        ownership: ownership,
         assigningCommitSequence: assigningCommitSequence
       )
       let result = StableEventCaptureCommit(
@@ -1409,7 +1232,6 @@ actor SQLiteEventStore: EventStoreProtocol {
           eventId: record.eventId,
           event: record.event,
           recordedAt: record.recordedAt,
-          ownership: record.ownership,
           assigningCommitSequence: assigningCommitSequence
         )
         guard stageRoutes else { return commit }
@@ -1441,32 +1263,12 @@ actor SQLiteEventStore: EventStoreProtocol {
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,
-    ownership: JourneyEventOwnership?,
     assigningCommitSequence: Bool
   ) throws -> StableEventCaptureCommit {
     if let existing = try queryStableCapture(id: eventId) {
       return StableEventCaptureCommit(
         outcome: existing,
         commitSequence: takeCommitSequence(if: assigningCommitSequence)
-      )
-    }
-    if let ownership, try hasJourneyOwnershipLoss(ownership) {
-      return StableEventCaptureCommit(
-        outcome: .ownershipLost,
-        commitSequence: takeCommitSequence(if: assigningCommitSequence)
-      )
-    }
-    if let ownership,
-       try hasUnresolvedJourneyOwnershipResponse(ownership) {
-      throw EventStorageError.queryFailed(
-        NSError(
-          domain: "Nuxie.EventStore",
-          code: 46,
-          userInfo: [
-            NSLocalizedDescriptionKey:
-              "journey ownership response has not reached its durable fence"
-          ]
-        )
       )
     }
     if let event {
@@ -1657,257 +1459,6 @@ actor SQLiteEventStore: EventStoreProtocol {
     guard requested else { return nil }
     defer { nextCommitSequence &+= 1 }
     return nextCommitSequence
-  }
-
-  public func recordJourneyOwnershipLoss(
-    _ ownership: JourneyEventOwnership,
-    recordedAt: Date
-  ) throws {
-    guard let db else { throw EventStorageError.databaseNotInitialized }
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-    let sql = """
-      INSERT INTO journey_ownership_fences (
-        journey_id, authoritative_epoch, recorded_at
-      ) VALUES (?, ?, ?)
-      ON CONFLICT(journey_id) DO UPDATE SET
-        authoritative_epoch = MAX(
-          journey_ownership_fences.authoritative_epoch,
-          excluded.authoritative_epoch
-        ),
-        recorded_at = MAX(
-          journey_ownership_fences.recorded_at,
-          excluded.recorded_at
-        );
-      """
-    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
-      throw EventStorageError.insertFailed(
-        NSError(
-          domain: "SQLite",
-          code: 31,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-    sqlite3_bind_text(statement, 1, ownership.journeyId, -1, SQLITE_TRANSIENT)
-    sqlite3_bind_int64(statement, 2, Int64(ownership.epoch))
-    sqlite3_bind_int64(
-      statement,
-      3,
-      Int64(recordedAt.timeIntervalSince1970 * 1_000)
-    )
-    guard sqlite3_step(statement) == SQLITE_DONE else {
-      throw EventStorageError.insertFailed(
-        NSError(
-          domain: "SQLite",
-          code: 32,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-  }
-
-  public func hasJourneyOwnershipLoss(
-    _ ownership: JourneyEventOwnership
-  ) throws -> Bool {
-    guard let db else { throw EventStorageError.databaseNotInitialized }
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-    let sql = """
-      SELECT 1
-      FROM journey_ownership_fences
-      WHERE journey_id = ? AND authoritative_epoch >= ?
-      LIMIT 1;
-      """
-    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
-      throw EventStorageError.queryFailed(
-        NSError(
-          domain: "SQLite",
-          code: 33,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-    sqlite3_bind_text(statement, 1, ownership.journeyId, -1, SQLITE_TRANSIENT)
-    sqlite3_bind_int64(statement, 2, Int64(ownership.epoch))
-    switch sqlite3_step(statement) {
-    case SQLITE_ROW:
-      return true
-    case SQLITE_DONE:
-      return false
-    default:
-      throw EventStorageError.queryFailed(
-        NSError(
-          domain: "SQLite",
-          code: 34,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-  }
-
-  public func recordUnresolvedJourneyOwnershipResponse(
-    sourceEventId: String,
-    ownership: JourneyEventOwnership,
-    recordedAt: Date
-  ) throws {
-    guard let db else { throw EventStorageError.databaseNotInitialized }
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-    let sql = """
-      INSERT INTO unresolved_journey_ownership_responses (
-        source_event_id, journey_id, authoritative_epoch, recorded_at
-      ) VALUES (?, ?, ?, ?)
-      ON CONFLICT(source_event_id, journey_id, authoritative_epoch)
-      DO UPDATE SET recorded_at = MAX(recorded_at, excluded.recorded_at);
-      """
-    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
-      throw EventStorageError.insertFailed(
-        NSError(
-          domain: "SQLite",
-          code: 37,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-    sqlite3_bind_text(statement, 1, sourceEventId, -1, SQLITE_TRANSIENT)
-    sqlite3_bind_text(statement, 2, ownership.journeyId, -1, SQLITE_TRANSIENT)
-    sqlite3_bind_int64(statement, 3, Int64(ownership.epoch))
-    sqlite3_bind_int64(
-      statement,
-      4,
-      Int64(recordedAt.timeIntervalSince1970 * 1_000)
-    )
-    guard sqlite3_step(statement) == SQLITE_DONE else {
-      throw EventStorageError.insertFailed(
-        NSError(
-          domain: "SQLite",
-          code: 38,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-  }
-
-  public func hasUnresolvedJourneyOwnershipResponse(
-    _ ownership: JourneyEventOwnership
-  ) throws -> Bool {
-    guard let db else { throw EventStorageError.databaseNotInitialized }
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-    let sql = """
-      SELECT 1
-      FROM unresolved_journey_ownership_responses
-      WHERE journey_id = ? AND authoritative_epoch >= ?
-      LIMIT 1;
-      """
-    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
-      throw EventStorageError.queryFailed(
-        NSError(
-          domain: "SQLite",
-          code: 39,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-    sqlite3_bind_text(statement, 1, ownership.journeyId, -1, SQLITE_TRANSIENT)
-    sqlite3_bind_int64(statement, 2, Int64(ownership.epoch))
-    switch sqlite3_step(statement) {
-    case SQLITE_ROW:
-      return true
-    case SQLITE_DONE:
-      return false
-    default:
-      throw EventStorageError.queryFailed(
-        NSError(
-          domain: "SQLite",
-          code: 40,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-  }
-
-  public func queryUnresolvedJourneyOwnershipResponse(
-    sourceEventId: String
-  ) throws -> [JourneyEventOwnership] {
-    guard let db else { throw EventStorageError.databaseNotInitialized }
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-    guard sqlite3_prepare_v2(
-      db,
-      "SELECT journey_id, authoritative_epoch FROM unresolved_journey_ownership_responses WHERE source_event_id = ?;",
-      -1,
-      &statement,
-      nil
-    ) == SQLITE_OK else {
-      throw EventStorageError.queryFailed(
-        NSError(
-          domain: "SQLite",
-          code: 43,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-    sqlite3_bind_text(statement, 1, sourceEventId, -1, SQLITE_TRANSIENT)
-    var ownerships: [JourneyEventOwnership] = []
-    while true {
-      switch sqlite3_step(statement) {
-      case SQLITE_ROW:
-        guard let journeyId = sqlite3_column_text(statement, 0) else {
-          throw EventStorageError.queryFailed(
-            NSError(domain: "SQLite", code: 44)
-          )
-        }
-        ownerships.append(JourneyEventOwnership(
-          journeyId: String(cString: journeyId),
-          epoch: Int(sqlite3_column_int64(statement, 1))
-        ))
-      case SQLITE_DONE:
-        return ownerships
-      default:
-        throw EventStorageError.queryFailed(
-          NSError(
-            domain: "SQLite",
-            code: 45,
-            userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-          )
-        )
-      }
-    }
-  }
-
-  public func clearUnresolvedJourneyOwnershipResponse(
-    sourceEventId: String
-  ) throws {
-    guard let db else { throw EventStorageError.databaseNotInitialized }
-    var statement: OpaquePointer?
-    defer { sqlite3_finalize(statement) }
-    guard sqlite3_prepare_v2(
-      db,
-      "DELETE FROM unresolved_journey_ownership_responses WHERE source_event_id = ?;",
-      -1,
-      &statement,
-      nil
-    ) == SQLITE_OK else {
-      throw EventStorageError.deleteFailed(
-        NSError(
-          domain: "SQLite",
-          code: 41,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
-    sqlite3_bind_text(statement, 1, sourceEventId, -1, SQLITE_TRANSIENT)
-    guard sqlite3_step(statement) == SQLITE_DONE else {
-      throw EventStorageError.deleteFailed(
-        NSError(
-          domain: "SQLite",
-          code: 42,
-          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
-        )
-      )
-    }
   }
 
   public func deleteStableDropsOlderThan(_ olderThan: Date) throws -> Int {

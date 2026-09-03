@@ -93,7 +93,7 @@ final class EventLogTests: AsyncSpec {
                     let stableTask = Task {
                         await log.captureAndRouteSystemEvent(
                             .init(
-                                name: JourneyEvents.journeyLegStarted,
+                                name: JourneyEvents.journeyStarted,
                                 properties: nil,
                                 eventId: "stable-after-ordinary",
                                 distinctId: "customer-a"
@@ -104,7 +104,7 @@ final class EventLogTests: AsyncSpec {
 
                     expect(mockStore.stableCaptureCommitCallCount).to(equal(0))
                     expect(mockStore.storedEvents.map(\.name))
-                        .toNot(contain(JourneyEvents.journeyLegStarted))
+                        .toNot(contain(JourneyEvents.journeyStarted))
 
                     mockStore.resumeInsert(id: ordinaryID)
                     guard await stableTask.value != nil else {
@@ -114,24 +114,20 @@ final class EventLogTests: AsyncSpec {
 
                     expect(mockStore.storedEvents.map(\.name)).to(equal([
                         "ordinary-before-stable",
-                        JourneyEvents.journeyLegStarted,
+                        JourneyEvents.journeyStarted,
                     ]))
                     await expect { await received.names }.to(equal([
                         "ordinary-before-stable",
-                        JourneyEvents.journeyLegStarted,
+                        JourneyEvents.journeyStarted,
                     ]))
                 }
 
                 it("allows a committed subscriber to durably capture another routed event") {
                     let received = ReceivedEvents()
-                    let sink = TriggerSystemEventSink(
-                        routedEvents: log,
-                        triggerProvider: { MockTriggerService() }
-                    )
                     await log.subscribeCommitted { event in
                         await received.append(event.name)
                         guard event.name == "outer" else { return }
-                        let committed = await sink.capture(
+                        let committed = await log.captureAndRouteSystemEvent(
                             .init(
                                 name: "nested",
                                 properties: nil,
@@ -143,7 +139,7 @@ final class EventLogTests: AsyncSpec {
                         // is currently invoking this subscriber. Its owner
                         // must retain retry evidence until a later attempt can
                         // observe the completed durable route receipt.
-                        expect(committed).to(beFalse())
+                        expect(committed).toNot(beNil())
                     }
                     try await log.configure(configuration: testConfig)
 
@@ -178,7 +174,6 @@ final class EventLogTests: AsyncSpec {
                             eventId: stored.id,
                             event: stored,
                             recordedAt: stored.timestamp,
-                            ownership: nil,
                             assigningCommitSequence: false,
                             admission: nil
                         )
@@ -382,7 +377,7 @@ final class EventLogTests: AsyncSpec {
                     let stableTask = Task {
                         await log.captureAndRouteSystemEvent(
                             .init(
-                                name: JourneyEvents.journeyLegStarted,
+                                name: JourneyEvents.journeyStarted,
                                 properties: nil,
                                 eventId: stableId,
                                 distinctId: "customer-a"
@@ -406,7 +401,7 @@ final class EventLogTests: AsyncSpec {
                     await log.drain()
 
                     await expect { await received.names }.to(equal([
-                        JourneyEvents.journeyLegStarted,
+                        JourneyEvents.journeyStarted,
                         "later",
                     ]))
                 }
@@ -419,14 +414,14 @@ final class EventLogTests: AsyncSpec {
                     ) else {
                         return fail("Expected current identity fence")
                     }
-                    let executionFence = DeviceLegProfileFence()
+                    let executionFence = JourneyProfileFence()
                     let generation = executionFence.advance()
                     guard let executionToken = executionFence.token(
                         ifCurrent: generation
                     ) else {
                         return fail("Expected current execution fence")
                     }
-                    let admission = DeviceLegCommitAdmission(
+                    let admission = JourneyCommitAdmission(
                         identity: mockIdentity,
                         identityFenceToken: identityFence.token,
                         executionFence: executionFence,
@@ -546,119 +541,6 @@ final class EventLogTests: AsyncSpec {
                     expect(names).to(contain("kept_event"))
                 }
 
-                it("stores direct-delivery history rows with device metadata") {
-                    await mockApi.setTrackEventResponse(.success())
-                    try await log.configure(configuration: testConfig)
-
-                    _ = try await log.trackWithResponse(
-                        JourneyEvents.journeyTransition,
-                        properties: ["version": "1.0.0"]
-                    )
-
-                    let stored = mockStore.storedEvents.first {
-                        $0.name == JourneyEvents.journeyTransition
-                    }
-                    expect(stored).toNot(beNil())
-                    let props = stored?.getPropertiesDict() ?? [:]
-                    expect(props["version"] as? String).to(equal("1.0.0"))
-                    expect(props["sdk_version"] as? String).to(equal(SDKVersion.current))
-                    #if os(macOS)
-                    expect(props["platform"] as? String).to(equal("macos"))
-                    #else
-                    expect(props["platform"] as? String).to(equal("ios"))
-                    #endif
-                    expect(props["device_model"]).toNot(beNil())
-                    expect(props["os_version"]).toNot(beNil())
-                }
-
-                it("retains authentication-rejected direct journey facts") {
-                    await mockApi.configureTrackEventFailure(
-                        error: NuxieNetworkError.httpError(
-                            statusCode: 401,
-                            message: "Unauthorized"
-                        )
-                    )
-                    try await log.configure(configuration: testConfig)
-
-                    await expect {
-                        try await log.trackWithResponse(
-                            JourneyEvents.journeyTransition,
-                            properties: nil
-                        )
-                    }.to(throwError())
-
-                    expect(mockStore.pendingIds).to(haveCount(1))
-                    expect(mockStore.deliveredIds).to(beEmpty())
-                    await expect { await log.deliveryHealthState() }
-                        .to(equal("unhealthy_authentication"))
-                }
-
-                it("retains a retryable direct fact in memory when persistence fails") {
-                    mockStore.shouldFailStore = true
-                    await mockApi.configureTrackEventFailure(
-                        error: NuxieNetworkError.httpError(
-                            statusCode: 401,
-                            message: "Unauthorized"
-                        )
-                    )
-                    try await log.configure(configuration: testConfig)
-
-                    await expect {
-                        try await log.trackWithResponse(
-                            JourneyEvents.journeyTransition,
-                            properties: nil
-                        )
-                    }.to(throwError())
-                    await expect { await log.getQueuedEventCount() }.to(equal(1))
-                    expect(mockStore.pendingIds).to(beEmpty())
-
-                    await mockApi.reset()
-                    _ = await log.performFlush(forceSend: true)
-                    await expect { await log.getQueuedEventCount() }.to(equal(0))
-                }
-
-                it("retains rate-limited direct journey facts") {
-                    await mockApi.configureTrackEventFailure(
-                        error: NuxieNetworkError.httpError(
-                            statusCode: 429,
-                            message: "Too Many Requests",
-                            retryAfter: "60"
-                        )
-                    )
-                    try await log.configure(configuration: testConfig)
-
-                    await expect {
-                        try await log.trackWithResponse(
-                            JourneyEvents.journeyTransition,
-                            properties: nil
-                        )
-                    }.to(throwError())
-
-                    expect(mockStore.pendingIds).to(haveCount(1))
-                    expect(mockStore.deliveredIds).to(beEmpty())
-                    let retry = await log.retryBackoffState()
-                    expect(retry.remainingDelay).toNot(beNil())
-                }
-
-                it("terminally retires a singleton oversized direct journey fact") {
-                    await mockApi.configureTrackEventFailure(
-                        error: NuxieNetworkError.httpError(
-                            statusCode: 413,
-                            message: "Payload Too Large"
-                        )
-                    )
-                    try await log.configure(configuration: testConfig)
-
-                    await expect {
-                        try await log.trackWithResponse(
-                            JourneyEvents.journeyTransition,
-                            properties: nil
-                        )
-                    }.to(throwError())
-
-                    expect(mockStore.pendingIds).to(beEmpty())
-                    expect(mockStore.deliveredIds).to(haveCount(1))
-                }
             }
 
             // MARK: - Retention
@@ -798,20 +680,12 @@ final class EventLogTests: AsyncSpec {
                         ),
                         right: .number(0)
                     )
-                    let result = await IRRuntime(
-                        dateProvider: MockDateProvider(initialDate: evaluationTime)
-                    ).eval(
-                        .init(
-                            ir_version: 1,
-                            engine_min: nil,
-                            compiled_at: nil,
-                            expr: .not(boundedCountIsZero)
-                        ),
-                        .init(
+                    let result = (try? await IRInterpreter(
+                        ctx: .init(
                             now: evaluationTime,
                             events: IREventQueriesAdapter(eventLog: relaunchedLog)
                         )
-                    )
+                    ).evalBool(.not(boundedCountIsZero))) ?? false
 
                     expect(result).to(beFalse())
                     await relaunchedLog.close()
@@ -1028,7 +902,6 @@ final class EventLogTests: AsyncSpec {
                     try await failureLog.configure(configuration: testConfig)
                     mockStore.shouldFailIRQuery = true
                     let queries = IREventQueriesAdapter(eventLog: failureLog)
-                    let runtime = IRRuntime(dateProvider: MockDateProvider(initialDate: now))
                     let boundedCount = IRExpr.eventsCount(
                         name: "purchase",
                         since: nil,
@@ -1057,15 +930,9 @@ final class EventLogTests: AsyncSpec {
                     )
 
                     for expression in [IRExpr.not(boundedCount), .not(nestedCount)] {
-                        let result = await runtime.eval(
-                            .init(
-                                ir_version: 1,
-                                engine_min: nil,
-                                compiled_at: nil,
-                                expr: expression
-                            ),
-                            .init(now: now, events: queries)
-                        )
+                        let result = (try? await IRInterpreter(
+                            ctx: .init(now: now, events: queries)
+                        ).evalBool(expression)) ?? false
                         expect(result).to(beFalse())
                     }
                     await failureLog.close()
@@ -1103,24 +970,15 @@ final class EventLogTests: AsyncSpec {
                         _ = try await interpreter.evalBool(lifetimeCountIsBelowExactTotal)
                         fail("Expected retained-only lifetime history to be unknown")
                     } catch IRError.incompleteEventHistory {
-                        // The interpreter preserves unknown; IRRuntime below
-                        // turns it into the authored fail-closed result.
+                        // The interpreter preserves unknown; callers fail closed.
                     }
 
-                    let runtime = IRRuntime(dateProvider: MockDateProvider())
-                    let negated = IREnvelope(
-                        ir_version: 1,
-                        engine_min: nil,
-                        compiled_at: nil,
-                        expr: .not(lifetimeCountIsBelowExactTotal)
-                    )
-                    let runtimeResult = await runtime.eval(
-                        negated,
-                        .init(
+                    let runtimeResult = (try? await IRInterpreter(
+                        ctx: .init(
                             now: Date(timeIntervalSince1970: 20_000),
                             events: IREventQueriesAdapter(eventLog: log)
                         )
-                    )
+                    ).evalBool(.not(lifetimeCountIsBelowExactTotal))) ?? false
                     expect(runtimeResult).to(beFalse())
                 }
 
@@ -1231,7 +1089,6 @@ final class EventLogTests: AsyncSpec {
                         distinctId: userId
                     )]
                     try await log.configure(configuration: testConfig)
-                    let runtime = IRRuntime(dateProvider: MockDateProvider())
                     let predicateUsesLifetimeAggregate = IRExpr.eventsCount(
                         name: "purchase",
                         since: nil,
@@ -1251,581 +1108,17 @@ final class EventLogTests: AsyncSpec {
                             )
                         )
                     )
-                    let result = await runtime.eval(
-                        .init(
-                            ir_version: 1,
-                            engine_min: nil,
-                            compiled_at: nil,
-                            expr: .not(predicateUsesLifetimeAggregate)
-                        ),
-                        .init(
+                    let result = (try? await IRInterpreter(
+                        ctx: .init(
                             now: now,
                             events: IREventQueriesAdapter(eventLog: log)
                         )
-                    )
+                    ).evalBool(.not(predicateUsesLifetimeAggregate))) ?? false
 
                     expect(result).to(beFalse())
                 }
             }
 
-            describe("mock prepared-trigger isolation") {
-                it("cancels delayed response signals when the mock resets") {
-                    let mock = MockEventLog()
-                    let priorSignals = SignalCount()
-                    let nextSignals = SignalCount()
-                    await mock.setMailboxPendingHandler {
-                        await priorSignals.increment()
-                    }
-                    mock.trackForTriggerDelayNanoseconds = 2_000_000_000
-                    mock.trackWithResponseResult = EventResponse(
-                        status: "ok",
-                        mailboxPending: true
-                    )
-
-                    let committed = await mock.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "prepared-before-reset",
-                            name: "prepared_before_reset",
-                            distinctId: "user-before-reset"
-                        )
-                    )
-                    mock.reset()
-                    await mock.setMailboxPendingHandler {
-                        await nextSignals.increment()
-                    }
-
-                    _ = await committed.response.value
-                    await expect { await priorSignals.value }.to(equal(0))
-                    await expect { await nextSignals.value }.to(equal(0))
-                }
-
-                it("keeps a commit suspended across reset in the old generation") {
-                    let mock = MockEventLog()
-                    let routeGate = AsyncTestGate()
-                    let nextSignals = SignalCount()
-                    await mock.subscribeCommitted { _ in
-                        await routeGate.suspendUntilReleased()
-                    }
-                    mock.trackWithResponseResult = EventResponse(
-                        status: "ok",
-                        mailboxPending: true
-                    )
-
-                    let commitTask = Task {
-                        await mock.commitPreparedTriggerEvent(
-                            NuxieEvent(
-                                id: "prepared-suspended-before-reset",
-                                name: "prepared_suspended_before_reset",
-                                distinctId: "user-before-reset"
-                            )
-                        )
-                    }
-                    await routeGate.waitUntilSuspended()
-                    mock.reset()
-                    await mock.setMailboxPendingHandler {
-                        await nextSignals.increment()
-                    }
-                    await routeGate.release()
-
-                    let committed = await commitTask.value
-                    _ = await committed.response.value
-                    await expect { await nextSignals.value }.to(equal(0))
-                }
-            }
-
-            describe("prepared trigger delivery") {
-                it("applies beforeSend before an authored event is committed") {
-                    testConfig.beforeSend = { event in
-                        guard event.name != "dropped_authored" else { return nil }
-                        return NuxieEvent(
-                            id: event.id,
-                            name: event.name,
-                            distinctId: event.distinctId,
-                            properties: ["redacted": true],
-                            timestamp: event.timestamp
-                        )
-                    }
-                    try await log.configure(configuration: testConfig)
-
-                    let dropped = await log.applyBeforeSend(
-                        to: NuxieEvent(
-                            id: "dropped-authored-id",
-                            name: "dropped_authored",
-                            distinctId: mockIdentity.getDistinctId(),
-                            properties: ["secret": "must-not-persist"]
-                        )
-                    )
-                    expect(dropped).to(beNil())
-
-                    let transformed = await log.applyBeforeSend(
-                        to: NuxieEvent(
-                            id: "kept-authored-id",
-                            name: "kept_authored",
-                            distinctId: mockIdentity.getDistinctId(),
-                            properties: ["secret": "must-be-redacted"]
-                        )
-                    )
-                    guard let transformed else {
-                        fail("expected beforeSend to retain the authored event")
-                        return
-                    }
-                    let committed = await log.commitPreparedTriggerEvent(
-                        transformed
-                    )
-
-                    let stored = mockStore.storedEvents.first {
-                        $0.id == "kept-authored-id"
-                    }
-                    expect(stored?.getPropertiesDict()["redacted"] as? Bool)
-                        .to(beTrue())
-                    expect(stored?.getPropertiesDict()["secret"]).to(beNil())
-                    _ = await committed.response.value
-                }
-
-                it("applies authored user-property directives to local identity") {
-                    try await log.configure(configuration: testConfig)
-                    mockIdentity.setUserProperty("plan", value: "free")
-
-                    let committed = await log.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "authored-user-properties",
-                            name: "authored_user_properties",
-                            distinctId: mockIdentity.getDistinctId(),
-                            properties: [
-                                "$set": ["plan": "pro"],
-                                "$set_once": ["cohort": "early"],
-                            ]
-                        )
-                    )
-
-                    let properties = mockIdentity.getUserProperties()
-                    expect(properties["plan"] as? String).to(equal("pro"))
-                    expect(properties["cohort"] as? String).to(equal("early"))
-                    _ = await committed.response.value
-                }
-
-                it("commits every earlier capture before the authored event") {
-                    try await log.configure(configuration: testConfig)
-
-                    log.track(
-                        "captured_first",
-                        properties: nil,
-                        userProperties: nil,
-                        userPropertiesSetOnce: nil
-                    )
-                    let committed = await log.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "authored-second",
-                            name: "authored_second",
-                            distinctId: "test-distinct-id"
-                        )
-                    )
-
-                    expect(mockStore.storedEvents.map(\.name).prefix(2))
-                        .to(equal(["captured_first", "authored_second"]))
-                    _ = await committed.response.value
-                }
-
-                it("delivers prepared authored events to the server in commit order") {
-                    let transport = OrderedPreparedEventTransport()
-                    let orderedLog = EventLog(
-                        identity: MockIdentityService(),
-                        dateProvider: MockDateProvider(),
-                        apiClient: transport,
-                        store: mockStore
-                    )
-                    log = orderedLog
-                    try await orderedLog.configure(configuration: testConfig)
-
-                    let first = await orderedLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "prepared-first-id",
-                            name: "prepared_first",
-                            distinctId: "test-distinct-id"
-                        )
-                    )
-                    await transport.waitUntilFirstStarted()
-                    let second = await orderedLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "prepared-second-id",
-                            name: "prepared_second",
-                            distinctId: "test-distinct-id"
-                        )
-                    )
-
-                    try await Task.sleep(nanoseconds: 100_000_000)
-                    await expect { await transport.startedNames }
-                        .to(equal(["prepared_first"]))
-
-                    await transport.releaseFirst()
-                    _ = await first.response.value
-                    _ = await second.response.value
-                    await expect { await transport.startedNames }
-                        .to(equal(["prepared_first", "prepared_second"]))
-                }
-
-                it("keeps a direct trigger behind an in-flight authored delivery") {
-                    let transport = OrderedPreparedEventTransport()
-                    let orderedLog = EventLog(
-                        identity: MockIdentityService(),
-                        dateProvider: MockDateProvider(),
-                        apiClient: transport,
-                        store: mockStore
-                    )
-                    log = orderedLog
-                    try await orderedLog.configure(configuration: testConfig)
-
-                    let first = await orderedLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "prepared-first-id",
-                            name: "prepared_first",
-                            distinctId: "test-distinct-id"
-                        )
-                    )
-                    await transport.waitUntilFirstStarted()
-                    let second = Task {
-                        try await orderedLog.trackForTrigger("direct_second")
-                    }
-
-                    try await Task.sleep(nanoseconds: 100_000_000)
-                    await expect { await transport.startedNames }
-                        .to(equal(["prepared_first"]))
-
-                    await transport.releaseFirst()
-                    _ = await first.response.value
-                    let (_, response) = try await second.value
-                    expect(response.status).to(equal("ok"))
-                    await expect { await transport.startedNames }
-                        .to(equal(["prepared_first", "direct_second"]))
-                }
-
-                it("keeps a trigger behind an in-flight durable system capture") {
-                    mockStore.stableCaptureDelayNanoseconds = 300_000_000
-                    try await log.configure(configuration: testConfig)
-
-                    let capture = Task {
-                        await log.captureSystemEvent(
-                            "$purchase_completed",
-                            properties: nil,
-                            eventId: "durable-system-first",
-                            distinctId: "test-distinct-id"
-                        )
-                    }
-                    await expect { mockStore.stableCaptureCommitCallCount }
-                        .toEventually(equal(1))
-                    let trigger = Task {
-                        try await log.trackForTrigger("direct_second")
-                    }
-
-                    try await Task.sleep(nanoseconds: 100_000_000)
-                    await expect { await mockApi.trackEventCallCount }.to(equal(0))
-
-                    _ = await capture.value
-                    let (_, response) = try await trigger.value
-                    expect(response.status).to(equal("offline"))
-                    await expect { await mockApi.trackEventCallCount }.to(equal(0))
-                    await expect { await log.getQueuedEventCount() }.to(equal(2))
-                }
-
-                it("keeps a later durable system capture behind a direct trigger") {
-                    let transport = OrderedPreparedEventTransport()
-                    let orderedLog = EventLog(
-                        identity: MockIdentityService(),
-                        dateProvider: MockDateProvider(),
-                        apiClient: transport,
-                        store: mockStore
-                    )
-                    log = orderedLog
-                    try await orderedLog.configure(configuration: testConfig)
-
-                    let trigger = Task {
-                        try await orderedLog.trackForTrigger("prepared_first")
-                    }
-                    await transport.waitUntilFirstStarted()
-                    let capture = Task {
-                        await orderedLog.captureSystemEvent(
-                            "$purchase_completed",
-                            properties: nil,
-                            eventId: "durable-system-second",
-                            distinctId: "test-distinct-id"
-                        )
-                    }
-
-                    try await Task.sleep(nanoseconds: 100_000_000)
-                    expect(mockStore.stableCaptureCommitCallCount).to(equal(0))
-
-                    await transport.releaseFirst()
-                    _ = try await trigger.value
-                    _ = await capture.value
-                    expect(mockStore.stableCaptureCommitCallCount).to(equal(1))
-                    await expect { await transport.startedNames }
-                        .to(equal(["prepared_first"]))
-                }
-
-                it("allows a response callback to track a control event") {
-                    try await log.configure(configuration: testConfig)
-                    await mockApi.setTrackEventResponse(
-                        EventResponse(status: "ok", mailboxPending: true)
-                    )
-                    let reentrantLog = log!
-                    let reentrantApi = mockApi!
-                    await reentrantLog.setMailboxPendingHandler {
-                        await reentrantApi.setTrackEventResponse(.success())
-                        _ = try? await reentrantLog.trackForTrigger(
-                            "$journey_claimed",
-                            properties: nil,
-                            persistToHistory: true,
-                            distinctIdOverride: "test-distinct-id"
-                        )
-                    }
-
-                    let (_, response) = try await reentrantLog.trackForTrigger("direct_first")
-
-                    expect(response.status).to(equal("ok"))
-                    await expect { await mockApi.trackEventCallCount }.to(equal(2))
-                    await expect { await log.getQueuedEventCount() }.to(equal(0))
-                }
-
-                it("does not deadlock a prepared callback behind a waiting trigger") {
-                    let transport = OrderedPreparedEventTransport(
-                        mailboxPendingForFirst: true
-                    )
-                    let orderedLog = EventLog(
-                        identity: MockIdentityService(),
-                        dateProvider: MockDateProvider(),
-                        apiClient: transport,
-                        store: mockStore
-                    )
-                    log = orderedLog
-                    try await orderedLog.configure(configuration: testConfig)
-                    await orderedLog.setMailboxPendingHandler {
-                        _ = try? await orderedLog.trackForTrigger(
-                            "$journey_claimed",
-                            properties: nil,
-                            persistToHistory: true,
-                            distinctIdOverride: "test-distinct-id"
-                        )
-                    }
-
-                    let first = await orderedLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "prepared-first-id",
-                            name: "prepared_first",
-                            distinctId: "test-distinct-id"
-                        )
-                    )
-                    await transport.waitUntilFirstStarted()
-                    let second = Task {
-                        try await orderedLog.trackForTrigger("direct_second")
-                    }
-
-                    await transport.releaseFirst()
-                    _ = try await second.value
-                    _ = await first.response.value
-                    await expect { await transport.startedNames }
-                        .to(equal(["prepared_first", "direct_second", "$journey_claimed"]))
-                }
-
-                it("does not deadlock a queued ownership decision behind a waiting trigger") {
-                    let transport = DecisionPredecessorPreparedEventTransport()
-                    let orderedLog = EventLog(
-                        identity: MockIdentityService(),
-                        dateProvider: MockDateProvider(),
-                        apiClient: transport,
-                        store: mockStore
-                    )
-                    log = orderedLog
-                    try await orderedLog.configure(configuration: testConfig)
-                    let callback = DecisionOwnershipCallbackRecorder()
-                    let decisionStore = mockStore!
-                    await orderedLog.setJourneyHandoffDeliveredHandler { journeyId in
-                        await callback.record(
-                            journeyId: journeyId,
-                            sourceWasAcknowledged: decisionStore.deliveredIds.contains(
-                                "queued-handoff-before-prepared"
-                            )
-                        )
-                    }
-
-                    await orderedLog.enqueueForDelivery(NuxieEvent(
-                        id: "queued-handoff-before-prepared",
-                        name: JourneyEvents.journeyHandoff,
-                        distinctId: "test-distinct-id",
-                        properties: [
-                            "journey_id": "deadlock-journey",
-                            "epoch": 0,
-                        ]
-                    ))
-                    let prepared = await orderedLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "prepared-after-handoff-id",
-                            name: "prepared_first",
-                            distinctId: "test-distinct-id"
-                        )
-                    )
-                    await transport.waitUntilDecisionStarted()
-                    let waitingTrigger = Task {
-                        try await orderedLog.trackForTrigger("direct_second")
-                    }
-                    await expect { await orderedLog.triggerDeliveryIsHeld() }
-                        .toEventually(beTrue())
-
-                    await transport.releaseDecision()
-
-                    _ = await prepared.response.value
-                    _ = try await waitingTrigger.value
-                    await expect { await transport.startedNames }.to(equal([
-                        JourneyEvents.journeyHandoff,
-                        "prepared_first",
-                        "direct_second",
-                    ]))
-                    await expect { await callback.journeyIds }
-                        .to(equal(["deadlock-journey"]))
-                    await expect { await callback.sourceWasAcknowledgedAtCallback }
-                        .to(equal([false]))
-                    expect(mockStore.deliveredIds)
-                        .to(contain("queued-handoff-before-prepared"))
-                }
-
-                it("keeps later prepared events behind an older failed delivery") {
-                    let transport = FailedPredecessorPreparedEventTransport()
-                    let orderedLog = EventLog(
-                        identity: MockIdentityService(),
-                        dateProvider: MockDateProvider(),
-                        apiClient: transport,
-                        store: mockStore
-                    )
-                    log = orderedLog
-                    try await orderedLog.configure(configuration: testConfig)
-
-                    let first = await orderedLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "failed-prepared-first-id",
-                            name: "failed_prepared_first",
-                            distinctId: "test-distinct-id"
-                        )
-                    )
-                    let second = await orderedLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "deferred-prepared-second-id",
-                            name: "deferred_prepared_second",
-                            distinctId: "test-distinct-id"
-                        )
-                    )
-
-                    let firstResponse = await first.response.value
-                    let secondResponse = await second.response.value
-                    expect(firstResponse.status).to(equal("offline"))
-                    expect(secondResponse.status).to(equal("offline"))
-                    await expect { await transport.directNames }
-                        .to(equal(["failed_prepared_first"]))
-                    await expect { await transport.batchNames }
-                        .to(equal([["failed_prepared_first"]]))
-                    expect(mockStore.pendingIds)
-                        .to(contain("failed-prepared-first-id", "deferred-prepared-second-id"))
-                }
-
-                it("cancels only the old identity's prepared delivery and releases its row") {
-                    let transport = ScopedCancellationEventTransport()
-                    let orderedLog = EventLog(
-                        identity: MockIdentityService(),
-                        dateProvider: MockDateProvider(),
-                        apiClient: transport,
-                        store: mockStore
-                    )
-                    log = orderedLog
-                    try await orderedLog.configure(configuration: testConfig)
-
-                    let old = await orderedLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "old-prepared-id",
-                            name: "old_prepared",
-                            distinctId: "old-user"
-                        )
-                    )
-                    await transport.waitUntilOldStarted()
-                    let new = await orderedLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "new-prepared-id",
-                            name: "new_prepared",
-                            distinctId: "new-user"
-                        )
-                    )
-
-                    await orderedLog.cancelPreparedResponseDeliveries(for: "old-user")
-
-                    let oldResponse = await old.response.value
-                    let newResponse = await new.response.value
-                    expect(oldResponse.status).to(equal("offline"))
-                    expect(newResponse.status).to(equal("ok"))
-                    await expect { await transport.directNames }
-                        .to(equal(["old_prepared", "new_prepared"]))
-                    await expect { await transport.batchNames }
-                        .to(equal([["old_prepared"]]))
-                    expect(mockStore.deliveredIds)
-                        .to(contain("old-prepared-id", "new-prepared-id"))
-                }
-
-                it("settles an in-flight authored delivery before closing its store") {
-                    let transport = CancellableEventTransport()
-                    let closingStore = MockEventStore()
-                    let closingLog = EventLog(
-                        identity: MockIdentityService(),
-                        dateProvider: MockDateProvider(),
-                        apiClient: transport,
-                        store: closingStore
-                    )
-                    try await closingLog.configure(configuration: testConfig)
-                    let committed = await closingLog.commitPreparedTriggerEvent(
-                        NuxieEvent(
-                            id: "authored-during-close",
-                            name: "authored_during_close",
-                            distinctId: "test-distinct-id"
-                        )
-                    )
-                    await transport.waitUntilTrackStarted()
-
-                    await closingLog.close()
-
-                    expect(closingStore.isClosed).to(beTrue())
-                    await expect { await transport.wasCancelled }.to(beTrue())
-                    let response = await committed.response.value
-                    expect(response.status).to(equal("offline"))
-                }
-
-                it("keeps storage open while an authored commit is registering") {
-                    let closingStore = MockEventStore()
-                    closingStore.pendingInsertDelayNanoseconds = 300_000_000
-                    let closingLog = EventLog(
-                        identity: MockIdentityService(),
-                        dateProvider: MockDateProvider(),
-                        apiClient: MockNuxieApi(),
-                        store: closingStore
-                    )
-                    try await closingLog.configure(configuration: testConfig)
-                    let commitTask = Task {
-                        await closingLog.commitPreparedTriggerEvent(
-                            NuxieEvent(
-                                id: "authored-registering-during-close",
-                                name: "authored_registering_during_close",
-                                distinctId: "test-distinct-id"
-                            )
-                        )
-                    }
-                    await expect { closingStore.storeEventCallCount }
-                        .toEventually(equal(1), timeout: .seconds(1))
-
-                    let closeTask = Task { await closingLog.close() }
-                    try await Task.sleep(nanoseconds: 50_000_000)
-                    expect(closingStore.isClosed).to(beFalse())
-
-                    let committed = await commitTask.value
-                    await closeTask.value
-                    expect(closingStore.isClosed).to(beTrue())
-                    let response = await committed.response.value
-                    expect(response.status).to(equal("offline"))
-                }
-            }
         }
     }
 }
@@ -1878,295 +1171,4 @@ private actor PersistenceProbe {
 
     var allPersisted: Bool { !persistedFlags.isEmpty && persistedFlags.allSatisfy { $0 } }
     var allPending: Bool { !pendingFlags.isEmpty && pendingFlags.allSatisfy { $0 } }
-}
-
-private actor SignalCount {
-    private(set) var value = 0
-
-    func increment() {
-        value += 1
-    }
-}
-
-private actor AsyncTestGate {
-    private var suspended = false
-    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
-    private var releaseContinuation: CheckedContinuation<Void, Never>?
-
-    func suspendUntilReleased() async {
-        suspended = true
-        suspensionWaiters.forEach { $0.resume() }
-        suspensionWaiters.removeAll()
-        await withCheckedContinuation { releaseContinuation = $0 }
-    }
-
-    func waitUntilSuspended() async {
-        guard !suspended else { return }
-        await withCheckedContinuation { suspensionWaiters.append($0) }
-    }
-
-    func release() {
-        releaseContinuation?.resume()
-        releaseContinuation = nil
-    }
-}
-
-private actor CancellableEventTransport: EventTransport {
-    private var trackStarted = false
-    private var trackStartWaiters: [CheckedContinuation<Void, Never>] = []
-    private(set) var wasCancelled = false
-
-    func waitUntilTrackStarted() async {
-        guard !trackStarted else { return }
-        await withCheckedContinuation { trackStartWaiters.append($0) }
-    }
-
-    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
-        BatchResponse(
-            status: "success",
-            processed: events.count,
-            failed: 0,
-            total: events.count,
-            errors: nil
-        )
-    }
-
-    func trackEvent(
-        event: String,
-        distinctId: String,
-        properties: sending [String: Any]?,
-        value: Double?,
-        entityId: String?
-    ) async throws -> EventResponse {
-        try await suspendTrack(eventID: event)
-    }
-
-    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
-        try await suspendTrack(eventID: event.id)
-    }
-
-    private func suspendTrack(eventID: String) async throws -> EventResponse {
-        trackStarted = true
-        trackStartWaiters.forEach { $0.resume() }
-        trackStartWaiters.removeAll()
-        do {
-            try await Task.sleep(nanoseconds: 30_000_000_000)
-            return EventResponse(status: "ok", eventId: eventID)
-        } catch {
-            wasCancelled = true
-            throw error
-        }
-    }
-}
-
-private actor ScopedCancellationEventTransport: EventTransport {
-    private var oldStarted = false
-    private var oldStartWaiters: [CheckedContinuation<Void, Never>] = []
-    private(set) var directNames: [String] = []
-    private(set) var batchNames: [[String]] = []
-
-    func waitUntilOldStarted() async {
-        guard !oldStarted else { return }
-        await withCheckedContinuation { oldStartWaiters.append($0) }
-    }
-
-    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
-        batchNames.append(events.map(\.event))
-        return BatchResponse(
-            status: "success",
-            processed: events.count,
-            failed: 0,
-            total: events.count,
-            errors: nil
-        )
-    }
-
-    func trackEvent(
-        event: String,
-        distinctId: String,
-        properties: sending [String: Any]?,
-        value: Double?,
-        entityId: String?
-    ) async throws -> EventResponse {
-        EventResponse(status: "ok", eventId: event)
-    }
-
-    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
-        directNames.append(event.name)
-        if event.distinctId == "old-user" {
-            oldStarted = true
-            oldStartWaiters.forEach { $0.resume() }
-            oldStartWaiters.removeAll()
-            try await Task.sleep(nanoseconds: 30_000_000_000)
-        }
-        return EventResponse(status: "ok", eventId: event.id)
-    }
-}
-
-private actor OrderedPreparedEventTransport: EventTransport {
-    private let mailboxPendingForFirst: Bool
-    private var started: [String] = []
-    private var firstStartWaiters: [CheckedContinuation<Void, Never>] = []
-    private var firstRelease: CheckedContinuation<Void, Never>?
-    private var firstReleased = false
-
-    init(mailboxPendingForFirst: Bool = false) {
-        self.mailboxPendingForFirst = mailboxPendingForFirst
-    }
-
-    var startedNames: [String] { started }
-
-    func waitUntilFirstStarted() async {
-        guard started.contains("prepared_first") else {
-            await withCheckedContinuation { firstStartWaiters.append($0) }
-            return
-        }
-    }
-
-    func releaseFirst() {
-        firstReleased = true
-        firstRelease?.resume()
-        firstRelease = nil
-    }
-
-    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
-        BatchResponse(
-            status: "success",
-            processed: events.count,
-            failed: 0,
-            total: events.count,
-            errors: nil
-        )
-    }
-
-    func trackEvent(
-        event: String,
-        distinctId: String,
-        properties: sending [String: Any]?,
-        value: Double?,
-        entityId: String?
-    ) async throws -> EventResponse {
-        await track(name: event, id: event)
-    }
-
-    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
-        await track(name: event.name, id: event.id)
-    }
-
-    private func track(name: String, id: String) async -> EventResponse {
-        started.append(name)
-        if name == "prepared_first" {
-            firstStartWaiters.forEach { $0.resume() }
-            firstStartWaiters.removeAll()
-            if !firstReleased {
-                await withCheckedContinuation { firstRelease = $0 }
-            }
-        }
-        return EventResponse(
-            status: "ok",
-            eventId: id,
-            mailboxPending: name == "prepared_first" && mailboxPendingForFirst
-        )
-    }
-}
-
-private actor DecisionPredecessorPreparedEventTransport: EventTransport {
-    private var started: [String] = []
-    private var decisionStartWaiters: [CheckedContinuation<Void, Never>] = []
-    private var decisionRelease: CheckedContinuation<Void, Never>?
-    private var decisionReleased = false
-
-    var startedNames: [String] { started }
-
-    func waitUntilDecisionStarted() async {
-        guard !started.contains(JourneyEvents.journeyHandoff) else { return }
-        await withCheckedContinuation { decisionStartWaiters.append($0) }
-    }
-
-    func releaseDecision() {
-        decisionReleased = true
-        decisionRelease?.resume()
-        decisionRelease = nil
-    }
-
-    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
-        BatchResponse(
-            status: "success",
-            processed: events.count,
-            failed: 0,
-            total: events.count,
-            errors: nil
-        )
-    }
-
-    func trackEvent(
-        event: String,
-        distinctId: String,
-        properties: sending [String: Any]?,
-        value: Double?,
-        entityId: String?
-    ) async throws -> EventResponse {
-        await track(name: event, id: event)
-    }
-
-    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
-        await track(name: event.name, id: event.id)
-    }
-
-    private func track(name: String, id: String) async -> EventResponse {
-        started.append(name)
-        guard name == JourneyEvents.journeyHandoff else {
-            return EventResponse(status: "ok", eventId: id)
-        }
-        decisionStartWaiters.forEach { $0.resume() }
-        decisionStartWaiters.removeAll()
-        if !decisionReleased {
-            await withCheckedContinuation { decisionRelease = $0 }
-        }
-        return EventResponse(
-            status: "ok",
-            eventId: id,
-            journeyOwnership: .init(
-                journeyId: "deadlock-journey",
-                accepted: true,
-                epoch: 1
-            )
-        )
-    }
-}
-
-private actor DecisionOwnershipCallbackRecorder {
-    private(set) var journeyIds: [String] = []
-    private(set) var sourceWasAcknowledgedAtCallback: [Bool] = []
-
-    func record(journeyId: String, sourceWasAcknowledged: Bool) {
-        journeyIds.append(journeyId)
-        sourceWasAcknowledgedAtCallback.append(sourceWasAcknowledged)
-    }
-}
-
-private actor FailedPredecessorPreparedEventTransport: EventTransport {
-    private(set) var directNames: [String] = []
-    private(set) var batchNames: [[String]] = []
-
-    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
-        batchNames.append(events.map(\.event))
-        throw URLError(.notConnectedToInternet)
-    }
-
-    func trackEvent(
-        event: String,
-        distinctId: String,
-        properties: sending [String: Any]?,
-        value: Double?,
-        entityId: String?
-    ) async throws -> EventResponse {
-        directNames.append(event)
-        throw URLError(.notConnectedToInternet)
-    }
-
-    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
-        directNames.append(event.name)
-        throw URLError(.notConnectedToInternet)
-    }
 }

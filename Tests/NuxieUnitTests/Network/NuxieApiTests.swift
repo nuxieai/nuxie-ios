@@ -179,10 +179,7 @@ final class NuxieApiTests: AsyncSpec {
                 
                 it("should successfully fetch profile") {
                     // Setup stub response
-                    let profileResponse = ResponseBuilders.buildProfileResponse(
-                        experiences: [ResponseBuilders.buildExperience()],
-                        segments: []
-                    )
+                    let profileResponse = TestJourneyProfile.response()
                     
                     StubURLProtocol.register(
                         matcher: RequestMatchers.post("/profile"),
@@ -192,18 +189,22 @@ final class NuxieApiTests: AsyncSpec {
                                 url: request.url!,
                                 statusCode: 200,
                                 httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"]
+                                headerFields: [
+                                    "Content-Type": "application/json",
+                                    NuxieApi.profileAppIdHeader: "app_a",
+                                    NuxieApi.profileAppEnvironmentHeader: "live",
+                                ]
                             )!
                             return (response, data)
                         }
                     )
                     
                     let result = try await api.fetchProfile(for: distinctId)
-                    expect(result.releases).to(beNil())
+                    expect(result.planeProfile.armedLegs).to(beEmpty())
                 }
 
                 it("decodes canonical device-plane profiles on every fetch path") {
-                    let fixture = try DeviceLegPlaneProfileTestFixture.load()
+                    let fixture = try JourneyPlaneProfileTestFixture.load()
                     StubURLProtocol.register(
                         matcher: RequestMatchers.post("/profile"),
                         handler: { request in
@@ -237,11 +238,11 @@ final class NuxieApiTests: AsyncSpec {
                         revalidating: nil
                     )
 
-                    expect(direct.planeProfile?.armedLegs.count).to(equal(1))
-                    expect(timed.planeProfile?.releases.count).to(equal(1))
+                    expect(direct.planeProfile.armedLegs.count).to(equal(1))
+                    expect(timed.planeProfile.releases.count).to(equal(1))
                     switch conditional {
                     case .modified(let profile, let validator):
-                        expect(profile.planeProfile?.facts.properties.count)
+                        expect(profile.planeProfile.facts.properties.count)
                             .to(equal(0))
                         expect(validator?.authority)
                             .to(equal(fixture.deliveryAuthority))
@@ -251,7 +252,7 @@ final class NuxieApiTests: AsyncSpec {
                 }
 
                 it("rejects a canonical profile without transport authority") {
-                    let fixture = try DeviceLegPlaneProfileTestFixture.load()
+                    let fixture = try JourneyPlaneProfileTestFixture.load()
                     StubURLProtocol.register(
                         matcher: RequestMatchers.post("/profile"),
                         handler: { request in
@@ -406,12 +407,13 @@ final class NuxieApiTests: AsyncSpec {
                 it("captures a valid profile validator from a modified response") {
                     let validator = ProfileCacheValidator(
                         rawValue: "\"profile-v2\"",
-                        resourceScope: "https://test.nuxie.ai/profile"
+                        resourceScope: "https://test.nuxie.ai/profile",
+                        authority: ProfileDeliveryAuthority(
+                            appId: "app_a",
+                            environment: "live"
+                        )
                     )
-                    let profileResponse = ResponseBuilders.buildProfileResponse(
-                        experiences: [ResponseBuilders.buildExperience()],
-                        segments: []
-                    )
+                    let profileResponse = TestJourneyProfile.response()
                     StubURLProtocol.register(
                         matcher: RequestMatchers.post("/profile"),
                         handler: { request in
@@ -423,6 +425,8 @@ final class NuxieApiTests: AsyncSpec {
                                     headerFields: [
                                         "Content-Type": "application/json",
                                         "ETag": validator.rawValue,
+                                        NuxieApi.profileAppIdHeader: "app_a",
+                                        NuxieApi.profileAppEnvironmentHeader: "live",
                                     ]
                                 )!,
                                 try ResponseBuilders.toJSON(profileResponse)
@@ -449,10 +453,7 @@ final class NuxieApiTests: AsyncSpec {
                         rawValue: "\"profile-foreign\"",
                         resourceScope: "https://other.nuxie.ai/profile"
                     )
-                    let profileResponse = ResponseBuilders.buildProfileResponse(
-                        experiences: [ResponseBuilders.buildExperience()],
-                        segments: []
-                    )
+                    let profileResponse = TestJourneyProfile.response()
                     var capturedRequest: URLRequest?
                     StubURLProtocol.register(
                         matcher: RequestMatchers.post("/profile"),
@@ -466,6 +467,8 @@ final class NuxieApiTests: AsyncSpec {
                                     headerFields: [
                                         "Content-Type": "application/json",
                                         "ETag": "\"profile-local\"",
+                                        NuxieApi.profileAppIdHeader: "app_a",
+                                        NuxieApi.profileAppEnvironmentHeader: "live",
                                     ]
                                 )!,
                                 try ResponseBuilders.toJSON(profileResponse)
@@ -497,7 +500,11 @@ final class NuxieApiTests: AsyncSpec {
                                 url: request.url!,
                                 statusCode: 200,
                                 httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"]
+                                headerFields: [
+                                    "Content-Type": "application/json",
+                                    NuxieApi.profileAppIdHeader: "app_a",
+                                    NuxieApi.profileAppEnvironmentHeader: "live",
+                                ]
                             )!
                             return (response, data)
                         }
@@ -591,7 +598,11 @@ final class NuxieApiTests: AsyncSpec {
                                 url: request.url!,
                                 statusCode: 401,
                                 httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"]
+                                headerFields: [
+                                    "Content-Type": "application/json",
+                                    NuxieApi.profileAppIdHeader: "app_a",
+                                    NuxieApi.profileAppEnvironmentHeader: "live",
+                                ]
                             )!
                             return (response, data)
                         }
@@ -610,17 +621,18 @@ final class NuxieApiTests: AsyncSpec {
                         handler: { request in
                             capturedRequest = request
                             
-                            let response = ResponseBuilders.buildProfileResponse(
-                                experiences: [],
-                                segments: []
-                            )
+                            let response = TestJourneyProfile.response()
                             
                             let data = try ResponseBuilders.toJSON(response)
                             let httpResponse = HTTPURLResponse(
                                 url: request.url!,
                                 statusCode: 200,
                                 httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"]
+                                headerFields: [
+                                    "Content-Type": "application/json",
+                                    NuxieApi.profileAppIdHeader: "app_a",
+                                    NuxieApi.profileAppEnvironmentHeader: "live",
+                                ]
                             )!
                             return (httpResponse, data)
                         }
@@ -654,17 +666,18 @@ final class NuxieApiTests: AsyncSpec {
                         handler: { request in
                             capturedRequest = request
                             
-                            let response = ResponseBuilders.buildProfileResponse(
-                                experiences: [],
-                                segments: []
-                            )
+                            let response = TestJourneyProfile.response()
                             
                             let data = try ResponseBuilders.toJSON(response)
                             let httpResponse = HTTPURLResponse(
                                 url: request.url!,
                                 statusCode: 200,
                                 httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"]
+                                headerFields: [
+                                    "Content-Type": "application/json",
+                                    NuxieApi.profileAppIdHeader: "app_a",
+                                    NuxieApi.profileAppEnvironmentHeader: "live",
+                                ]
                             )!
                             return (httpResponse, data)
                         }
@@ -721,12 +734,13 @@ final class NuxieApiTests: AsyncSpec {
                                 url: request.url!,
                                 statusCode: 200,
                                 httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"]
+                                headerFields: [
+                                    "Content-Type": "application/json",
+                                    NuxieApi.profileAppIdHeader: "app_a",
+                                    NuxieApi.profileAppEnvironmentHeader: "live",
+                                ]
                             )!
-                            let profile = ResponseBuilders.buildProfileResponse(
-                                experiences: [],
-                                segments: []
-                            )
+                            let profile = TestJourneyProfile.response()
                             return (response, try ResponseBuilders.toJSON(profile))
                         }
                     )
@@ -791,12 +805,13 @@ final class NuxieApiTests: AsyncSpec {
                                 url: request.url!,
                                 statusCode: 200,
                                 httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"]
+                                headerFields: [
+                                    "Content-Type": "application/json",
+                                    NuxieApi.profileAppIdHeader: "app_a",
+                                    NuxieApi.profileAppEnvironmentHeader: "live",
+                                ]
                             )!
-                            let profile = ResponseBuilders.buildProfileResponse(
-                                experiences: [],
-                                segments: []
-                            )
+                            let profile = TestJourneyProfile.response()
                             return (response, try ResponseBuilders.toJSON(profile))
                         }
                     )
@@ -907,8 +922,8 @@ final class NuxieApiTests: AsyncSpec {
                     var capturedRequest: URLRequest?
                     let timestamp = Date(timeIntervalSince1970: 1_753_459_200.789)
                     let capturedEvent = NuxieEvent(
-                        id: "journey-handoff-1",
-                        name: "$journey_handoff",
+                        id: "captured-event-1",
+                        name: "checkout_completed",
                         distinctId: distinctId,
                         properties: [
                             "journey_id": "journey-1",
@@ -950,10 +965,10 @@ final class NuxieApiTests: AsyncSpec {
                         return
                     }
 
-                    expect(json["event"] as? String).to(equal("$journey_handoff"))
+                    expect(json["event"] as? String).to(equal("checkout_completed"))
                     expect(json["distinct_id"] as? String).to(equal(distinctId))
                     expect(json["idempotency_key"] as? String)
-                        .to(equal("journey-handoff-1"))
+                        .to(equal("captured-event-1"))
                     expect(json["timestamp"] as? String)
                         .to(equal("2025-07-25T16:00:00.789Z"))
                     guard let properties = json["properties"] as? [String: Any],

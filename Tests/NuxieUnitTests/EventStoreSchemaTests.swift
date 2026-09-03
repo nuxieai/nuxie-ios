@@ -21,7 +21,7 @@ final class EventStoreSchemaTests: XCTestCase {
         temporaryRoot = nil
     }
 
-    func testFreshStoreInstallsTheCompleteSchemaAsVersionOne() async throws {
+    func testFreshStoreInstallsTheCompleteSchemaAsVersionTwo() async throws {
         let store = SQLiteEventStore()
         try await store.initialize(path: temporaryRoot)
         await store.close()
@@ -29,7 +29,7 @@ final class EventStoreSchemaTests: XCTestCase {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
-        XCTAssertEqual(try userVersion(in: database), 1)
+        XCTAssertEqual(try userVersion(in: database), 2)
         XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM pragma_table_info('events');", in: database), 7)
         XCTAssertEqual(
             try scalarInt(
@@ -91,7 +91,7 @@ final class EventStoreSchemaTests: XCTestCase {
         )
     }
 
-    func testReopensValidVersionOneWithoutMutatingItsSchema() async throws {
+    func testReopensValidVersionTwoWithoutMutatingItsSchema() async throws {
         let firstStore = SQLiteEventStore()
         try await firstStore.initialize(path: temporaryRoot)
         await firstStore.close()
@@ -106,7 +106,7 @@ final class EventStoreSchemaTests: XCTestCase {
 
         let reopenedDatabase = try openDatabase()
         defer { sqlite3_close(reopenedDatabase) }
-        XCTAssertEqual(try userVersion(in: reopenedDatabase), 1)
+        XCTAssertEqual(try userVersion(in: reopenedDatabase), 2)
         XCTAssertEqual(
             try scalarInt("PRAGMA schema_version;", in: reopenedDatabase),
             initialSchemaVersion
@@ -151,13 +151,13 @@ final class EventStoreSchemaTests: XCTestCase {
         )
     }
 
-    func testRejectsVersionTwoWithoutMutatingIt() async throws {
+    func testRejectsFutureVersionWithoutMutatingIt() async throws {
         let database = try openDatabase()
         try execute(
             """
             CREATE TABLE future_data (value TEXT NOT NULL);
             INSERT INTO future_data (value) VALUES ('keep-me');
-            PRAGMA user_version = 2;
+            PRAGMA user_version = 3;
             """,
             on: database
         )
@@ -165,27 +165,27 @@ final class EventStoreSchemaTests: XCTestCase {
         sqlite3_close(database)
 
         let store = SQLiteEventStore()
-        await assertSchemaFailure(store, targetVersion: 2, operation: "validate user_version")
+        await assertSchemaFailure(store, targetVersion: 3, operation: "validate user_version")
 
         let rejectedDatabase = try openDatabase()
         defer { sqlite3_close(rejectedDatabase) }
-        XCTAssertEqual(try userVersion(in: rejectedDatabase), 2)
+        XCTAssertEqual(try userVersion(in: rejectedDatabase), 3)
         XCTAssertEqual(try scalarInt("PRAGMA schema_version;", in: rejectedDatabase), schemaVersionBefore)
         XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM future_data;", in: rejectedDatabase), 1)
     }
 
-    func testRejectsMalformedVersionOneWithoutMutatingIt() async throws {
+    func testRejectsMalformedVersionTwoWithoutMutatingIt() async throws {
         let database = try openDatabase()
         try createCurrentSchema(in: database, userIDIsRequired: false)
         let schemaVersionBefore = try scalarInt("PRAGMA schema_version;", in: database)
         sqlite3_close(database)
 
         let store = SQLiteEventStore()
-        await assertSchemaFailure(store, targetVersion: 1, operation: "verify events")
+        await assertSchemaFailure(store, targetVersion: 2, operation: "verify events")
 
         let rejectedDatabase = try openDatabase()
         defer { sqlite3_close(rejectedDatabase) }
-        XCTAssertEqual(try userVersion(in: rejectedDatabase), 1)
+        XCTAssertEqual(try userVersion(in: rejectedDatabase), 2)
         XCTAssertEqual(try scalarInt("PRAGMA schema_version;", in: rejectedDatabase), schemaVersionBefore)
         XCTAssertEqual(
             try scalarInt(
@@ -196,16 +196,16 @@ final class EventStoreSchemaTests: XCTestCase {
         )
     }
 
-    func testRejectsVersionOneWhenARequiredIndexIsMissing() async throws {
+    func testRejectsVersionTwoWhenARequiredIndexIsMissing() async throws {
         let database = try openDatabase()
         try createCurrentSchema(in: database, omittedIndex: "idx_events_delivery")
         sqlite3_close(database)
 
         let store = SQLiteEventStore()
-        await assertSchemaFailure(store, targetVersion: 1, operation: "verify idx_events_delivery")
+        await assertSchemaFailure(store, targetVersion: 2, operation: "verify idx_events_delivery")
     }
 
-    func testRejectsVersionOneWithoutHistoryMetadata() async throws {
+    func testRejectsVersionTwoWithoutHistoryMetadata() async throws {
         let database = try openDatabase()
         try createCurrentSchema(in: database, includeHistoryMetadata: false)
         sqlite3_close(database)
@@ -213,19 +213,19 @@ final class EventStoreSchemaTests: XCTestCase {
         let store = SQLiteEventStore()
         await assertSchemaFailure(
             store,
-            targetVersion: 1,
+            targetVersion: 2,
             operation: "verify event_history_metadata"
         )
     }
 
-    func testRejectsVersionOneWhenAnIndexHasTheWrongDefinition() async throws {
+    func testRejectsVersionTwoWhenAnIndexHasTheWrongDefinition() async throws {
         let database = try openDatabase()
         try createCurrentSchema(in: database, omittedIndex: "idx_events_delivery")
         try execute("CREATE INDEX idx_events_delivery ON events(name);", on: database)
         sqlite3_close(database)
 
         let store = SQLiteEventStore()
-        await assertSchemaFailure(store, targetVersion: 1, operation: "verify idx_events_delivery")
+        await assertSchemaFailure(store, targetVersion: 2, operation: "verify idx_events_delivery")
     }
 
     private func assertSchemaFailure(
@@ -292,7 +292,7 @@ final class EventStoreSchemaTests: XCTestCase {
               delivery_state INTEGER NOT NULL DEFAULT 0,
               FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
             );
-            PRAGMA user_version = 1;
+            PRAGMA user_version = 2;
             """,
             on: database
         )

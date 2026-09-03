@@ -145,44 +145,6 @@ final class ForwardingPersistenceTests: XCTestCase {
     await log.close()
   }
 
-  func testConvertedServerFactUsesConversionAtAsTimestampAndArrivalAsReceivedAt() async throws {
-    let arrival = Date(timeIntervalSince1970: 456)
-    let store = MockEventStore()
-    let log = EventLog(
-      identity: MockIdentityService(),
-      dateProvider: MockDateProvider(initialDate: arrival),
-      apiClient: MockNuxieApiForQueue(),
-      store: store
-    )
-    let recorder = ForwardingRecorder()
-    await log.subscribeForwarding { event in await recorder.record(event) }
-    try await log.configure(configuration: NuxieConfiguration(apiKey: "test-api-key"))
-    let convertedAt = Date(timeIntervalSince1970: 123)
-    let envelopeAt = Date(timeIntervalSince1970: 124)
-
-    await log.commitServerFacts([
-      JourneyDownFact(
-        id: "server-fact",
-        event: .converted,
-        timestamp: envelopeAt,
-        properties: JourneyConvertedProperties(
-          journeyId: "journey-1",
-          experienceId: "experience-1",
-          experienceVersion: "version-1",
-          at: convertedAt,
-          sourceFactRef: "source-1"
-        )
-      ),
-    ], distinctId: "customer-1")
-    await log.drain()
-
-    let forwardedSnapshot = await recorder.snapshot()
-    let forwarded = try XCTUnwrap(forwardedSnapshot.first)
-    XCTAssertEqual(forwarded.event.timestamp, convertedAt)
-    XCTAssertEqual(forwarded.receivedAt, arrival)
-    await log.close()
-  }
-
   func testScriptedJourneyReachesPublicDelegateInDurabilityOrderOnMainActor() async throws {
     let expectedNames = [
       "experience_shown",
@@ -190,7 +152,7 @@ final class ForwardingPersistenceTests: XCTestCase {
       "purchase_completed",
       "purchase_synced",
       "experience_dismissed",
-      "journey_ended",
+      "journey_completed",
     ]
     let storageURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("nuxie-forwarding-script-\(UUID().uuidString)")
@@ -215,8 +177,10 @@ final class ForwardingPersistenceTests: XCTestCase {
     core.identity.setDistinctId("customer-1")
     let refProperties: [String: Any] = [
       "experience_id": "experience-1",
-      "experience_version": "version-1",
+      "experience_version_id": "version-1",
       "journey_id": "journey-1",
+      "leg_id": String(repeating: "a", count: 64),
+      "leg_generation": 0,
     ]
     // Exercise the same nearest service seams used by the real producers:
     // presentation and exposure emitters enqueue on EventLog, StoreKit uses
@@ -277,10 +241,13 @@ final class ForwardingPersistenceTests: XCTestCase {
     )
     await core.eventLog.drain()
 
-    _ = try await core.eventLog.trackWithResponse(
-      JourneyEvents.journeyExited,
-      properties: refProperties.merging(["reason": "completed"]) { _, new in new },
-      flushStrategy: .eventLog
+    _ = await core.systemEvents.capture(
+      .init(
+        name: JourneyEvents.journeyCompleted,
+        properties: refProperties.merging(["outcome": "completed"]) { _, new in new },
+        eventId: "scripted-journey-completed",
+        distinctId: "customer-1"
+      )
     )
     await core.eventLog.drain()
 
@@ -366,22 +333,6 @@ final class ForwardingPersistenceTests: XCTestCase {
     await log.close()
   }
 
-  func testTriggerLaneForwardsWithoutEnteringOrdinaryRouting() async throws {
-    let (log, _) = try await makeLog()
-    let recorder = ForwardingRecorder()
-    await log.subscribeCommitted { event in await recorder.recordRoute(event) }
-    await log.subscribeForwarding { event in await recorder.record(event) }
-
-    _ = try await log.trackForTrigger("host_trigger", properties: nil)
-    await log.drain()
-
-    let routedNames = await recorder.routes()
-    let forwardedNames = await recorder.snapshot().map(\.event.forwardingName)
-    XCTAssertTrue(routedNames.isEmpty)
-    XCTAssertEqual(forwardedNames, ["host_trigger"])
-    await log.close()
-  }
-
   func testMirroredCaptureForwardsWithoutReenteringOrdinaryRouting() async throws {
     let (log, _) = try await makeLog()
     let recorder = ForwardingRecorder()
@@ -451,22 +402,26 @@ final class ForwardingPersistenceTests: XCTestCase {
       encoding: .utf8
     )
 
-    let ordinaryLanes = [
-      "  func trackWithResponse(\n    _ event: String,\n    properties: sending [String: Any]? = nil,\n    flushStrategy:",
-      "  public func trackForTrigger(\n    _ event: String,\n    properties: sending [String: Any]? = nil,\n    persistToHistory:",
-      "  public func commitPreparedTriggerEvent(\n    _ event: NuxieEvent",
-      "  public func storePreparedEventInHistory(_ event: NuxieEvent) async",
-      "  public func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async",
-      "  private func commit(\n    _ event: NuxieEvent,\n    routeToSubscribers: Bool,\n    subscriberAdmissions:",
-    ]
-    for signature in ordinaryLanes {
-      let body = try functionBody(in: source, startingWith: signature)
-      XCTAssertEqual(
-        body.components(separatedBy: "try await persist(").count - 1,
-        1,
-        "Persistence lane bypassed persist: \(signature)"
-      )
-    }
+    let captureBody = try functionBody(
+      in: source,
+      startingWith: "  private func processCapture(_ cmd: CaptureCommand) async"
+    )
+    XCTAssertEqual(captureBody.components(separatedBy: "await commit(").count - 1, 1)
+
+    let preparedHistoryBody = try functionBody(
+      in: source,
+      startingWith: "  public func storePreparedEventInHistory(_ event: NuxieEvent) async"
+    )
+    XCTAssertEqual(
+      preparedHistoryBody.components(separatedBy: "try await persist(").count - 1,
+      1
+    )
+
+    let commitBody = try functionBody(
+      in: source,
+      startingWith: "  private func commit(\n    _ event: NuxieEvent,\n    routeToSubscribers: Bool,\n    subscriberAdmissions:"
+    )
+    XCTAssertEqual(commitBody.components(separatedBy: "try await persist(").count - 1, 1)
 
     let stableLane = try functionBody(
       in: source,
@@ -521,7 +476,6 @@ final class ForwardingPersistenceTests: XCTestCase {
     ).mapValues(\.count)
     let expectedStoreCalls = [
       "advanceHistoryCoverage": 1,
-      "clearUnresolvedJourneyOwnershipResponse": 1,
       "close": 1,
       "commitStableCapture": 1,
       "commitStableCaptureAndStageRoute": 2,
@@ -531,10 +485,8 @@ final class ForwardingPersistenceTests: XCTestCase {
       "getEventCount": 1,
       "getFirstEventTime": 1,
       "getLastEventTime": 2,
-      "getPendingDeliveryCount": 2,
+      "getPendingDeliveryCount": 1,
       "hasEvent": 1,
-      "hasJourneyOwnershipLoss": 1,
-      "hasUnresolvedJourneyOwnershipResponse": 2,
       "historyCoverageStartingAt": 1,
       "initialize": 1,
       "insert": 1,
@@ -546,11 +498,8 @@ final class ForwardingPersistenceTests: XCTestCase {
       "queryPendingStableRoutes": 2,
       "queryRecentEvents": 1,
       "queryStableCapture": 2,
-      "queryUnresolvedJourneyOwnershipResponse": 2,
       "readOrInitializeHistoryCoverage": 1,
       "reassignEvents": 1,
-      "recordJourneyOwnershipLoss": 1,
-      "recordUnresolvedJourneyOwnershipResponse": 1,
     ]
     XCTAssertEqual(
       actualStoreCalls,

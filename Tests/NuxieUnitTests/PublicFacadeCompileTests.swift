@@ -12,16 +12,13 @@ final class PublicFacadeCompileTests: XCTestCase {
         let sdk = NuxieSDK.shared
         _ = sdk.version
         _ = sdk.isSetup
-        _ = TriggerResult.self
-        _ = TriggerUpdate.self
         _ = ExperienceRef.self
-        _ = TriggerError.Code.self
         _ = FeatureAccess.self
         _ = FeatureUsageResult.self
     }
 
     private func applicationUsageExample(_ sdk: NuxieSDK) async throws {
-        let _: TriggerResult = await sdk.triggerAndWait("checkout_started")
+        sdk.trigger("checkout_started")
         let _: FeatureAccess = try await sdk.hasFeature("premium")
         let _: FeatureUsageResult = try await sdk.useFeatureAndWait("credits")
         try await sdk.setLocaleIdentifier(nil)

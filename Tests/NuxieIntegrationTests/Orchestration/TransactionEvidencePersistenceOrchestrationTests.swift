@@ -56,12 +56,7 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                 }
 
                 let api = MockNuxieApi()
-                await api.setProfileResponse(ProfileResponse(
-                    segments: [],
-                    userProperties: nil,
-                    experiments: nil,
-                    features: []
-                ))
+                await api.setProfileResponse(TestJourneyProfile.response())
                 let stack = try await OrchestrationStack.boot(
                     storageURL: storageURL,
                     api: api,

@@ -808,24 +808,24 @@ class ExperienceViewController: NuxiePlatformViewController {
         handleNativeRestore(outcomeCorrelation: outcomeCorrelation)
     }
 
-    func resolveDeviceLegNotificationPermissionEvent(
+    func resolveJourneyNotificationPermissionEvent(
         journeyId: String
-    ) async -> DeviceLegPresentationPermissionEvent {
+    ) async -> JourneyPresentationPermissionEvent {
         let outcome = await permissions.resolveNotificationAuthorization()
-        return DeviceLegPresentationPermissionEvent(
+        return JourneyPresentationPermissionEvent(
             name: notificationPermissionEventName(outcome),
             properties: ["journey_id": journeyId]
         )
     }
 
-    func resolveDeviceLegRequestPermissionEvent(
+    func resolveJourneyRequestPermissionEvent(
         permissionType: String,
         journeyId: String
-    ) async -> DeviceLegPresentationPermissionEvent {
+    ) async -> JourneyPresentationPermissionEvent {
         let resolution = await permissions.resolveRequestPermission(
             permissionType: permissionType
         )
-        return DeviceLegPresentationPermissionEvent(
+        return JourneyPresentationPermissionEvent(
             name: requestPermissionEventName(resolution)
                 ?? SystemEventNames.permissionDenied,
             properties: [
@@ -835,9 +835,9 @@ class ExperienceViewController: NuxiePlatformViewController {
         )
     }
 
-    func resolveDeviceLegTrackingPermissionEvent(
+    func resolveJourneyTrackingPermissionEvent(
         journeyId: String
-    ) async -> DeviceLegPresentationPermissionEvent {
+    ) async -> JourneyPresentationPermissionEvent {
         let currentStatus = trackingAuthorizationHandler.authorizationStatus()
         let eventName: String
         if currentStatus == .unsupported {
@@ -852,7 +852,7 @@ class ExperienceViewController: NuxiePlatformViewController {
             eventName = trackingPermissionEventName(outcome)
                 ?? SystemEventNames.trackingDenied
         }
-        return DeviceLegPresentationPermissionEvent(
+        return JourneyPresentationPermissionEvent(
             name: eventName,
             properties: ["journey_id": journeyId]
         )
@@ -1329,7 +1329,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         #else
         viewModel.handleLoadingFailed(
             ExperienceError.configurationFailed(
-                ExperienceReleaseAcquisitionError.requiredObjectUnavailable(
+                JourneyReleaseAcquisitionError.requiredObjectUnavailable(
                     "Nuxie runtime unavailable"
                 )
             )

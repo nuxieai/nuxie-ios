@@ -56,27 +56,58 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
 
         for fixture in index.fixtures {
             let fixtureRoot = fixturesRoot.appendingPathComponent(fixture.id)
-            let profile = try JSONDecoder().decode(
-                ExperienceReleaseProfile.self,
-                from: Data(contentsOf: fixtureRoot.appendingPathComponent("profile.json"))
+            let profile = try JourneyPlaneProfile.decode(
+                Data(contentsOf: fixtureRoot.appendingPathComponent("profile.json"))
             )
-            let cache = temporaryDirectory()
-            let store = ExperienceReleaseAcquisitionStore(
-                cacheDirectory: cache,
-                urlSession: TestURLSessionProvider.createTestSession(),
-                authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
-                supportedRuntime: ExperienceReleaseRuntime.current,
-                admission: ExperienceReleaseAdmission(
-                    store: InMemoryExperienceReleaseHighWaterStore()
+            let locator = try XCTUnwrap(profile.releases.first?.locator)
+            let profileCatalog = JourneyProfileCatalog(
+                authorizationKeys: try JourneyTrustRoots.keys(for: .development),
+                supportedRuntime: JourneyReleaseRuntime.current,
+                highWaterStore: InMemoryJourneyReleaseHighWaterStore()
+            )
+            let preparedProfile = try await profileCatalog.prepare(
+                profile,
+                authority: ProfileDeliveryAuthority(
+                    appId: locator.appId,
+                    environment: locator.environment
                 )
             )
-            let catalog = try await store.authenticateProfile(profile)
-            let definition = try XCTUnwrap(catalog.definitions.first)
-            XCTAssertEqual(catalog.definitions.count, 1, fixture.id)
-            let initialScreenID = try XCTUnwrap(definition.journey.screens.first?.id)
-            let artifact = try await store.presentationArtifact(
-                definition: definition,
-                initialScreenID: initialScreenID
+            let didCommitProfile = try await profileCatalog.commit(
+                preparedProfile,
+                distinctId: "journey-fixture"
+            )
+            XCTAssertTrue(didCommitProfile)
+            let arm = try XCTUnwrap(profile.armedLegs.first)
+            let release = try XCTUnwrap(
+                preparedProfile.snapshot.releasesByDigest[
+                    arm.reference.descriptorSha256
+                ]
+            )
+            let cache = temporaryDirectory()
+            let store = JourneyReleaseAcquisitionStore(
+                cacheDirectory: cache,
+                urlSession: TestURLSessionProvider.createTestSession()
+            )
+            let preparedArtifacts = try await store.prepareJourneyArtifacts(
+                for: preparedProfile.snapshot
+            )
+            XCTAssertEqual(
+                preparedArtifacts.releaseDescriptorSHA256s,
+                Set(preparedProfile.snapshot.releasesByDigest.keys),
+                fixture.id
+            )
+            let presentation = try await store.preparePresentation(
+                release: release,
+                delivery: profile.delivery,
+                productResolver: { _ in [] }
+            )
+            let initialScreenID = try XCTUnwrap(
+                release.descriptor.leg.screens.first?.id
+            )
+            let artifact = try await presentation.artifactLoader(
+                presentation.experience,
+                nil,
+                initialScreenID
             )
             XCTAssertFalse(artifact.sceneBytes.isEmpty, fixture.id)
             XCTAssertEqual(artifact.payload.renderPlan.entry.screenId, initialScreenID, fixture.id)

@@ -200,19 +200,14 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     ),
                     right: .number(0)
                 )
-                let result = await IRRuntime(
-                    dateProvider: MockDateProvider(initialDate: now)
-                ).eval(
-                    .init(
-                        ir_version: 1,
-                        engine_min: nil,
-                        compiled_at: nil,
-                        expr: .not(boundedCountIsZero)
-                    ),
-                    .init(now: now, events: queries)
-                )
-
-                expect(result).to(beFalse())
+                do {
+                    _ = try await IRInterpreter(
+                        ctx: .init(now: now, events: queries)
+                    ).evalBool(.not(boundedCountIsZero))
+                    fail("Expected corrupt queried history to remain unknown under negation")
+                } catch IRError.incompleteEventHistory {
+                    // Expected: corrupt history cannot safely prove a negative.
+                }
             }
 
             it("restarts sequence matching from a later viable first step") {

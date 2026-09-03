@@ -1,6 +1,6 @@
 import Foundation
 
-/// Enhanced event model for dual-purpose event handling
+/// Immutable event snapshot used by delivery, forwarding, and Journey routing.
 // @unchecked Sendable: all stored properties are immutable (`let`); the
 // [String: Any] payload is a write-once snapshot never mutated after init.
 public struct NuxieEvent: @unchecked Sendable {

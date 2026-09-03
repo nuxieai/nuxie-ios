@@ -135,7 +135,7 @@ enum TimeWindowMath {
     }
 
     private static func exactLocalToInstant(_ localAsUTC: Date, timezone: SignedJourneyTimezone, disambiguation: Disambiguation) -> Date? {
-        guard let offsets = try? timezone.bundle.nearbyOffsets(for: timezone, around: localAsUTC) else { return nil }
+        let offsets = timezone.bundle.nearbyOffsets(for: timezone, around: localAsUTC)
         let expected = utc.dateComponents([.year, .month, .day, .hour, .minute], from: localAsUTC)
         let candidates = offsets.compactMap { offset -> Date? in
             let instant = localAsUTC.addingTimeInterval(-TimeInterval(offset))

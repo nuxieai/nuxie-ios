@@ -19,15 +19,15 @@ class MockExperienceViewController: ExperienceViewController {
     var shutdownRuntimeHandler: (@MainActor () async -> Void)?
     var prepareForDismissalHandler: (@MainActor () async -> Void)?
     var navigationResult = ExperienceScreenNavigationResult.navigated
-    var notificationPermissionEvent = DeviceLegPresentationPermissionEvent(
+    var notificationPermissionEvent = JourneyPresentationPermissionEvent(
         name: SystemEventNames.notificationsEnabled,
         properties: [:]
     )
-    var requestPermissionEvent = DeviceLegPresentationPermissionEvent(
+    var requestPermissionEvent = JourneyPresentationPermissionEvent(
         name: SystemEventNames.permissionGranted,
         properties: ["type": "camera"]
     )
-    var trackingPermissionEvent = DeviceLegPresentationPermissionEvent(
+    var trackingPermissionEvent = JourneyPresentationPermissionEvent(
         name: SystemEventNames.trackingAuthorized,
         properties: [:]
     )
@@ -38,6 +38,7 @@ class MockExperienceViewController: ExperienceViewController {
     /// Create a mock flow view controller with test data
     init(
         mockExperienceVersionId: String = "test-flow",
+        mockScreenId: String = "screen-1",
         mockExperience: Experience? = nil,
         eventLog: EventLogProtocol = MockFactory.shared.eventLog,
         loadingTimeoutSeconds: TimeInterval = 15.0,
@@ -54,7 +55,7 @@ class MockExperienceViewController: ExperienceViewController {
         let description = JourneyDocument(
             screens: [
                 JourneyScreen(
-                    id: "screen-1",
+                    id: mockScreenId,
                     defaultViewModelName: nil,
                     defaultInstanceId: nil
                 )
@@ -65,15 +66,16 @@ class MockExperienceViewController: ExperienceViewController {
         let flow = mockExperience ?? Experience(
             id: "test-experience",
             versionId: mockExperienceVersionId,
-            name: "Test Experience",
-            reentry: .everyTime,
-            releaseCreatedAt: "2024-01-01T00:00:00Z",
-            trigger: nil,
-            goal: nil,
-            exitPolicy: nil,
-            conversionAnchor: nil,
-            experienceType: nil,
+            buildId: "test-build",
+            artifactContentHash: nil,
+            authenticatedReleaseID: nil,
+            behaviorPresentation: .fullScreenDefault,
+            behaviorPresentationScreens: [
+                mockScreenId: .init(width: 390, height: 844)
+            ],
+            assetBaseURL: URL(string: "https://assets.example.com/")!,
             journey: description,
+            definition: nil,
             products: products
         )
         let resolvedTransactionService = transactionService ?? TransactionService(
@@ -160,26 +162,26 @@ class MockExperienceViewController: ExperienceViewController {
         return navigationResult
     }
 
-    override func resolveDeviceLegNotificationPermissionEvent(
+    override func resolveJourneyNotificationPermissionEvent(
         journeyId: String
-    ) async -> DeviceLegPresentationPermissionEvent {
+    ) async -> JourneyPresentationPermissionEvent {
         _ = journeyId
         notificationPermissionResolutionCount += 1
         return notificationPermissionEvent
     }
 
-    override func resolveDeviceLegRequestPermissionEvent(
+    override func resolveJourneyRequestPermissionEvent(
         permissionType: String,
         journeyId: String
-    ) async -> DeviceLegPresentationPermissionEvent {
+    ) async -> JourneyPresentationPermissionEvent {
         _ = journeyId
         requestPermissionResolutionTypes.append(permissionType)
         return requestPermissionEvent
     }
 
-    override func resolveDeviceLegTrackingPermissionEvent(
+    override func resolveJourneyTrackingPermissionEvent(
         journeyId: String
-    ) async -> DeviceLegPresentationPermissionEvent {
+    ) async -> JourneyPresentationPermissionEvent {
         _ = journeyId
         trackingPermissionResolutionCount += 1
         return trackingPermissionEvent

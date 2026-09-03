@@ -23,22 +23,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
     )
     public var checkFeatureResponse: FeatureCheckResult?
     public var trackEventResponse: EventResponse?
-    public var responseWriteResponse = ResponseWriteResponse(
-        status: "ok",
-        response: nil,
-        version: nil
-    )
-    public var responseWriteError: Error?
-    public var responseWriteDelay: TimeInterval = 0
-    public var responseSubmitResponse = ResponseSubmitResponse(
-        status: "ok",
-        response: nil
-    )
-    public var responseSubmitError: Error?
-    public var responseAbandonResponse = ResponseAbandonResponse(
-        status: "ok",
-        responses: []
-    )
 
     // Call tracking
     public var fetchProfileCallCount = 0
@@ -87,31 +71,8 @@ public actor MockNuxieApi: NuxieApiProtocol {
     /// aggregate count flaky.
     public private(set) var trackEventCalls: [TrackEventCall] = []
 
-    /// Immutable snapshot of a recorded setResponseField call.
-    // @unchecked Sendable: write-once snapshot; the value is never mutated.
-    public struct ResponseFieldCall: @unchecked Sendable {
-        public let distinctId: String
-        public let journeyId: String
-        public let responseSchemaId: String
-        public let schemaVersion: Int?
-        public let key: String
-        public let value: Any
-    }
-
     // Track last trackEvent call details
     public private(set) var lastTrackEventCall: TrackEventCall?
-    public private(set) var lastResponseFieldCall: ResponseFieldCall?
-    public private(set) var responseFieldCalls: [ResponseFieldCall] = []
-    public private(set) var lastResponseSubmitCall: (
-        distinctId: String,
-        journeyId: String,
-        responseSchemaId: String,
-        schemaVersion: Int?
-    )?
-    public private(set) var lastResponseAbandonCall: (
-        distinctId: String,
-        journeyId: String
-    )?
     
     public init() {
         // The nonisolated init cannot call the actor-isolated setup method;
@@ -124,14 +85,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     }
 
     private static func makeDefaultProfileResponse() -> ProfileResponse {
-        let segment = Segment(id: "segment-1", name: "Test Segment")
-        
-        return ProfileResponse(
-            segments: [segment],
-            userProperties: nil,
-            experiments: nil,
-            features: nil
-        )
+        TestJourneyProfile.response()
     }
     
     // Configuration methods
@@ -139,18 +93,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
         self.profileResponse = response
     }
 
-    public func setResponseWriteError(_ error: Error?) {
-        self.responseWriteError = error
-    }
-
-    public func setResponseWriteDelay(_ delay: TimeInterval) {
-        responseWriteDelay = delay
-    }
-
-    public func setResponseSubmitError(_ error: Error?) {
-        self.responseSubmitError = error
-    }
-    
     public func setProfileDelay(_ delay: TimeInterval) {
         self.profileDelay = delay
     }
@@ -293,6 +235,25 @@ public actor MockNuxieApi: NuxieApiProtocol {
         return response
     }
 
+    public func fetchProfile(
+        for distinctId: String,
+        locale: String?,
+        revalidating validator: ProfileCacheValidator?
+    ) async throws -> ProfileFetchResult {
+        let response = try await fetchProfile(for: distinctId, locale: locale)
+        return .modified(
+            response,
+            validator: ProfileCacheValidator(
+                rawValue: "\"mock-profile\"",
+                resourceScope: "https://mock.nuxie.test/profile",
+                authority: ProfileDeliveryAuthority(
+                    appId: "mock-app",
+                    environment: "live"
+                )
+            )
+        )
+    }
+
     public func fetchProfileWithTimeout(for distinctId: String, locale: String?, timeout: TimeInterval) async throws -> ProfileResponse {
         fetchProfileWithTimeoutCallCount += 1
         lastTimeoutUsed = timeout
@@ -345,8 +306,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
             eventId: nil,
             message: nil,
             featuresMatched: nil,
-            usage: nil,
-            journey: nil,
+            usage: nil
         )
     }
 
@@ -471,64 +431,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
         )
     }
 
-    public func setResponseField(
-        distinctId: String,
-        journeyId: String,
-        responseSchemaId: String,
-        schemaVersion: Int?,
-        key: String,
-        value: Any
-    ) async throws -> ResponseWriteResponse {
-        let call = ResponseFieldCall(
-            distinctId: distinctId,
-            journeyId: journeyId,
-            responseSchemaId: responseSchemaId,
-            schemaVersion: schemaVersion,
-            key: key,
-            value: value
-        )
-        lastResponseFieldCall = call
-        responseFieldCalls.append(call)
-        if responseWriteDelay > 0 {
-            try await Task.sleep(
-                nanoseconds: UInt64(responseWriteDelay * 1_000_000_000)
-            )
-        }
-        if let responseWriteError {
-            throw responseWriteError
-        }
-        return responseWriteResponse
-    }
-
-    public func submitResponse(
-        distinctId: String,
-        journeyId: String,
-        responseSchemaId: String,
-        schemaVersion: Int?
-    ) async throws -> ResponseSubmitResponse {
-        lastResponseSubmitCall = (
-            distinctId: distinctId,
-            journeyId: journeyId,
-            responseSchemaId: responseSchemaId,
-            schemaVersion: schemaVersion
-        )
-        if let responseSubmitError {
-            throw responseSubmitError
-        }
-        return responseSubmitResponse
-    }
-
-    public func abandonResponses(
-        distinctId: String,
-        journeyId: String
-    ) async throws -> ResponseAbandonResponse {
-        lastResponseAbandonCall = (
-            distinctId: distinctId,
-            journeyId: journeyId
-        )
-        return responseAbandonResponse
-    }
-
     // Test helpers
     public func reset() {
         shouldFailProfile = false
@@ -562,17 +464,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         lastProfileLocale = nil
         sentEvents.removeAll()
         lastTrackEventCall = nil
-        lastResponseFieldCall = nil
-        responseFieldCalls = []
-        lastResponseSubmitCall = nil
-        lastResponseAbandonCall = nil
         checkFeatureResponse = nil
-        responseWriteResponse = ResponseWriteResponse(status: "ok", response: nil, version: nil)
-        responseWriteError = nil
-        responseWriteDelay = 0
-        responseSubmitResponse = ResponseSubmitResponse(status: "ok", response: nil)
-        responseSubmitError = nil
-        responseAbandonResponse = ResponseAbandonResponse(status: "ok", responses: [])
 
         // Reset profileResponse to default
         setupDefaultProfileResponse()
@@ -591,8 +483,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
             eventId: nil,
             message: message,
             featuresMatched: nil,
-            usage: usage,
-            journey: nil,
+            usage: usage
         )
     }
 

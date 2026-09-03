@@ -1,5 +1,5 @@
 {
-  "suite": "device-leg-admission-v1",
+  "suite": "journey-admission-v1",
   "cases": [
     {
       "name": "report-only golden",

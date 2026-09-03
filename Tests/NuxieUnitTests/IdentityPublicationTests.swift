@@ -14,23 +14,38 @@ private struct RecordedIdentityChange: Equatable {
 private actor IdentityChangeJourneyRecorder: JourneyServiceProtocol {
     private var identityChanges: [RecordedIdentityChange] = []
 
-    func startJourney(
-        for experience: Experience,
-        distinctId: String,
-        originEventId: String?
-    ) async -> Journey? { nil }
-
-    func resumeJourney(_ journey: Journey) async {}
     func handleEvent(_ event: NuxieEvent) async {}
-    func handleEventForTrigger(_ event: NuxieEvent) async -> [JourneyTriggerResult] { [] }
-    func registerDetachedPresentationOwner(distinctId: String) async {}
-    func getActiveJourneys(for distinctId: String) async -> [Journey] { [] }
-    func checkExpiredTimers() async {}
+    func handleEvent(
+        _ event: NuxieEvent,
+        admittedProfileGeneration: UInt64?
+    ) async {}
+    nonisolated func eventAdmissionGeneration() -> UInt64 { 0 }
     func initialize() async {}
     func onAppWillEnterForeground() async {}
     func onAppBecameActive() async {}
     func onAppDidEnterBackground() async {}
     func shutdown() async {}
+
+    func profileDidCommit(
+        _ snapshot: JourneyProfileCatalog.Snapshot,
+        artifacts: PreparedJourneyArtifacts?,
+        authority: ProfileDeliveryAuthority,
+        admissionGeneration: UInt64,
+        distinctId: String
+    ) async {}
+
+    func profileDidWithdraw(
+        authority: ProfileDeliveryAuthority?,
+        admissionGeneration: UInt64,
+        distinctId: String
+    ) async {}
+
+    func profileDidClear(
+        distinctId: String,
+        admissionGeneration: UInt64
+    ) async {}
+
+    func profileDidClearAll(admissionGeneration: UInt64) async {}
 
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
         identityChanges.append(RecordedIdentityChange(from: oldDistinctId, to: newDistinctId))
