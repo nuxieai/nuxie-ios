@@ -970,6 +970,28 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         }
     }
 
+    func testEmbeddedRuntimeAdvertisesSceneFormat73AndAdmitsCompatibleMinorVersions() throws {
+        let runtime = ExperienceReleaseRuntime.current
+        XCTAssertEqual(runtime.sceneFormat, .init(major: 7, minor: 3))
+
+        for minor in [0, 3] {
+            XCTAssertNoThrow(
+                try authenticate(
+                    descriptorBytes: descriptorForCurrentRuntime(sceneFormatMinor: minor),
+                    supportedRuntime: runtime
+                )
+            )
+        }
+
+        assertAuthenticationError(
+            try signedEnvelope(
+                descriptorBytes: descriptorForCurrentRuntime(sceneFormatMinor: 4)
+            ),
+            supportedRuntime: runtime,
+            is: "experience_release.runtime.unsupported"
+        )
+    }
+
     func testRuntimeRejectsScreenActionsBeforeAcquisition() throws {
         let descriptor = try mutatedValidDescriptor { root in
             var screens = try XCTUnwrap(root["screenBehaviors"] as? [[String: Any]])
@@ -1523,6 +1545,34 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         var root = try validDescriptorJSONObject()
         try mutation(&root)
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    private func descriptorForCurrentRuntime(sceneFormatMinor: Int) throws -> Data {
+        let runtime = ExperienceReleaseRuntime.current
+        let runtimeRevision = try XCTUnwrap(runtime.supportedRuntimeRevisions.sorted().first)
+        let luauRevision = try XCTUnwrap(runtime.supportedLuauRevisions.keys.sorted().first)
+        let luauBytecodeVersions = try XCTUnwrap(runtime.supportedLuauRevisions[luauRevision])
+
+        return try mutatedValidDescriptor { root in
+            root["requirements"] = [
+                "minimumSdkVersion": runtime.currentSdkVersion,
+                "runtimeRevision": runtimeRevision,
+                "luau": [
+                    "revision": luauRevision,
+                    "bytecodeVersions": luauBytecodeVersions.sorted(),
+                ],
+                "sceneFormat": [
+                    "major": runtime.sceneFormat.major,
+                    "minor": sceneFormatMinor,
+                ],
+                "timezoneData": [
+                    "format": "iana-tzdb",
+                    "revision": runtime.timezoneDataRevision,
+                    "sha256": runtime.timezoneDataSHA256,
+                ],
+                "requiredCapabilities": runtime.supportedCapabilities.sorted(),
+            ]
+        }
     }
 
     private func descriptorWithFirstHandlerAction(
