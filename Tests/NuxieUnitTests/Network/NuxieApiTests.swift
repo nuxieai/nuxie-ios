@@ -526,7 +526,7 @@ final class NuxieApiTests: AsyncSpec {
                         handler: { request in
                             let data = Data(
                                 """
-                                {"experiences":[],"experiences":[],"pinnedVersions":[],"assetBaseUrl":"https://assets.nuxie.test/","segments":[]}
+                                {"schemaVersion":"nuxie.journey-plane-profile.v1","status":"ok","delivery":{"renderBaseUrl":"https://render.nuxie.test/","assetBaseUrl":"https://assets.nuxie.test/"},"features":[],"facts":{"properties":{},"memberships":{},"assignments":{}},"armedLegs":[],"armedLegs":[],"releases":[]}
                                 """.utf8
                             )
                             return (

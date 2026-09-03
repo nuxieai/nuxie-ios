@@ -468,7 +468,7 @@ extension EventLogProtocol {
 
 }
 
-/// The unified event log actor. Owns capture → enrich (session stamp, context,
+/// The unified event log actor. Owns capture → enrich (identity, context,
 /// sanitize, beforeSend) → persist (SQLite, pending) → durable network
 /// delivery (batching, retry/backoff, ack) → query, plus the committed-events
 /// subscription stream that decouples downstream consumers (journeys,
