@@ -30,7 +30,8 @@ struct DeviceLegControlExecutor {
         }
 
         let experimentId: String
-        let variantId: String
+        /// The valid variant whose body will execute. Nil skips every variant.
+        let variantId: String?
         let isHoldout: Bool
         let source: Source
     }
@@ -139,12 +140,23 @@ struct DeviceLegControlExecutor {
             let hasAssignedVariant = control.variants.contains {
                 $0.id == assignedVariantId
             }
-            let selected = hasAssignedVariant ? assignedVariantId! : first
+            if let assignedVariantId, !hasAssignedVariant {
+                return advance(
+                    outlets,
+                    outlet: DeviceLegControlExecutor.invalidAssignmentOutlet,
+                    context: context,
+                    experimentSelection: .init(
+                        experimentId: control.experimentId,
+                        variantId: nil,
+                        isHoldout: assignment?.isHoldout ?? false,
+                        source: .invalidAssignment(variantId: assignedVariantId)
+                    )
+                )
+            }
+            let selected = assignedVariantId ?? first
             let source: ExperimentSelection.Source
             if hasAssignedVariant {
                 source = .profile
-            } else if let assignedVariantId {
-                source = .invalidAssignment(variantId: assignedVariantId)
             } else {
                 source = .noAssignment
             }
@@ -235,6 +247,8 @@ struct DeviceLegControlExecutor {
     private func decode<T: Decodable>(_ type: T.Type, _ action: [String: ExperienceReleaseJSONValue]) throws -> T {
         try ExactJSONCodec.decode(type, from: ExactJSONCodec.encode(ExperienceReleaseJSONValue.object(.init(action))))
     }
+
+    private static let invalidAssignmentOutlet = "invalid_assignment"
 
 }
 
