@@ -153,7 +153,7 @@ enum JourneyReleaseSchemaValidator {
             throw invalid
         }
         switch type {
-        case .connectorAction, .grantEntitlement, .deviceAvailable:
+        case .connectorAction, .grantEntitlement:
             throw invalid
         case .condition:
             _ = try object(action, required: ["type", "branches"])

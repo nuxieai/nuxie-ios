@@ -29,8 +29,6 @@ enum JourneyActionType: String, Codable, Sendable {
 
     case connectorAction = "connector_action"
     case grantEntitlement = "grant_entitlement"
-    case deviceAvailable = "device_available"
-
     init?(action: [String: JourneyReleaseJSONValue]) {
         guard let rawValue = Self.rawValue(in: action) else { return nil }
         self.init(rawValue: rawValue)

@@ -506,7 +506,6 @@ enum JourneyReleaseSchemaPrimitives {
         case "wait_until": required = ["type", "trigger", "condition", "maxTimeMs", "onSatisfied", "onTimeout"]; optional = []
         case "condition": required = ["type", "branches", "defaultProgram"]; optional = []
         case "experiment": required = ["type", "experimentId", "name", "variants"]; optional = ["description", "hypothesis"]
-        case "device_available": required = ["type", "claimWithinMs", "onAvailable", "onUnavailable"]; optional = []
         case "send_event": required = ["type", "eventName"]; optional = ["payload"]
         case "update_customer": required = ["type", "attributes"]; optional = []
         case "milestone": required = ["type", "milestoneId"]; optional = []
@@ -573,10 +572,6 @@ enum JourneyReleaseSchemaPrimitives {
                 guard isJSONBoolean(variant["isHoldout"]) else { try invalid("\(path).variants[\(index)].isHoldout") }
                 try validateCanonicalProgramField(variant["program"], path: "\(path).variants[\(index)].program", screenIDs: screenIDs, placementIDs: placementIDs)
             }
-        case "device_available":
-            try integer(action["claimWithinMs"], minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).claimWithinMs")
-            try validateCanonicalProgramField(action["onAvailable"], path: "\(path).onAvailable", screenIDs: screenIDs, placementIDs: placementIDs)
-            try validateCanonicalProgramField(action["onUnavailable"], path: "\(path).onUnavailable", screenIDs: screenIDs, placementIDs: placementIDs)
         case "send_event":
             if let payload = action["payload"] { try validateJourneyValueRecord(payload, path: "\(path).payload") }
         case "update_customer": try validateJourneyValueRecord(action["attributes"], path: "\(path).attributes")
