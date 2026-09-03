@@ -4,6 +4,8 @@ struct AppStoreIntroEligibilityRequest: Codable {
     let distinctId: String
     let journeyId: String
     let experienceVersionId: String
+    let legId: String
+    let descriptorSha256: String
     let placementId: String
     let transactionId: String
 }

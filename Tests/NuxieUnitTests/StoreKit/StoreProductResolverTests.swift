@@ -5,7 +5,9 @@ import NuxieTestSupport
 final class StoreProductResolverTests: XCTestCase {
     private let authorization = IntroEligibilityAuthorizationContext(
         distinctId: "customer-1",
-        journeyId: "journey-1"
+        journeyId: "journey-1",
+        legId: String(repeating: "a", count: 64),
+        descriptorSha256: String(repeating: "b", count: 64)
     )
     func testPlacementDecodesExactIntroEligibilityAndBillingPlan() throws {
         let placement = try JSONDecoder().decode(

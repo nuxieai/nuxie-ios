@@ -258,7 +258,9 @@ final class JourneyRuntimeDelegate {
     init(request: JourneyPresentationRequest) {
         introEligibilityAuthorizationContext = .init(
             distinctId: request.owner.distinctId,
-            journeyId: request.owner.journeyId
+            journeyId: request.owner.journeyId,
+            legId: request.release.descriptor.leg.id,
+            descriptorSha256: request.release.descriptorSHA256
         )
         journeyId = request.owner.journeyId
         initialScreenId = request.screenId

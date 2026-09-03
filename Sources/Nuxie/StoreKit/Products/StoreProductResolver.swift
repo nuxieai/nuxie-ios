@@ -26,6 +26,8 @@ struct IntroEligibilityTokenRequest: Equatable, Hashable, Sendable {
 struct IntroEligibilityAuthorizationContext: Equatable, Hashable, Sendable {
     let distinctId: String
     let journeyId: String
+    let legId: String
+    let descriptorSha256: String
 }
 
 protocol IntroEligibilityAuthorizationContextProviding: AnyObject {
@@ -82,6 +84,8 @@ struct AppStoreIntroEligibilityTokenProvider: IntroEligibilityTokenProviding {
             distinctId: request.authorization.distinctId,
             journeyId: request.authorization.journeyId,
             experienceVersionId: request.experienceVersionId,
+            legId: request.authorization.legId,
+            descriptorSha256: request.authorization.descriptorSha256,
             placementId: request.placementId,
             transactionId: appTransaction.appTransactionID
         )

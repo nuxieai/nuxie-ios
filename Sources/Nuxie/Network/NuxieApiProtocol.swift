@@ -96,6 +96,8 @@ protocol IntroEligibilityTokenRequesting: AnyObject, Sendable {
         distinctId: String,
         journeyId: String,
         experienceVersionId: String,
+        legId: String,
+        descriptorSha256: String,
         placementId: String,
         transactionId: String
     ) async throws -> String
@@ -106,6 +108,8 @@ extension IntroEligibilityTokenRequesting {
         distinctId: String,
         journeyId: String,
         experienceVersionId: String,
+        legId: String,
+        descriptorSha256: String,
         placementId: String,
         transactionId: String
     ) async throws -> String {
