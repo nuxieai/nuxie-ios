@@ -17,8 +17,7 @@ struct DeviceLegReporter {
                 // A shown experiment decision owns its exposure record before
                 // the terminal run can be removed from the journal.
                 guard !run.experimentExposures.contains(where: {
-                    ($0.shownAt != nil || $0.kind == .invalidAssignment)
-                        && !$0.queued
+                    $0.shownAt != nil && !$0.queued
                 }) else { continue }
                 guard await queue(run, completion: true) else { continue }
                 try await journal.markCompletionQueued(run)
@@ -64,8 +63,9 @@ struct DeviceLegReporter {
 
 extension DeviceLegReporter: Sendable {}
 
-    /// Flushes visible selections and invalid assignments, which execute no
-    /// variant and therefore report immediately without a presentation.
+/// Flushes only experiment decisions whose selected variant reached a visible
+/// surface. The journal keeps the stable event ID until EventLog accepts it,
+/// so a crash or transient storage failure cannot duplicate an exposure.
 struct DeviceLegExperimentExposureReporter: Sendable {
     private struct Projection {
         let eventName: String
@@ -80,8 +80,7 @@ struct DeviceLegExperimentExposureReporter: Sendable {
     ) async throws -> Bool {
         for run in try await journal.runs() {
             for exposure in run.experimentExposures
-            where (exposure.shownAt != nil || exposure.kind == .invalidAssignment)
-                && !exposure.queued {
+            where exposure.shownAt != nil && !exposure.queued {
                 let projection = projection(exposure, run: run)
                 let capture = await captureStableSystemEvent(
                     projection.eventName,
@@ -132,21 +131,21 @@ struct DeviceLegExperimentExposureReporter: Sendable {
             "experience_id": run.reference.experienceId,
             "experience_version": run.reference.versionId,
             "experiment_key": exposure.experimentId,
+            "variant_key": exposure.variantId,
         ]
         let eventName: String
         switch exposure.kind {
         case .assigned:
-            properties["variant_key"] = exposure.variantId
             eventName = JourneyEvents.experimentExposure
             properties["assignment_source"] = "profile"
             properties["is_holdout"] = exposure.isHoldout
         case .fallback:
-            properties["variant_key"] = exposure.variantId
             eventName = JourneyEvents.experimentExposureFallback
             properties["assignment_source"] = "no_assignment"
         case .invalidAssignment:
             eventName = JourneyEvents.experimentExposureError
             properties["variant_key"] = exposure.assignedVariantId
+                ?? exposure.variantId
             properties["reason"] = "variant_not_found"
         }
         return Projection(eventName: eventName, properties: properties)

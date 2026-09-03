@@ -429,46 +429,6 @@ final class DeviceLegExperimentPresentationTests: DeviceLegTestCase {
         )
     }
 
-    func testUnknownAssignmentSkipsEveryVariantAndReportsTheErrorImmediately() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try DeviceLegPlaneProfileTestFixture.load(
-            entryKey: "renderedEntry"
-        )
-        let snapshot = renderedExperimentSnapshot(
-            try await authenticatedRenderedSnapshot(fixture),
-            assignment: .init(variantId: "missing", isHoldout: false)
-        )
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let presenter = await MainActor.run { RecordingDeviceLegPresenter() }
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter
-        )
-
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-
-        let error = try XCTUnwrap(events.routedEvents.first {
-            $0.name == JourneyEvents.experimentExposureError
-        })
-        XCTAssertEqual(error.properties["variant_key"] as? String, "missing")
-        XCTAssertEqual(error.properties["reason"] as? String, "variant_not_found")
-        XCTAssertFalse(events.routedEvents.contains {
-            $0.name == JourneyEvents.experimentExposure
-                || $0.name == JourneyEvents.experimentExposureFallback
-        })
-        let presentationCount = await MainActor.run {
-            presenter.presentationRequests.count
-        }
-        XCTAssertEqual(presentationCount, 0)
-    }
-
     func testDeclinedPresentationDoesNotReportExperimentExposure() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
