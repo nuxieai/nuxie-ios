@@ -8,6 +8,6 @@ package enum NuxieEmbeddedRuntimeCompatibility {
     package static let luauRevision = "rive_0_36"
     package static let luauBytecodeVersions: Set<Int> = [3, 6]
     package static let sceneFormatMajor = 7
-    package static let sceneFormatMinor = 0
+    package static let sceneFormatMinor = 3
     package static let capabilities: Set<String> = ["rive", "text-input"]
 }
