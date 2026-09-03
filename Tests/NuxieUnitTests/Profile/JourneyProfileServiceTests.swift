@@ -159,6 +159,47 @@ final class JourneyProfileServiceTests: XCTestCase {
         XCTAssertEqual(foregroundFetchCount, 2)
     }
 
+    func testIdentityChangeWaitsForTheNextProfileSyncPoint() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let api = JourneyProfileSequenceAPI([
+            .response(ProfileResponse(planeProfile: fixture.profile)),
+        ], authority: fixture.deliveryAuthority)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let service = makeService(
+            cache: InMemoryCachedProfileStore(ttl: nil),
+            identity: identity,
+            api: api,
+            experiences: MockExperienceService(),
+            catalog: try makeCatalog(
+                fixture,
+                store: InMemoryJourneyReleaseHighWaterStore()
+            )
+        )
+
+        identity.setDistinctId("customer-b")
+        await service.handleUserChange(
+            from: "customer-a",
+            to: "customer-b"
+        )
+
+        let identityChangeFetchCount = await api.fetchCount
+        XCTAssertEqual(identityChangeFetchCount, 0)
+        let profileBeforeForeground = await service.getCachedProfile(
+            distinctId: "customer-b"
+        )
+        XCTAssertNil(profileBeforeForeground)
+
+        await service.onAppBecameActive()
+
+        let foregroundFetchCount = await api.fetchCount
+        XCTAssertEqual(foregroundFetchCount, 1)
+        let profileAfterForeground = await service.getCachedProfile(
+            distinctId: "customer-b"
+        )
+        XCTAssertEqual(profileAfterForeground?.planeProfile.releases.count, 1)
+    }
+
     func testAdmissionPublishesCanonicalAuthorityAndRejectedReplacementRetainsIt() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let invalid = try fixture.invalidSignatureProfile()

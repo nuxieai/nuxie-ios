@@ -571,13 +571,6 @@ internal actor ProfileService: ProfileServiceProtocol {
             }
         }
         guard isCurrent(admission) else { return }
-        Task { [weak self] in
-            do {
-                _ = try await self?.refetchProfile(distinctId: newDistinctId)
-            } catch {
-                LogDebug("Profile refresh after identity change failed: \(error)")
-            }
-        }
     }
 
     private func beginAdmission(distinctId: String) -> Admission {
