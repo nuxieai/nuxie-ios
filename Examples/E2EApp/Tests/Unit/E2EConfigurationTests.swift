@@ -6,7 +6,7 @@ final class E2EConfigurationTests: XCTestCase {
     let environment: [String: String] = [
       E2EConfiguration.apiKeyEnvKey: "pk_env",
       E2EConfiguration.ingestUrlEnvKey: "http://env.example",
-      E2EConfiguration.flowIdEnvKey: "flow_env",
+      E2EConfiguration.triggerEventEnvKey: "event_env",
       E2EConfiguration.artifactEnvKey: "/tmp/artifact.json",
     ]
 
@@ -14,7 +14,7 @@ final class E2EConfigurationTests: XCTestCase {
     {
       "publicApiKey": "pk_artifact",
       "ingestUrl": "http://artifact.example",
-      "flowId": "flow_artifact"
+      "triggerEvent": "event_artifact"
     }
     """
 
@@ -25,7 +25,7 @@ final class E2EConfigurationTests: XCTestCase {
 
     XCTAssertEqual(configuration.apiKey, "pk_env")
     XCTAssertEqual(configuration.ingestUrlString, "http://env.example")
-    XCTAssertEqual(configuration.flowId, "flow_env")
+    XCTAssertEqual(configuration.triggerEvent, "event_env")
   }
 
   func testArtifactFallbackWhenEnvironmentMissing() {
@@ -37,7 +37,7 @@ final class E2EConfigurationTests: XCTestCase {
     {
       "publicApiKey": "pk_artifact",
       "ingestUrl": "http://artifact.example",
-      "flowId": "flow_artifact"
+      "triggerEvent": "event_artifact"
     }
     """
 
@@ -48,7 +48,7 @@ final class E2EConfigurationTests: XCTestCase {
 
     XCTAssertEqual(configuration.apiKey, "pk_artifact")
     XCTAssertEqual(configuration.ingestUrlString, "http://artifact.example")
-    XCTAssertEqual(configuration.flowId, "flow_artifact")
+    XCTAssertEqual(configuration.triggerEvent, "event_artifact")
   }
 
   func testDefaultsWhenNoEnvironmentOrArtifact() {
@@ -56,7 +56,7 @@ final class E2EConfigurationTests: XCTestCase {
 
     XCTAssertEqual(configuration.apiKey, E2EConfiguration.defaultApiKey)
     XCTAssertEqual(configuration.ingestUrlString, E2EConfiguration.defaultIngestUrlString)
-    XCTAssertEqual(configuration.flowId, E2EConfiguration.defaultFlowId)
+    XCTAssertEqual(configuration.triggerEvent, E2EConfiguration.defaultTriggerEvent)
   }
 
   func testDirectoryArtifactPathResolvesLaunchConfig() {
@@ -68,7 +68,7 @@ final class E2EConfigurationTests: XCTestCase {
     {
       "publicApiKey": "pk_artifact_dir",
       "ingestUrl": "http://artifact-dir.example",
-      "flowId": "flow_artifact_dir"
+      "triggerEvent": "event_artifact_dir"
     }
     """
 
@@ -82,7 +82,7 @@ final class E2EConfigurationTests: XCTestCase {
 
     XCTAssertEqual(configuration.apiKey, "pk_artifact_dir")
     XCTAssertEqual(configuration.ingestUrlString, "http://artifact-dir.example")
-    XCTAssertEqual(configuration.flowId, "flow_artifact_dir")
+    XCTAssertEqual(configuration.triggerEvent, "event_artifact_dir")
   }
 
   private func makeLoader(json: String) -> (String) -> Data? {

@@ -19,7 +19,11 @@ struct ContentView: View {
         Section("E2E Configuration") {
           labeledValue("API Key", configuration.apiKey, id: "config-api-key")
           labeledValue("Ingest URL", configuration.ingestUrlString, id: "config-ingest-url")
-          labeledValue("Flow ID", configuration.flowId, id: "config-flow-id")
+          labeledValue(
+            "Trigger Event",
+            configuration.triggerEvent,
+            id: "config-trigger-event"
+          )
         }
 
         Section("SDK") {
@@ -28,10 +32,10 @@ struct ContentView: View {
           }
           .accessibilityIdentifier("setup-button")
 
-          Button("Show Flow") {
-            showFlow()
+          Button("Trigger Journey") {
+            triggerJourney()
           }
-          .accessibilityIdentifier("show-flow-button")
+          .accessibilityIdentifier("trigger-journey-button")
           .disabled(!isReady)
 
           Text(setupStateLabel)
@@ -104,7 +108,7 @@ struct ContentView: View {
     }
   }
 
-  private func showFlow() {
+  private func triggerJourney() {
     errorMessage = nil
 
     guard isReady else {
@@ -114,15 +118,6 @@ struct ContentView: View {
       return
     }
 
-    Task {
-      do {
-        try await NuxieSDK.shared.presentExperienceVersionForTesting(configuration.flowId)
-      } catch {
-        await MainActor.run {
-          errorMessage = error.localizedDescription
-          setupState = .error(error.localizedDescription)
-        }
-      }
-    }
+    NuxieSDK.shared.trigger(configuration.triggerEvent)
   }
 }
