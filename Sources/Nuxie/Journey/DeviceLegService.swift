@@ -139,6 +139,13 @@ actor DeviceLegService {
     /// generations fence callbacks that were current before an actor hop but
     /// arrive after a replacement profile or identity transition.
     private var profileDeliveryGeneration: UInt64 = 0
+    /// One transport generation may clear the departing customer and then
+    /// install the replacement customer's cached profile. Keep the per-user
+    /// claim so both publications can share that generation without admitting
+    /// an older callback from any customer.
+    private var profileDeliveryGenerationsByDistinctId: [String: UInt64] = [:]
+    /// A global clear invalidates every per-user generation at or below it.
+    private var profileDeliveryGenerationFloor: UInt64 = 0
     /// Advances for every profile publication and linearizes entry admission.
     private let profileFence = DeviceLegProfileFence()
     /// Advances only when admitted execution authority is explicitly revoked.
@@ -256,17 +263,11 @@ extension DeviceLegService {
         admissionGeneration: UInt64,
         distinctId: String
     ) async {
-        guard identity.getDistinctId() == distinctId,
-              admissionGeneration > profileDeliveryGeneration else { return }
-        if acceptsProfileAuthorityScope {
-            let authenticatedScope = DeviceLegStorageScope(authority: authority)
-            guard storageScope == nil || storageScope == authenticatedScope else {
-                LogError("DeviceLegService: authenticated app authority changed")
-                return
-            }
-            storageScope = authenticatedScope
-        }
-        profileDeliveryGeneration = admissionGeneration
+        guard claimAuthenticatedProfileDelivery(
+            authority: authority,
+            admissionGeneration: admissionGeneration,
+            distinctId: distinctId
+        ) else { return }
         await commitProfile(
             snapshot,
             artifacts: artifacts,
@@ -280,12 +281,96 @@ extension DeviceLegService {
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         distinctId: String
     ) async {
-        profileDeliveryGeneration &+= 1
+        _ = advanceProfileDelivery(distinctId: distinctId)
         await commitProfile(snapshot, artifacts: nil, distinctId: distinctId)
     }
 }
 
 private extension DeviceLegService {
+    private func claimAuthenticatedProfileDelivery(
+        authority: ProfileDeliveryAuthority?,
+        admissionGeneration: UInt64,
+        distinctId: String
+    ) -> Bool {
+        guard identity.getDistinctId() == distinctId,
+              canClaimProfileDelivery(
+                admissionGeneration,
+                distinctId: distinctId
+              ), installProfileAuthority(authority) else { return false }
+        return claimProfileDelivery(
+            admissionGeneration,
+            distinctId: distinctId
+        )
+    }
+
+    private func canClaimProfileDelivery(
+        _ admissionGeneration: UInt64,
+        distinctId: String
+    ) -> Bool {
+        admissionGeneration >= profileDeliveryGeneration
+            && admissionGeneration > profileDeliveryGenerationFloor
+            && admissionGeneration
+                > (profileDeliveryGenerationsByDistinctId[distinctId] ?? 0)
+    }
+
+    @discardableResult
+    private func claimProfileDelivery(
+        _ admissionGeneration: UInt64,
+        distinctId: String
+    ) -> Bool {
+        guard canClaimProfileDelivery(
+            admissionGeneration,
+            distinctId: distinctId
+        ) else { return false }
+        profileDeliveryGeneration = max(
+            profileDeliveryGeneration,
+            admissionGeneration
+        )
+        profileDeliveryGenerationsByDistinctId[distinctId] =
+            admissionGeneration
+        return true
+    }
+
+    @discardableResult
+    private func advanceProfileDelivery(distinctId: String) -> UInt64 {
+        profileDeliveryGeneration &+= 1
+        profileDeliveryGenerationsByDistinctId[distinctId] =
+            profileDeliveryGeneration
+        return profileDeliveryGeneration
+    }
+
+    @discardableResult
+    private func claimProfileDeliveryClearAll(
+        _ admissionGeneration: UInt64
+    ) -> Bool {
+        guard admissionGeneration > profileDeliveryGeneration else {
+            return false
+        }
+        profileDeliveryGeneration = admissionGeneration
+        profileDeliveryGenerationFloor = admissionGeneration
+        profileDeliveryGenerationsByDistinctId.removeAll()
+        return true
+    }
+
+    private func advanceProfileDeliveryClearAll() {
+        profileDeliveryGeneration &+= 1
+        profileDeliveryGenerationFloor = profileDeliveryGeneration
+        profileDeliveryGenerationsByDistinctId.removeAll()
+    }
+
+    private func installProfileAuthority(
+        _ authority: ProfileDeliveryAuthority?
+    ) -> Bool {
+        guard acceptsProfileAuthorityScope, let authority else { return true }
+        let authenticatedScope = DeviceLegStorageScope(authority: authority)
+        guard storageScope == nil || storageScope == authenticatedScope else {
+            LogError("DeviceLegService: authenticated app authority changed")
+            return false
+        }
+        storageScope = authenticatedScope
+        return true
+    }
+
     private func commitProfile(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
         artifacts: PreparedDeviceLegArtifacts?,
@@ -334,33 +419,15 @@ extension DeviceLegService {
         // Reject a departing customer before touching journal ownership, and
         // reject an older callback before it can erase a newer same-customer
         // profile publication.
-        guard identity.getDistinctId() == distinctId,
-              admissionGeneration > profileDeliveryGeneration else { return }
-        if acceptsProfileAuthorityScope, let authority {
-            let authenticatedScope = DeviceLegStorageScope(authority: authority)
-            guard storageScope == nil || storageScope == authenticatedScope else {
-                LogError("DeviceLegService: authenticated app authority changed")
-                return
-            }
-            storageScope = authenticatedScope
-        }
-        profileDeliveryGeneration = admissionGeneration
-        guard profileState?.distinctId == distinctId
-                || journal?.distinctId == distinctId else { return }
-        _ = profileFence.advance()
-        profileState = nil
-        stateArmReceipts.removeAll()
-        inFlightAttempts.removeAll()
-        if let journal, journal.distinctId == distinctId {
-            do {
-                try await journal.retainStateArmReceipts([])
-            } catch {
-                LogWarning(
-                    "DeviceLegService: failed to retire withdrawn profile receipts: \(error)"
-                )
-            }
-        }
-        await scheduleNextWake()
+        guard claimAuthenticatedProfileDelivery(
+            authority: authority,
+            admissionGeneration: admissionGeneration,
+            distinctId: distinctId
+        ) else { return }
+        await withdrawCurrentProfile(
+            distinctId: distinctId,
+            admissionGeneration: admissionGeneration
+        )
     }
 
     /// Direct runtime tests do not model ProfileService's transport token.
@@ -368,26 +435,27 @@ extension DeviceLegService {
         authority: ProfileDeliveryAuthority?,
         distinctId: String
     ) async {
-        profileDeliveryGeneration &+= 1
-        await withdrawCurrentProfile(
-            authority: authority,
+        guard installProfileAuthority(authority) else { return }
+        let admissionGeneration = advanceProfileDelivery(
             distinctId: distinctId
+        )
+        await withdrawCurrentProfile(
+            distinctId: distinctId,
+            admissionGeneration: admissionGeneration
         )
     }
 
     private func withdrawCurrentProfile(
-        authority: ProfileDeliveryAuthority?,
-        distinctId: String
+        distinctId: String,
+        admissionGeneration: UInt64
     ) async {
-        if acceptsProfileAuthorityScope, let authority {
-            let authenticatedScope = DeviceLegStorageScope(authority: authority)
-            guard storageScope == nil || storageScope == authenticatedScope else {
-                LogError("DeviceLegService: authenticated app authority changed")
-                return
-            }
-            storageScope = authenticatedScope
+        guard identity.getDistinctId() == distinctId else { return }
+        if initialized {
+            await ensureJournal(for: distinctId)
         }
-        guard identity.getDistinctId() == distinctId,
+        guard profileDeliveryGenerationsByDistinctId[distinctId]
+                == admissionGeneration,
+              identity.getDistinctId() == distinctId,
               profileState?.distinctId == distinctId
                 || journal?.distinctId == distinctId else { return }
         _ = profileFence.advance()
@@ -403,6 +471,7 @@ extension DeviceLegService {
                 )
             }
         }
+        await resumeParkedRuns(event: nil)
         await scheduleNextWake()
     }
 
@@ -410,13 +479,15 @@ extension DeviceLegService {
         distinctId: String,
         admissionGeneration: UInt64
     ) async {
-        guard admissionGeneration > profileDeliveryGeneration else { return }
-        profileDeliveryGeneration = admissionGeneration
+        guard claimProfileDelivery(
+            admissionGeneration,
+            distinctId: distinctId
+        ) else { return }
         await clearProfile(distinctId: distinctId)
     }
 
     func profileDidClear(distinctId: String) async {
-        profileDeliveryGeneration &+= 1
+        _ = advanceProfileDelivery(distinctId: distinctId)
         await clearProfile(distinctId: distinctId)
     }
 
@@ -443,13 +514,12 @@ extension DeviceLegService {
     }
 
     func profileDidClearAll(admissionGeneration: UInt64) async {
-        guard admissionGeneration > profileDeliveryGeneration else { return }
-        profileDeliveryGeneration = admissionGeneration
+        guard claimProfileDeliveryClearAll(admissionGeneration) else { return }
         await clearAllProfiles()
     }
 
     func profileDidClearAll() async {
-        profileDeliveryGeneration &+= 1
+        advanceProfileDeliveryClearAll()
         await clearAllProfiles()
     }
 
@@ -755,13 +825,16 @@ private extension DeviceLegService {
             )
             clearRetainedReleaseCache()
             journal = opened
+            // A process break terminals every non-parked run before any
+            // retained renderer route can advance it. Parked runs remain
+            // eligible for publication recovery and current-fact wakeup.
+            _ = try await opened.recover(at: dateProvider.now())
             guard await events.replayPendingStableRoutes(
                 distinctId: distinctId
             ) else {
                 throw DeviceLegJournalError.invalidState
             }
             try await recoverPendingPresentationPublications(in: opened)
-            _ = try await opened.recover(at: dateProvider.now())
             _ = try await experimentExposures.flushPending(in: opened)
             try await DeviceLegReporter(journal: opened, events: events)
                 .flushPending()
@@ -777,9 +850,18 @@ private extension DeviceLegService {
         in journal: DeviceLegRunJournal
     ) async throws {
         for run in try await journal.runs()
-        where run.pendingPresentationPublication != nil
-                && run.completion == nil {
+        where run.pendingPresentationPublication != nil {
             let executionFenceToken = executionFence.token()
+            if run.completion != nil {
+                guard await presentationPublications.recoverObservability(
+                    run,
+                    in: journal,
+                    executionFenceToken: executionFenceToken
+                ) else {
+                    throw DeviceLegJournalError.invalidState
+                }
+                continue
+            }
             guard let release = await release(
                 for: run,
                 state: currentProfileState(),

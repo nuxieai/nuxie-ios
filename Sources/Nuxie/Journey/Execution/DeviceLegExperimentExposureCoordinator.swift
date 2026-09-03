@@ -11,13 +11,18 @@ actor DeviceLegExperimentExposureCoordinator {
         let admission: DeviceLegCommitAdmission
     }
 
+    private struct PendingMarkKey: Hashable, Sendable {
+        let runId: String
+        let screenId: String
+    }
+
     private let events: any RoutedStableSystemEventCapturing
     private let retryLoop = CancellationAwareExponentialRetryLoop(
         initialDelayNanoseconds: 250_000_000,
         maximumDelayNanoseconds: 2_000_000_000
     )
     private var retryTasks: [String: Task<Void, Never>] = [:]
-    private var pendingMarks: [String: [String: PendingMark]] = [:]
+    private var pendingMarks: [String: [PendingMarkKey: PendingMark]] = [:]
 
     init(events: any RoutedStableSystemEventCapturing) {
         self.events = events
@@ -171,7 +176,7 @@ actor DeviceLegExperimentExposureCoordinator {
         }
     }
 
-    private func pendingMarkKey(_ mark: PendingMark) -> String {
-        "\(mark.runId)\u{0}\(mark.screenId)"
+    private func pendingMarkKey(_ mark: PendingMark) -> PendingMarkKey {
+        PendingMarkKey(runId: mark.runId, screenId: mark.screenId)
     }
 }

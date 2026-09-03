@@ -842,6 +842,7 @@ extension DeviceLegTestCase {
         identity: MockIdentityService,
         events: MockEventLog,
         directory: URL,
+        storageScope: DeviceLegStorageScope? = .testFixture,
         dateProvider: DateProviderProtocol = MockDateProvider(),
         featureAccess: @escaping DeviceLegService.FeatureAccessLookup = { _ in nil },
         storeEntitlements: @escaping DeviceLegService.StoreEntitlementLookup = { [] },
@@ -858,6 +859,7 @@ extension DeviceLegTestCase {
             dateProvider: dateProvider,
             sleepProvider: MockSleepProvider(),
             journalDirectory: directory,
+            storageScope: storageScope,
             featureAccess: featureAccess,
             storeEntitlements: storeEntitlements,
             dispatcher: dispatcher ?? DeviceLegEffectDispatcher(
