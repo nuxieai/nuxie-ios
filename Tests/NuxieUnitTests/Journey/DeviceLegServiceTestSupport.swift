@@ -411,16 +411,8 @@ extension DeviceLegTestCase {
                     outlets: [
                         "variant_a": "present_a",
                         "variant_b": "present_b",
-                        "invalid_assignment": "after_experiment",
                     ],
                     outcome: nil
-                ),
-                .init(
-                    kind: .complete,
-                    id: "after_experiment",
-                    action: nil,
-                    outlets: nil,
-                    outcome: "completed"
                 ),
                 .init(
                     kind: .action,
