@@ -858,7 +858,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         XCTAssertTrue(settings.localeIdentifier().hasPrefix("locale-"))
     }
 
-    func testSDKLocaleControlRefreshesWhileBuilderMutationIsIgnored() async throws {
+    func testSDKLocaleControlWaitsForNextProfileSyncWhileBuilderMutationIsIgnored() async throws {
         let sdk = NuxieSDK.shared
         await sdk.shutdown()
         let mocks = MockFactory.shared
@@ -877,6 +877,10 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         XCTAssertEqual(localeAfterBuilderMutation, "en_US")
 
         try await sdk.setLocaleIdentifier("fr_FR")
+        let localeBeforeNextSync = await mocks.nuxieApi.lastProfileLocale
+        XCTAssertEqual(localeBeforeNextSync, "en_US")
+
+        await sdk.core!.profile.onAppBecameActive()
         let localeAfterRuntimeControl = await mocks.nuxieApi.lastProfileLocale
         XCTAssertEqual(localeAfterRuntimeControl, "fr_FR")
     }
