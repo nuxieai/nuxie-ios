@@ -201,7 +201,7 @@ Create with `NuxieConfiguration(apiKey:)` and optionally set:
   `setLocaleIdentifier(_:)` for runtime changes.
 - Hooks: `beforeSend` to transform or drop events, including the lifecycle
   events that the SDK always captures.
-- Experience releases use the authenticated delivery origins supplied by the
+- Journey releases use the authenticated delivery origins supplied by the
   profile; applications cannot override signed object locations.
 - Purchases: `purchaseDelegate` to handle StoreKit buy/restore in your app and
   `purchaseHandlingMode` to define transaction ownership.

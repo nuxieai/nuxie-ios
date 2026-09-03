@@ -148,7 +148,7 @@ private enum ExperienceRuntimeReferenceError: LocalizedError {
         case .missingResourceRoot:
             "Reference app could not resolve Bundle.main.resourceURL"
         case .missingFixture(let fixture):
-            "Signed experience release fixture is missing: \(fixture)"
+            "Signed Journey release fixture is missing: \(fixture)"
         }
     }
 }
