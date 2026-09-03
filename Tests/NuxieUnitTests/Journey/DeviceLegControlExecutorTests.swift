@@ -9,8 +9,15 @@ final class DeviceLegControlExecutorTests: XCTestCase {
                 struct Event: Decodable { let name: String; let occurredAtMillis: Int64; let properties: ExactJSONObject<ExperienceReleaseJSONValue> }
                 struct Signal: Decodable { let event: Event?; let responsesChanged: Bool? }
                 struct Expected: Decodable {
+                    struct ExperimentSelection: Decodable {
+                        let experimentId: String
+                        let variantId: String?
+                        let assignedVariantId: String?
+                        let source: String
+                    }
                     let kind: String; let stepId: String?; let anchorAtMillis: Int64?; let wakeAtMillis: Int64?
                     let outcome: String?; let actionType: String?; let event: ExactJSONObject<ExperienceReleaseJSONValue>?
+                    let experimentSelection: ExperimentSelection?
                 }
                 let id: String; let step: DeviceLeg.Step; let nowMillis: Int64
                 let checkpoint: DeviceLegControlExecutor.Checkpoint?; let signal: Signal?; let expected: Expected
@@ -32,10 +39,26 @@ final class DeviceLegControlExecutorTests: XCTestCase {
             let result = executor.evaluate(step: vector.step, context: suite.context, assignments: suite.assignments,
                                            nowMillis: vector.nowMillis, checkpoint: vector.checkpoint, signal: signal)
             switch (vector.expected.kind, result) {
-            case ("advance", .advance(let stepId, let context, _)):
+            case ("advance", .advance(let stepId, let context, let selection)):
                 XCTAssertEqual(stepId, vector.expected.stepId, vector.id)
                 if let event = vector.expected.event {
                     XCTAssertEqual(try ExactJSONCodec.encode(context.event), try ExactJSONCodec.encode(event), vector.id)
+                }
+                if let expected = vector.expected.experimentSelection {
+                    let selection = try XCTUnwrap(selection, vector.id)
+                    XCTAssertEqual(selection.experimentId, expected.experimentId, vector.id)
+                    XCTAssertEqual(selection.variantId, expected.variantId, vector.id)
+                    switch selection.source {
+                    case .profile:
+                        XCTAssertEqual(expected.source, "profile", vector.id)
+                        XCTAssertEqual(selection.variantId, expected.assignedVariantId, vector.id)
+                    case .noAssignment:
+                        XCTAssertEqual(expected.source, "no_assignment", vector.id)
+                        XCTAssertNil(expected.assignedVariantId, vector.id)
+                    case .invalidAssignment(let assignedVariantId):
+                        XCTAssertEqual(expected.source, "invalid_assignment", vector.id)
+                        XCTAssertEqual(assignedVariantId, expected.assignedVariantId, vector.id)
+                    }
                 }
             case ("park", .park(let stepId, let checkpoint)):
                 XCTAssertEqual(stepId, vector.expected.stepId, vector.id)

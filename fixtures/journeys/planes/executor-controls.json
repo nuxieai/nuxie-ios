@@ -10,6 +10,10 @@
     "experiment_assigned": {
       "variantId": "variant_b",
       "isHoldout": false
+    },
+    "experiment_invalid": {
+      "variantId": "missing",
+      "isHoldout": false
     }
   },
   "cases": [
@@ -77,10 +81,19 @@
             { "id": "variant_b", "isHoldout": false }
           ]
         },
-        "outlets": { "variant_a": "a", "variant_b": "b" }
+        "outlets": { "variant_a": "a", "variant_b": "b", "invalid_assignment": "after" }
       },
       "nowMillis": 1000,
-      "expected": { "kind": "advance", "stepId": "b" }
+      "expected": {
+        "kind": "advance",
+        "stepId": "b",
+        "experimentSelection": {
+          "experimentId": "experiment_assigned",
+          "variantId": "variant_b",
+          "assignedVariantId": "variant_b",
+          "source": "profile"
+        }
+      }
     },
     {
       "id": "unassigned-experiment-uses-first-variant",
@@ -95,10 +108,46 @@
             { "id": "other", "isHoldout": false }
           ]
         },
-        "outlets": { "default": "a", "other": "b" }
+        "outlets": { "default": "a", "other": "b", "invalid_assignment": "after" }
       },
       "nowMillis": 1000,
-      "expected": { "kind": "advance", "stepId": "a" }
+      "expected": {
+        "kind": "advance",
+        "stepId": "a",
+        "experimentSelection": {
+          "experimentId": "experiment_new",
+          "variantId": "default",
+          "assignedVariantId": null,
+          "source": "no_assignment"
+        }
+      }
+    },
+    {
+      "id": "unknown-assignment-skips-every-variant",
+      "step": {
+        "kind": "action",
+        "id": "experiment",
+        "action": {
+          "type": "experiment",
+          "experimentId": "experiment_invalid",
+          "variants": [
+            { "id": "variant_a", "isHoldout": false },
+            { "id": "variant_b", "isHoldout": false }
+          ]
+        },
+        "outlets": { "variant_a": "a", "variant_b": "b", "invalid_assignment": "after" }
+      },
+      "nowMillis": 1000,
+      "expected": {
+        "kind": "advance",
+        "stepId": "after",
+        "experimentSelection": {
+          "experimentId": "experiment_invalid",
+          "variantId": null,
+          "assignedVariantId": "missing",
+          "source": "invalid_assignment"
+        }
+      }
     },
     {
       "id": "time-window-parks-at-next-opening",
