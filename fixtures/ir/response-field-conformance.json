@@ -1,24 +1,11 @@
 {
   "suite": "response-field-ir",
-  "version": 1,
+  "version": 2,
   "now": "2026-08-17T20:00:02Z",
-  "responseSession": {
-    "responseId": "rsp_fdf96a130d4da11a334943fddeae435c692b09f043d68c86a2c0298edbe8def7",
-    "journeyId": "journey-1",
-    "responseSchemaKey": "survey",
-    "responseSchemaVersionId": "survey-v1",
-    "schemaVersion": 1,
-    "state": "draft",
-    "values": {
-      "reason": "price",
-      "score": 3,
-      "qualified": true
-    },
-    "version": 4,
-    "createdAt": "2026-08-17T20:00:00Z",
-    "updatedAt": "2026-08-17T20:00:01Z",
-    "submittedAt": null,
-    "abandonedAt": null
+  "responses": {
+    "reason": "price",
+    "score": 3,
+    "qualified": true
   },
   "vectors": [
     {
@@ -26,8 +13,14 @@
       "expr": {
         "type": "Compare",
         "op": "==",
-        "left": { "type": "Response.Field", "key": "reason" },
-        "right": { "type": "String", "value": "price" }
+        "left": {
+          "type": "Response.Field",
+          "key": "reason"
+        },
+        "right": {
+          "type": "String",
+          "value": "price"
+        }
       },
       "expect": true
     },
@@ -36,8 +29,14 @@
       "expr": {
         "type": "Compare",
         "op": ">",
-        "left": { "type": "Response.Field", "key": "score" },
-        "right": { "type": "Number", "value": 2 }
+        "left": {
+          "type": "Response.Field",
+          "key": "score"
+        },
+        "right": {
+          "type": "Number",
+          "value": 2
+        }
       },
       "expect": true
     },
@@ -46,8 +45,14 @@
       "expr": {
         "type": "Compare",
         "op": "!=",
-        "left": { "type": "Response.Field", "key": "reason" },
-        "right": { "type": "String", "value": "fit" }
+        "left": {
+          "type": "Response.Field",
+          "key": "reason"
+        },
+        "right": {
+          "type": "String",
+          "value": "fit"
+        }
       },
       "expect": true
     },
@@ -56,12 +61,21 @@
       "expr": {
         "type": "Compare",
         "op": "in",
-        "left": { "type": "Response.Field", "key": "reason" },
+        "left": {
+          "type": "Response.Field",
+          "key": "reason"
+        },
         "right": {
           "type": "List",
           "value": [
-            { "type": "String", "value": "price" },
-            { "type": "String", "value": "fit" }
+            {
+              "type": "String",
+              "value": "price"
+            },
+            {
+              "type": "String",
+              "value": "fit"
+            }
           ]
         }
       },
@@ -69,12 +83,18 @@
     },
     {
       "name": "boolean truthiness",
-      "expr": { "type": "Response.Field", "key": "qualified" },
+      "expr": {
+        "type": "Response.Field",
+        "key": "qualified"
+      },
       "expect": true
     },
     {
       "name": "missing field is null and falsey",
-      "expr": { "type": "Response.Field", "key": "missing" },
+      "expr": {
+        "type": "Response.Field",
+        "key": "missing"
+      },
       "expect": false
     }
   ]

@@ -370,13 +370,10 @@ final class ConformanceVectorTests: XCTestCase {
 
 
     func testResponseFieldIRVectors() async throws {
-        struct ResponseSession: Decodable {
-            let values: [String: ScreenEmissionValue]
-        }
         struct Suite: Decodable {
             let version: Int
             let now: String
-            let responseSession: ResponseSession
+            let responses: [String: ScreenEmissionValue]
             let vectors: [Vector]
         }
         struct Vector: Decodable {
@@ -392,12 +389,12 @@ final class ConformanceVectorTests: XCTestCase {
             Suite.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(suite.version, 1)
+        XCTAssertEqual(suite.version, 2)
         let now = try XCTUnwrap(ISO8601DateFormatter().date(from: suite.now))
         let interpreter = IRInterpreter(
             ctx: EvalContext(
                 now: now,
-                responseValues: suite.responseSession.values
+                responseValues: suite.responses
             )
         )
 
