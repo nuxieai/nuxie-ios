@@ -26,7 +26,9 @@ final class NativeStoreKitPurchaseAdapterTests: XCTestCase {
                 placementId: "paywall:0",
                 authorization: .init(
                     distinctId: "customer-1",
-                    journeyId: "journey-1"
+                    journeyId: "journey-1",
+                    legId: String(repeating: "a", count: 64),
+                    descriptorSha256: String(repeating: "b", count: 64)
                 )
             ),
             appStoreProduct: appStoreProduct

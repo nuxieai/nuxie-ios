@@ -22,10 +22,21 @@ final class AppStoreIntroEligibilityApiTests: XCTestCase {
                 )
                 XCTAssertEqual(json["apiKey"] as? String, "test-api-key")
                 XCTAssertEqual(json["distinctId"] as? String, "customer-1")
-                XCTAssertEqual(json["journeyId"] as? String, "journey-1")
+                XCTAssertEqual(
+                    json["journeyId"] as? String,
+                    "0198a9c0-7b35-7a5b-8c1a-123456789abc"
+                )
                 XCTAssertEqual(
                     json["experienceVersionId"] as? String,
                     "version_123"
+                )
+                XCTAssertEqual(
+                    json["legId"] as? String,
+                    String(repeating: "a", count: 64)
+                )
+                XCTAssertEqual(
+                    json["descriptorSha256"] as? String,
+                    String(repeating: "b", count: 64)
                 )
                 XCTAssertEqual(json["placementId"] as? String, "paywall:0")
                 XCTAssertEqual(
@@ -54,8 +65,10 @@ final class AppStoreIntroEligibilityApiTests: XCTestCase {
 
         let token = try await api.appStoreIntroEligibilityToken(
             distinctId: "customer-1",
-            journeyId: "journey-1",
+            journeyId: "0198a9c0-7b35-7a5b-8c1a-123456789abc",
             experienceVersionId: "version_123",
+            legId: String(repeating: "a", count: 64),
+            descriptorSha256: String(repeating: "b", count: 64),
             placementId: "paywall:0",
             transactionId: "app-transaction-123"
         )

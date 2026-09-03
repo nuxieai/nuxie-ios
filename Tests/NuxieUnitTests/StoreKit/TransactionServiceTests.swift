@@ -764,7 +764,9 @@ final class TransactionServiceTests: AsyncSpec {
                                 placementId: mockProduct.placementId,
                                 authorization: .init(
                                     distinctId: "test-user",
-                                    journeyId: "journey-1"
+                                    journeyId: "journey-1",
+                                    legId: String(repeating: "a", count: 64),
+                                    descriptorSha256: String(repeating: "b", count: 64)
                                 )
                             ),
                             appStoreProduct: mockAppStoreProduct
@@ -803,7 +805,9 @@ final class TransactionServiceTests: AsyncSpec {
                                 placementId: mockProduct.placementId,
                                 authorization: .init(
                                     distinctId: "test-user",
-                                    journeyId: "journey-1"
+                                    journeyId: "journey-1",
+                                    legId: String(repeating: "a", count: 64),
+                                    descriptorSha256: String(repeating: "b", count: 64)
                                 )
                             ),
                         ]
@@ -825,7 +829,9 @@ final class TransactionServiceTests: AsyncSpec {
                                 placementId: mockProduct.placementId,
                                 authorization: .init(
                                     distinctId: "previous-customer",
-                                    journeyId: "journey-1"
+                                    journeyId: "journey-1",
+                                    legId: String(repeating: "a", count: 64),
+                                    descriptorSha256: String(repeating: "b", count: 64)
                                 )
                             ),
                             appStoreProduct: mockAppStoreProduct
@@ -1298,7 +1304,9 @@ final class TransactionServiceTests: AsyncSpec {
                             experienceVersionId: "version-single-token",
                             authorization: .init(
                                 distinctId: "test-user",
-                                journeyId: "journey-1"
+                                journeyId: "journey-1",
+                                legId: String(repeating: "a", count: 64),
+                                descriptorSha256: String(repeating: "b", count: 64)
                             ),
                             productId: "trial",
                             placementId: "paywall:trial",
@@ -1360,7 +1368,9 @@ final class TransactionServiceTests: AsyncSpec {
                             experienceVersionId: "version-direct-terms",
                             authorization: .init(
                                 distinctId: "test-user",
-                                journeyId: "journey-direct"
+                                journeyId: "journey-direct",
+                                legId: String(repeating: "a", count: 64),
+                                descriptorSha256: String(repeating: "b", count: 64)
                             ),
                             productId: "pro",
                             placementId: "paywall:pro",
@@ -1479,7 +1489,9 @@ final class TransactionServiceTests: AsyncSpec {
                             experienceVersionId: "version-trial",
                             authorization: .init(
                                 distinctId: "test-user",
-                                journeyId: "journey-1"
+                                journeyId: "journey-1",
+                                legId: String(repeating: "a", count: 64),
+                                descriptorSha256: String(repeating: "b", count: 64)
                             ),
                             productId: "trial",
                             placementId: "paywall:trial",
@@ -1500,7 +1512,9 @@ final class TransactionServiceTests: AsyncSpec {
                             experienceVersionId: "version-trial",
                             authorization: .init(
                                 distinctId: "test-user",
-                                journeyId: "journey-1"
+                                journeyId: "journey-1",
+                                legId: String(repeating: "a", count: 64),
+                                descriptorSha256: String(repeating: "b", count: 64)
                             ),
                             productId: "trial",
                             placementId: "paywall:trial",
@@ -1539,7 +1553,9 @@ final class TransactionServiceTests: AsyncSpec {
                         )
                         let authorization = IntroEligibilityAuthorizationContext(
                             distinctId: "test-user",
-                            journeyId: "journey-1"
+                            journeyId: "journey-1",
+                            legId: String(repeating: "a", count: 64),
+                            descriptorSha256: String(repeating: "b", count: 64)
                         )
                         let resolver = StoreProductResolver(
                             tokenProvider: introTokenProvider,

@@ -297,7 +297,9 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         )
         let authorization = IntroEligibilityAuthorizationContext(
             distinctId: "customer-a",
-            journeyId: "journey-a"
+            journeyId: "journey-a",
+            legId: String(repeating: "a", count: 64),
+            descriptorSha256: String(repeating: "b", count: 64)
         )
 
         let presentation = release.scopedForPresentation(
@@ -477,7 +479,9 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
                     placementId: "paywall:0",
                     authorization: .init(
                         distinctId: "customer-1",
-                        journeyId: journeyId
+                        journeyId: journeyId,
+                        legId: String(repeating: "a", count: 64),
+                        descriptorSha256: String(repeating: "b", count: 64)
                     )
                 ),
                 appStoreProduct: MockStoreProduct(

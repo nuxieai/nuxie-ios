@@ -32,7 +32,9 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             provider.introEligibilityAuthorizationContext,
             IntroEligibilityAuthorizationContext(
                 distinctId: "customer-authority",
-                journeyId: "journey-authority"
+                journeyId: "journey-authority",
+                legId: release.descriptor.leg.id,
+                descriptorSha256: release.descriptorSHA256
             )
         )
     }

@@ -617,6 +617,8 @@ extension NuxieApi {
         distinctId: String,
         journeyId: String,
         experienceVersionId: String,
+        legId: String,
+        descriptorSha256: String,
         placementId: String,
         transactionId: String
     ) async throws -> String {
@@ -624,6 +626,8 @@ extension NuxieApi {
             distinctId: distinctId,
             journeyId: journeyId,
             experienceVersionId: experienceVersionId,
+            legId: legId,
+            descriptorSha256: descriptorSha256,
             placementId: placementId,
             transactionId: transactionId
         )
