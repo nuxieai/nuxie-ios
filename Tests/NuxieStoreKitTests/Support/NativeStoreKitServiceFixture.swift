@@ -60,8 +60,8 @@ final class NativeStoreKitServiceFixture: @unchecked Sendable {
     ) async throws -> StoreProduct {
         var product = try await store.product(id: id)
         product.purchaseContext = PurchaseCommercialContext(
-            release: AuthenticatedExperienceReleaseID(
-                identity: ExperienceReleaseIdentity(
+            release: AuthenticatedJourneyReleaseID(
+                identity: JourneyReleaseIdentity(
                     appId: "storekit-test-app",
                     environment: "qualification",
                     experienceId: "storekit-test-experience",

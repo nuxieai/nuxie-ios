@@ -327,39 +327,10 @@ final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
     }
 }
 
-final class IRTestSegmentService: SegmentServiceProtocol, IRSegmentQueries, @unchecked Sendable {
+final class IRTestSegmentService: IRSegmentQueries, @unchecked Sendable {
     var memberSegments: Set<String> = ["premium_users"]
     var enteredDates: [String: Date] = ["premium_users": Date(timeIntervalSince1970: 1704067200)] // 2024-01-01
     
-    func replaceSnapshot(
-        _ snapshot: SegmentMembershipSeed,
-        definitions: [Segment],
-        for distinctId: String
-    ) async {
-        memberSegments = Set(snapshot.memberships.map(\.segmentId))
-        enteredDates = Dictionary(uniqueKeysWithValues: snapshot.memberships.map {
-            ($0.segmentId, $0.enteredAt)
-        })
-    }
-
-    func snapshot(for distinctId: String) async -> SegmentMembershipSeed {
-        SegmentMembershipSeed(
-            evaluatedAt: nil,
-            memberships: memberSegments.map {
-                SeededSegmentMembership(
-                    segmentId: $0,
-                    enteredAt: enteredDates[$0] ?? Date()
-                )
-            }
-        )
-    }
-
-    func clearSnapshot(for distinctId: String) async { memberSegments.removeAll(); enteredDates.removeAll() }
-    
-    func isInSegment(_ segmentId: String) async -> Bool {
-        return memberSegments.contains(segmentId)
-    }
-
     func isMember(_ segmentId: String) async -> Bool {
         memberSegments.contains(segmentId)
     }
@@ -731,22 +702,11 @@ final class IRInterpreterTests: AsyncSpec {
             }
 
             it("should resolve Response.Field only from the exact execution snapshot") {
-                let snapshot = ResponseSessionSnapshot(
-                    responseId: "rsp_fdf96a130d4da11a334943fddeae435c692b09f043d68c86a2c0298edbe8def7",
-                    journeyId: "journey-1",
-                    responseSchemaKey: "survey",
-                    responseSchemaVersionId: "survey-v1",
-                    schemaVersion: 1,
-                    state: .draft,
-                    values: ["reason": .string("price")],
-                    version: 1,
-                    createdAt: "2026-08-17T20:00:00Z",
-                    updatedAt: "2026-08-17T20:00:00Z",
-                    submittedAt: nil,
-                    abandonedAt: nil
-                )
                 let withSnapshot = IRInterpreter(
-                    ctx: EvalContext(now: testDate, responseSession: snapshot)
+                    ctx: EvalContext(
+                        now: testDate,
+                        responseValues: ["reason": .string("price")]
+                    )
                 )
 
                 let reason = try await withSnapshot.evalValue(.responseField(key: "reason"))

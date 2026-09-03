@@ -15,7 +15,6 @@ s:5Nuxie0A16TestingOverridesV7flushAtSiSgvp	Var	flushAt
 s:5Nuxie0A16TestingOverridesVACycfc	Constructor	init()
 s:5Nuxie0A3SDKC18FeatureCheckPolicyO9wireValueSSvg	Accessor	Get()
 s:5Nuxie0A3SDKC18FeatureCheckPolicyO9wireValueSSvp	Var	wireValue
-s:5Nuxie0A3SDKC34presentExperienceVersionForTestingyySSYaKF	Function	presentExperienceVersionForTesting(_:)
 s:5Nuxie10AnyCodableV	TypeDecl	AnyCodable
 s:5Nuxie10AnyCodableV2eeoiySbAC_ACtFZ	Function	==(_:_:)
 s:5Nuxie10AnyCodableV4fromACs7Decoder_p_tKcfc	Constructor	init(from:)
@@ -26,8 +25,6 @@ s:5Nuxie10AnyCodableVyACypcfc	Constructor	init(_:)
 s:5Nuxie11EnvironmentO7stagingyA2CmF	Var	staging
 s:5Nuxie13FeatureAccessV9wireValueSDySSAA10AnyCodableVGvg	Accessor	Get()
 s:5Nuxie13FeatureAccessV9wireValueSDySSAA10AnyCodableVGvp	Var	wireValue
-s:5Nuxie13TriggerResultO9wireValueSDyS2SGvg	Accessor	Get()
-s:5Nuxie13TriggerResultO9wireValueSDyS2SGvp	Var	wireValue
 s:5Nuxie18FeatureUsageResultV9wireValueSDySSAA10AnyCodableVGvg	Accessor	Get()
 s:5Nuxie18FeatureUsageResultV9wireValueSDySSAA10AnyCodableVGvp	Var	wireValue
 s:5Nuxie9AppActionV9wireValueSDySSAA10AnyCodableVGvg	Accessor	Get()

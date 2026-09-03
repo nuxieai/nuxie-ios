@@ -9,19 +9,13 @@ struct NuxieCoreOverrides {
   var api: NuxieApiProtocol?
   var identity: IdentityServiceProtocol?
   var eventLog: EventLogProtocol?
-  var irRuntime: IRRuntime?
-  var segments: SegmentServiceProtocol?
   var experiences: ExperienceServiceProtocol?
   var profile: ProfileServiceProtocol?
   var featureInfo: FeatureInfo?
   var featureUseCommandStore: FeatureUseCommandStoring?
   var features: FeatureServiceProtocol?
-  var triggerBroker: TriggerBrokerProtocol?
   var experiencePresentation: ExperiencePresentationServiceProtocol?
-  var goalEvaluator: GoalEvaluatorProtocol?
-  var journeyStore: JourneyStoreProtocol?
-  var journeys: JourneyServiceProtocol?
-  var triggers: TriggerServiceProtocol?
+  var journeys: (any JourneyServiceProtocol)?
   var productService: ProductService?
   var transactionObserver: TransactionObserverProtocol?
   var transactionRecoverySources: StoreTransactionRecoverySources?
@@ -33,15 +27,13 @@ struct NuxieCoreOverrides {
   var localeProvider: LocaleIdentifierProviding?
   var purchaseSettings: PurchaseSettingsProviding?
   var presentationTrace: ExperiencePresentationTraceRecording?
-  var deviceLegPresentation: (any DeviceLegPresenting)?
-  /// Explicit test-host control. Nil preserves the legacy qualification-host
-  /// behavior for callers that install a presentation trace recorder.
+  var journeyPresentation: (any JourneyPresenting)?
+  /// Explicit test-host control for presentation diagnostics.
   var presentationDiagnosticsEnabled: Bool?
   /// Qualification-only correlation installed before lifecycle restoration
   /// begins so a relaunched presentation remains attributable to the current
   /// user-observed retry attempt.
   var restoredPresentationAttempt: ExperiencePresentationAttempt?
-  var experienceWarmLoadsInitiallySuspended = false
 
   init(presentationDiagnosticsEnabled: Bool? = nil) {
     self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
@@ -63,22 +55,15 @@ final class NuxieCore: @unchecked Sendable {
   let api: NuxieApiProtocol
   let identity: IdentityServiceProtocol
   let eventLog: EventLogProtocol
-  let irRuntime: IRRuntime
-  let segments: SegmentServiceProtocol
   let experiences: ExperienceServiceProtocol
-  let deviceLegProfiles: DeviceLegProfileCatalog
-  let deviceLegs: (any DeviceLegServiceProtocol)?
+  let journeyProfiles: JourneyProfileCatalog
+  let journeys: (any JourneyServiceProtocol)?
   let profile: ProfileServiceProtocol
   let featureInfo: FeatureInfo
   let featureUseCommands: FeatureUseCommandQueue
   let features: FeatureServiceProtocol
-  let triggerBroker: TriggerBrokerProtocol
   let experiencePresentation: ExperiencePresentationServiceProtocol
-  let deviceLegPresentation: any DeviceLegPresenting
-  let goalEvaluator: GoalEvaluatorProtocol
-  let journeyStore: JourneyStoreProtocol
-  let journeys: JourneyServiceProtocol
-  let triggers: TriggerServiceProtocol
+  let journeyPresentation: any JourneyPresenting
   let productService: ProductService
   let transactionObserver: TransactionObserverProtocol
   let transactionService: TransactionService
@@ -113,21 +98,14 @@ final class NuxieCore: @unchecked Sendable {
       dateProvider: dateProvider,
       apiClient: api
     )
-    let irRuntime = overrides.irRuntime ?? IRRuntime(dateProvider: dateProvider)
-    let segments = overrides.segments ?? SegmentService()
-
     // Deferred references break the two construction cycles in the graph
     // (experiences → transactionService → observer → features → profile → experiences,
     // and observer ↔ transactionService). The box is set at the end of init
     // and only read after init completes.
     let builtTransactionService = LateBound<TransactionService>()
     let builtTransactionObserver = LateBound<TransactionObserverProtocol>()
-    let builtTriggerService = LateBound<TriggerServiceProtocol>()
     let builtFeatureService = LateBound<FeatureServiceProtocol>()
-    let systemEvents = overrides.systemEvents ?? TriggerSystemEventSink(
-      routedEvents: eventLog,
-      triggerProvider: { builtTriggerService.get() }
-    )
+    let systemEvents = overrides.systemEvents ?? EventLogSystemEventSink(events: eventLog)
     let localeProvider = overrides.localeProvider ?? runtimeSettings
     let purchaseSettings = overrides.purchaseSettings ?? runtimeSettings
 
@@ -136,16 +114,16 @@ final class NuxieCore: @unchecked Sendable {
       api: api
     )
     let introEligibilityOverrideHealth = IntroEligibilityOverrideHealth()
-    let authorizationKeys: [ExperiencePackageAuthorizationKey]
+    let authorizationKeys: [JourneyPackageAuthorizationKey]
     do {
-      authorizationKeys = try ExperienceTrustRoots.keys(
+      authorizationKeys = try JourneyTrustRoots.keys(
         for: configuration.environment
       )
     } catch {
       LogError("Experience package trust roots unavailable: \(error)")
       authorizationKeys = []
     }
-    let releasePaths = ExperienceReleaseStoragePaths.resolve(
+    let releasePaths = JourneyReleaseStoragePaths.resolve(
       customStoragePath: internalConfiguration.customStoragePath,
       cachesDirectory: FileManager.default.urls(
         for: .cachesDirectory,
@@ -156,30 +134,27 @@ final class NuxieCore: @unchecked Sendable {
         in: .userDomainMask
       ).first
     )
-    let highWaterStore: any ExperienceReleaseHighWaterStore
+    let highWaterStore: any JourneyReleaseHighWaterStore
     if let admissionDirectory = releasePaths.admission {
       do {
-        highWaterStore = try PersistentExperienceReleaseHighWaterStore(
+        highWaterStore = try PersistentJourneyReleaseHighWaterStore(
           directory: admissionDirectory
         )
       } catch {
-        LogError("Experience release replay store unavailable: \(error)")
-        highWaterStore = UnavailableExperienceReleaseHighWaterStore()
+        LogError("Journey release replay store unavailable: \(error)")
+        highWaterStore = UnavailableJourneyReleaseHighWaterStore()
       }
     } else {
-      LogError("Experience release replay store unavailable: Application Support directory missing")
-      highWaterStore = UnavailableExperienceReleaseHighWaterStore()
+      LogError("Journey release replay store unavailable: Application Support directory missing")
+      highWaterStore = UnavailableJourneyReleaseHighWaterStore()
     }
-    let releaseStore = ExperienceReleaseAcquisitionStore(
+    let releaseStore = JourneyReleaseAcquisitionStore(
       cacheDirectory: releasePaths.objects,
-      urlSession: internalConfiguration.urlSession ?? .shared,
-      authorizationKeys: authorizationKeys,
-      supportedRuntime: ExperienceReleaseRuntime.current,
-      admission: ExperienceReleaseAdmission(store: highWaterStore)
+      urlSession: internalConfiguration.urlSession ?? .shared
     )
-    let deviceLegProfiles = DeviceLegProfileCatalog(
+    let journeyProfiles = JourneyProfileCatalog(
       authorizationKeys: authorizationKeys,
-      supportedRuntime: ExperienceReleaseRuntime.current,
+      supportedRuntime: JourneyReleaseRuntime.current,
       highWaterStore: highWaterStore
     )
     let profileStorageScope = ProfileStorageScope(
@@ -198,24 +173,22 @@ final class NuxieCore: @unchecked Sendable {
         internalConfiguration.presentationDiagnosticsEnabled
           || (overrides.presentationDiagnosticsEnabled
             ?? (overrides.presentationTrace != nil)),
-      warmLoadsInitiallySuspended: overrides.experienceWarmLoadsInitiallySuspended,
       testStoreEnabled: configuration.testStoreEnabled
     )
-    let triggerBroker = overrides.triggerBroker ?? TriggerBroker()
     let defaultExperiencePresentation = ExperiencePresentationService(
       windowProvider: nil,
       experiences: experiences,
-      eventLog: eventLog,
-      triggerBroker: triggerBroker,
-      dateProvider: dateProvider
+      eventLog: eventLog
     )
     let experiencePresentation = overrides.experiencePresentation
       ?? defaultExperiencePresentation
-    let deviceLegPresentation = overrides.deviceLegPresentation
+    let journeyPresentation = overrides.journeyPresentation
       ?? defaultExperiencePresentation
-    let deviceLegs: (any DeviceLegServiceProtocol)?
-    if let timezones = SignedTimezoneBundle.installed {
-      deviceLegs = DeviceLegService(
+    let journeys: (any JourneyServiceProtocol)?
+    if let override = overrides.journeys {
+      journeys = override
+    } else if let timezones = SignedTimezoneBundle.installed {
+      journeys = JourneyService(
         identity: identity,
         events: eventLog,
         dateProvider: dateProvider,
@@ -234,14 +207,14 @@ final class NuxieCore: @unchecked Sendable {
           guard !configuration.testStoreEnabled else { return [] }
           return await builtTransactionObserver.get().currentEntitledStoreProductIds()
         },
-        dispatcher: DeviceLegEffectDispatcher(
+        dispatcher: JourneyEffectDispatcher(
           identity: identity,
           events: eventLog,
           appActionHandler: appActionHandler
         ),
-        presenter: deviceLegPresentation,
+        presenter: journeyPresentation,
         pinnedReleaseAuthenticator: { entry, reference in
-          try await deviceLegProfiles.authenticatePinnedRelease(
+          try await journeyProfiles.authenticatePinnedRelease(
             entry,
             reference: reference
           )
@@ -249,19 +222,16 @@ final class NuxieCore: @unchecked Sendable {
         timezones: timezones
       )
     } else {
-      LogError("Device-leg runtime unavailable: signed timezone bundle missing")
-      deviceLegs = nil
+      LogError("Journey runtime unavailable: signed timezone bundle missing")
+      journeys = nil
     }
     let profile = overrides.profile ?? ProfileService(
       identity: identity,
       api: api,
-      segments: segments,
       experiences: experiences,
-      deviceLegProfiles: deviceLegProfiles,
-      deviceLegRuntime: deviceLegs,
-      eventLog: eventLog,
+      journeyProfiles: journeyProfiles,
+      journeyRuntime: journeys,
       dateProvider: dateProvider,
-      sleepProvider: sleepProvider,
       localeProvider: localeProvider,
       storageScope: profileStorageScope,
       customStoragePath: internalConfiguration.customStoragePath
@@ -311,49 +281,6 @@ final class NuxieCore: @unchecked Sendable {
     )
     builtFeatureService.set(features)
 
-    // Set-once wiring for the segments → irRuntime → features cycle.
-    irRuntime.wire(
-      identity: identity, eventLog: eventLog,
-      segments: segments, features: features)
-
-    let goalEvaluator = overrides.goalEvaluator ?? GoalEvaluator(
-      eventLog: eventLog,
-      features: features,
-      identity: identity,
-      dateProvider: dateProvider,
-      irRuntime: irRuntime
-    )
-    let journeyStore = overrides.journeyStore ?? JourneyStore(
-      customStoragePath: internalConfiguration.customStoragePath,
-      dateProvider: dateProvider
-    )
-    let journeys = overrides.journeys ?? JourneyService(
-      journeyStore: journeyStore,
-      experiences: experiences,
-      profile: profile,
-      identity: identity,
-      segments: segments,
-      features: features,
-      experiencePresentation: experiencePresentation,
-      eventLog: eventLog,
-      triggerBroker: triggerBroker,
-      dateProvider: dateProvider,
-      sleepProvider: sleepProvider,
-      goalEvaluator: goalEvaluator,
-      irRuntime: irRuntime,
-      api: api,
-      appActionHandler: appActionHandler,
-      presentationTrace: presentationTrace,
-      restoredPresentationAttempt: overrides.restoredPresentationAttempt
-    )
-    let triggers = overrides.triggers ?? TriggerService(
-      eventLog: eventLog,
-      journeys: journeys,
-      triggerBroker: triggerBroker,
-      dateProvider: dateProvider,
-      presentationTrace: presentationTrace
-    )
-    builtTriggerService.set(triggers)
     let transactionObserver = overrides.transactionObserver ?? TransactionObserver(
       api: api,
       features: features,
@@ -433,8 +360,7 @@ final class NuxieCore: @unchecked Sendable {
       eventLog: eventLog,
       features: features,
       experiences: experiences,
-      deviceLegs: deviceLegs,
-      journeysProvider: { journeys }
+      journeys: journeys
     )
 
     self.dateProvider = dateProvider
@@ -442,22 +368,15 @@ final class NuxieCore: @unchecked Sendable {
     self.api = api
     self.identity = identity
     self.eventLog = eventLog
-    self.irRuntime = irRuntime
-    self.segments = segments
     self.experiences = experiences
-    self.deviceLegProfiles = deviceLegProfiles
-    self.deviceLegs = deviceLegs
+    self.journeyProfiles = journeyProfiles
+    self.journeys = journeys
     self.profile = profile
     self.featureInfo = featureInfo
     self.featureUseCommands = featureUseCommands
     self.features = features
-    self.triggerBroker = triggerBroker
     self.experiencePresentation = experiencePresentation
-    self.deviceLegPresentation = deviceLegPresentation
-    self.goalEvaluator = goalEvaluator
-    self.journeyStore = journeyStore
-    self.journeys = journeys
-    self.triggers = triggers
+    self.journeyPresentation = journeyPresentation
     self.productService = productService
     self.transactionObserver = transactionObserver
     self.transactionService = transactionService

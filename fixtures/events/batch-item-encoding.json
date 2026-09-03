@@ -1,8 +1,8 @@
 {
   "suite": "events/batch-item-encoding",
   "version": 1,
-  "description": "Captured event → wire batch item. idempotency_key MUST equal the event's own id (UUIDv7) so retried batches dedupe server-side; distinct_id, name, timestamp and properties pass through unchanged; $anon_distinct_id is lifted from properties to the top-level field. expect_properties_json is canonical sorted-key JSON text so runners must exercise their real encoder rather than compare decoded values.",
-  "precision_note": "JSON text can preserve UInt64 values above 2^53, but runtimes that materialize every JSON number as an IEEE-754 double cannot preserve those integers exactly. Cross-SDK properties that must round-trip through JavaScript-compatible consumers must remain within ±(2^53-1) or use a decimal string.",
+  "description": "Captured event \u2192 wire batch item. idempotency_key MUST equal the event's own id (UUIDv7) so retried batches dedupe server-side; distinct_id, name, timestamp and properties pass through unchanged; $anon_distinct_id is lifted from properties to the top-level field. expect_properties_json is canonical sorted-key JSON text so runners must exercise their real encoder rather than compare decoded values.",
+  "precision_note": "JSON text can preserve UInt64 values above 2^53, but runtimes that materialize every JSON number as an IEEE-754 double cannot preserve those integers exactly. Cross-SDK properties that must round-trip through JavaScript-compatible consumers must remain within \u00b1(2^53-1) or use a decimal string.",
   "vectors": [
     {
       "name": "basic event",
@@ -11,14 +11,20 @@
         "name": "button_clicked",
         "distinct_id": "user-1",
         "timestamp": "2026-07-19T12:00:00Z",
-        "properties": { "screen": "home", "count": 2 }
+        "properties": {
+          "screen": "home",
+          "count": 2
+        }
       },
       "expect": {
         "event": "button_clicked",
         "distinct_id": "user-1",
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000001",
         "timestamp": "2026-07-19T12:00:00.000Z",
-        "properties": { "screen": "home", "count": 2 }
+        "properties": {
+          "screen": "home",
+          "count": 2
+        }
       },
       "expect_properties_json": "{\"count\":2,\"screen\":\"home\"}"
     },
@@ -29,7 +35,10 @@
         "name": "$identify",
         "distinct_id": "user-2",
         "timestamp": "2026-07-19T12:00:01Z",
-        "properties": { "$anon_distinct_id": "anon-9", "distinct_id": "user-2" }
+        "properties": {
+          "$anon_distinct_id": "anon-9",
+          "distinct_id": "user-2"
+        }
       },
       "expect": {
         "event": "$identify",
@@ -47,7 +56,10 @@
         "name": "$feature_used",
         "distinct_id": "user-3",
         "timestamp": "2026-07-19T12:00:02Z",
-        "properties": { "value": 5, "entityId": "project-1" }
+        "properties": {
+          "value": 5,
+          "entityId": "project-1"
+        }
       },
       "expect": {
         "event": "$feature_used",
@@ -81,56 +93,47 @@
       "expect_properties_json": "{\"false_value\":false,\"one\":1,\"true_value\":true,\"zero\":0}"
     },
     {
-      "name": "journey transition epoch zero remains numeric",
+      "name": "zero-valued counters remain numeric",
       "event": {
         "id": "0198f0a4-7e11-7000-8000-000000000005",
-        "name": "$journey_transition",
+        "name": "checkout_progress",
         "distinct_id": "user-5",
         "timestamp": "2026-07-19T12:00:04Z",
         "properties": {
-          "journey_id": "journey-epoch-0",
-          "epoch": 0,
-          "to_node": "screen-a",
-          "region": "device-main",
-          "plane": "device"
+          "attempt": 0,
+          "step": "payment"
         }
       },
       "expect": {
-        "event": "$journey_transition",
+        "event": "checkout_progress",
         "distinct_id": "user-5",
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000005",
         "timestamp": "2026-07-19T12:00:04.000Z"
       },
-      "expect_properties_json": "{\"epoch\":0,\"journey_id\":\"journey-epoch-0\",\"plane\":\"device\",\"region\":\"device-main\",\"to_node\":\"screen-a\"}"
+      "expect_properties_json": "{\"attempt\":0,\"step\":\"payment\"}"
     },
     {
-      "name": "journey handoff epoch one remains numeric",
+      "name": "nested numeric values remain numeric",
       "event": {
         "id": "0198f0a4-7e11-7000-8000-000000000006",
-        "name": "$journey_handoff",
+        "name": "sync_checkpoint",
         "distinct_id": "user-6",
         "timestamp": "2026-07-19T12:00:05Z",
         "properties": {
-          "journey_id": "journey-epoch-1",
-          "epoch": 1,
-          "direction": "device_to_server",
-          "envelope": {
-            "stateVersion": 1,
-            "executionState": {
-              "plane": "device",
-              "regionId": "server-region-1",
-              "currentNodeId": "server-node-1"
-            }
+          "attempt": 1,
+          "checkpoint": {
+            "sequence": 1,
+            "state": "ready"
           }
         }
       },
       "expect": {
-        "event": "$journey_handoff",
+        "event": "sync_checkpoint",
         "distinct_id": "user-6",
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000006",
         "timestamp": "2026-07-19T12:00:05.000Z"
       },
-      "expect_properties_json": "{\"direction\":\"device_to_server\",\"envelope\":{\"executionState\":{\"currentNodeId\":\"server-node-1\",\"plane\":\"device\",\"regionId\":\"server-region-1\"},\"stateVersion\":1},\"epoch\":1,\"journey_id\":\"journey-epoch-1\"}"
+      "expect_properties_json": "{\"attempt\":1,\"checkpoint\":{\"sequence\":1,\"state\":\"ready\"}}"
     }
   ]
 }

@@ -20,9 +20,9 @@ Signed release profile and content-addressed RIV fixture derived from the
 UNIV-1845 production-publisher generic-command proof. Its journey uses the
 canonical publisher `[hostId: [ScreenScriptRef]]` shape. It contains one real
 scripted screen whose press
-listener emits response, declared journey, custom, and deliberately malformed
-product commands in a fixed authored order. Its declared purchase event has a
-real navigation handler used by the JourneyRunner tracer.
+listener emits response, Journey, custom, and deliberately malformed product
+commands in a fixed authored order. Its declared purchase event has a real
+navigation handler used by the Journey presentation runtime.
 
 ## Apple platform seams
 

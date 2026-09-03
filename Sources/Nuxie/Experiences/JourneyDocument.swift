@@ -1,10 +1,5 @@
 import Foundation
 
-struct ExperienceReference: Equatable, Hashable, Sendable {
-    let experienceId: String
-    let versionId: String
-}
-
 enum ExperienceBehaviorPresentationStyle: String, Codable, Sendable {
     case fullScreen = "full_screen"
     case sheet
@@ -74,100 +69,6 @@ struct ExperienceBehaviorScreenGeometry: Codable, Equatable, Sendable {
 struct ExperienceShellContract: Codable, Equatable, Sendable {
     let presentation: ExperienceBehaviorPresentation
     let screen: ExperienceBehaviorScreenGeometry
-}
-
-struct ExperienceBehaviorDefinition: Sendable {
-    let reference: ExperienceReference
-    let buildId: String
-    /// Signed RIV digest, available before object acquisition for telemetry.
-    let artifactContentHash: String
-    let name: String
-    let reentry: ExperienceReentry
-    let releaseCreatedAt: String
-    let trigger: ExperienceTrigger?
-    let goal: GoalConfig?
-    let exitPolicy: ExitPolicy?
-    let conversionAnchor: String?
-    let timeLimitSeconds: Int?
-    let experienceType: String?
-    let presentation: ExperienceBehaviorPresentation
-    let presentationScreens: [String: ExperienceBehaviorScreenGeometry]
-
-    var presentationStyle: ExperienceBehaviorPresentationStyle {
-        presentation.style
-    }
-
-    init(
-        reference: ExperienceReference,
-        buildId: String,
-        artifactContentHash: String,
-        name: String,
-        reentry: ExperienceReentry,
-        releaseCreatedAt: String,
-        trigger: ExperienceTrigger?,
-        goal: GoalConfig?,
-        exitPolicy: ExitPolicy?,
-        conversionAnchor: String?,
-        timeLimitSeconds: Int?,
-        experienceType: String?,
-        presentation: ExperienceBehaviorPresentation,
-        presentationScreens: [String: ExperienceBehaviorScreenGeometry]
-    ) {
-        self.reference = reference
-        self.buildId = buildId
-        self.artifactContentHash = artifactContentHash
-        self.name = name
-        self.reentry = reentry
-        self.releaseCreatedAt = releaseCreatedAt
-        self.trigger = trigger
-        self.goal = goal
-        self.exitPolicy = exitPolicy
-        self.conversionAnchor = conversionAnchor
-        self.timeLimitSeconds = timeLimitSeconds
-        self.experienceType = experienceType
-        self.presentation = presentation
-        self.presentationScreens = presentationScreens
-    }
-
-    init(
-        reference: ExperienceReference,
-        buildId: String,
-        artifactContentHash: String,
-        name: String,
-        reentry: ExperienceReentry,
-        releaseCreatedAt: String,
-        trigger: ExperienceTrigger?,
-        goal: GoalConfig?,
-        exitPolicy: ExitPolicy?,
-        conversionAnchor: String?,
-        timeLimitSeconds: Int?,
-        experienceType: String?,
-        presentationStyle: ExperienceBehaviorPresentationStyle,
-        presentationScreens: [String: ExperienceBehaviorScreenGeometry] = [:]
-    ) {
-        self.init(
-            reference: reference,
-            buildId: buildId,
-            artifactContentHash: artifactContentHash,
-            name: name,
-            reentry: reentry,
-            releaseCreatedAt: releaseCreatedAt,
-            trigger: trigger,
-            goal: goal,
-            exitPolicy: exitPolicy,
-            conversionAnchor: conversionAnchor,
-            timeLimitSeconds: timeLimitSeconds,
-            experienceType: experienceType,
-            presentation: .init(
-                style: presentationStyle,
-                orientation: .any,
-                backgroundColor: "#FFFFFFFF",
-                sheet: nil,
-                drawer: nil
-            ),
-            presentationScreens: presentationScreens
-        )
-    }
 }
 
 // MARK: - Signed journey member

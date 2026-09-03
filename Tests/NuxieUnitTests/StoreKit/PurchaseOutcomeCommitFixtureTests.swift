@@ -954,8 +954,8 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
             period: nil
         )
         product.purchaseContext = PurchaseCommercialContext(
-            release: AuthenticatedExperienceReleaseID(
-                identity: ExperienceReleaseIdentity(
+            release: AuthenticatedJourneyReleaseID(
+                identity: JourneyReleaseIdentity(
                     appId: "fixture-app",
                     environment: "test",
                     experienceId: fixtureProduct.experienceId,

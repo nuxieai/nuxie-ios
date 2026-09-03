@@ -335,7 +335,6 @@ final class NuxieSDKRun: @unchecked Sendable {
     let core: NuxieCore
     let lifecycleCoordinator: NuxieLifecycleCoordinator
     let eventSystemSetupTask: Task<Void, Never>
-    let journeyInitializeTask: Task<Void, Never>
     let featureInfoDelegateTask: Task<Void, Never>?
     let profilePrefetchTask: Task<Void, Never>?
     let transactionObserverTask: Task<Void, Never>?
@@ -347,7 +346,6 @@ final class NuxieSDKRun: @unchecked Sendable {
         core: NuxieCore,
         lifecycleCoordinator: NuxieLifecycleCoordinator,
         eventSystemSetupTask: Task<Void, Never>,
-        journeyInitializeTask: Task<Void, Never>,
         featureInfoDelegateTask: Task<Void, Never>?,
         profilePrefetchTask: Task<Void, Never>?,
         transactionObserverTask: Task<Void, Never>?,
@@ -358,7 +356,6 @@ final class NuxieSDKRun: @unchecked Sendable {
         self.core = core
         self.lifecycleCoordinator = lifecycleCoordinator
         self.eventSystemSetupTask = eventSystemSetupTask
-        self.journeyInitializeTask = journeyInitializeTask
         self.featureInfoDelegateTask = featureInfoDelegateTask
         self.profilePrefetchTask = profilePrefetchTask
         self.transactionObserverTask = transactionObserverTask
@@ -371,7 +368,6 @@ final class NuxieSDKRun: @unchecked Sendable {
     var preDrainStartupTasks: [Task<Void, Never>] {
         [
             eventSystemSetupTask,
-            journeyInitializeTask,
             featureInfoDelegateTask,
             profilePrefetchTask,
             transactionObserverTask,

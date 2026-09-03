@@ -9,7 +9,7 @@ final class StoreProductResolverTests: XCTestCase {
     )
     func testPlacementDecodesExactIntroEligibilityAndBillingPlan() throws {
         let placement = try JSONDecoder().decode(
-            ExperienceReleasePlacementDocument.self,
+            JourneyReleasePlacementDocument.self,
             from: Data(
                 #"{"id":"paywall:0","productId":"product_premium","appStore":{"introEligibility":"alwaysEligible","billingPlan":"monthly"}}"#.utf8
             )

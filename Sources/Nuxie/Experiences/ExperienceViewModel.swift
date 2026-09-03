@@ -162,7 +162,7 @@ class ExperienceViewModel {
                 } catch {
                     let reportedError: Error
                     var attributes = ["phase": "presentation"]
-                    if let failure = error as? ExperienceReleaseResourceFailure {
+                    if let failure = error as? JourneyReleaseResourceFailure {
                         reportedError = failure.underlying
                         attributes.merge(
                             failure.resourceMetrics.qualificationTraceAttributes

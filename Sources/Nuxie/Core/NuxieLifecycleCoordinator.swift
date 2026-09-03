@@ -24,35 +24,29 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private let transitionContinuation: AsyncStream<LifecycleTransition>.Continuation
   private var worker: Task<Void, Never>?
 
-  private let journeyService: JourneyServiceProtocol
-  private let deviceLegService: (any DeviceLegServiceProtocol)?
+  private let journeyService: (any JourneyServiceProtocol)?
   private let eventLog: EventQueueLifecycle
   private let profileService: ProfileServiceProtocol
   private let experiencePresentationService: ExperiencePresentationServiceProtocol
-  private let deviceLegPresentationService: any DeviceLegPresenting
-  private let experienceService: ExperienceServiceProtocol
+  private let journeyPresentationService: any JourneyPresenting
   private let featureService: FeatureServiceProtocol
 
   init(
     lifecycleTracker: AppLifecycleTracker,
-    journeys: JourneyServiceProtocol,
-    deviceLegs: (any DeviceLegServiceProtocol)? = nil,
+    journeys: (any JourneyServiceProtocol)? = nil,
     eventLog: EventQueueLifecycle,
     profile: ProfileServiceProtocol,
-    experiences: ExperienceServiceProtocol,
     experiencePresentation: ExperiencePresentationServiceProtocol,
-    deviceLegPresentation: any DeviceLegPresenting,
+    journeyPresentation: any JourneyPresenting,
     features: FeatureServiceProtocol
   ) {
     (self.transitions, self.transitionContinuation) = AsyncStream.makeStream()
     self.lifecycleTracker = lifecycleTracker
     self.journeyService = journeys
-    self.deviceLegService = deviceLegs
     self.eventLog = eventLog
     self.profileService = profile
-    self.experienceService = experiences
     self.experiencePresentationService = experiencePresentation
-    self.deviceLegPresentationService = deviceLegPresentation
+    self.journeyPresentationService = journeyPresentation
     self.featureService = features
   }
 
@@ -108,9 +102,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private func handle(_ transition: LifecycleTransition) async {
     switch transition {
     case .didEnterBackground:
-      await experienceService.onAppDidEnterBackground()
-      await deviceLegService?.onAppDidEnterBackground()
-      await journeyService.onAppDidEnterBackground()
+      await journeyService?.onAppDidEnterBackground()
       await eventLog.onAppDidEnterBackground()
       // Emit $app_backgrounded after services have processed
       lifecycleTracker.trackAppBackgrounded()
@@ -118,8 +110,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     case .willEnterForeground:
       // Re-arm timers BEFORE UI is active so we can catch up time-based work,
       // but do not present experiences until after didBecomeActive + debounce.
-      await deviceLegService?.onAppWillEnterForeground()
-      await journeyService.onAppWillEnterForeground()
+      await journeyService?.onAppWillEnterForeground()
       // Emit $app_opened after journey service has processed
       lifecycleTracker.trackAppForegrounded()
 
@@ -128,15 +119,13 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       // Expire or refresh resident profile authority before speculative
       // Experience preparation is allowed to resume from that authority.
       await profileService.onAppBecameActive()
-      await experienceService.onAppBecameActive()
       // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
       await featureService.syncFeatureInfo()
       // Presentation actions resumed by either runtime may await this gate.
       // Re-open it after profile authority is current, before invoking those
       // runtimes, so the serialized lifecycle worker cannot wait on itself.
-      await deviceLegPresentationService.deviceLegProfileRefreshDidComplete()
-      await deviceLegService?.onAppBecameActive()
-      await journeyService.onAppBecameActive()
+      await journeyPresentationService.journeyProfileRefreshDidComplete()
+      await journeyService?.onAppBecameActive()
     }
   }
 

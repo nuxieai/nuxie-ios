@@ -11,15 +11,10 @@ enum ActivityCuration {
     JourneyEvents.experienceErrored,
     JourneyEvents.experienceShown,
     JourneyEvents.experimentExposure,
-    JourneyEvents.experimentExposureError,
     SystemEventNames.featureUsed,
-    JourneyEvents.journeyConverted,
-    JourneyEvents.journeyEnrolled,
-    JourneyEvents.journeyLegStarted,
-    JourneyEvents.journeyLegCompleted,
-    JourneyEvents.journeyExited,
+    JourneyEvents.journeyStarted,
+    JourneyEvents.journeyCompleted,
     JourneyEvents.journeyMilestone,
-    JourneyEvents.journeySuperseded,
     SystemEventNames.notificationsDenied,
     SystemEventNames.notificationsEnabled,
     SystemEventNames.permissionDenied,
@@ -42,19 +37,8 @@ enum ActivityCuration {
   static let hiddenNames: Set<String> = [
     JourneyEvents.appActionRequested,
     JourneyEvents.customerUpdated,
-    JourneyEvents.eventSent,
     JourneyEvents.experienceArtifactLoadSucceeded,
-    JourneyEvents.experimentExposureFallback,
     SystemEventNames.identify,
-    JourneyEvents.journeyClaimed,
-    JourneyEvents.journeyEffectCompleted,
-    JourneyEvents.journeyEffectRequested,
-    JourneyEvents.journeyHandoff,
-    JourneyEvents.journeyParked,
-    SystemEventNames.journeyStarted,
-    JourneyEvents.journeyTransition,
-    SystemEventNames.responseSet,
-    SystemEventNames.responseUnset,
   ]
 
   static var classifiedNames: Set<String> { curatedNames.union(hiddenNames) }
@@ -64,8 +48,8 @@ enum ActivityCuration {
   static func timestamp(_ event: NuxieEvent) -> Date {
     let field: String
     switch event.forwardingName {
-    case JourneyEvents.journeyLegStarted: field = "started_at"
-    case JourneyEvents.journeyLegCompleted: field = "completed_at"
+    case JourneyEvents.journeyStarted: field = "started_at"
+    case JourneyEvents.journeyCompleted: field = "completed_at"
     default: return event.timestamp
     }
     guard let value = event.properties[field] as? String else { return event.timestamp }
@@ -91,9 +75,7 @@ enum ActivityCuration {
     case JourneyEvents.experienceErrored:
       guard let ref = experienceRef(properties) else { return missing(internalName) }
       return .experienceErrored(ref, message: string(properties, "error_message") ?? "")
-    case JourneyEvents.journeyEnrolled:
-      return experienceRef(properties).map(NuxieActivity.journeyStarted)
-    case JourneyEvents.journeyLegStarted, JourneyEvents.journeyLegCompleted:
+    case JourneyEvents.journeyStarted, JourneyEvents.journeyCompleted:
       guard let ref = experienceRef(properties, requireVersion: true), ref.journeyId != nil,
             let legId = nonemptyString(properties, "leg_id"),
             let number = properties["leg_generation"] as? NSNumber,
@@ -101,37 +83,16 @@ enum ActivityCuration {
             number.doubleValue >= 0, number.doubleValue <= 9_007_199_254_740_991,
             number.doubleValue.rounded() == number.doubleValue
       else { return missing(internalName) }
-      if internalName == JourneyEvents.journeyLegStarted {
-        return .journeyLegStarted(ref, legId: legId, generation: number.intValue)
+      if internalName == JourneyEvents.journeyStarted {
+        return .journeyStarted(ref, legId: legId, generation: number.intValue)
       }
       guard let outcome = nonemptyString(properties, "outcome") else { return missing(internalName) }
-      return .journeyLegCompleted(ref, legId: legId, generation: number.intValue, outcome: outcome)
+      return .journeyCompleted(ref, legId: legId, generation: number.intValue, outcome: outcome)
     case JourneyEvents.journeyMilestone:
       guard let ref = experienceRef(properties),
             let milestoneId = string(properties, "milestone_id")
       else { return missing(internalName) }
       return .milestoneReached(ref, milestoneId: milestoneId)
-    case JourneyEvents.journeyConverted:
-      guard let ref = experienceRef(properties, requireVersion: true),
-            let journeyId = string(properties, "journey_id")
-      else { return missing(internalName) }
-      return .journeyConverted(ref, journeyId: journeyId)
-    case JourneyEvents.journeyExited:
-      guard let ref = experienceRef(properties),
-            let rawReason = string(properties, "reason")
-      else { return missing(internalName) }
-      let reason: JourneyExitReason
-      if rawReason == "cancelled", string(properties, "dismissed_by") == "user" {
-        reason = .dismissed
-      } else if let mapped = journeyExitReason(rawReason) {
-        reason = mapped
-      } else {
-        return missing(internalName)
-      }
-      return .journeyEnded(ref, exitReason: reason)
-    case JourneyEvents.journeySuperseded:
-      guard let ref = experienceRef(properties) else { return missing(internalName) }
-      return .journeyEnded(ref, exitReason: .superseded)
     case SystemEventNames.purchaseCompleted:
       return purchaseInfo(properties).map(NuxieActivity.purchaseCompleted)
     case SystemEventNames.purchaseFailed:
@@ -181,15 +142,6 @@ enum ActivityCuration {
         experimentKey: experimentKey,
         variantKey: variantKey,
         isHoldout: isHoldout
-      )
-    case JourneyEvents.experimentExposureError:
-      guard let ref = experienceRef(properties),
-            let experimentKey = string(properties, "experiment_key")
-      else { return missing(internalName) }
-      return .experimentError(
-        ref,
-        experimentKey: experimentKey,
-        message: string(properties, "reason") ?? ""
       )
     case SystemEventNames.productsUnavailable:
       guard let ref = experienceRef(properties),
@@ -284,20 +236,6 @@ enum ActivityCuration {
     case "goal_met": .goalMet
     case "error": .error
     case "host", "host_dismissed": .host
-    default: nil
-    }
-  }
-
-  private static func journeyExitReason(_ value: String) -> JourneyExitReason? {
-    switch value {
-    case "completed": .completed
-    case "dismissed": .dismissed
-    case "goal_met", "converted_exit": .goalMet
-    case "trigger_unmatched", "stopped_matching": .triggerUnmatched
-    case "expired", "time_limit": .expired
-    case "cancelled": .cancelled
-    case "error": .error
-    case "superseded": .superseded
     default: nil
     }
   }

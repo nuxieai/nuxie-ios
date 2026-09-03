@@ -401,24 +401,6 @@ actor RecoveryTransactionSourceProbe {
     }
 }
 
-private actor UnusedProductAuthorityReleaseStore: ExperienceReleaseAcquiring {
-    func authenticateProfile(
-        _ profile: ExperienceReleaseProfile
-    ) async throws -> AuthenticatedExperienceReleaseCatalog {
-        _ = profile
-        throw ExperienceReleaseAcquisitionError.invalidProfileEntry
-    }
-
-    func prepare(
-        definition: AuthenticatedExperienceReleaseDefinition,
-        intent: ExperienceReleasePreparationIntent
-    ) async throws -> PreparedExperienceRelease {
-        _ = definition
-        _ = intent
-        throw ExperienceReleaseAcquisitionError.invalidProfileEntry
-    }
-}
-
 private actor AsyncCallCounter {
     private var value = 0
     func increment() { value += 1 }
@@ -549,8 +531,8 @@ private final class RecoveryDeletionFailureStore:
 final class PurchaseRecoveryScopeTests: XCTestCase {
     private func commercialContext() -> PurchaseCommercialContext {
         PurchaseCommercialContext(
-            release: AuthenticatedExperienceReleaseID(
-                identity: ExperienceReleaseIdentity(
+            release: AuthenticatedJourneyReleaseID(
+                identity: JourneyReleaseIdentity(
                     appId: "app-1",
                     environment: "live",
                     experienceId: "experience-1",
@@ -1079,15 +1061,26 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let providerReadsWhileOffline = await providerSource.readCounts()
         XCTAssertEqual(providerReadsWhileOffline.unfinished, 1)
         XCTAssertEqual(providerReadsWhileOffline.currentEntitlements, 0)
-        let providerAdmission = ExperienceLoader(
+        let providerAdmission = JourneyReleaseCatalog(
             productService: mocks.productService,
-            releaseStore: UnusedProductAuthorityReleaseStore()
+            releaseStore: JourneyReleaseAcquisitionStore()
         )
         await providerAdmission.setProductAuthorityChangeHandler {
             await providerObserver.retryAfterProfileReady()
         }
         await providerAuthority.set(.providerConnector)
-        _ = try? await providerAdmission.replaceReleaseProfile(nil)
+        let emptyProfile = JourneyProfileCatalog.Snapshot(
+            profile: TestJourneyProfile.response().planeProfile,
+            releasesByDigest: [:]
+        )
+        if let prepared = try? await providerAdmission.prepareJourneyProfile(
+            emptyProfile
+        ) {
+            _ = await providerAdmission.commitJourneyProfile(
+                prepared,
+                generation: 1
+            )
+        }
         XCTAssertTrue(providerAPI.recordedCustomers.isEmpty)
         let providerFinishAfterReady = await providerFinishes.count()
         XCTAssertEqual(providerFinishAfterReady, 0)
@@ -1096,7 +1089,14 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(providerReads.currentEntitlements, 1)
         let providerFeatureSyncCount = await providerFeatureSyncs.count()
         XCTAssertEqual(providerFeatureSyncCount, 0)
-        _ = try? await providerAdmission.replaceReleaseProfile(nil)
+        if let prepared = try? await providerAdmission.prepareJourneyProfile(
+            emptyProfile
+        ) {
+            _ = await providerAdmission.commitJourneyProfile(
+                prepared,
+                generation: 2
+            )
+        }
         let providerReadsAfterRepeatedAdmission = await providerSource.readCounts()
         XCTAssertEqual(providerReadsAfterRepeatedAdmission.unfinished, 2)
         XCTAssertEqual(providerReadsAfterRepeatedAdmission.currentEntitlements, 1)
@@ -1175,15 +1175,22 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let nativeReadsWhileOffline = await nativeSource.readCounts()
         XCTAssertEqual(nativeReadsWhileOffline.unfinished, 1)
         XCTAssertEqual(nativeReadsWhileOffline.currentEntitlements, 0)
-        let nativeAdmission = ExperienceLoader(
+        let nativeAdmission = JourneyReleaseCatalog(
             productService: mocks.productService,
-            releaseStore: UnusedProductAuthorityReleaseStore()
+            releaseStore: JourneyReleaseAcquisitionStore()
         )
         await nativeAdmission.setProductAuthorityChangeHandler {
             await nativeObserver.retryAfterProfileReady()
         }
         await nativeAuthority.set(.readyNoMatch)
-        _ = try? await nativeAdmission.replaceReleaseProfile(nil)
+        if let prepared = try? await nativeAdmission.prepareJourneyProfile(
+            emptyProfile
+        ) {
+            _ = await nativeAdmission.commitJourneyProfile(
+                prepared,
+                generation: 1
+            )
+        }
         XCTAssertEqual(nativeAPI.recordedCustomers, ["customer-a"])
         let nativeFinishAfterReady = await nativeFinishes.count()
         XCTAssertEqual(nativeFinishAfterReady, 1)
@@ -1192,7 +1199,14 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(nativeReads.currentEntitlements, 1)
         let nativeFeatureSyncCount = await nativeFeatureSyncs.count()
         XCTAssertEqual(nativeFeatureSyncCount, 0)
-        _ = try? await nativeAdmission.replaceReleaseProfile(nil)
+        if let prepared = try? await nativeAdmission.prepareJourneyProfile(
+            emptyProfile
+        ) {
+            _ = await nativeAdmission.commitJourneyProfile(
+                prepared,
+                generation: 2
+            )
+        }
         let nativeReadsAfterRepeatedAdmission = await nativeSource.readCounts()
         XCTAssertEqual(nativeReadsAfterRepeatedAdmission.unfinished, 2)
         XCTAssertEqual(nativeReadsAfterRepeatedAdmission.currentEntitlements, 1)

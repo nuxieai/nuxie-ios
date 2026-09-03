@@ -7,43 +7,9 @@ struct ResponseBuilders {
     // MARK: - Profile Response
     
     static func buildProfileResponse(
-        experiences: [Experience] = [],
-        segments: [Segment] = [],
-        userProperties: [String: AnyCodable]? = nil,
-        experiments: [String: ExperimentAssignment]? = nil,
-        features: [Feature]? = nil
+        features: [Feature] = []
     ) -> ProfileResponse {
-        _ = experiences
-        return ProfileResponse(
-            segments: segments,
-            userProperties: userProperties,
-            experiments: experiments,
-            features: features
-        )
-    }
-    
-    static func buildExperience(
-        id: String = "experience-1",
-        name: String = "Test Experience",
-        flowId: String = "flow-1",
-        triggerType: String = "event",
-        eventName: String = "app_open"
-    ) -> Experience {
-        return Experience(
-            id: id,
-            versionId: flowId,
-            name: name,
-            reentry: .oneTime,
-            releaseCreatedAt: Date().ISO8601Format(),
-            trigger: .event(EventTriggerConfig(
-                eventName: eventName,
-                condition: nil
-            )),
-            goal: nil,
-            exitPolicy: nil,
-            conversionAnchor: nil,
-            experienceType: nil
-        )
+        TestJourneyProfile.response(features: features)
     }
     
     // MARK: - Batch Response
@@ -85,9 +51,7 @@ struct ResponseBuilders {
             customer: nil,
             eventId: nil,
             message: nil,
-            featuresMatched: nil,
-            usage: nil,
-            journey: nil,
+            featuresMatched: nil
         )
     }
 
@@ -109,8 +73,7 @@ struct ResponseBuilders {
                 current: current,
                 limit: limit,
                 remaining: remaining
-            ),
-            journey: nil,
+            )
         )
     }
     

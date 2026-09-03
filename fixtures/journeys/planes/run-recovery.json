@@ -1,5 +1,5 @@
 {
-  "suite": "device-leg-run-recovery-v1",
+  "suite": "journey-run-recovery-v1",
   "startedAtMillis": 100000,
   "reopenedAtMillis": 400000,
   "cases": [

@@ -798,7 +798,7 @@ actor FeatureUseCommandQueue {
     if let metadata = command.metadata {
       properties["metadata"] = metadata.mapValues(\.value)
     }
-    let enriched = await eventLog.prepareTriggerProperties(properties)
+    let enriched = await eventLog.prepareEventProperties(properties)
     let pinnedProperties = applying(command.identity, to: enriched)
     let original = NuxieEvent(
       id: command.operationId,

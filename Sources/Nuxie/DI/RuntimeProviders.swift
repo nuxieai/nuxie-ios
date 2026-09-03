@@ -113,20 +113,17 @@ private actor StableSystemEventCaptureRetryQueue {
         let madeProgress: Bool
     }
 
-    private let routedEvents: (any RoutedStableSystemEventCapturing)?
-    private let triggerProvider: @Sendable () -> TriggerServiceProtocol
+    private let routedEvents: any RoutedStableSystemEventCapturing
     private let retryLoop: CancellationAwareExponentialRetryLoop
     private var pendingByEventId: [String: StableSystemEventCaptureRequest] = [:]
     private var pendingOrder: [String] = []
     private var retryTask: Task<Void, Never>?
 
     init(
-        routedEvents: (any RoutedStableSystemEventCapturing)?,
-        triggerProvider: @escaping @Sendable () -> TriggerServiceProtocol,
+        routedEvents: any RoutedStableSystemEventCapturing,
         baseDelayNanoseconds: UInt64
     ) {
         self.routedEvents = routedEvents
-        self.triggerProvider = triggerProvider
         retryLoop = CancellationAwareExponentialRetryLoop(
             initialDelayNanoseconds: baseDelayNanoseconds,
             maximumDelayNanoseconds: 2_000_000_000
@@ -169,21 +166,12 @@ private actor StableSystemEventCaptureRetryQueue {
     private func attempt(
         _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        if let routedEvents {
-            guard await routedEvents.captureAndRouteSystemEvent(request)
-                    != nil else { return false }
-            // EventLog commits before enqueueing its route. Keep retry
-            // ownership until every subscriber admitted with that commit has
-            // returned; DeviceLeg persists its correlated transition before
-            // returning from the subscriber callback.
-            return await routedEvents.drainCommittedRouting()
+        guard await routedEvents.captureAndRouteSystemEvent(request) != nil else {
+            return false
         }
-        return await triggerProvider().captureSystemEvent(
-            request.name,
-            properties: request.properties,
-            eventId: request.eventId,
-            distinctId: request.distinctId
-        )
+        // EventLog commits before enqueueing its route. Keep retry ownership
+        // until Journey has persisted the correlated transition.
+        return await routedEvents.drainCommittedRouting()
     }
 
     private func remove(_ eventId: String) {
@@ -227,33 +215,29 @@ private actor StableSystemEventCaptureRetryQueue {
     }
 }
 
-/// Routes internal events through the same trigger pipeline as `NuxieSDK.trigger`.
-final class TriggerSystemEventSink: SystemEventSink, @unchecked Sendable {
-    private let triggerProvider: @Sendable () -> TriggerServiceProtocol
+/// Routes every SDK-authored event through the canonical EventLog → Journey lane.
+final class EventLogSystemEventSink: SystemEventSink, @unchecked Sendable {
+    private let events: any EventLogProtocol
     private let stableCaptureRetries: StableSystemEventCaptureRetryQueue
 
     init(
-        routedEvents: (any RoutedStableSystemEventCapturing)? = nil,
-        stableCaptureRetryBaseDelayNanoseconds: UInt64 = 50_000_000,
-        triggerProvider: @escaping @Sendable () -> TriggerServiceProtocol
+        events: any EventLogProtocol,
+        stableCaptureRetryBaseDelayNanoseconds: UInt64 = 50_000_000
     ) {
-        self.triggerProvider = triggerProvider
+        self.events = events
         stableCaptureRetries = StableSystemEventCaptureRetryQueue(
-            routedEvents: routedEvents,
-            triggerProvider: triggerProvider,
+            routedEvents: events,
             baseDelayNanoseconds: stableCaptureRetryBaseDelayNanoseconds
         )
     }
 
     func emit(_ name: String, properties: [String: Any]?) {
-        let properties = UncheckedSendable(properties)
-        let trigger = triggerProvider()
-        Task { @MainActor in
-            await trigger.trigger(
-                name,
-                properties: properties.value
-            ) { _ in }
-        }
+        events.track(
+            name,
+            properties: properties,
+            userProperties: nil,
+            userPropertiesSetOnce: nil
+        )
     }
 
     func capture(_ request: StableSystemEventCaptureRequest) async -> Bool {
@@ -272,12 +256,7 @@ final class TriggerSystemEventSink: SystemEventSink, @unchecked Sendable {
     }
 
     func captureOnly(_ request: StableSystemEventCaptureRequest) async -> Bool {
-        return await triggerProvider().captureSystemEventOnly(
-            request.name,
-            properties: request.properties,
-            eventId: request.eventId,
-            distinctId: request.distinctId
-        )
+        await capture(request)
     }
 }
 

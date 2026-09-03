@@ -330,12 +330,9 @@ actor NuxieApi: NuxieApiProtocol {
 
     private func decodeProfile(from data: Data) throws -> ProfileResponse {
         do {
-            if let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               root["schemaVersion"] as? String == "nuxie.journey-plane-profile.v1" {
-                return ProfileResponse(planeProfile: try JourneyPlaneProfile.decode(data))
-            }
-            try StrictJSONDuplicateKeyValidator.validate(data)
-            return try decoder.decode(ProfileResponse.self, from: data)
+            return ProfileResponse(
+                planeProfile: try JourneyPlaneProfile.decode(data)
+            )
         } catch let error as NuxieNetworkError {
             throw error
         } catch {
@@ -399,12 +396,12 @@ actor NuxieApi: NuxieApiProtocol {
     private static func requireProfileAuthority(
         for profile: ProfileResponse,
         response: HTTPURLResponse
-    ) throws -> ProfileDeliveryAuthority? {
+    ) throws -> ProfileDeliveryAuthority {
         let authority = try profileAuthority(from: response)
-        guard profile.planeProfile == nil || authority != nil else {
+        guard authority != nil else {
             throw NuxieNetworkError.invalidResponse
         }
-        return authority
+        return authority!
     }
 
     private static func profileAuthority(
@@ -485,7 +482,7 @@ extension NuxieApi {
             resourceScope: resourceScope,
             authority: authority
         )
-        guard profile.planeProfile == nil || nextValidator != nil else {
+        guard nextValidator != nil else {
             throw NuxieNetworkError.invalidResponse
         }
         return .modified(
@@ -638,63 +635,4 @@ extension NuxieApi {
         return response.token
     }
 
-    public func setResponseField(
-        distinctId: String,
-        journeyId: String,
-        responseSchemaId: String,
-        schemaVersion: Int?,
-        key: String,
-        value: sending Any
-    ) async throws -> ResponseWriteResponse {
-        let request = ResponseFieldRequest(
-            distinctId: distinctId,
-            journeyId: journeyId,
-            responseSchemaId: responseSchemaId,
-            schemaVersion: schemaVersion,
-            key: key,
-            value: AnyCodable(value)
-        )
-
-        return try await self.request(
-            endpoint: .responseField(request),
-            body: request,
-            responseType: ResponseWriteResponse.self
-        )
-    }
-
-    public func submitResponse(
-        distinctId: String,
-        journeyId: String,
-        responseSchemaId: String,
-        schemaVersion: Int?
-    ) async throws -> ResponseSubmitResponse {
-        let request = ResponseSubmitRequest(
-            distinctId: distinctId,
-            journeyId: journeyId,
-            responseSchemaId: responseSchemaId,
-            schemaVersion: schemaVersion
-        )
-
-        return try await self.request(
-            endpoint: .responseSubmit(request),
-            body: request,
-            responseType: ResponseSubmitResponse.self
-        )
-    }
-
-    public func abandonResponses(
-        distinctId: String,
-        journeyId: String
-    ) async throws -> ResponseAbandonResponse {
-        let request = ResponseAbandonRequest(
-            distinctId: distinctId,
-            journeyId: journeyId
-        )
-
-        return try await self.request(
-            endpoint: .responseAbandon(request),
-            body: request,
-            responseType: ResponseAbandonResponse.self
-        )
-    }
 }

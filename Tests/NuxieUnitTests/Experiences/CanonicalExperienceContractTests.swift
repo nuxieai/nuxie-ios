@@ -10,7 +10,8 @@ final class CanonicalExperienceContractTests: XCTestCase {
         let scopedRoots = [
             root.appendingPathComponent("Sources/Nuxie/Experiences"),
             root.appendingPathComponent("Sources/Nuxie/Journey"),
-            root.appendingPathComponent("fixtures/experience-release-descriptor"),
+            root.appendingPathComponent("Sources/Nuxie/Profile"),
+            root.appendingPathComponent("fixtures/journeys/planes"),
             root.appendingPathComponent("Tests/ExperienceRuntimeHostApp/Fixtures"),
         ]
         let forbidden = [
@@ -21,6 +22,9 @@ final class CanonicalExperienceContractTests: XCTestCase {
             #"nuxie\.response\.v2"#,
             #"LEGACY_JOURNEY_TESTS"#,
             #"set_response_field"#,
+            #"\bDeviceLeg[A-Za-z0-9_]*\b"#,
+            #"\bdevice[- ]leg(?:s)?\b"#,
+            #"\$(?:event_sent|experiment_exposure_(?:error|fallback)|journey_(?:claimed|converted|effect_(?:completed|requested)|enrolled|exited|handoff|parked|started|superseded|transition))\b"#,
         ].map { try! NSRegularExpression(pattern: $0) }
 
         var violations: [String] = []

@@ -361,16 +361,6 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
         )
     }
 
-    func testSheetRevealActivationSuppressesDuplicateJourneyTransition() {
-        XCTAssertFalse(JourneyTransitionAnalytics.shouldTrack(
-            from: "revealed-screen",
-            to: "revealed-screen"
-        ))
-        XCTAssertTrue(JourneyTransitionAnalytics.shouldTrack(
-            from: "dismissed-screen",
-            to: "revealed-screen"
-        ))
-    }
 }
 
 private func customTransitionDeclaration() -> NativeExperienceTransition {

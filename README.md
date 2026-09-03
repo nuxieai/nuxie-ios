@@ -185,8 +185,8 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 
 - `NuxieSDK.shared.setup(with:)`: initialize the SDK (call once).
 - `NuxieSDK.shared.identify(_:userProperties:userPropertiesSetOnce:)`: identify a user and set traits.
-- `NuxieSDK.shared.trigger(_:properties:)`: trigger events without observing updates.
-- `NuxieSDK.shared.trigger(_:properties:handler:)`: trigger events with experience and journey updates.
+- `NuxieSDK.shared.trigger(_:properties:)`: capture an event for delivery and
+  ordered Journey evaluation.
 - `NuxieSDK.shared.reset(keepAnonymousId:)`: clear identity (e.g., logout).
 - `NuxieSDK.shared.version`: current SDK version string.
 - `NuxieSDK.shared.getDistinctId()`: current distinct ID (identified or anonymous).
@@ -202,8 +202,8 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 - `await NuxieSDK.shared.dismiss()`: dismisses the presented experience. It is a
   no-op when none is presented, waits for that experience's in-flight purchase or
   restore without interrupting StoreKit, and abandons its in-progress server-effect
-  wait before dismissing. The journey exits as dismissed, and a pending
-  `triggerAndWait` resolves as a completed journey with that exit reason.
+  wait before dismissing. The Journey records the dismissal and resumes from its
+  durable state when its authored policy allows it.
 - On macOS, `target: "in_app"` link actions open in the default browser (no in-app Safari view).
 
 ## Configuration Highlights

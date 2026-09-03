@@ -115,29 +115,6 @@ extension IntroEligibilityTokenRequesting {
     }
 }
 
-protocol ResponseWriting: AnyObject, Sendable {
-    func setResponseField(
-        distinctId: String,
-        journeyId: String,
-        responseSchemaId: String,
-        schemaVersion: Int?,
-        key: String,
-        value: sending Any
-    ) async throws -> ResponseWriteResponse
-
-    func submitResponse(
-        distinctId: String,
-        journeyId: String,
-        responseSchemaId: String,
-        schemaVersion: Int?
-    ) async throws -> ResponseSubmitResponse
-
-    func abandonResponses(
-        distinctId: String,
-        journeyId: String
-    ) async throws -> ResponseAbandonResponse
-}
-
 /// Composition-root convenience. Feature modules depend on the narrower
 /// capability they use, while the concrete client implements every port.
 protocol NuxieApiProtocol:
@@ -146,6 +123,5 @@ protocol NuxieApiProtocol:
     FeatureChecking,
     PurchaseSynchronizing,
     PurchaseBackedFeatureUsing,
-    IntroEligibilityTokenRequesting,
-    ResponseWriting
+    IntroEligibilityTokenRequesting
 {}

@@ -96,7 +96,7 @@ private final class ExperienceRuntimeReferenceViewController: UIViewController {
             let cacheRoot = FileManager.default.temporaryDirectory
                 .appendingPathComponent("nuxie-experience-runtime-reference", isDirectory: true)
                 .appendingPathComponent(fixtureName, isDirectory: true)
-            let child = try ExperienceReleaseFixtureHost.makeViewController(
+            let child = try JourneyFixtureHost.makeViewController(
                 fixtureBaseURL: fixtureURL,
                 cacheRootURL: cacheRoot,
                 presentationDiagnosticsEnabled: true,

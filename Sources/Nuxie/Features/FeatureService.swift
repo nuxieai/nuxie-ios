@@ -262,8 +262,7 @@ internal actor FeatureService: FeatureServiceProtocol {
 
         // Fall back to the profile cache (features from profile response)
         if let profile = await profileService.getCachedProfile(distinctId: distinctId),
-           let features = profile.features,
-           let feature = features.first(where: { $0.id == featureId }) {
+           let feature = profile.planeProfile.features.first(where: { $0.id == featureId }) {
             // For entity-based features, check entity balance
             if let entityId = entityId, let entities = feature.entities {
                 if let entityBalance = entities[entityId] {
@@ -330,8 +329,8 @@ internal actor FeatureService: FeatureServiceProtocol {
         await synchronizeCustomerScopeIfNeeded()
         let distinctId = identityService.getDistinctId()
         var result: [String: FeatureAccess] = [:]
-        if let profile = await profileService.getCachedProfile(distinctId: distinctId),
-           let features = profile.features {
+        if let profile = await profileService.getCachedProfile(distinctId: distinctId) {
+            let features = profile.planeProfile.features
             for feature in features {
                 result[feature.id] = FeatureAccess(from: feature)
             }

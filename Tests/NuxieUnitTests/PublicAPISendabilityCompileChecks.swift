@@ -43,21 +43,12 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(NuxieSDK.self)
     requireSendable(NuxieSDK.FeatureCheckPolicy.self)
 
-    // Trigger surface (wrapper contract)
-    requireSendable(TriggerUpdate.self)
-    requireSendable(TriggerDecision.self)
-    requireSendable(TriggerResult.self)
-    requireSendable(TriggerError.self)
-    requireSendable(TriggerError.Code.self)
     requireSendable(ExperienceRef.self)
-    requireSendable(JourneyUpdate.self)
-    requireSendable(SuppressReason.self)
 
     // Events
     requireSendable(NuxieEvent.self)
     requireSendable(StoredEvent.self)
     requireSendable(EventResponse.self)
-    requireSendable(EventFlushStrategy.self)
     requireSendable(AnyCodable.self)
     requireSendable(AppActionValue.self)
     requireSendable(AppAction.self)
@@ -77,17 +68,12 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(PurchaseFeature.self)
 
     // Profile / network models
-    requireSendable(Segment.self)
     requireSendable(Feature.self)
-    requireSendable(ExperimentAssignment.self)
 
     // Experiences
     requireSendable(StoreProduct.self)
     // Journeys
     requireSendable(Journey.self)
-    requireSendable(JourneyStatus.self)
-    requireSendable(JourneyExitReason.self)
-    requireSendable(ResumeReason.self)
 
     // StoreKit
     requireSendable(PurchaseResult.self)
@@ -100,7 +86,6 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(NuxieError.self)
     requireSendable(NuxieNetworkError.self)
     requireSendable(Nuxie.StoreKitError.self)
-    requireSendable(TriggerError.self)
 
     // IR value model (crosses the EventLog actor boundary)
     requireSendable(IRValue.self)
@@ -126,18 +111,8 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     config.beforeSend = { event in event }  // must accept @Sendable closure
     try sdk.setup(with: config)
 
-    // Fire-and-forget trigger with a @Sendable progress handler.
-    sdk.trigger("compile_check", properties: ["k": "v"]) { update in
-      _ = update
-    }
-
-    // Awaited trigger; result consumed on the main actor.
-    let result = await sdk.triggerAndWait("compile_check")
-    switch result {
-    case .noMatch: break
-    case .journeyCompleted(let update): _ = update.journeyId
-    case .error(let error): _ = error.code
-    }
+    // Events are durable fire-and-forget inputs to the local Journey runtime.
+    sdk.trigger("compile_check", properties: ["k": "v"])
 
     // Identity.
     sdk.identify("user-1", userProperties: ["plan": "pro"])
@@ -165,10 +140,8 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
   /// Consumer moving SDK values across isolation domains: everything a
   /// detached task captures below must be Sendable.
   private func _compileOnlyCrossIsolationUsage() async {
-    let result = await NuxieSDK.shared.triggerAndWait("compile_check")
-
     Task.detached {
-      _ = result
+      NuxieSDK.shared.trigger("compile_check")
       await NuxieSDK.shared.dismiss()
     }
   }

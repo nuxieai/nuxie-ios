@@ -55,93 +55,63 @@ final class EventCatalogConformanceTests: XCTestCase {
         let wire: [Bool]
     }
 
-    // Independent per-event pin for fields that cannot always be inferred
-    // from a generic source call (for example trackForTrigger's policy flag).
+    // Independent per-event pin for the two current durability paths:
+    // ordinary EventLog capture and stable Journey/system-fact capture.
     private static let expectedSemanticRows = #"""
-$app_action_requested	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
-$app_backgrounded	trackForTrigger	governed	/i/event response lane	true	true
-$app_installed	trackForTrigger	governed	/i/event response lane	true	true
-$app_opened	trackForTrigger	governed	/i/event response lane	true	true
-$app_updated	trackForTrigger	governed	/i/event response lane	true	true
-$customer_updated	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
-$event_sent	processCapture	governed	batch	true	true
+$app_action_requested	captureStableSystemEvent	governed	batch	true	true
+$app_backgrounded	processCapture	governed	batch	true	true
+$app_installed	processCapture	governed	batch	true	true
+$app_opened	processCapture	governed	batch	true	true
+$app_updated	processCapture	governed	batch	true	true
+$customer_updated	captureStableSystemEvent	governed	batch	true	true
 $experience_artifact_load_failed	processCapture	governed	batch	true	true
 $experience_artifact_load_succeeded	processCapture	governed	batch	true	true
 $experience_dismissed	processCapture	governed	batch	true	true
 $experience_errored	processCapture	governed	batch	true	true
 $experience_shown	processCapture	governed	batch	true	true
-$experiment_exposure	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
-$experiment_exposure_error	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
-$experiment_exposure_fallback	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
-$feature_used	featureCommand|storePreparedEventInHistory	governed	/i/event response lane	true	true
+$experiment_exposure	captureStableSystemEvent	governed	batch	true	true
+$feature_used	featureCommand|storePreparedEventInHistory	governed|governed	/event|none	true|true	true|false
 $identify	processCapture	governed	batch	true	true
-$journey_claimed	trackForTrigger	exempt	/i/event response lane	true	true
-$journey_converted	trackWithResponse|commitServerFacts	exempt	/i/event response lane|none	true	true|false
-$journey_effect_completed	commitServerFacts	exempt	none	true	false
-$journey_effect_requested	processCapture	governed	batch	true	true
-$journey_enrolled	trackWithResponse	exempt	/i/event response lane	true	true
-$journey_exited	trackWithResponse|captureStableSystemEvent	exempt|governed	/i/event response lane|batch	true	true
-$journey_handoff	trackForTrigger	exempt	/i/event response lane	true	true
 $journey_leg_started	captureStableSystemEvent	governed	batch	true	true
 $journey_leg_completed	captureStableSystemEvent	governed	batch	true	true
-$journey_milestone	trackWithResponse|trackForTrigger|captureStableSystemEvent	exempt|exempt|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
-$journey_parked	processCapture	governed	batch	true	true
-$journey_started	none	exempt	none	false	false
-$journey_superseded	commitServerFacts	exempt	none	true	false
-$journey_transition	trackWithResponse|processCapture	exempt|governed	/i/event response lane|batch	true	true
-$notifications_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
-$notifications_enabled	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
-$permission_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
-$permission_granted	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
-$products_unavailable	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
-$purchase_cancelled	trackForTrigger|captureStableSystemEvent	governed|governed	/i/event response lane|batch	true|true	true|true
+$journey_milestone	captureStableSystemEvent	governed	batch	true	true
+$notifications_denied	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$notifications_enabled	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$permission_denied	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$permission_granted	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$products_unavailable	captureStableSystemEvent	governed	batch	true	true
+$purchase_cancelled	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
 $purchase_completed	captureStableSystemEvent	governed	batch	true	true
-$purchase_failed	trackForTrigger|captureStableSystemEvent	governed|governed	/i/event response lane|batch	true|true	true|true
-$purchase_pending	trackForTrigger	governed	/i/event response lane	true	true
-$purchase_synced	captureStableSystemEvent|trackForTrigger	governed|governed	batch|/i/event response lane	true|true	true|true
-$response_set	none	exempt	none	false	false
-$response_unset	none	exempt	none	false	false
-$restore_completed	captureStableSystemEvent|trackForTrigger	governed|governed	batch|/i/event response lane	true|true	true|true
-$restore_failed	trackForTrigger|captureStableSystemEvent	governed|governed	/i/event response lane|batch	true|true	true|true
-$restore_no_purchases	trackForTrigger|captureStableSystemEvent	governed|governed	/i/event response lane|batch	true|true	true|true
-$screen_dismissed	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
-$screen_shown	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
-$tracking_authorized	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
-$tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	governed|governed|governed	/i/event response lane|/i/event response lane|batch	true|true|true	true|true|true
+$purchase_failed	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$purchase_pending	processCapture	governed	batch	true	true
+$purchase_synced	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$restore_completed	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$restore_failed	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$restore_no_purchases	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$screen_dismissed	captureStableSystemEvent	governed	batch	true	true
+$screen_shown	captureStableSystemEvent	governed	batch	true	true
+$tracking_authorized	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
+$tracking_denied	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
 """#
 
     private static let declaredConstants: [(path: String, value: String)] = [
         ("JourneyEvents.appActionRequested", JourneyEvents.appActionRequested),
         ("JourneyEvents.customerUpdated", JourneyEvents.customerUpdated),
-        ("JourneyEvents.eventSent", JourneyEvents.eventSent),
         ("JourneyEvents.experienceArtifactLoadFailed", JourneyEvents.experienceArtifactLoadFailed),
         ("JourneyEvents.experienceArtifactLoadSucceeded", JourneyEvents.experienceArtifactLoadSucceeded),
         ("JourneyEvents.experienceDismissed", JourneyEvents.experienceDismissed),
         ("JourneyEvents.experienceErrored", JourneyEvents.experienceErrored),
         ("JourneyEvents.experienceShown", JourneyEvents.experienceShown),
         ("JourneyEvents.experimentExposure", JourneyEvents.experimentExposure),
-        ("JourneyEvents.experimentExposureError", JourneyEvents.experimentExposureError),
-        ("JourneyEvents.experimentExposureFallback", JourneyEvents.experimentExposureFallback),
-        ("JourneyEvents.journeyClaimed", JourneyEvents.journeyClaimed),
-        ("JourneyEvents.journeyConverted", JourneyEvents.journeyConverted),
-        ("JourneyEvents.journeyEffectCompleted", JourneyEvents.journeyEffectCompleted),
-        ("JourneyEvents.journeyEffectRequested", JourneyEvents.journeyEffectRequested),
-        ("JourneyEvents.journeyEnrolled", JourneyEvents.journeyEnrolled),
-        ("JourneyEvents.journeyExited", JourneyEvents.journeyExited),
-        ("JourneyEvents.journeyHandoff", JourneyEvents.journeyHandoff),
-        ("JourneyEvents.journeyLegStarted", JourneyEvents.journeyLegStarted),
-        ("JourneyEvents.journeyLegCompleted", JourneyEvents.journeyLegCompleted),
+        ("JourneyEvents.journeyStarted", JourneyEvents.journeyStarted),
+        ("JourneyEvents.journeyCompleted", JourneyEvents.journeyCompleted),
         ("JourneyEvents.journeyMilestone", JourneyEvents.journeyMilestone),
-        ("JourneyEvents.journeyParked", JourneyEvents.journeyParked),
-        ("JourneyEvents.journeySuperseded", JourneyEvents.journeySuperseded),
-        ("JourneyEvents.journeyTransition", JourneyEvents.journeyTransition),
         ("SystemEventNames.appBackgrounded", SystemEventNames.appBackgrounded),
         ("SystemEventNames.appInstalled", SystemEventNames.appInstalled),
         ("SystemEventNames.appOpened", SystemEventNames.appOpened),
         ("SystemEventNames.appUpdated", SystemEventNames.appUpdated),
         ("SystemEventNames.featureUsed", SystemEventNames.featureUsed),
         ("SystemEventNames.identify", SystemEventNames.identify),
-        ("SystemEventNames.journeyStarted", SystemEventNames.journeyStarted),
         ("SystemEventNames.notificationsDenied", SystemEventNames.notificationsDenied),
         ("SystemEventNames.notificationsEnabled", SystemEventNames.notificationsEnabled),
         ("SystemEventNames.permissionDenied", SystemEventNames.permissionDenied),
@@ -152,8 +122,6 @@ $tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	govern
         ("SystemEventNames.purchaseFailed", SystemEventNames.purchaseFailed),
         ("SystemEventNames.purchasePending", SystemEventNames.purchasePending),
         ("SystemEventNames.purchaseSynced", SystemEventNames.purchaseSynced),
-        ("SystemEventNames.responseSet", SystemEventNames.responseSet),
-        ("SystemEventNames.responseUnset", SystemEventNames.responseUnset),
         ("SystemEventNames.restoreCompleted", SystemEventNames.restoreCompleted),
         ("SystemEventNames.restoreFailed", SystemEventNames.restoreFailed),
         ("SystemEventNames.restoreNoPurchases", SystemEventNames.restoreNoPurchases),
@@ -172,31 +140,17 @@ $tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	govern
         "$app_opened": "appOpened",
         "$app_updated": "appUpdated",
         "$customer_updated": "hidden: identity and PII rider",
-        "$event_sent": "hidden: authored event remains Nuxie-internal",
         "$experience_artifact_load_failed": "experienceLoadFailed",
         "$experience_artifact_load_succeeded": "hidden: successful artifact load is noise",
         "$experience_dismissed": "experienceDismissed",
         "$experience_errored": "experienceErrored",
         "$experience_shown": "experienceShown",
         "$experiment_exposure": "experimentExposure",
-        "$experiment_exposure_error": "experimentError",
-        "$experiment_exposure_fallback": "hidden: default-variant diagnostic is not an exposure",
         "$feature_used": "featureUsed",
         "$identify": "hidden: identity and PII event",
-        "$journey_claimed": "hidden: journey ownership protocol",
-        "$journey_converted": "journeyConverted",
-        "$journey_effect_completed": "hidden: journey effect protocol",
-        "$journey_effect_requested": "hidden: journey effect protocol",
-        "$journey_enrolled": "journeyStarted",
-        "$journey_leg_started": "journeyLegStarted",
-        "$journey_leg_completed": "journeyLegCompleted",
-        "$journey_exited": "journeyEnded",
-        "$journey_handoff": "hidden: journey ownership protocol",
+        "$journey_leg_started": "journeyStarted",
+        "$journey_leg_completed": "journeyCompleted",
         "$journey_milestone": "milestoneReached",
-        "$journey_parked": "hidden: journey checkpoint protocol",
-        "$journey_started": "hidden: retired runtime control",
-        "$journey_superseded": "journeyEnded",
-        "$journey_transition": "hidden: journey state-sync protocol",
         "$notifications_denied": "permissionResolved",
         "$notifications_enabled": "permissionResolved",
         "$permission_denied": "permissionResolved",
@@ -207,8 +161,6 @@ $tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	govern
         "$purchase_failed": "purchaseFailed",
         "$purchase_pending": "purchasePending",
         "$purchase_synced": "purchaseSynced",
-        "$response_set": "hidden: local response control state",
-        "$response_unset": "hidden: local response control state",
         "$restore_completed": "restoreCompleted",
         "$restore_failed": "restoreFailed",
         "$restore_no_purchases": "restoreNoPurchases",
@@ -291,67 +243,59 @@ $tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	govern
 
     func testCanonicalPropertyContractsMatchProductionShapes() throws {
         let catalog = try loadCatalog()
-        let effect = try XCTUnwrap(catalog["$journey_effect_requested"]?.properties["effect"])
-        XCTAssertEqual(effect.type, "object")
-        XCTAssertTrue(effect.required)
-        XCTAssertEqual(
-            effect.source,
-            "structured effect descriptor handled by JourneyRunner.handleServerEffect"
-        )
 
-        let experienceVersion = try XCTUnwrap(
-            catalog["$experiment_exposure"]?.properties["experience_version"]
-        )
-        XCTAssertEqual(experienceVersion.type, "String")
-        XCTAssertTrue(experienceVersion.required)
+        let exposure = try XCTUnwrap(catalog[JourneyEvents.experimentExposure])
+        for property in [
+            "journey_id",
+            "experience_id",
+            "experience_version",
+            "leg_id",
+            "leg_generation",
+            "experiment_key",
+            "variant_key",
+            "is_holdout",
+            "assignment_source",
+        ] {
+            XCTAssertEqual(exposure.properties[property]?.required, true, property)
+        }
 
-        let convertedExperienceID = try XCTUnwrap(
-            catalog["$journey_converted"]?.properties["experience_id"]
-        )
-        XCTAssertEqual(convertedExperienceID.type, "String")
-        XCTAssertTrue(convertedExperienceID.required)
-        XCTAssertEqual(
-            convertedExperienceID.source,
-            "required on both paths since nuxie-ios#369: the device path supplies it from JourneySnapshot and the server down-fact decode rejects payloads missing it"
-        )
+        let started = try XCTUnwrap(catalog[JourneyEvents.journeyStarted])
+        for property in [
+            "journey_id",
+            "experience_id",
+            "experience_version_id",
+            "leg_id",
+            "leg_generation",
+            "started_at",
+        ] {
+            XCTAssertEqual(started.properties[property]?.required, true, property)
+        }
 
-        let convertedExperienceVersion = try XCTUnwrap(
-            catalog["$journey_converted"]?.properties["experience_version"]
-        )
-        XCTAssertEqual(convertedExperienceVersion.type, "String")
-        XCTAssertTrue(convertedExperienceVersion.required)
-        XCTAssertEqual(
-            convertedExperienceVersion.source,
-            "required on both paths since nuxie-ios#369: the device path supplies it from JourneySnapshot and the server down-fact decode rejects payloads missing it"
-        )
+        let completed = try XCTUnwrap(catalog[JourneyEvents.journeyCompleted])
+        for property in [
+            "journey_id",
+            "experience_id",
+            "experience_version_id",
+            "leg_id",
+            "leg_generation",
+            "started_at",
+            "completed_at",
+            "outcome",
+            "outputs",
+        ] {
+            XCTAssertEqual(completed.properties[property]?.required, true, property)
+        }
 
-        let effectRequested = try XCTUnwrap(catalog["$journey_effect_requested"])
-        XCTAssertTrue(
-            (effectRequested.fixtures ?? []).contains("fixtures/journeys/effects/round-trip.json"),
-            "the effect round-trip vector pins the request shape, including the required epoch"
-        )
-        XCTAssertEqual(effectRequested.properties["epoch"]?.required, true)
-
-        // The pin must bite the vector's content, not just the catalog's
-        // reference: every required effect-request property appears in the
-        // fixture's request payload.
-        let effectFixtureURL = repositoryRoot
-            .appendingPathComponent("fixtures/journeys/effects/round-trip.json")
-        let effectFixture = try XCTUnwrap(
-            JSONSerialization.jsonObject(
-                with: Data(contentsOf: effectFixtureURL)
-            ) as? [String: Any]
-        )
-        let effectRequest = try XCTUnwrap(effectFixture["request"] as? [String: Any])
-        XCTAssertEqual(effectRequest["event"] as? String, "$journey_effect_requested")
-        let effectRequestProperties = try XCTUnwrap(
-            effectRequest["properties"] as? [String: Any]
-        )
-        for (name, property) in effectRequested.properties where property.required {
-            XCTAssertNotNil(
-                effectRequestProperties[name],
-                "round-trip.json request omits required property '\(name)'"
-            )
+        let milestone = try XCTUnwrap(catalog[JourneyEvents.journeyMilestone])
+        for property in [
+            "journey_id",
+            "experience_id",
+            "experience_version_id",
+            "leg_id",
+            "leg_generation",
+            "milestone_id",
+        ] {
+            XCTAssertEqual(milestone.properties[property]?.required, true, property)
         }
     }
 
@@ -438,7 +382,12 @@ $tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	govern
             SystemEventNames.trackingDenied,
         ]
         for eventName in permissionEvents {
-            _ = try await log.trackForTrigger(eventName, properties: experienceProperties)
+            _ = await log.captureAndRouteSystemEvent(.init(
+                name: eventName,
+                properties: experienceProperties,
+                eventId: UUID().uuidString,
+                distinctId: "customer-1"
+            ))
         }
 
         let featureProperties: [String: Any] = [
@@ -446,7 +395,7 @@ $tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	govern
             "amount": 2.0,
             "entity_id": "entity-1",
         ]
-        let enrichedFeatureProperties = await log.prepareTriggerProperties(featureProperties)
+        let enrichedFeatureProperties = await log.prepareEventProperties(featureProperties)
         await log.storePreparedEventInHistory(NuxieEvent(
             id: "feature-use-1",
             name: SystemEventNames.featureUsed,
@@ -553,53 +502,52 @@ $tracking_denied	trackForTrigger|trackForTrigger|captureStableSystemEvent	govern
     }
 
     private func assertAdmissionTicketProducerCapturesRemainWired() throws {
-        let runner = try String(
-            contentsOf: repositoryRoot.appendingPathComponent(
-                "Sources/Nuxie/Journey/Execution/JourneyRunner.swift"
-            ),
-            encoding: .utf8
-        )
-        let runnerCaptures = [
-            ("    private func dispatchScreenChanged(", "SystemEventNames.screenShown"),
-            ("    func handleScreenDismissed(", "SystemEventNames.screenDismissed"),
-            ("    private func dispatchProductsUnavailableEvent(",
-             "SystemEventNames.productsUnavailable"),
-        ]
-        for (signature, event) in runnerCaptures {
-            let body = try functionBody(in: runner, startingWith: signature)
-            XCTAssertTrue(body.contains(event), "\(event) left its real producer")
-            XCTAssertEqual(
-                body.components(separatedBy: "eventLog.trackWithoutRouting(").count - 1,
-                1,
-                "\(event) no longer enters the processCapture lane"
-            )
-        }
-
         let journeyService = try String(
             contentsOf: repositoryRoot.appendingPathComponent(
                 "Sources/Nuxie/Journey/JourneyService.swift"
             ),
             encoding: .utf8
         )
-        let scopedPermissionBody = try functionBody(
-            in: journeyService,
-            startingWith: "  func handleScopedPermissionEvent("
-        )
-        XCTAssertTrue(scopedPermissionBody.contains("name: eventName"))
-        XCTAssertTrue(scopedPermissionBody.contains("trackScopedEvent("))
-        XCTAssertTrue(scopedPermissionBody.contains("persistToHistory: true"))
-        XCTAssertTrue(scopedPermissionBody.contains("applyBeforeSend: true"))
+        let journeyLifecycleProducers = [
+            ("    private func handlePresentationScreenChanged(",
+             "SystemEventNames.screenShown"),
+            ("    private func handlePresentationScreenDismissed(",
+             "SystemEventNames.screenDismissed"),
+            ("    private func handlePresentationProductsUnavailable(",
+             "SystemEventNames.productsUnavailable"),
+        ]
+        for (signature, event) in journeyLifecycleProducers {
+            let body = try functionBody(in: journeyService, startingWith: signature)
+            XCTAssertTrue(body.contains(event), "\(event) left its real producer")
+            XCTAssertTrue(
+                body.contains("handlePresentationLifecycleEvent("),
+                "\(event) no longer enters Journey's stable lifecycle capture"
+            )
+        }
 
-        let unsupportedPermissionBody = try functionBody(
+        let permissionBody = try functionBody(
             in: journeyService,
-            startingWith: "  func handleUnsupportedScopedRequestPermission("
+            startingWith: "    private func handlePresentationPermissionEvent("
+        )
+        XCTAssertTrue(permissionBody.contains("name: eventName"))
+        XCTAssertTrue(permissionBody.contains("events.captureAndRouteSystemEvent("))
+
+        let presentationCaptureBody = try functionBody(
+            in: journeyService,
+            startingWith: "    private func capturePresentationEvent("
+        )
+        XCTAssertTrue(presentationCaptureBody.contains("presentationPublications.capture("))
+
+        let publicationCoordinator = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Sources/Nuxie/Journey/Execution/JourneyPresentationPublicationCoordinator.swift"
+            ),
+            encoding: .utf8
         )
         XCTAssertTrue(
-            unsupportedPermissionBody.contains("name: SystemEventNames.permissionDenied")
+            publicationCoordinator.contains("events.captureAndRouteSystemEventBatch("),
+            "Journey presentation facts must use the stable batch capture lane"
         )
-        XCTAssertTrue(unsupportedPermissionBody.contains("trackScopedEvent("))
-        XCTAssertTrue(unsupportedPermissionBody.contains("persistToHistory: true"))
-        XCTAssertTrue(unsupportedPermissionBody.contains("applyBeforeSend: true"))
 
         let controller = try String(
             contentsOf: repositoryRoot.appendingPathComponent(

@@ -76,7 +76,7 @@ struct PurchaseStorageScope: Codable, Equatable, Hashable, Sendable {
 }
 
 struct PurchaseCommercialContext: Codable, Equatable, Sendable {
-    let release: AuthenticatedExperienceReleaseID
+    let release: AuthenticatedJourneyReleaseID
     let placementId: String
     let productId: String
     let storeProductId: String
@@ -87,7 +87,7 @@ struct PurchaseCommercialContext: Codable, Equatable, Sendable {
     let price: Double?
 
     init(
-        release: AuthenticatedExperienceReleaseID,
+        release: AuthenticatedJourneyReleaseID,
         placementId: String,
         productId: String,
         storeProductId: String,

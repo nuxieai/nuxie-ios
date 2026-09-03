@@ -312,8 +312,8 @@ final class TransactionServiceTests: AsyncSpec {
                     appStoreProduct: mockAppStoreProduct
                 )
                 mockProduct.purchaseContext = PurchaseCommercialContext(
-                    release: AuthenticatedExperienceReleaseID(
-                        identity: ExperienceReleaseIdentity(
+                    release: AuthenticatedJourneyReleaseID(
+                        identity: JourneyReleaseIdentity(
                             appId: "app-1",
                             environment: "live",
                             experienceId: "experience-1",

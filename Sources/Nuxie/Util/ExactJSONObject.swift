@@ -32,8 +32,8 @@ struct ExactJSONObject<Value> {
     func merging(_ other: [String: Value], uniquingKeysWith combine: (Value, Value) throws -> Value) rethrows -> Self {
         try merging(Self(other), uniquingKeysWith: combine)
     }
-    /// Legacy callers already require Swift dictionaries. New leg boundaries
-    /// use ExactJSONCodec so their arbitrary property names never take this path.
+    /// Dictionary-backed callers accept Swift key equality. Authenticated
+    /// Journey boundaries use ExactJSONCodec and never take this path.
     var dictionary: [String: Value] { Dictionary(map { ($0.key, $0.value) }, uniquingKeysWith: { _, new in new }) }
 }
 extension ExactJSONObject: Sequence {

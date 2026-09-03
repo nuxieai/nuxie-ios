@@ -81,8 +81,8 @@ final class InternalServiceDependencyTests: XCTestCase {
                 appStoreProduct: appStoreProduct
             )
             product.purchaseContext = PurchaseCommercialContext(
-                release: AuthenticatedExperienceReleaseID(
-                    identity: ExperienceReleaseIdentity(
+                release: AuthenticatedJourneyReleaseID(
+                    identity: JourneyReleaseIdentity(
                         appId: "app-1",
                         environment: "live",
                         experienceId: "experience-1",
@@ -153,22 +153,44 @@ final class InternalServiceDependencyTests: XCTestCase {
             configuration: configuration,
             overrides: overrides
         )
+        let snapshot = JourneyProfileCatalog.Snapshot(
+            profile: TestJourneyProfile.response().planeProfile,
+            releasesByDigest: [:]
+        )
 
-        _ = try await core.experiences.replaceReleaseProfile(nil)
+        let firstProfile = try await core.experiences.prepareJourneyProfile(snapshot)
+        let firstProfileCommitted = await core.experiences.commitJourneyProfile(
+            firstProfile,
+            generation: 1,
+            admission: nil
+        )
+        XCTAssertTrue(firstProfileCommitted)
         for _ in 0..<100 where await observer.profileReadyRecoveryCalls == 0 {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         let firstAdmissionCalls = await observer.profileReadyRecoveryCalls
         XCTAssertEqual(firstAdmissionCalls, 1)
 
-        _ = try await core.experiences.replaceReleaseProfile(nil)
+        let repeatedProfile = try await core.experiences.prepareJourneyProfile(snapshot)
+        let repeatedProfileCommitted = await core.experiences.commitJourneyProfile(
+            repeatedProfile,
+            generation: 2,
+            admission: nil
+        )
+        XCTAssertTrue(repeatedProfileCommitted)
         try await Task.sleep(nanoseconds: 25_000_000)
         let repeatedAdmissionCalls = await observer.profileReadyRecoveryCalls
         XCTAssertEqual(repeatedAdmissionCalls, 1)
 
         await observer.stopListening()
         await core.experiences.clearCache()
-        _ = try await core.experiences.replaceReleaseProfile(nil)
+        let postStopProfile = try await core.experiences.prepareJourneyProfile(snapshot)
+        let postStopProfileCommitted = await core.experiences.commitJourneyProfile(
+            postStopProfile,
+            generation: 3,
+            admission: nil
+        )
+        XCTAssertTrue(postStopProfileCommitted)
         try await Task.sleep(nanoseconds: 25_000_000)
         let postStopCalls = await observer.profileReadyRecoveryCalls
         XCTAssertEqual(postStopCalls, 1)

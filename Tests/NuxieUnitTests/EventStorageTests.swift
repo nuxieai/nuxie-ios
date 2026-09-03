@@ -183,48 +183,6 @@ final class EventStorageTests: AsyncSpec {
                 expect(reorderedInserted).to(beFalse())
             }
 
-            it("retains server-origin ids beyond the ordinary pruning horizon") {
-                let oldTimestamp = Date(timeIntervalSince1970: 100)
-                let serverFact = try StoredEvent(
-                    id: "server-fact-id",
-                    name: JourneyEvents.journeyConverted,
-                    properties: [StoredEvent.originProperty: StoredEventOrigin.server.rawValue],
-                    timestamp: oldTimestamp,
-                    distinctId: "customer-a"
-                )
-                let deviceEvent = try StoredEvent(
-                    id: "device-event-id",
-                    name: SystemEventNames.appOpened,
-                    timestamp: oldTimestamp,
-                    distinctId: "customer-a"
-                )
-                _ = try await internalEventStore.insert(
-                    serverFact,
-                    deliveryState: .delivered,
-                    origin: .server
-                )
-                _ = try await internalEventStore.insert(deviceEvent, deliveryState: .delivered)
-                _ = try await internalEventStore.readOrInitializeHistoryCoverage(
-                    startingAt: .distantPast
-                )
-
-                let result = try await internalEventStore.pruneHistory(
-                    keeping: 1,
-                    olderThan: Date(timeIntervalSince1970: 1_000)
-                )
-
-                expect(result.ageDeleted) == 1
-                let retainedServerFact = try await internalEventStore.queryEvent(id: serverFact.id)
-                let prunedDeviceEvent = try await internalEventStore.queryEvent(id: deviceEvent.id)
-                let redeliveryWasNew = try await internalEventStore.insert(
-                    serverFact,
-                    deliveryState: .delivered
-                )
-                expect(retainedServerFact).notTo(beNil())
-                expect(prunedDeviceEvent).to(beNil())
-                expect(redeliveryWasNew) == false
-            }
-
             it("prunes malformed device properties and advances coverage") {
                 let oldTimestamp = Date(timeIntervalSince1970: 100)
                 let corrupt = try StoredEvent(
@@ -252,31 +210,6 @@ final class EventStorageTests: AsyncSpec {
                 expect(result.coverageStartingAt).to(equal(Date(timeIntervalSince1970: 200)))
                 let corruptRow = try await internalEventStore.queryEvent(id: corrupt.id)
                 expect(corruptRow).to(beNil())
-            }
-
-            it("prunes a device event that claims server origin in its properties") {
-                let spoofed = try StoredEvent(
-                    id: "spoofed-server-origin",
-                    name: SystemEventNames.appOpened,
-                    properties: [
-                        StoredEvent.originProperty: StoredEventOrigin.server.rawValue,
-                    ],
-                    timestamp: Date(timeIntervalSince1970: 100),
-                    distinctId: "customer-a"
-                )
-                _ = try await internalEventStore.insert(spoofed, deliveryState: .delivered)
-                _ = try await internalEventStore.readOrInitializeHistoryCoverage(
-                    startingAt: .distantPast
-                )
-
-                let result = try await internalEventStore.pruneHistory(
-                    keeping: 10,
-                    olderThan: Date(timeIntervalSince1970: 200)
-                )
-
-                expect(result.ageDeleted).to(equal(1))
-                let spoofedRow = try await internalEventStore.queryEvent(id: spoofed.id)
-                expect(spoofedRow).to(beNil())
             }
 
             it("should insert and query events correctly") {
@@ -545,7 +478,6 @@ final class EventStorageTests: AsyncSpec {
                         eventId: event.id,
                         event: event,
                         recordedAt: event.timestamp,
-                        ownership: nil,
                         assigningCommitSequence: true,
                         admission: nil
                     )
@@ -573,7 +505,6 @@ final class EventStorageTests: AsyncSpec {
                         eventId: event.id,
                         event: nil,
                         recordedAt: Date(timeIntervalSince1970: 2_000),
-                        ownership: nil,
                         assigningCommitSequence: true,
                         admission: nil
                     )
@@ -595,200 +526,10 @@ final class EventStorageTests: AsyncSpec {
                         eventId: event.id,
                         event: nil,
                         recordedAt: Date(timeIntervalSince1970: 3_000),
-                        ownership: nil,
                         assigningCommitSequence: true,
                         admission: nil
                     )
                 expect(acknowledgedReplay.localRoutePending).to(beFalse())
-            }
-
-            it("prevents stale-epoch stable capture after ownership loss across relaunch") {
-                let journeyId = "journey-owned-on-another-device"
-                try await internalEventStore.recordJourneyOwnershipLoss(
-                    JourneyEventOwnership(journeyId: journeyId, epoch: 7),
-                    recordedAt: Date(timeIntervalSince1970: 1_000)
-                )
-
-                await internalEventStore.close()
-                internalEventStore = SQLiteEventStore()
-                try await internalEventStore.initialize(
-                    path: URL(fileURLWithPath: tempDbPath)
-                )
-
-                let staleOwnershipPersisted = try await internalEventStore
-                    .hasJourneyOwnershipLoss(
-                        JourneyEventOwnership(journeyId: journeyId, epoch: 7)
-                    )
-                let newerOwnershipPersisted = try await internalEventStore
-                    .hasJourneyOwnershipLoss(
-                        JourneyEventOwnership(journeyId: journeyId, epoch: 8)
-                    )
-                expect(staleOwnershipPersisted).to(beTrue())
-                expect(newerOwnershipPersisted).to(beFalse())
-
-                let staleEvent = try StoredEvent(
-                    id: "journey-exited:stale-epoch",
-                    name: JourneyEvents.journeyExited,
-                    distinctId: "customer-a"
-                )
-                let stale = try await internalEventStore.commitStableCapture(
-                    eventId: staleEvent.id,
-                    event: staleEvent,
-                    recordedAt: Date(timeIntervalSince1970: 2_000),
-                    ownership: JourneyEventOwnership(
-                        journeyId: journeyId,
-                        epoch: 7
-                    )
-                )
-                guard case .ownershipLost = stale else {
-                    return fail("authoritative ownership loss must reject the stale exit")
-                }
-                let storedStale = try await internalEventStore.queryEvent(
-                    id: staleEvent.id
-                )
-                let stableStale = try await internalEventStore.queryStableCapture(
-                    id: staleEvent.id
-                )
-                expect(storedStale).to(beNil())
-                expect(stableStale).to(beNil())
-
-                let newerEvent = try StoredEvent(
-                    id: "journey-exited:newer-epoch",
-                    name: JourneyEvents.journeyExited,
-                    distinctId: "customer-a"
-                )
-                let newer = try await internalEventStore.commitStableCapture(
-                    eventId: newerEvent.id,
-                    event: newerEvent,
-                    recordedAt: Date(timeIntervalSince1970: 3_000),
-                    ownership: JourneyEventOwnership(
-                        journeyId: journeyId,
-                        epoch: 8
-                    )
-                )
-                guard case .captured(let canonical, isNew: true) = newer else {
-                    return fail("a newly owned epoch must remain eligible")
-                }
-                expect(canonical.id) == newerEvent.id
-            }
-
-            it("retains unresolved ownership response sources across relaunch") {
-                let sourceEventId = "ownership-response-source"
-                let ownership = JourneyEventOwnership(
-                    journeyId: "journey-awaiting-fence",
-                    epoch: 5
-                )
-                try await internalEventStore.recordUnresolvedJourneyOwnershipResponse(
-                    sourceEventId: sourceEventId,
-                    ownership: ownership,
-                    recordedAt: Date(timeIntervalSince1970: 1_000)
-                )
-
-                await internalEventStore.close()
-                internalEventStore = SQLiteEventStore()
-                try await internalEventStore.initialize(
-                    path: URL(fileURLWithPath: tempDbPath)
-                )
-
-                let matching = try await internalEventStore
-                    .hasUnresolvedJourneyOwnershipResponse(ownership)
-                let sourceOwnerships = try await internalEventStore
-                    .queryUnresolvedJourneyOwnershipResponse(
-                        sourceEventId: sourceEventId
-                    )
-                let newer = try await internalEventStore
-                    .hasUnresolvedJourneyOwnershipResponse(
-                        JourneyEventOwnership(
-                            journeyId: ownership.journeyId,
-                            epoch: ownership.epoch + 1
-                        )
-                    )
-                expect(matching).to(beTrue())
-                expect(sourceOwnerships).to(contain(ownership))
-                expect(newer).to(beFalse())
-
-                let blockedEvent = try StoredEvent(
-                    id: "journey-exited:unresolved-response",
-                    name: JourneyEvents.journeyExited,
-                    distinctId: "customer-a"
-                )
-                do {
-                    _ = try await internalEventStore.commitStableCapture(
-                        eventId: blockedEvent.id,
-                        event: blockedEvent,
-                        recordedAt: Date(timeIntervalSince1970: 2_000),
-                        ownership: ownership
-                    )
-                    return fail(
-                        "an unresolved response must block atomic stable capture"
-                    )
-                } catch {
-                    // Retryable storage refusal is the expected outcome.
-                }
-                let blockedOutcome = try await internalEventStore
-                    .queryStableCapture(id: blockedEvent.id)
-                expect(blockedOutcome).to(beNil())
-
-                try await internalEventStore.clearUnresolvedJourneyOwnershipResponse(
-                    sourceEventId: sourceEventId
-                )
-                let cleared = try await internalEventStore
-                    .hasUnresolvedJourneyOwnershipResponse(ownership)
-                expect(cleared).to(beFalse())
-            }
-
-            it("rolls back every stable capture when a later batch item fails") {
-                let ownership = JourneyEventOwnership(
-                    journeyId: "journey-with-unresolved-ownership",
-                    epoch: 4
-                )
-                try await internalEventStore.recordUnresolvedJourneyOwnershipResponse(
-                    sourceEventId: "unresolved-source",
-                    ownership: ownership,
-                    recordedAt: Date(timeIntervalSince1970: 1_000)
-                )
-                let first = try StoredEvent(
-                    id: "screen-batch:first",
-                    name: "first",
-                    distinctId: "customer-a"
-                )
-                let blocked = try StoredEvent(
-                    id: "screen-batch:blocked",
-                    name: "blocked",
-                    distinctId: "customer-a"
-                )
-
-                await expect {
-                    try await internalEventStore.commitStableCaptureBatch(
-                        [
-                            StableEventCaptureRecord(
-                                eventId: first.id,
-                                event: first,
-                                recordedAt: Date(timeIntervalSince1970: 2_000),
-                                ownership: nil
-                            ),
-                            StableEventCaptureRecord(
-                                eventId: blocked.id,
-                                event: blocked,
-                                recordedAt: Date(timeIntervalSince1970: 2_001),
-                                ownership: ownership
-                            ),
-                        ],
-                        assigningCommitSequence: true,
-                        admission: nil
-                    )
-                }.to(throwError())
-
-                let firstOutcome = try await internalEventStore.queryStableCapture(
-                    id: first.id
-                )
-                let blockedOutcome = try await internalEventStore.queryStableCapture(
-                    id: blocked.id
-                )
-                let pending = try await internalEventStore.queryPendingDelivery(limit: 10)
-                expect(firstOutcome).to(beNil())
-                expect(blockedOutcome).to(beNil())
-                expect(pending).to(beEmpty())
             }
 
             it("inserts a stable pending event exactly once") {

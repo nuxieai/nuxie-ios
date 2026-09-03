@@ -2,41 +2,6 @@ import XCTest
 @testable import Nuxie
 
 final class JourneyScreenEmissionDispatcherTests: XCTestCase {
-    func testJourneyIngressCausalityRejectsCyclesAndHopOverflow() throws {
-        let source = ExperienceEventCausality(
-            chainId: "chain-1",
-            parentEventId: "parent-1",
-            visitedExperienceIds: ["experience-1"],
-            hopCount: 1
-        )
-        XCTAssertEqual(
-            extendExperienceAdmissionCausality(
-                source,
-                targetExperienceId: "experience-1"
-            ).failure,
-            .experienceCycle
-        )
-        XCTAssertEqual(
-            extendExperienceAdmissionCausality(
-                ExperienceEventCausality(
-                    chainId: source.chainId,
-                    parentEventId: source.parentEventId,
-                    visitedExperienceIds: source.visitedExperienceIds,
-                    hopCount: 32
-                ),
-                targetExperienceId: "experience-2"
-            ).failure,
-            .experienceHopLimit
-        )
-        XCTAssertEqual(
-            try extendExperienceAdmissionCausality(
-                source,
-                targetExperienceId: "experience-2"
-            ).get().visitedExperienceIds,
-            ["experience-1", "experience-2"]
-        )
-    }
-
     func testTypedRuntimeEffectsProduceOneAtomicBatch() async throws {
         let dispatcher = ScreenEmissionDispatcher(
             createId: incrementingID(),
@@ -70,7 +35,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
         XCTAssertEqual(batch.emissions.map(\.id), ["id_2", "id_3"])
         XCTAssertEqual(batch.emissions.map(\.sequence), [0, 1])
         XCTAssertEqual(batch.emissions.map(\.name), [
-            SystemEventNames.responseSet,
+            JourneyResponseControlNames.responseSet,
             "survey_submitted",
         ])
     }

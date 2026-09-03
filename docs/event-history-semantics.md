@@ -18,7 +18,7 @@ An event-query source explicitly reports one of two coverage states:
 Production `EventLog` always reports a retained window backed by durable SQLite
 metadata. A fresh database establishes its starting timestamp at the first SDK
 open. The boundary survives process restarts and is cleared only when the event
-database itself is reset. Databases that do not exactly match the current v1
+database itself is reset. Databases that do not exactly match the current v2
 schema are rejected; the SDK has no legacy event-store reader or migration path.
 
 The boundary is monotonic. Age and count retention advance it only when rows
@@ -41,15 +41,14 @@ fault.
 A fresh install, identity history from another device, and previously pruned or
 failed rows are outside this local-history contract.
 
-## Response-bearing delivery and Feature commands
+## Event delivery and Feature commands
 
-`trackWithResponse` creates one canonical `NuxieEvent` before persistence or
-transport. Its UUIDv7 is stored in the pending history row and sent as the
-direct `/i/event` `idempotency_key`. A failed response-lane send leaves that
-same row pending; direct or batch recovery after relaunch reuses the same id,
-and acknowledgement advances delivery state on the row instead of creating a
-delivered shadow event. Journey control events remain on the serialized direct
-control lane because their callers need the synchronous response.
+Ordinary capture creates one canonical `NuxieEvent`, persists it as pending,
+and sends it through batch delivery. Its UUIDv7 remains the wire
+`idempotency_key` across retries. Stable Journey and system facts use the same
+store and batch transport under a producer-supplied id; the producing state
+machine advances only after durable capture. Renderer response controls update
+the Journey journal directly and do not enter EventLog.
 
 Ordinary `useFeatureAndWait` calls use a separate v1 Feature-command journal,
 not an undelivered history row. The final command is written atomically before
@@ -97,7 +96,7 @@ query.
 
 ## Schema and authoring guidance
 
-`event_history_metadata` is part of the complete schema v1. Fresh-store table
+`event_history_metadata` is part of the complete schema v2. Fresh-store table
 creation, required-column and index verification, and the `user_version = 1`
 write occur in one transaction. The singleton coverage row is established when
 `EventLog` first opens that fresh store and its monotonic `coverage_start_ms` is

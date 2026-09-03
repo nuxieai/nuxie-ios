@@ -10,127 +10,6 @@ import XCTest
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
     @MainActor
-    func testAppActionJourneyStepDeliversResolvedRequestThroughDelegate() async throws {
-        let sdk = NuxieSDK.shared
-        let recorder = AppActionDelegateRecorder()
-        sdk.delegate = recorder
-        defer { sdk.delegate = nil }
-        let mocks = MockFactory.shared
-        mocks.eventLog.reset()
-        let runtime = try makeJourneyRunner(
-            document: JourneyDocument(screens: [JourneyScreen(id: "screen_1")]),
-            appActionHandler: { action in
-                sdk.deliverAppAction(action)
-            }
-        )
-
-        await runtime.runner.handleAppAction(
-            AppActionStep(
-                nodeId: "action-1",
-                name: "export_finished",
-                payload: [
-                    "format": .string("pdf"),
-                    "count": .eventField("count"),
-                    "ratio": .eventField("ratio"),
-                    "enabled": .eventField("enabled"),
-                    "invalid": .eventField("invalid"),
-                ]
-            ),
-            context: JourneyRunner.TriggerContext(
-                screenId: "screen_1",
-                componentId: nil,
-                handlerId: nil,
-                instanceId: nil,
-                payload: [
-                    "count": NSNumber(value: 1),
-                    "ratio": NSNumber(value: 1.5),
-                    "enabled": NSNumber(value: true),
-                    "invalid": Double.infinity,
-                ]
-            )
-        )
-
-        let delivery = recorder.delivery
-        let action = try XCTUnwrap(delivery?.action)
-        XCTAssertTrue(delivery?.sdk === sdk)
-        XCTAssertEqual(action.name, "export_finished")
-        XCTAssertEqual(action.payload, [
-            "format": .string("pdf"),
-            "count": .int(1),
-            "ratio": .double(1.5),
-            "enabled": .bool(true),
-        ])
-        XCTAssertEqual(action.experience, ExperienceRef(
-            experienceId: "interactive-experience",
-            experienceVersion: "interactive-build",
-            journeyId: runtime.journey.id
-        ))
-    }
-
-    func testSignedDynamicPurchaseFollowsSelectedProductToPlacement() async throws {
-        let fixtureRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelope.self,
-            from: Data(contentsOf: fixtureRoot.appendingPathComponent(
-                "fixtures/experience-release-descriptor/envelope.json"
-            ))
-        )
-        let descriptorBytes = try XCTUnwrap(Data(base64Encoded: envelope.descriptorBytesBase64))
-        let descriptor = try JSONDecoder().decode(
-            ExperienceReleaseDescriptor.self,
-            from: descriptorBytes
-        )
-        let definition = try ExperienceDefinition(descriptor: descriptor)
-        let experience = Experience(
-            behavior: ExperienceBehaviorDefinition(
-                reference: ExperienceReference(
-                    experienceId: descriptor.identity.experienceId,
-                    versionId: descriptor.identity.experienceVersionId
-                ),
-                buildId: descriptor.identity.buildId,
-                artifactContentHash: String(repeating: "a", count: 64),
-                name: "Signed dynamic purchase",
-                reentry: .everyTime,
-                releaseCreatedAt: descriptor.identity.releaseCreatedAt,
-                trigger: nil,
-                goal: nil,
-                exitPolicy: nil,
-                conversionAnchor: nil,
-                timeLimitSeconds: nil,
-                experienceType: nil,
-                presentation: .fullScreenDefault,
-                presentationScreens: [
-                    "screen_welcome": ExperienceBehaviorScreenGeometry(width: 390, height: 844)
-                ]
-            ),
-            journey: definition.renderShell,
-            definition: definition,
-            assetBaseURL: URL(string: "https://assets.nuxie.test/")!
-        )
-        let runtime = try makeJourneyRunner(experience: experience)
-        let controller = await MainActor.run {
-            PurchaseRecordingExperienceViewController(experience: experience)
-        }
-        await runtime.runner.attach(viewController: controller)
-
-        _ = await runtime.runner.dispatchScreenEvent(
-            NuxieEvent(
-                name: "purchase_tapped",
-                distinctId: "interactive-user",
-                properties: [:]
-            ),
-            screenId: "screen_welcome",
-            componentId: nil,
-            instanceId: nil
-        )
-
-        let placementIDs = await MainActor.run { controller.placementIDs }
-        XCTAssertEqual(placementIDs, ["golden:monthly"])
-    }
 
     func testPreparedAuthenticatedRIVOpensTwoRendererBoundScreensWithFreshState() async throws {
         let fixture = try await twoScreenStatePayload()
@@ -548,189 +427,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
         let removedStatus = await cache.status(for: "removed")
         XCTAssertEqual(removedStatus, .miss)
-    }
-
-    func testLoaderMemoryPressureRecreatesPreparationFromVerifiedDiskObjects() async throws {
-        StubURLProtocol.reset()
-        defer { StubURLProtocol.reset() }
-        let fixture = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/scripted-resources")
-        let profile = try JSONDecoder().decode(
-            ExperienceReleaseProfile.self,
-            from: Data(contentsOf: fixture.appendingPathComponent("profile.json"))
-        )
-        let deliveryHost = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
-        let requests = InteractiveRequestPathRecorder()
-        StubURLProtocol.register(matcher: { $0.url?.host == deliveryHost }) { request in
-            let path = try XCTUnwrap(request.url?.path)
-            requests.append(path)
-            let file = fixture.appendingPathComponent(String(path.dropFirst()))
-            let bytes = try Data(contentsOf: file)
-            let contentType = file.pathExtension == "riv"
-                ? "application/vnd.rive" : "application/octet-stream"
-            return (
-                HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 200,
-                    httpVersion: "HTTP/1.1",
-                    headerFields: [
-                        "Content-Type": contentType,
-                        "Content-Length": String(bytes.count),
-                    ]
-                )!,
-                bytes
-            )
-        }
-        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "prepared-riv-loader-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-        addTeardownBlock {
-            try? FileManager.default.removeItem(at: cache)
-        }
-        let releaseStore = ExperienceReleaseAcquisitionStore(
-            cacheDirectory: cache,
-            urlSession: TestURLSessionProvider.createTestSession(),
-            authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
-            supportedRuntime: ExperienceReleaseRuntime.current,
-            admission: ExperienceReleaseAdmission(
-                store: InMemoryExperienceReleaseHighWaterStore()
-            )
-        )
-        let loader = ExperienceLoader(
-            productService: ProductService(),
-            releaseStore: releaseStore
-        )
-        _ = try await loader.replaceReleaseProfile(profile)
-        let entry = try XCTUnwrap(profile.active.first)
-        let experience = try await loader.experienceForJourneyControl(
-            experienceId: entry.locator.experienceId,
-            versionId: entry.locator.experienceVersionId
-        )
-        let screenID = try XCTUnwrap(experience.journey.screens.first?.id)
-        let firstArtifact = try await loader.presentationArtifact(
-            for: experience,
-            initialScreenID: screenID
-        )
-        let firstPreparation = try await firstArtifact.interactivePreparation.preparation()
-        let liveScreen = try await firstPreparation.openScreen(
-            screenID: screenID,
-            pixelWidth: 24,
-            pixelHeight: 24
-        )
-        defer { Task { try? await liveScreen.close() } }
-        let downloadedPaths = requests.paths
-        XCTAssertFalse(downloadedPaths.isEmpty)
-
-        _ = try await loader.replaceReleaseProfile(profile)
-        let refreshed = try await loader.experienceForJourneyControl(
-            experienceId: entry.locator.experienceId,
-            versionId: entry.locator.experienceVersionId
-        )
-        let refreshedArtifact = try await loader.presentationArtifact(
-            for: refreshed,
-            initialScreenID: screenID
-        )
-        let refreshedPreparation = try await refreshedArtifact
-            .interactivePreparation.preparation()
-        XCTAssertTrue(firstPreparation === refreshedPreparation)
-        XCTAssertEqual(requests.paths, downloadedPaths)
-
-        await loader.handleMemoryPressure()
-        let retained = try await loader.experienceForJourneyControl(
-            experienceId: entry.locator.experienceId,
-            versionId: entry.locator.experienceVersionId
-        )
-        let secondArtifact = try await loader.presentationArtifact(
-            for: retained,
-            initialScreenID: screenID
-        )
-        let secondPreparation = try await secondArtifact.interactivePreparation.preparation()
-
-        XCTAssertEqual(secondArtifact.source, .cache)
-        XCTAssertEqual(requests.paths, downloadedPaths)
-        XCTAssertFalse(firstPreparation === secondPreparation)
-        _ = try await liveScreen.step(elapsedSeconds: 0)
-    }
-
-    func testCapturedAdmissionResolvesItsCatalogAfterANewerGenerationCommits() async throws {
-        let fixtures = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures")
-        let firstProfile = try JSONDecoder().decode(
-            ExperienceReleaseProfile.self,
-            from: Data(contentsOf: fixtures.appendingPathComponent("scripted-resources/profile.json"))
-        )
-        let secondProfile = try JSONDecoder().decode(
-            ExperienceReleaseProfile.self,
-            from: Data(contentsOf: fixtures.appendingPathComponent("multi-screen/profile.json"))
-        )
-        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "routing-catalog-generation-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-        addTeardownBlock {
-            try? FileManager.default.removeItem(at: cache)
-        }
-        let loader = ExperienceLoader(
-            productService: ProductService(),
-            releaseStore: ExperienceReleaseAcquisitionStore(
-                cacheDirectory: cache,
-                urlSession: TestURLSessionProvider.createTestSession(),
-                authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
-                supportedRuntime: ExperienceReleaseRuntime.current,
-                admission: ExperienceReleaseAdmission(
-                    store: InMemoryExperienceReleaseHighWaterStore()
-                )
-            )
-        )
-
-        let firstPrepared = try await loader.prepareReleaseProfile(firstProfile)
-        let committedFirstCatalog = try await loader.commitReleaseProfile(
-            firstPrepared,
-            generation: 1
-        )
-        let firstCatalog = try XCTUnwrap(committedFirstCatalog)
-        let firstReference = try XCTUnwrap(firstCatalog.references.first)
-        let capturedAdmission = ProfileTriggerAdmission(
-            effectiveExperienceReferences: firstCatalog.references,
-            activeExperienceReferences: firstCatalog.references,
-            userProperties: [:],
-            segmentMemberships: .empty,
-            routingCatalog: firstCatalog
-        )
-
-        let secondPrepared = try await loader.prepareReleaseProfile(secondProfile)
-        _ = try await loader.commitReleaseProfile(secondPrepared, generation: 2)
-
-        do {
-            _ = try await loader.experienceForJourneyControl(
-                experienceId: firstReference.experienceId,
-                versionId: firstReference.versionId
-            )
-            XCTFail("Expected the live loader catalog to have replaced generation 1")
-        } catch let error as ExperienceReleaseAcquisitionError {
-            XCTAssertEqual(error, .invalidProfileEntry)
-        }
-
-        let resolved = try await capturedAdmission.routingCatalog.experience(
-            experienceId: firstReference.experienceId,
-            versionId: firstReference.versionId
-        )
-        XCTAssertEqual(resolved.id, firstReference.experienceId)
-        XCTAssertEqual(resolved.versionId, firstReference.versionId)
-        XCTAssertEqual(capturedAdmission.routingCatalog.generation, 1)
-        guard case .event(let trigger)? = resolved.trigger else {
-            return XCTFail("Expected the captured generation's event trigger")
-        }
-        XCTAssertEqual(trigger.eventName, SystemEventNames.appOpened)
     }
 
     func testRepresentativeCorpusRecordsFirstScreenPreparationCPUAndMemory() async throws {
@@ -3501,23 +3197,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         .object(fields.map { ExperienceInteractiveField(key: $0.0, value: $0.1) })
     }
 
-    private func authenticatedScriptedPayload(
-        profileTransform: ((Data) throws -> Data)? = nil,
-        artifactTransform: ((URL, Data) throws -> Data)? = nil
-    ) async throws
-        -> AuthenticatedRuntimePayload
-    {
-        let directory = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/scripted-generic-commands", isDirectory: true)
-        return try await authenticatedFixturePayload(
-            at: directory,
-            profileTransform: profileTransform,
-            artifactTransform: artifactTransform
-        )
-    }
-
     private func authenticatedFixturePayload(named name: String) async throws
         -> AuthenticatedRuntimePayload
     {
@@ -3531,23 +3210,17 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     private func authenticatedFixturePayload(
-        at fixture: URL,
-        profileTransform: ((Data) throws -> Data)? = nil,
-        artifactTransform: ((URL, Data) throws -> Data)? = nil
+        at fixture: URL
     ) async throws -> AuthenticatedRuntimePayload {
         StubURLProtocol.reset()
-        let receivedProfileBytes = try Data(
+        let profileBytes = try Data(
             contentsOf: fixture.appendingPathComponent("profile.json")
         )
-        let profile = try JSONDecoder().decode(
-            ExperienceReleaseProfile.self,
-            from: try profileTransform?(receivedProfileBytes) ?? receivedProfileBytes
-        )
+        let profile = try JourneyPlaneProfile.decode(profileBytes)
         let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
         StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
             let file = fixture.appendingPathComponent(String(request.url!.path.dropFirst()))
-            let receivedBytes = try Data(contentsOf: file)
-            let bytes = try artifactTransform?(request.url!, receivedBytes) ?? receivedBytes
+            let bytes = try Data(contentsOf: file)
             let contentType: String
             switch file.pathExtension {
             case "riv": contentType = "application/vnd.rive"
@@ -3577,19 +3250,35 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             withIntermediateDirectories: true
         )
         defer { try? FileManager.default.removeItem(at: cache) }
-        let store = ExperienceReleaseAcquisitionStore(
+        let store = JourneyReleaseAcquisitionStore(
             cacheDirectory: cache,
-            urlSession: TestURLSessionProvider.createTestSession(),
-            authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
-            supportedRuntime: ExperienceReleaseRuntime.current,
-            admission: ExperienceReleaseAdmission(store: InMemoryExperienceReleaseHighWaterStore())
+            urlSession: TestURLSessionProvider.createTestSession()
         )
-        let catalog = try await store.authenticateProfile(profile)
-        let definition = try XCTUnwrap(catalog.definitions.first)
-        let screenID = try XCTUnwrap(definition.journey.screens.first?.id)
-        return try await store.acquire(
-            definition: definition,
-            initialScreenID: screenID
+        let catalog = JourneyProfileCatalog(
+            authorizationKeys: try JourneyTrustRoots.keys(for: .development),
+            supportedRuntime: JourneyReleaseRuntime.current,
+            highWaterStore: InMemoryJourneyReleaseHighWaterStore()
+        )
+        let firstEntry = try XCTUnwrap(profile.releases.first)
+        let authenticated = try await catalog.prepare(
+            profile,
+            authority: ProfileDeliveryAuthority(
+                appId: firstEntry.locator.appId,
+                environment: firstEntry.locator.environment
+            )
+        ).snapshot
+        let release = try XCTUnwrap(authenticated.releasesByDigest.values.first)
+        let screenID = try XCTUnwrap(release.descriptor.leg.screens.first?.id)
+        let presentation = try await store.preparePresentation(
+            release: release,
+            delivery: profile.delivery,
+            pinnedArtifacts: nil,
+            productResolver: { _ in [] }
+        )
+        return try await presentation.artifactLoader(
+            presentation.experience,
+            nil,
+            screenID
         ).payload
     }
 
@@ -3798,77 +3487,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             values: values,
             scene: exactComponentListFixture(),
             artboardName: "Main"
-        )
-    }
-
-    private func makeJourneyRunner(
-        document: JourneyDocument,
-        appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in }
-    ) throws -> (runner: JourneyRunner, journey: Journey) {
-        let base = Experience(
-            id: "interactive-experience",
-            versionId: "interactive-build",
-            name: "Interactive",
-            reentry: .oneTime,
-            releaseCreatedAt: "2026-08-08T00:00:00Z",
-            trigger: nil,
-            goal: nil,
-            exitPolicy: nil,
-            conversionAnchor: nil,
-            experienceType: nil,
-            journey: document
-        )
-        return try makeJourneyRunner(
-            experience: base,
-            appActionHandler: appActionHandler
-        )
-    }
-
-    private func makeJourneyRunner(
-        experience base: Experience,
-        appActionHandler: @escaping @MainActor @Sendable (AppAction) -> Void = { _ in }
-    ) throws -> (runner: JourneyRunner, journey: Journey) {
-        let mocks = MockFactory.shared
-        // The runner's identity fence only executes last-mile effects for the
-        // journey's own user; align the harness identity with the journey.
-        mocks.identityService.setDistinctId("interactive-user")
-        var initialState = JourneySnapshot(
-            experience: base,
-            distinctId: "interactive-user",
-            now: Date()
-        )
-        initialState.executionState.currentScreenId = "screen_1"
-        let journey = Journey(snapshot: initialState)
-        let runtime = IRRuntime(dateProvider: mocks.dateProvider)
-        let features = FeatureService(
-            api: mocks.nuxieApi,
-            identity: mocks.identityService,
-            profile: mocks.profileService,
-            dateProvider: mocks.dateProvider,
-            featureInfo: FeatureInfo(),
-            cacheTTL: 5 * 60
-        )
-        runtime.wire(
-            identity: mocks.identityService,
-            eventLog: mocks.eventLog,
-            segments: mocks.segmentService,
-            features: features
-        )
-        return (
-            JourneyRunner(
-                journey: journey,
-                initialState: initialState,
-                experience: base,
-                eventLog: mocks.eventLog,
-                identity: mocks.identityService,
-                features: features,
-                profile: mocks.profileService,
-                apiClient: mocks.nuxieApi,
-                dateProvider: mocks.dateProvider,
-                appActionHandler: appActionHandler,
-                persistEntryActionClaim: { _ in true }
-            ),
-            journey
         )
     }
 

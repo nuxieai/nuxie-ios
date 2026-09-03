@@ -124,10 +124,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       )
       let eventLog = core.eventLog
       let journeyService = core.journeys
-      let deviceLegService = core.deviceLegs
-      let deviceLegAdmission = eventLog.reserveCommittedAdmission {
-        [weak deviceLegService] in
-        deviceLegService?.eventAdmissionGeneration()
+      let journeyAdmission = eventLog.reserveCommittedAdmission {
+        [weak journeyService] in
+        journeyService?.eventAdmissionGeneration()
       }
 
       // Start the lifecycle coordinator over the built graph. It always owns
@@ -136,12 +135,10 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       let lifecycleCoordinator = NuxieLifecycleCoordinator(
         lifecycleTracker: lifecycleTracker,
         journeys: core.journeys,
-        deviceLegs: core.deviceLegs,
         eventLog: core.eventLog,
         profile: core.profile,
-        experiences: core.experiences,
         experiencePresentation: core.experiencePresentation,
-        deviceLegPresentation: core.deviceLegPresentation,
+        journeyPresentation: core.journeyPresentation,
         features: core.features
       )
       lifecycleCoordinator.start()
@@ -154,40 +151,29 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       let eventSystemSetupTask = Task {
         guard !Task.isCancelled else { return }
         await eventLog.subscribeCommitted(
-          reservation: deviceLegAdmission
-        ) { [weak deviceLegService] event, admittedProfileGeneration in
-          await deviceLegService?.handleEvent(
+          reservation: journeyAdmission
+        ) { [weak journeyService] event, admittedProfileGeneration in
+          await journeyService?.handleEvent(
             event,
             admittedProfileGeneration: admittedProfileGeneration
           )
         }
-        await eventLog.subscribeCommitted { [weak journeyService] event in
-          await journeyService?.handleEvent(event)
-        }
         await eventLog.subscribeForwarding(
           when: { [weak self] in self?.delegate != nil }
-        ) { [weak self, weak journeyService] durable in
-          await self?.deliverForwardedActivity(
-            durable,
-            journeyService: journeyService
-          )
+        ) { [weak self] durable in
+          await self?.deliverForwardedActivity(durable)
         }
         // Recovery can durably emit leg lifecycle events. Install both local
         // routing and customer forwarding subscribers before it opens the
         // journal so those events follow the same observable lane as live
         // execution.
-        await deviceLegService?.initialize()
+        await journeyService?.initialize()
         do {
           try await eventLog.configure(configuration: setupConfiguration)
           LogDebug("Event system setup complete")
         } catch {
           LogError("Event system setup failed: \(error)")
         }
-      }
-
-      let journeyInitializeTask = Task {
-        guard !Task.isCancelled else { return }
-        await journeyService.initialize()
       }
 
       var featureInfoDelegateTask: Task<Void, Never>?
@@ -209,11 +195,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         profilePrefetchTask = Task {
           await Self.runProfilePrefetch(
             refetch: { _ = try await core.profile.refetchProfile() },
-            recoverProfileDependentState: {
-              await Self.recoverAfterProfilePrefetch(
-                journeys: journeyService
-              )
-            },
+            recoverProfileDependentState: {},
             syncFeatures: { await core.features.syncFeatureInfo() }
           )
         }
@@ -238,7 +220,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         core: core,
         lifecycleCoordinator: lifecycleCoordinator,
         eventSystemSetupTask: eventSystemSetupTask,
-        journeyInitializeTask: journeyInitializeTask,
         featureInfoDelegateTask: featureInfoDelegateTask,
         profilePrefetchTask: profilePrefetchTask,
         transactionObserverTask: transactionObserverTask,
@@ -260,26 +241,13 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     delegate?.nuxie(self, didRequestAppAction: action)
   }
 
-  private func deliverForwardedActivity(
-    _ durable: DurableForwardingEvent,
-    journeyService: JourneyServiceProtocol?
-  ) async {
+  private func deliverForwardedActivity(_ durable: DurableForwardingEvent) async {
     // Keep curation and the public envelope unallocated when no observer is
     // attached. A delegate attached later receives only subsequent activity.
     guard delegate != nil else { return }
-    var properties = durable.event.properties
-    if durable.event.forwardingName == JourneyEvents.journeySuperseded,
-       properties["experience_id"] == nil,
-       let journeyId = properties["journey_id"] as? String,
-       let ref = await journeyService?.forwardingExperienceRef(for: journeyId) {
-      properties["experience_id"] = ref.experienceId
-      if let version = ref.experienceVersion {
-        properties["experience_version"] = version
-      }
-    }
     guard let activity = ActivityCuration.activity(
       internalName: durable.event.forwardingName,
-      properties: properties
+      properties: durable.event.properties
     ) else { return }
     let info = NuxieActivityInfo(
       id: durable.event.id,
@@ -326,8 +294,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       // CancellationError instead of letting it finish against this graph.
       await core.featureUseCommands.close()
       await run.featureCommandRecoveryTask?.value
-      await core.deviceLegs?.shutdown()
-      await core.journeys.shutdown()
+      await core.journeys?.shutdown()
       await core.eventLog.close()
       await core.profile.cleanupExpired()
 
@@ -336,17 +303,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   }
 
   // MARK: - Startup tasks
-
-  /// Retry Journey state after the startup profile attempt. Product authority
-  /// admission independently wakes StoreKit recovery when its authenticated
-  /// ownership catalog materially changes, including later refresh, locale,
-  /// foreground, and mailbox paths.
-  static func recoverAfterProfilePrefetch(
-    journeys: JourneyServiceProtocol
-  ) async {
-    guard !Task.isCancelled else { return }
-    await journeys.retryRestoredPresentations()
-  }
 
   static func runProfilePrefetch(
     refetch: @escaping @Sendable () async throws -> Void,
@@ -386,235 +342,24 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     defer { operation.finish() }
     let run = operation.graph
     await run.eventSystemSetupTask.value
-    await run.journeyInitializeTask.value
   }
 
-  // MARK: - Trigger (Event) API
+  // MARK: - Event API
 
-  /// Trigger an event: tracks it, evaluates matching experiences, and may
-  /// present an experience. Fire-and-forget; pass `handler` to observe progressive
-  /// updates (routing decisions and journey lifecycle) for this trigger.
+  /// Capture an event. Committed events are evaluated by the Journey runtime
+  /// in the same durable, ordered lane used by SDK-authored events.
   public func trigger(
     _ event: String,
-    properties: [String: Any]? = nil,
-    handler: (@Sendable (TriggerUpdate) -> Void)? = nil
+    properties: [String: Any]? = nil
   ) {
     guard let operation = runningOperation() else { return }
-    let run = operation.graph
-    let core = run.core
-
-    let presentationAttempt = beginPresentationAttemptIfEnabled(
-      triggerEvent: event,
-      core: core
+    defer { operation.finish() }
+    operation.graph.core.eventLog.track(
+      event,
+      properties: properties,
+      userProperties: nil,
+      userPropertiesSetOnce: nil
     )
-    let triggerService = core.triggers
-    // Boxed: property payloads are write-once snapshots handed to the SDK.
-    let propertiesBox = UncheckedSendable(properties)
-    let launched = run.launchFacadeTask { @MainActor [operation] in
-      defer { operation.finish() }
-      if let presentationAttempt,
-         let tracedTriggerService = triggerService as? any PresentationAttemptTriggerServiceProtocol {
-        await tracedTriggerService.trigger(
-          event,
-          properties: propertiesBox.value,
-          presentationAttempt: presentationAttempt
-        ) { update in
-          handler?(update)
-        }
-      } else {
-        await triggerService.trigger(
-          event,
-          properties: propertiesBox.value
-        ) { update in
-          handler?(update)
-        }
-      }
-    }
-    if !launched {
-      operation.finish()
-    }
-  }
-
-  /// Trigger an event and await its terminal outcome — the register pattern:
-  ///
-  /// ```swift
-  /// let result = await NuxieSDK.shared.triggerAndWait("export_tapped")
-  /// ```
-  /// An active journey that is still awaiting a terminal update when SDK
-  /// shutdown begins resolves as an error whose code is `trigger_failed`.
-  public func triggerAndWait(
-    _ event: String,
-    properties: [String: Any]? = nil,
-    progress: (@Sendable (TriggerUpdate) -> Void)? = nil
-  ) async -> TriggerResult {
-    guard let operation = runningOperation() else {
-      return .error(TriggerError(code: .notConfigured, message: "SDK not configured"))
-    }
-    let run = operation.graph
-    let core = run.core
-
-    let presentationAttempt = beginPresentationAttemptIfEnabled(
-      triggerEvent: event,
-      core: core
-    )
-    let triggerService = core.triggers
-    // Boxed: property payloads are write-once snapshots handed to the SDK.
-    let propertiesBox = UncheckedSendable(properties)
-    return await withCheckedContinuation { (continuation: CheckedContinuation<TriggerResult, Never>) in
-      let state = TriggerCompletionState()
-      let launched = run.launchFacadeTask { @MainActor [operation] in
-        defer { operation.finish() }
-        let handleUpdate: @Sendable (TriggerUpdate) -> Void = { update in
-          progress?(update)
-          if let result = NuxieSDK.terminalResult(for: update), state.claim() {
-            continuation.resume(returning: result)
-          } else if NuxieSDK.opensJourneyCompletion(update) {
-            state.expectJourneyCompletion()
-          }
-        }
-        if let presentationAttempt,
-           let tracedTriggerService = triggerService as? any PresentationAttemptTriggerServiceProtocol {
-          await tracedTriggerService.trigger(
-            event,
-            properties: propertiesBox.value,
-            presentationAttempt: presentationAttempt,
-            handler: handleUpdate
-          )
-        } else {
-          await triggerService.trigger(
-            event,
-            properties: propertiesBox.value,
-            handler: handleUpdate
-          )
-        }
-        // If the update sequence ended without a terminal update and no
-        // journey is pending, resolve as tracked-with-no-match. A journey's
-        // terminal update may arrive after TriggerService returns, so keep
-        // this SDK-owned worker registered until that update or shutdown.
-        if state.isWaitingForJourneyCompletion {
-          await state.waitForCompletion {
-            if state.claim() {
-              continuation.resume(returning: .error(TriggerError(
-                code: .triggerFailed,
-                message: "SDK shutdown began before the journey completed"
-              )))
-            }
-          }
-        } else if state.claim() {
-          continuation.resume(returning: .noMatch)
-        }
-      }
-      if !launched {
-        continuation.resume(returning: .error(TriggerError(
-          code: .notConfigured,
-          message: "SDK shutdown began before trigger work started"
-        )))
-      }
-    }
-  }
-
-  private func beginPresentationAttemptIfEnabled(
-    triggerEvent: String,
-    core: NuxieCore
-  ) -> ExperiencePresentationAttempt? {
-    guard core.presentationTrace.isEnabled else { return nil }
-    let startedAt = core.dateProvider.now()
-    let timestamp = ExperiencePresentationTimestamp.now(wallClock: startedAt)
-    let attempt = ExperiencePresentationAttempt.make(
-      triggerEvent: triggerEvent,
-      startedAt: startedAt,
-      startedAtMonotonicTime: timestamp.monotonicTime
-    )
-    ExperiencePresentationTraceContext(
-      attempt: attempt,
-      recorder: core.presentationTrace
-    ).recordTriggerAcceptedAndBeginRouting(at: timestamp)
-    return attempt
-  }
-
-  /// Terminal-state classification for triggerAndWait. Runs on the MainActor
-  /// callback path only (TriggerCompletionState guards double-resume).
-  private static func terminalResult(for update: TriggerUpdate) -> TriggerResult? {
-    switch update {
-    case .error(let error):
-      return .error(error)
-    case .decision(let decision):
-      switch decision {
-      case .noMatch: return .noMatch
-      default: return nil
-      }
-    case .journey(let update):
-      return .journeyCompleted(update)
-    }
-  }
-
-  private static func opensJourneyCompletion(_ update: TriggerUpdate) -> Bool {
-    guard case .decision(let decision) = update else { return false }
-    switch decision {
-    case .journeyStarted:
-      return true
-    default:
-      return false
-    }
-  }
-
-  /// Lock-based completion bookkeeping for triggerAndWait. The update
-  /// callback runs on the TriggerService actor's executor, not the main
-  /// actor, so this must be executor-agnostic (the old stream plumbing
-  /// mutated captured locals across executors — a data race).
-  private final class TriggerCompletionState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var completed = false
-    private var waitingForJourney = false
-    private var completionWaiters: [CheckedContinuation<Void, Never>] = []
-
-    /// Returns true exactly once — the caller that wins resumes the
-    /// continuation.
-    func claim() -> Bool {
-      let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>]? in
-        guard !completed else { return nil }
-        completed = true
-        let waiters = completionWaiters
-        completionWaiters.removeAll()
-        return waiters
-      }
-      waiters?.forEach { $0.resume() }
-      return waiters != nil
-    }
-
-    func expectJourneyCompletion() {
-      lock.lock()
-      waitingForJourney = true
-      lock.unlock()
-    }
-
-    var isWaitingForJourneyCompletion: Bool {
-      lock.lock()
-      defer { lock.unlock() }
-      return waitingForJourney
-    }
-
-    /// Keeps the facade worker owned until the journey callback reaches a
-    /// terminal result. Cancelling that worker is SDK shutdown's signal to
-    /// settle the public continuation and release its lifecycle operation.
-    func waitForCompletion(
-      onCancel: @escaping @Sendable () -> Void
-    ) async {
-      await withTaskCancellationHandler {
-        await withCheckedContinuation { continuation in
-          let alreadyCompleted = lock.withLock { () -> Bool in
-            guard !completed else { return true }
-            completionWaiters.append(continuation)
-            return false
-          }
-          if alreadyCompleted {
-            continuation.resume()
-          }
-        }
-      } onCancel: {
-        onCancel()
-      }
-    }
   }
 
   // MARK: - User Management
@@ -856,23 +601,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     defer { operation.finish() }
     await operation.graph.core.experiencePresentation
       .dismissCurrentExperienceFromHost()
-  }
-
-  /// Present a profile-delivered experience version for the E2E harness.
-  /// - Parameter versionId: The profile-delivered experience version to present.
-  @_spi(Testing)
-  @MainActor
-  public func presentExperienceVersionForTesting(_ versionId: String) async throws {
-    guard let operation = runningOperation() else {
-      throw NuxieError.notConfigured
-    }
-    defer { operation.finish() }
-    _ = try await operation.graph.core.experiencePresentation.presentExperience(
-      versionId,
-      from: nil,
-      runtimeDelegate: nil,
-      colorSchemeMode: .system
-    )
   }
 
   // MARK: - Profile Management
@@ -1206,7 +934,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     if let entityId { captureProperties["entity_id"] = entityId }
     if let metadata { captureProperties["metadata"] = metadata }
     let capturePropertiesBox = UncheckedSendable(captureProperties)
-    let enriched = await eventLog.prepareTriggerProperties(capturePropertiesBox.value)
+    let enriched = await eventLog.prepareEventProperties(capturePropertiesBox.value)
     let exactEvent = NuxieEvent(
       id: eventId ?? UUID.v7().uuidString,
       name: SystemEventNames.featureUsed,

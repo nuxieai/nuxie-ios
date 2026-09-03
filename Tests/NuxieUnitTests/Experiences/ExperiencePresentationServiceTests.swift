@@ -129,12 +129,12 @@ private actor ExperiencePresentationAcquisitionGate {
 }
 
 @MainActor
-private final class DeviceLegPresentationOutcomeRecorder {
-    private(set) var outcomes: [DeviceLegSurfaceOutcome] = []
+private final class JourneyPresentationOutcomeRecorder {
+    private(set) var outcomes: [JourneySurfaceOutcome] = []
     private(set) var availabilitySignals = 0
     var results: [Bool] = []
 
-    func record(_ outcome: DeviceLegSurfaceOutcome) -> Bool {
+    func record(_ outcome: JourneySurfaceOutcome) -> Bool {
         outcomes.append(outcome)
         return results.isEmpty ? true : results.removeFirst()
     }
@@ -195,10 +195,10 @@ private final class CommerceActionRecordingExperienceViewController:
 }
 
 @MainActor
-private final class DeviceLegDismissalOrderRecorder {
+private final class JourneyDismissalOrderRecorder {
     private(set) var events: [String] = []
 
-    func screenDismissed() -> DeviceLegScreenDismissalResult {
+    func screenDismissed() -> JourneyScreenDismissalResult {
         events.append("screen_dismissed")
         return .handled
     }
@@ -233,83 +233,15 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             service = ExperiencePresentationService(
                 windowProvider: mockWindowProvider,
                 experiences: mockExperienceService,
-                eventLog: mockEventLog,
-                triggerBroker: TriggerBroker(),
-                dateProvider: MockDateProvider()
+                eventLog: mockEventLog
             )
         }
 
-        func makeExperience(id: String) -> Experience {
-            let releaseCreatedAt = ISO8601DateFormatter().string(from: Date())
-            return Experience(
-                id: id,
-                versionId: "flow-test",
-                name: "Test Experience",
-                reentry: .oneTime,
-                releaseCreatedAt: releaseCreatedAt,
-                trigger: .event(EventTriggerConfig(eventName: "test_event", condition: nil)),
-                goal: nil,
-                exitPolicy: nil,
-                conversionAnchor: nil,
-                experienceType: nil
-            )
-        }
-
-        func makeSignedExperience(
-            versionId: String,
-            shell: ExperienceShellContract,
-            screenId: String = "screen-selected",
-            additionalScreenID: String? = nil
-        ) -> Experience {
-            var screens = [screenId: shell.screen]
-            if let additionalScreenID {
-                screens[additionalScreenID] = shell.screen
-            }
-            return Experience(
-                behavior: ExperienceBehaviorDefinition(
-                    reference: .init(
-                        experienceId: "experience",
-                        versionId: versionId
-                    ),
-                    buildId: "build-\(versionId)",
-                    artifactContentHash: String(repeating: "a", count: 64),
-                    name: "Signed shell",
-                    reentry: .everyTime,
-                    releaseCreatedAt: "2026-08-15T00:00:00Z",
-                    trigger: nil,
-                    goal: nil,
-                    exitPolicy: nil,
-                    conversionAnchor: nil,
-                    timeLimitSeconds: nil,
-                    experienceType: nil,
-                    presentation: shell.presentation,
-                    presentationScreens: screens
-                ),
-                journey: JourneyDocument(screens: screens.keys.sorted().map {
-                    .init(id: $0)
-                }),
-                assetBaseURL: URL(string: "https://assets.nuxie.test/")!,
-                authenticatedReleaseID: .init(
-                    identity: .init(
-                        appId: "app",
-                        environment: "test",
-                        experienceId: "experience",
-                        experienceVersionId: versionId,
-                        buildId: "build-\(versionId)",
-                        versionNumber: 1,
-                        releaseCreatedAt: "2026-08-15T00:00:00Z",
-                        releaseSequence: 1
-                    ),
-                    descriptorSHA256: String(repeating: "a", count: 64)
-                )
-            )
-        }
-
-        func makeDeviceLegRelease(
+        func makeJourneyRelease(
             versionId: String,
             screenId: String = "screen-selected"
-        ) -> AuthenticatedDeviceLegRelease {
-            let identity = ExperienceReleaseIdentity(
+        ) -> AuthenticatedJourneyRelease {
+            let identity = JourneyReleaseIdentity(
                 appId: "app",
                 environment: "test",
                 experienceId: "experience",
@@ -319,10 +251,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 publishedAt: "2026-08-15T00:00:00Z",
                 publishedAtSeq: 1
             )
-            let leg = DeviceLeg(
-                schemaVersion: "nuxie.device-leg.v1",
+            let leg = Journey(
+                schemaVersion: "nuxie.experience-planes.v1",
                 id: String(repeating: "b", count: 64),
-                entryCondition: DeviceLegEntryCondition(
+                entryCondition: JourneyEntryCondition(
                     type: .appForegrounded,
                     eventName: nil,
                     segmentId: nil,
@@ -330,7 +262,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     condition: nil
                 ),
                 entryStepId: "show",
-                steps: [DeviceLeg.Step(
+                steps: [Journey.Step(
                     kind: .action,
                     id: "show",
                     action: [
@@ -341,25 +273,25 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     outcome: nil
                 )],
                 routes: [],
-                screens: [DeviceLeg.Screen(
+                screens: [Journey.Screen(
                     id: screenId,
                     defaultViewModelName: nil,
                     defaultInstanceId: nil,
                     responseCaptures: []
                 )],
-                reentry: DeviceLeg.Reentry(type: .everyTime, windowSeconds: nil),
-                entitlementGate: DeviceLeg.EntitlementGate(enabled: false, products: []),
-                facts: DeviceLegFactReferences(
+                reentry: Journey.Reentry(type: .everyTime, windowSeconds: nil),
+                entitlementGate: Journey.EntitlementGate(enabled: false, products: []),
+                facts: JourneyFactReferences(
                     propertyKeys: [],
                     segmentIds: [],
                     experimentIds: []
                 ),
-                inputs: DeviceLeg.Boundary(eventFields: [], responseFields: []),
+                inputs: Journey.Boundary(eventFields: [], responseFields: []),
                 outputs: [],
                 completionOutputs: [:]
             )
-            let descriptor = DeviceLegReleaseDescriptor(
-                schemaVersion: DeviceLegReleaseDescriptor.wireSchemaVersion,
+            let descriptor = JourneyReleaseDescriptor(
+                schemaVersion: JourneyReleaseDescriptor.wireSchemaVersion,
                 identity: identity,
                 metadata: [:],
                 presentation: [:],
@@ -373,7 +305,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 provenance: [:]
             )
             let bytes = try! JSONEncoder().encode(descriptor)
-            return AuthenticatedDeviceLegRelease(
+            return AuthenticatedJourneyRelease(
                 authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
                 exactDescriptorBytes: bytes,
                 descriptorSHA256: SHA256Provider.hexDigest(bytes),
@@ -382,8 +314,8 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             )
         }
 
-        func deviceLegDelivery() -> ExperienceReleaseDelivery {
-            ExperienceReleaseDelivery(
+        func journeyDelivery() -> JourneyReleaseDelivery {
+            JourneyReleaseDelivery(
                 renderBaseUrl: "https://assets.nuxie.test/render/",
                 assetBaseUrl: "https://assets.nuxie.test/assets/"
             )
@@ -394,525 +326,31 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             mockWindowProvider.reset()
         }
         
-        describe("presentExperience") {
+        describe("Journey presentation") {
             context("when presenting for a journey") {
-                it("tracks $experience_shown exactly once on success") { @MainActor in
-                    let flowId = "test-flow-journey"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    let experience = makeExperience(id: "experience-1")
-                    let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-
-                    try! await service.presentExperience(flowId, from: journey, runtimeDelegate: nil)
-
-                    let experienceShownCount = mockEventLog.trackedEvents
-                        .filter { $0.name == JourneyEvents.experienceShown }
-                        .count
-                    expect(experienceShownCount).to(equal(1))
-                }
-
-                it("does not track $experience_shown when presentation fails") { @MainActor in
-                    let experience = makeExperience(id: "experience-1")
-                    let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-
-                    mockExperienceService.shouldFailExperienceDisplay = true
-                    mockExperienceService.failureError = MockExperienceServiceError.experienceNotFound("missing-flow")
-
-                    do {
-                        _ = try await service.presentExperience("missing-flow", from: journey, runtimeDelegate: nil)
-                        fail("Expected presentExperience to throw")
-                    } catch {
-                        // Expected.
-                    }
-
-                    let experienceShownCount = mockEventLog.trackedEvents
-                        .filter { $0.name == JourneyEvents.experienceShown }
-                        .count
-                    expect(experienceShownCount).to(equal(0))
-                }
             }
 
             context("when window scene is available") {
-                it("should create a presentation window") { @MainActor in
-                    // Setup
-                    let flowId = "test-flow-1"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    
-                    // Act
-                    do {
-                        _ = try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                    } catch {
-                        fail("Unexpected presentExperience error: \(error)")
-                    }
-                    
-                    // Assert
-                    expect(service.isExperiencePresented).to(beTrue())
-                    expect(mockWindowProvider.createdWindows.count).to(equal(1))
-                    
-                    let window = mockWindowProvider.createdWindows.first
-                    expect(window?.presentCalled).to(beTrue())
-                    expect(window?.presentedViewController).to(equal(mockVC))
-                }
-
-                it("reports shell presentation only after the window has presented") { @MainActor in
-                    let flowId = "test-flow-shell-milestone"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    let recorder = ExperiencePresentationLifecycleRecorder()
-                    recorder.isShellPresented = {
-                        mockWindowProvider.createdWindows.first?.presentedViewController === mockVC
-                    }
-
-                    try! await service.presentExperience(
-                        flowId,
-                        from: nil,
-                        runtimeDelegate: recorder
-                    )
-
-                    expect(recorder.shellWasPresented).to(beTrue())
-                    expect(recorder.cleanupCompleted).to(beFalse())
-
-                    await service.dismissCurrentExperience()
-
-                    expect(recorder.cleanupCompleted).to(beTrue())
-                    expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
-                    expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
-                }
-
-                it("ignores a persisted shell that disagrees with the authenticated release") { @MainActor in
-                    let versionId = "signed-drawer-shell"
-                    let authenticatedShell = ExperienceShellContract(
-                        presentation: .init(
-                            style: .drawer,
-                            orientation: .portrait,
-                            backgroundColor: "#102030FF",
-                            sheet: nil,
-                            drawer: .init(
-                                edge: .bottom,
-                                extentRatio: 0.72,
-                                cornerRadius: 24,
-                                dismissible: true
-                            )
-                        ),
-                        screen: .init(width: 390, height: 640)
-                    )
-                    let persistedShell = ExperienceShellContract(
-                        presentation: .fullScreenDefault,
-                        screen: .init(width: 1, height: 1)
-                    )
-                    let mockVC = MockExperienceViewController(
-                        mockExperienceVersionId: versionId,
-                        mockExperience: makeSignedExperience(
-                            versionId: versionId,
-                            shell: authenticatedShell
-                        )
-                    )
-                    mockExperienceService.mockViewControllers[versionId] = mockVC
-                    let commit = JourneyPendingPresentation(
-                        experienceId: "experience",
-                        experienceVersionId: versionId,
-                        releaseID: nil,
-                        presentationStyle: .drawer,
-                        shell: persistedShell,
-                        screenId: "screen-selected",
-                        transition: nil,
-                        continuation: []
-                    )
-
-                    _ = try! await service.presentExperience(
-                        versionId,
-                        from: nil,
-                        runtimeDelegate: nil,
-                        colorSchemeMode: .dark,
-                        commit: commit
-                    )
-
-                    expect(
-                        mockWindowProvider.createdWindows.first?.presentedShellContract
-                    ).to(equal(authenticatedShell))
-                }
-
-                it("suppresses the loading treatment for an exact memory-warm release") { @MainActor in
-                    let versionId = "signed-memory-warm"
-                    let shell = ExperienceShellContract(
-                        presentation: .init(
-                            style: .fullScreen,
-                            orientation: .any,
-                            backgroundColor: "#102030FF",
-                            sheet: nil,
-                            drawer: nil
-                        ),
-                        screen: .init(width: 390, height: 844)
-                    )
-                    let mockVC = MockExperienceViewController(
-                        mockExperienceVersionId: versionId,
-                        mockExperience: makeSignedExperience(
-                            versionId: versionId,
-                            shell: shell
-                        )
-                    )
-                    mockExperienceService.mockViewControllers[versionId] = mockVC
-                    mockExperienceService.presentationCommitIsMemoryWarm = true
-                    let commit = JourneyPendingPresentation(
-                        experienceId: "experience",
-                        experienceVersionId: versionId,
-                        releaseID: nil,
-                        presentationStyle: .fullScreen,
-                        shell: shell,
-                        screenId: "screen-selected",
-                        transition: nil,
-                        continuation: []
-                    )
-
-                    _ = try! await service.presentExperience(
-                        versionId,
-                        from: nil,
-                        runtimeDelegate: nil,
-                        colorSchemeMode: .light,
-                        commit: commit
-                    )
-
-                    expect(mockVC.suppressesLoadingTreatmentForPresentation).to(beTrue())
-                    expect(
-                        mockWindowProvider.createdWindows.first?.presentedShellContract
-                    ).to(equal(shell))
-                }
-
-                it("suppresses loading for a memory-warm direct presentation") { @MainActor in
-                    let versionId = "signed-memory-warm-direct"
-                    let shell = ExperienceShellContract(
-                        presentation: .fullScreenDefault,
-                        screen: .init(width: 390, height: 844)
-                    )
-                    let mockVC = MockExperienceViewController(
-                        mockExperienceVersionId: versionId,
-                        mockExperience: makeSignedExperience(
-                            versionId: versionId,
-                            shell: shell
-                        )
-                    )
-                    mockExperienceService.mockViewControllers[versionId] = mockVC
-                    mockExperienceService.presentationCommitIsMemoryWarm = true
-
-                    _ = try! await service.presentExperience(
-                        versionId,
-                        from: nil,
-                        runtimeDelegate: nil
-                    )
-
-                    expect(mockVC.suppressesLoadingTreatmentForPresentation).to(beTrue())
-                }
-
-                it("fails closed when a direct signed presentation has no authoritative screen") { @MainActor in
-                    let versionId = "signed-direct-multiscreen"
-                    let shell = ExperienceShellContract(
-                        presentation: .init(
-                            style: .drawer,
-                            orientation: .portrait,
-                            backgroundColor: "#102030FF",
-                            sheet: nil,
-                            drawer: .init(
-                                edge: .bottom,
-                                extentRatio: 0.72,
-                                cornerRadius: 24,
-                                dismissible: true
-                            )
-                        ),
-                        screen: .init(width: 390, height: 640)
-                    )
-                    mockExperienceService.mockViewControllers[versionId] =
-                        MockExperienceViewController(
-                            mockExperienceVersionId: versionId,
-                            mockExperience: makeSignedExperience(
-                                versionId: versionId,
-                                shell: shell,
-                                additionalScreenID: "screen-other"
-                            )
-                        )
-
-                    do {
-                        _ = try await service.presentExperience(
-                            versionId,
-                            from: nil,
-                            runtimeDelegate: nil
-                        )
-                        fail("Expected an ambiguous direct presentation to fail closed")
-                    } catch let error as ExperiencePresentationError {
-                        guard case .presentationSuperseded = error else {
-                            return fail("Unexpected presentation error: \(error)")
-                        }
-                    } catch {
-                        fail("Unexpected error: \(error)")
-                    }
-                    expect(mockWindowProvider.createdWindows).to(beEmpty())
-                }
-
-                it("attributes window presentation through the shell milestone") { @MainActor in
-                    let flowId = "test-flow-shell-attribution"
-                    let mockVC = MockExperienceViewController(
-                        mockExperienceVersionId: flowId
-                    )
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    let trace = InMemoryExperiencePresentationTrace()
-                    let attempt = ExperiencePresentationAttempt.make(
-                        triggerEvent: "qualification_present",
-                        startedAt: Date()
-                    )
-                    let recorder = ExperiencePresentationLifecycleRecorder()
-                    recorder.presentationTraceContext =
-                        ExperiencePresentationTraceContext(
-                            attempt: attempt,
-                            recorder: trace
-                        )
-
-                    try! await service.presentExperience(
-                        flowId,
-                        from: nil,
-                        runtimeDelegate: recorder
-                    )
-
-                    let displayEvents = trace.qualificationSnapshot(
-                        for: attempt.id
-                    ).events.filter { $0.work == "display_presentation" }
-                    expect(displayEvents.map(\.stage)).to(equal([
-                        "work_started",
-                        "work_completed",
-                    ]))
-                    expect(displayEvents.allSatisfy {
-                        $0.attributes["phase"] == "shell"
-                    }).to(beTrue())
-                }
-                
-                it("should set up dismissal handler on flow view controller") { @MainActor in
-                    // Setup
-                    let flowId = "test-flow-handler"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    
-                    // Present flow
-                    try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                    
-                    // Verify onClose handler is set
-                    expect(mockVC.onClose).toNot(beNil())
-                }
-
-                it("prepares a fresh runtime presentation before showing a cached controller") { @MainActor in
-                    let flowId = "test-flow-reuse"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-
-                    try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                    expect(mockVC.prepareForPresentationCallCount).to(equal(1))
-
-                    await service.dismissCurrentExperience()
-                    expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
-
-                    try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                    expect(mockVC.prepareForPresentationCallCount).to(equal(2))
-                }
-
-                it("returns the captured trace token when reusing a cached controller") { @MainActor in
-                    let flowId = "captured-trace-token-reuse"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    let recorder = ExperiencePresentationLifecycleRecorder()
-                    let firstToken = ExperiencePresentationTraceToken(id: UUID())
-                    let replacementToken = ExperiencePresentationTraceToken(id: UUID())
-
-                    recorder.activePresentationTraceToken = firstToken
-                    try! await service.presentExperience(
-                        flowId,
-                        from: nil,
-                        runtimeDelegate: recorder
-                    )
-                    await service.dismissCurrentExperience()
-
-                    expect(recorder.completedTraceTokens).to(equal([firstToken]))
-
-                    recorder.activePresentationTraceToken = replacementToken
-                    try! await service.presentExperience(
-                        flowId,
-                        from: nil,
-                        runtimeDelegate: recorder
-                    )
-
-                    expect(recorder.shellTraceTokens).to(equal([
-                        firstToken,
-                        replacementToken,
-                    ]))
-                    expect(service.currentExperienceViewController).to(beIdenticalTo(mockVC))
-
-                    await service.dismissCurrentExperience()
-
-                    expect(recorder.completedTraceTokens).to(equal([
-                        firstToken,
-                        replacementToken,
-                    ]))
-                }
-                
-                it("should handle flow dismissal and cleanup") { @MainActor in
-                    // Setup
-                    let flowId = "test-flow-dismissal"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    
-                    // Present flow
-                    try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                    expect(mockWindowProvider.createdWindows.count).to(equal(1))
-                    
-                    // Simulate dismissal via onClose callback
-                    mockVC.onClose?(.userDismissed)
-                    
-                    // Wait for cleanup to complete
-                    await polling(expect(service.isExperiencePresented)).value
-                        .toEventually(beFalse(), timeout: .seconds(2))
-                    
-                    // Verify window was cleaned up
-                    let window = mockWindowProvider.createdWindows.first
-                    expect(window?.destroyCalled).to(beTrue())
-                    expect(window?.presentedViewController).to(beNil())
-                }
-                
-                it("declines another direct presentation while a surface is owned") { @MainActor in
-                    // Present first flow
-                    let flowId1 = "flow-1"
-                    let mockVC1 = MockExperienceViewController(mockExperienceVersionId: flowId1)
-                    mockExperienceService.mockViewControllers[flowId1] = mockVC1
-                    
-                    try! await service.presentExperience(flowId1, from: nil, runtimeDelegate: nil)
-                    expect(service.isExperiencePresented).to(beTrue())
-                    expect(mockWindowProvider.createdWindows.count).to(equal(1))
-                    
-                    let flowId2 = "flow-2"
-                    let mockVC2 = MockExperienceViewController(mockExperienceVersionId: flowId2)
-                    mockExperienceService.mockViewControllers[flowId2] = mockVC2
-                    
-                    do {
-                        _ = try await service.presentExperience(
-                            flowId2,
-                            from: nil,
-                            runtimeDelegate: nil
-                        )
-                        fail("Expected the competing presentation to be declined")
-                    } catch ExperiencePresentationError.presentationDeclined {
-                        // The current surface remains the sole owner.
-                    } catch {
-                        fail("Unexpected presentation error: \(error)")
-                    }
-
-                    expect(service.currentExperienceViewController)
-                        .to(beIdenticalTo(mockVC1))
-                    expect(mockWindowProvider.createdWindows.count).to(equal(1))
-                }
-
-                it("declines a second presentation from the same journey") { @MainActor in
-                    let journey = Journey(
-                        id: "same-journey-owner",
-                        experience: makeExperience(id: "same-journey-experience"),
-                        distinctId: "user-1",
-                        now: Date()
-                    )
-                    let firstVersionID = "same-journey-first"
-                    let firstController = MockExperienceViewController(
-                        mockExperienceVersionId: firstVersionID
-                    )
-                    mockExperienceService.mockViewControllers[firstVersionID] = firstController
-                    _ = try! await service.presentExperience(
-                        firstVersionID,
-                        from: journey,
-                        runtimeDelegate: nil
-                    )
-
-                    let secondVersionID = "same-journey-second"
-                    mockExperienceService.mockViewControllers[secondVersionID] =
-                        MockExperienceViewController(mockExperienceVersionId: secondVersionID)
-                    do {
-                        _ = try await service.presentExperience(
-                            secondVersionID,
-                            from: journey,
-                            runtimeDelegate: nil
-                        )
-                        fail("Expected the owner's second presentation to be declined")
-                    } catch ExperiencePresentationError.presentationDeclined {
-                        // Same-journey screen movement belongs to navigation.
-                    } catch {
-                        fail("Unexpected presentation error: \(error)")
-                    }
-
-                    expect(service.currentExperienceViewController)
-                        .to(beIdenticalTo(firstController))
-                    expect(mockWindowProvider.createdWindows).to(haveCount(1))
-                }
-
-                it("declines a different journey without replacing the surface owner") { @MainActor in
-                    let firstVersionID = "owned-by-first-journey"
-                    let firstController = MockExperienceViewController(
-                        mockExperienceVersionId: firstVersionID
-                    )
-                    mockExperienceService.mockViewControllers[firstVersionID] = firstController
-                    let firstJourney = Journey(
-                        id: "journey-owner",
-                        experience: makeExperience(id: "experience-owner"),
-                        distinctId: "user-1",
-                        now: Date()
-                    )
-                    _ = try! await service.presentExperience(
-                        firstVersionID,
-                        from: firstJourney,
-                        runtimeDelegate: nil
-                    )
-
-                    let secondVersionID = "declined-other-journey"
-                    let secondController = MockExperienceViewController(
-                        mockExperienceVersionId: secondVersionID
-                    )
-                    mockExperienceService.mockViewControllers[secondVersionID] = secondController
-                    let secondJourney = Journey(
-                        id: "journey-contender",
-                        experience: makeExperience(id: "experience-contender"),
-                        distinctId: "user-1",
-                        now: Date()
-                    )
-
-                    do {
-                        _ = try await service.presentExperience(
-                            secondVersionID,
-                            from: secondJourney,
-                            runtimeDelegate: nil
-                        )
-                        fail("Expected the competing Journey to be declined")
-                    } catch ExperiencePresentationError.presentationDeclined {
-                        // Expected: the trigger remains eligible to fire later.
-                    } catch {
-                        fail("Unexpected presentation error: \(error)")
-                    }
-
-                    expect(service.currentExperienceViewController)
-                        .to(beIdenticalTo(firstController))
-                    expect(firstController.shutdownRuntimeCallCount).to(equal(0))
-                    expect(mockWindowProvider.createdWindows.count).to(equal(1))
-                }
-
-                it("tears down the device-leg surface while retrying durable host input") { @MainActor in
-                    let versionID = "device-leg-host-dismiss"
+                it("tears down the Journey surface while retrying durable host input") { @MainActor in
+                    let versionID = "Journey-host-dismiss"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let outcomes = DeviceLegPresentationOutcomeRecorder()
+                    let outcomes = JourneyPresentationOutcomeRecorder()
                     outcomes.results = [false, true]
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -923,7 +361,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
                     )
 
-                    let presentationResult = await service.presentDeviceLeg(request)
+                    let presentationResult = await service.presentJourney(request)
                     expect(presentationResult).to(equal(.shown))
                     expect(service.currentExperienceViewController)
                         .to(beIdenticalTo(controller))
@@ -948,23 +386,24 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 }
 
                 it("acknowledges ordinary user dismissal after screen lifecycle handling") { @MainActor in
-                    let versionID = "device-leg-user-dismiss"
+                    let versionID = "Journey-user-dismiss"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let outcomes = DeviceLegPresentationOutcomeRecorder()
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let outcomes = JourneyPresentationOutcomeRecorder()
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -975,7 +414,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
                     )
 
-                    let presentationResult = await service.presentDeviceLeg(request)
+                    let presentationResult = await service.presentJourney(request)
                     expect(presentationResult).to(equal(.shown))
 
                     controller.performDismiss(reason: .userDismissed)
@@ -992,24 +431,25 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         .to(equal("journey-owner"))
                 }
 
-                it("settles screen dismissal before the device-leg surface outcome") { @MainActor in
-                    let versionID = "device-leg-dismiss-order"
+                it("settles screen dismissal before the Journey surface outcome") { @MainActor in
+                    let versionID = "Journey-dismiss-order"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let order = DeviceLegDismissalOrderRecorder()
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let order = JourneyDismissalOrderRecorder()
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1022,7 +462,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in order.surfaceOutcome() }
                     )
-                    let presentationResult = await service.presentDeviceLeg(request)
+                    let presentationResult = await service.presentJourney(request)
                     expect(presentationResult).to(equal(.shown))
 
                     controller.performDismiss(reason: .userDismissed)
@@ -1034,24 +474,25 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     ]))
                 }
 
-                it("declines a competing device-leg journey without replacing its owner") { @MainActor in
-                    let versionID = "device-leg-owner"
+                it("declines a competing Journey journey without replacing its owner") { @MainActor in
+                    let versionID = "Journey-owner"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let outcomes = DeviceLegPresentationOutcomeRecorder()
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let outcomes = JourneyPresentationOutcomeRecorder()
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let ownerRequest = DeviceLegPresentationRequest(
+                    let ownerRequest = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1061,12 +502,12 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onEmissionBatch: { _ in true },
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
                     )
-                    let ownerResult = await service.presentDeviceLeg(ownerRequest)
+                    let ownerResult = await service.presentJourney(ownerRequest)
                     expect(ownerResult).to(equal(.shown))
 
-                    let contenderRequest = DeviceLegPresentationRequest(
+                    let contenderRequest = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-contender",
@@ -1076,33 +517,34 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
                     )
-                    let contenderResult = await service.presentDeviceLeg(contenderRequest)
+                    let contenderResult = await service.presentJourney(contenderRequest)
                     expect(contenderResult).to(equal(.declined))
 
                     expect(service.currentExperienceViewController)
                         .to(beIdenticalTo(controller))
                     expect(controller.shutdownRuntimeCallCount).to(equal(0))
                     expect(mockWindowProvider.createdWindows.count).to(equal(1))
-                    await service.shutdownDeviceLegPresentation(ownerDistinctId: "user-1")
+                    await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }
 
-                it("navigates a device-leg journey on its existing controller") { @MainActor in
-                    let versionID = "device-leg-navigation"
+                it("navigates a Journey journey on its existing controller") { @MainActor in
+                    let versionID = "Journey-navigation"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1112,10 +554,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
                     )
-                    let presentationResult = await service.presentDeviceLeg(request)
+                    let presentationResult = await service.presentJourney(request)
                     expect(presentationResult).to(equal(.shown))
 
-                    let result = await service.navigateDeviceLegPresentation(
+                    let result = await service.navigateJourneyPresentation(
                         owner: .init(
                             journeyId: "journey-owner",
                             distinctId: "user-1"
@@ -1133,7 +575,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(mockWindowProvider.createdWindows.count).to(equal(1))
 
                     controller.navigationResult = .productsUnavailable
-                    let recoveryResult = await service.navigateDeviceLegPresentation(
+                    let recoveryResult = await service.navigateJourneyPresentation(
                         owner: .init(
                             journeyId: "journey-owner",
                             distinctId: "user-1"
@@ -1144,30 +586,31 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(recoveryResult).to(equal(.productsUnavailable))
                     expect(service.isExperiencePresented).to(beTrue())
 
-                    await service.shutdownDeviceLegPresentation(ownerDistinctId: "user-1")
+                    await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }
 
-                it("finishes only the matching device-leg presentation owner") { @MainActor in
-                    let versionID = "device-leg-finish"
+                it("finishes only the matching Journey presentation owner") { @MainActor in
+                    let versionID = "Journey-finish"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let availability = DeviceLegPresentationOutcomeRecorder()
-                    service.setDeviceLegPresentationAvailabilityHandler {
+                    let availability = JourneyPresentationOutcomeRecorder()
+                    service.setJourneyPresentationAvailabilityHandler {
                         availability.recordAvailability()
                     }
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1177,10 +620,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
                     )
-                    let presentationResult = await service.presentDeviceLeg(request)
+                    let presentationResult = await service.presentJourney(request)
                     expect(presentationResult).to(equal(.shown))
 
-                    await service.finishDeviceLegPresentation(
+                    await service.finishJourneyPresentation(
                         owner: .init(
                             journeyId: "journey-contender",
                             distinctId: "user-1"
@@ -1189,7 +632,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(service.isExperiencePresented).to(beTrue())
                     expect(controller.shutdownRuntimeCallCount).to(equal(0))
 
-                    await service.finishDeviceLegPresentation(
+                    await service.finishJourneyPresentation(
                         owner: .init(
                             journeyId: "journey-owner",
                             distinctId: "user-1"
@@ -1203,10 +646,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 }
 
                 it(
-                    "waits for foreground profile refresh before advertising device-leg capacity"
+                    "waits for foreground profile refresh before advertising Journey capacity"
                 ) { @MainActor in
-                    let availability = DeviceLegPresentationOutcomeRecorder()
-                    service.setDeviceLegPresentationAvailabilityHandler {
+                    let availability = JourneyPresentationOutcomeRecorder()
+                    service.setJourneyPresentationAvailabilityHandler {
                         availability.recordAvailability()
                     }
 
@@ -1214,41 +657,42 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     service.onAppBecameActive()
 
                     expect(availability.availabilitySignals).to(equal(0))
-                    expect(service.reserveDeviceLegPresentation(
+                    expect(service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )).to(beNil())
 
-                    service.deviceLegProfileRefreshDidComplete()
+                    service.journeyProfileRefreshDidComplete()
 
                     expect(availability.availabilitySignals).to(equal(1))
-                    // Legacy JourneyService still receives the same lifecycle
-                    // transition after the coordinator opens DeviceLeg
-                    // authority. A duplicate callback must not close it again.
+                    // The Journey service receives the same lifecycle transition
+                    // after the coordinator opens profile authority. A duplicate
+                    // callback must not close it again.
                     service.onAppBecameActive()
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
                     expect(reservation).toNot(beNil())
                     reservation?.release()
                 }
 
-                it("defers active device-leg actions until foreground profile authority is ready") { @MainActor in
-                    let versionID = "device-leg-foreground-action"
+                it("defers active Journey actions until foreground profile authority is ready") { @MainActor in
+                    let versionID = "Journey-foreground-action"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1258,7 +702,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
                     )
-                    let presentationResult = await service.presentDeviceLeg(request)
+                    let presentationResult = await service.presentJourney(request)
                     expect(presentationResult).to(equal(.shown))
                     await controller.runtimeDelegate?.experienceViewController(
                         controller,
@@ -1273,7 +717,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     service.onAppBecameActive()
                     let completed = ExperiencePresentationTestSignal()
                     let action = Task { @MainActor in
-                        let result = await service.dispatchDeviceLegPresentationAction(
+                        let result = await service.dispatchJourneyPresentationAction(
                             owner: .init(
                                 journeyId: "journey-owner",
                                 distinctId: "user-1"
@@ -1295,21 +739,22 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(controller.navigationScreenIds).to(beEmpty())
                     expect(service.isExperiencePresented).to(beTrue())
 
-                    service.deviceLegProfileRefreshDidComplete()
+                    service.journeyProfileRefreshDidComplete()
 
                     let actionResult = await action.value
                     expect(actionResult).to(equal(.handled))
                     expect(completed.isSignaled).to(beTrue())
                     expect(controller.navigationScreenIds).to(equal([screenID]))
                     expect(service.isExperiencePresented).to(beTrue())
-                    await service.shutdownDeviceLegPresentation(ownerDistinctId: "user-1")
+                    await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }
 
-                it("returns an authenticated permission resolution to the claimed device-leg action") { @MainActor in
-                    let versionID = "device-leg-permission-action"
+                it("returns an authenticated permission resolution to the claimed Journey action") { @MainActor in
+                    let versionID = "Journey-permission-action"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     controller.requestPermissionEvent = .init(
                         name: SystemEventNames.permissionDenied,
@@ -1319,16 +764,16 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         ]
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1338,10 +783,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
                     )
-                    let presentationResult = await service.presentDeviceLeg(request)
+                    let presentationResult = await service.presentJourney(request)
                     expect(presentationResult).to(equal(.shown))
 
-                    let actionResult = await service.dispatchDeviceLegPresentationAction(
+                    let actionResult = await service.dispatchJourneyPresentationAction(
                         owner: .init(
                             journeyId: "journey-owner",
                             distinctId: "user-1"
@@ -1366,26 +811,27 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(controller.requestPermissionResolutionTypes)
                         .to(equal(["camera"]))
                     expect(service.isExperiencePresented).to(beTrue())
-                    await service.shutdownDeviceLegPresentation(ownerDistinctId: "user-1")
+                    await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }
 
                 it("correlates purchase and restore outcomes to their claimed effects") { @MainActor in
-                    let versionID = "device-leg-commerce-action"
+                    let versionID = "Journey-commerce-action"
                     let screenID = "screen-selected"
                     let controller = CommerceActionRecordingExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1395,10 +841,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onEmissionBatch: { _ in true },
                         onOutcome: { _, _ in true }
                     )
-                    let presentationResult = await service.presentDeviceLeg(request)
+                    let presentationResult = await service.presentJourney(request)
                     expect(presentationResult).to(equal(.shown))
 
-                    let purchaseResult = await service.dispatchDeviceLegPresentationAction(
+                    let purchaseResult = await service.dispatchJourneyPresentationAction(
                         owner: .init(
                             journeyId: "journey-owner",
                             distinctId: "user-1"
@@ -1409,7 +855,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         ],
                         effectId: "effect-purchase"
                     )
-                    let restoreResult = await service.dispatchDeviceLegPresentationAction(
+                    let restoreResult = await service.dispatchJourneyPresentationAction(
                         owner: .init(
                             journeyId: "journey-owner",
                             distinctId: "user-1"
@@ -1434,27 +880,28 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         )
                     ))
-                    await service.shutdownDeviceLegPresentation(ownerDistinctId: "user-1")
+                    await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }
 
-                it("dispatches an authenticated device-leg dismiss through the active controller") { @MainActor in
-                    let versionID = "device-leg-authored-dismiss"
+                it("dispatches an authenticated Journey dismiss through the active controller") { @MainActor in
+                    let versionID = "Journey-authored-dismiss"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(
-                        mockExperienceVersionId: versionID
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID
                     )
                     mockExperienceService.mockViewControllers[versionID] = controller
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let outcomes = DeviceLegPresentationOutcomeRecorder()
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let outcomes = JourneyPresentationOutcomeRecorder()
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1466,10 +913,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             outcomes.record(outcome)
                         }
                     )
-                    let presentationResult = await service.presentDeviceLeg(request)
+                    let presentationResult = await service.presentJourney(request)
                     expect(presentationResult).to(equal(.shown))
 
-                    let actionResult = await service.dispatchDeviceLegPresentationAction(
+                    let actionResult = await service.dispatchJourneyPresentationAction(
                         owner: .init(
                             journeyId: "journey-owner",
                             distinctId: "user-1"
@@ -1488,19 +935,19 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 }
 
                 it("does not advertise capacity when an unused reservation is released") { @MainActor in
-                    let availability = DeviceLegPresentationOutcomeRecorder()
-                    service.setDeviceLegPresentationAvailabilityHandler {
+                    let availability = JourneyPresentationOutcomeRecorder()
+                    service.setJourneyPresentationAvailabilityHandler {
                         availability.recordAvailability()
                     }
 
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
                     expect(reservation).toNot(beNil())
                     reservation?.release()
 
                     expect(availability.availabilitySignals).to(equal(0))
-                    let nextReservation = service.reserveDeviceLegPresentation(
+                    let nextReservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
                     expect(nextReservation).toNot(beNil())
@@ -1509,16 +956,16 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 }
 
                 it("advertises capacity when a contended unused reservation is released") { @MainActor in
-                    let availability = DeviceLegPresentationOutcomeRecorder()
-                    service.setDeviceLegPresentationAvailabilityHandler {
+                    let availability = JourneyPresentationOutcomeRecorder()
+                    service.setJourneyPresentationAvailabilityHandler {
                         availability.recordAvailability()
                     }
 
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
                     expect(reservation).toNot(beNil())
-                    let blockedReservation = service.reserveDeviceLegPresentation(
+                    let blockedReservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
                     expect(blockedReservation).to(beNil())
@@ -1526,7 +973,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     reservation?.release()
 
                     expect(availability.availabilitySignals).to(equal(1))
-                    let nextReservation = service.reserveDeviceLegPresentation(
+                    let nextReservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
                     expect(nextReservation).toNot(beNil())
@@ -1534,25 +981,28 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(availability.availabilitySignals).to(equal(1))
                 }
 
-                it("fences a device-leg presentation acquiring during profile teardown") { @MainActor in
-                    let versionID = "device-leg-profile-teardown"
+                it("fences a Journey presentation acquiring during profile teardown") { @MainActor in
+                    let versionID = "Journey-profile-teardown"
                     let screenID = "screen-selected"
                     mockExperienceService.mockViewControllers[versionID] =
-                        MockExperienceViewController(mockExperienceVersionId: versionID)
+                        MockExperienceViewController(
+                            mockExperienceVersionId: versionID,
+                            mockScreenId: screenID
+                        )
                     let gate = ExperiencePresentationAcquisitionGate()
                     mockExperienceService.viewControllerHandler = {
                         await gate.suspend()
                     }
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1563,11 +1013,11 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onOutcome: { _, _ in true }
                     )
                     let presentation = Task { @MainActor in
-                        await service.presentDeviceLeg(request)
+                        await service.presentJourney(request)
                     }
                     await gate.waitUntilEntered()
                     let shutdown = Task { @MainActor in
-                        await service.shutdownDeviceLegPresentation(
+                        await service.shutdownJourneyPresentation(
                             ownerDistinctId: "user-1"
                         )
                     }
@@ -1582,93 +1032,28 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(mockWindowProvider.createdWindows).to(beEmpty())
                 }
 
-                it("leaves another owner's detached host completion running during profile teardown") { @MainActor in
-                    let detachedFlowID = "detached-other-owner"
-                    let detachedController = MockExperienceViewController(
-                        mockExperienceVersionId: detachedFlowID
-                    )
-                    let detachedRecorder = ExperiencePresentationLifecycleRecorder()
-                    let releaseDetachedCompletion = ExperiencePresentationTestSignal()
-                    detachedRecorder.hostDismissalHandler = {
-                        while !releaseDetachedCompletion.isSignaled,
-                              !Task.isCancelled {
-                            try? await Task.sleep(nanoseconds: 10_000_000)
-                        }
-                    }
-                    mockExperienceService.mockViewControllers[detachedFlowID] =
-                        detachedController
-                    try! await service.presentExperience(
-                        detachedFlowID,
-                        from: nil,
-                        runtimeDelegate: detachedRecorder
-                    )
-                    let hostDismissal = Task { @MainActor in
-                        await service.dismissCurrentExperienceFromHost()
-                    }
-                    await polling(expect(detachedRecorder.hostDismissalStarted)).value
-                        .toEventually(beTrue(), timeout: .seconds(1))
-
-                    let versionID = "device-leg-owner-teardown"
+                it("fences a Journey presentation acquiring as the app backgrounds") { @MainActor in
+                    let versionID = "Journey-background"
                     let screenID = "screen-selected"
                     mockExperienceService.mockViewControllers[versionID] =
-                        MockExperienceViewController(mockExperienceVersionId: versionID)
-                    let release = makeDeviceLegRelease(
-                        versionId: versionID,
-                        screenId: screenID
-                    )
-                    let reservation = service.reserveDeviceLegPresentation(
-                        ownerDistinctId: "device-leg-user"
-                    )
-                    expect(reservation).to(beNil())
-                    let request = DeviceLegPresentationRequest(
-                        release: release,
-                        delivery: deviceLegDelivery(),
-                        screenId: screenID,
-                        owner: .init(
-                            journeyId: "device-leg-journey",
-                            distinctId: "device-leg-user"
-                        ),
-                        reservation: reservation,
-                        onEmissionBatch: { _ in true },
-                        onOutcome: { _, _ in true }
-                    )
-                    let presentationResult = await service.presentDeviceLeg(request)
-                    expect(presentationResult).to(equal(.declined))
-
-                    await service.shutdownDeviceLegPresentation(
-                        ownerDistinctId: "device-leg-user"
-                    )
-
-                    expect(service.isExperiencePresented).to(beFalse())
-                    expect(detachedRecorder.cleanupCompleted).to(beFalse())
-                    expect(detachedController.shutdownRuntimeCallCount).to(equal(0))
-
-                    releaseDetachedCompletion.signal()
-                    await hostDismissal.value
-                    await polling(expect(detachedRecorder.cleanupCompleted)).value
-                        .toEventually(beTrue(), timeout: .seconds(1))
-                    expect(detachedController.shutdownRuntimeCallCount).to(equal(1))
-                }
-
-                it("fences a device-leg presentation acquiring as the app backgrounds") { @MainActor in
-                    let versionID = "device-leg-background"
-                    let screenID = "screen-selected"
-                    mockExperienceService.mockViewControllers[versionID] =
-                        MockExperienceViewController(mockExperienceVersionId: versionID)
+                        MockExperienceViewController(
+                            mockExperienceVersionId: versionID,
+                            mockScreenId: screenID
+                        )
                     let gate = ExperiencePresentationAcquisitionGate()
                     mockExperienceService.viewControllerHandler = {
                         await gate.suspend()
                     }
-                    let release = makeDeviceLegRelease(
+                    let release = makeJourneyRelease(
                         versionId: versionID,
                         screenId: screenID
                     )
-                    let reservation = service.reserveDeviceLegPresentation(
+                    let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = DeviceLegPresentationRequest(
+                    let request = JourneyPresentationRequest(
                         release: release,
-                        delivery: deviceLegDelivery(),
+                        delivery: journeyDelivery(),
                         screenId: screenID,
                         owner: .init(
                             journeyId: "journey-owner",
@@ -1679,7 +1064,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onOutcome: { _, _ in true }
                     )
                     let presentation = Task { @MainActor in
-                        await service.presentDeviceLeg(request)
+                        await service.presentJourney(request)
                     }
                     await gate.waitUntilEntered()
 
@@ -1692,184 +1077,6 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(mockWindowProvider.createdWindows).to(beEmpty())
                 }
 
-                it("ignores an old controller close callback after a new flow is presented") { @MainActor in
-                    let firstExperienceVersionId = "stale-close-first"
-                    let firstVC = MockExperienceViewController(mockExperienceVersionId: firstExperienceVersionId)
-                    mockExperienceService.mockViewControllers[firstExperienceVersionId] = firstVC
-                    try! await service.presentExperience(firstExperienceVersionId, from: nil, runtimeDelegate: nil)
-                    let staleOnClose = firstVC.onClose
-                    await service.dismissCurrentExperience()
-
-                    let secondExperienceVersionId = "stale-close-second"
-                    let secondVC = MockExperienceViewController(mockExperienceVersionId: secondExperienceVersionId)
-                    mockExperienceService.mockViewControllers[secondExperienceVersionId] = secondVC
-                    try! await service.presentExperience(secondExperienceVersionId, from: nil, runtimeDelegate: nil)
-                    let secondWindow = mockWindowProvider.createdWindows[1]
-
-                    staleOnClose?(.userDismissed)
-                    await Task.yield()
-
-                    expect(service.currentExperienceId).to(equal(secondExperienceVersionId))
-                    expect(service.currentExperienceViewController).to(beIdenticalTo(secondVC))
-                    expect(secondWindow.destroyCalled).to(beFalse())
-                    expect(service.isExperiencePresented).to(beTrue())
-                }
-
-                it("ignores a delayed close fallback after reusing the same controller") { @MainActor in
-                    let flowId = "stale-close-reused-controller"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-
-                    mockVC.performDismiss(reason: .userDismissed)
-                    await polling(expect(service.isExperiencePresented)).value
-                        .toEventually(beFalse(), timeout: .seconds(1))
-
-                    try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-
-                    expect(service.currentExperienceViewController).to(beIdenticalTo(mockVC))
-                    expect(service.isExperiencePresented).to(beTrue())
-                }
-
-                it("cancels an owned presentation attempt and tears down its window") { @MainActor in
-                    let flowId = "cancelled-presentation"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    let gate = ExperiencePresentationTestGate()
-                    mockVC.prepareForPresentationHandler = {
-                        await gate.wait()
-                    }
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-
-                    let presentation = Task { @MainActor in
-                        // Boxed: Task success types must be Sendable.
-                        PollingBox(try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil))
-                    }
-                    await gate.waitUntilSuspended()
-                    presentation.cancel()
-                    gate.resume()
-
-                    do {
-                        _ = try await presentation.value
-                        fail("Expected presentation cancellation")
-                    } catch is CancellationError {
-                        // Expected.
-                    }
-
-                    expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
-                    expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
-                    expect(service.currentExperienceViewController).to(beNil())
-                    expect(service.isExperiencePresented).to(beFalse())
-                }
-
-                it("tears down owned presentation when its exact commit is replaced during prepare") { @MainActor in
-                    let flowId = "replaced-presentation"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    let gate = ExperiencePresentationTestGate()
-                    mockVC.prepareForPresentationHandler = { await gate.wait() }
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    let commit = JourneyPendingPresentation(
-                        experienceId: "experience",
-                        experienceVersionId: flowId,
-                        releaseID: nil,
-                        presentationStyle: .fullScreen,
-                        screenId: "screen-selected",
-                        transition: nil,
-                        continuation: []
-                    )
-
-                    let presentation = Task { @MainActor in
-                        try await service.presentExperience(
-                            flowId,
-                            from: nil,
-                            runtimeDelegate: nil,
-                            colorSchemeMode: .light,
-                            commit: commit
-                        )
-                    }
-                    await gate.waitUntilSuspended()
-                    mockExperienceService.presentationCommitIsValid = false
-                    gate.resume()
-
-                    do {
-                        _ = try await presentation.value
-                        fail("expected superseded commit")
-                    } catch ExperiencePresentationError.presentationSuperseded {
-                        // Expected.
-                    }
-                    expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
-                    expect(mockWindowProvider.createdWindows.first?.presentCalled).to(beFalse())
-                    expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
-                    expect(service.isExperiencePresented).to(beFalse())
-                }
-                it("declines a second commit while a valid presentation is being prepared") { @MainActor in
-                    let flowId = "invalid-commit-no-supersede"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    let gate = ExperiencePresentationTestGate()
-                    mockVC.prepareForPresentationHandler = { await gate.wait() }
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    let validCommit = JourneyPendingPresentation(
-                        experienceId: "experience",
-                        experienceVersionId: flowId,
-                        releaseID: nil,
-                        presentationStyle: .fullScreen,
-                        screenId: "screen-selected",
-                        transition: nil,
-                        continuation: []
-                    )
-                    let validPresentation = Task { @MainActor in
-                        try await service.presentExperience(
-                            flowId,
-                            from: nil,
-                            runtimeDelegate: nil,
-                            colorSchemeMode: .light,
-                            commit: validCommit
-                        )
-                    }
-                    await gate.waitUntilSuspended()
-
-                    let competingCommit = JourneyPendingPresentation(
-                        experienceId: "experience",
-                        experienceVersionId: flowId,
-                        releaseID: nil,
-                        presentationStyle: .fullScreen,
-                        screenId: "screen-selected",
-                        transition: nil,
-                        continuation: []
-                    )
-                    do {
-                        _ = try await service.presentExperience(
-                            flowId,
-                            from: nil,
-                            runtimeDelegate: nil,
-                            colorSchemeMode: .light,
-                            commit: competingCommit
-                        )
-                        fail("expected the competing presentation to be declined")
-                    } catch ExperiencePresentationError.presentationDeclined {
-                        // Expected.
-                    }
-
-                    gate.resume()
-                    _ = try await validPresentation.value
-                    expect(service.isExperiencePresented).to(beTrue())
-                }
-                
-                it("should present view controller in window") { @MainActor in
-                    // Setup
-                    let flowId = "test-key-window"
-                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                    mockExperienceService.mockViewControllers[flowId] = mockVC
-                    
-                    // Present flow
-                    try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                    
-                    // Verify window presentation
-                    let window = mockWindowProvider.createdWindows.first
-                    expect(window?.presentCalled).to(beTrue())
-                    expect(window?.isPresenting).to(beTrue())
-                    expect(window?.presentedViewController).to(equal(mockVC))
-                }
             }
             
             context("when window scene is not available") {
@@ -1877,184 +1084,19 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     mockWindowProvider.simulateNoScene()
                 }
 
-                it("does not reserve device-leg capacity") { @MainActor in
-                    expect(service.reserveDeviceLegPresentation(
+                it("does not reserve Journey capacity") { @MainActor in
+                    expect(service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )).to(beNil())
                 }
                 
-                it("should throw noActiveScene error") { @MainActor in
-                    do {
-                        _ = try await service.presentExperience("test-flow", from: nil, runtimeDelegate: nil)
-                        fail("Expected presentExperience to throw noActiveScene")
-                    } catch let error as ExperiencePresentationError {
-                        guard case .noActiveScene = error else {
-                            fail("Expected .noActiveScene, got \(error)")
-                            return
-                        }
-                    } catch {
-                        fail("Unexpected error: \(error)")
-                    }
-                    
-                    // Should not create any windows
-                    expect(mockWindowProvider.createdWindows).to(beEmpty())
-                }
             }
             
             context("when flow service fails") {
-                it("should propagate flow service errors") { @MainActor in
-                    // Setup flow service to fail
-                    mockExperienceService.shouldFailExperienceDisplay = true
-                    mockExperienceService.failureError = MockExperienceServiceError.experienceNotFound("missing-flow")
-                    
-                    // Act & Assert
-                    do {
-                        _ = try await service.presentExperience("missing-flow", from: nil, runtimeDelegate: nil)
-                        fail("Expected presentExperience to throw")
-                    } catch {
-                        // Expected.
-                    }
-                    
-                    // Should not create any windows
-                    expect(mockWindowProvider.createdWindows).to(beEmpty())
-                    expect(service.isExperiencePresented).to(beFalse())
-                }
             }
         }
         
         describe("dismissCurrentExperience") {
-            it("tears down an owned in-flight window presentation immediately") { @MainActor in
-                let flowId = "host-dismiss-during-window-presentation"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                let recorder = ExperiencePresentationLifecycleRecorder()
-                let presentationGate = ExperiencePresentationTestGate()
-                let hostDismissalStarted = ExperiencePresentationTestSignal()
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                mockWindowProvider.presentHandler = {
-                    await presentationGate.wait()
-                }
-                recorder.hostDismissalWillHandler = {
-                    hostDismissalStarted.signal()
-                }
-
-                let presentation = Task { @MainActor in
-                    PollingBox(try await service.presentExperience(
-                        flowId,
-                        from: nil,
-                        runtimeDelegate: recorder
-                    ))
-                }
-                await presentationGate.waitUntilSuspended()
-
-                let dismissal = Task { @MainActor in
-                    await service.dismissCurrentExperienceFromHost()
-                }
-                await hostDismissalStarted.wait()
-                presentationGate.resume()
-                await dismissal.value
-
-                let window = mockWindowProvider.createdWindows.first
-                expect(service.isExperiencePresented).to(beFalse())
-                expect(window?.destroyCalled).to(beTrue())
-                do {
-                    _ = try await presentation.value.value
-                    fail("the in-flight presentation should observe host cancellation")
-                } catch is CancellationError {
-                    // Expected.
-                } catch {
-                    fail("expected CancellationError, received \(error)")
-                }
-                await polling(expect(recorder.cleanupCompleted)).value
-                    .toEventually(beTrue(), timeout: .seconds(1))
-                expect(window?.presentedViewController).to(beNil())
-            }
-
-            it("does not cancel controller acquisition when host dismissal finds no current presentation") { @MainActor in
-                let flowId = "host-dismiss-during-controller-acquisition"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                let acquisitionGate = ExperiencePresentationTestGate()
-                let suspendedExperiences = SuspendedViewControllerExperienceService(
-                    base: mockExperienceService,
-                    gate: acquisitionGate
-                )
-                service = ExperiencePresentationService(
-                    windowProvider: mockWindowProvider,
-                    experiences: suspendedExperiences,
-                    eventLog: mockEventLog,
-                    triggerBroker: TriggerBroker(),
-                    dateProvider: MockDateProvider()
-                )
-
-                let presentation = Task { @MainActor in
-                    PollingBox(try await service.presentExperience(
-                        flowId,
-                        from: nil,
-                        runtimeDelegate: nil
-                    ))
-                }
-                await acquisitionGate.waitUntilSuspended()
-                expect(service.isExperiencePresented).to(beFalse())
-
-                await service.dismissCurrentExperienceFromHost()
-                acquisitionGate.resume()
-
-                do {
-                    let presentedController = try await presentation.value.value
-                    expect(presentedController).to(beIdenticalTo(mockVC))
-                } catch {
-                    fail("Host dismissal without a current presentation cancelled acquisition: \(error)")
-                }
-                expect(service.isExperiencePresented).to(beTrue())
-                expect(mockWindowProvider.createdWindows).to(haveCount(1))
-            }
-
-            it("shutdown invalidates and joins a presentation suspended before publication") { @MainActor in
-                let flowId = "shutdown-during-controller-acquisition"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                let recorder = ExperiencePresentationLifecycleRecorder()
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                let acquisitionGate = ExperiencePresentationTestGate()
-                let suspendedExperiences = SuspendedViewControllerExperienceService(
-                    base: mockExperienceService,
-                    gate: acquisitionGate
-                )
-                service = ExperiencePresentationService(
-                    windowProvider: mockWindowProvider,
-                    experiences: suspendedExperiences,
-                    eventLog: mockEventLog,
-                    triggerBroker: TriggerBroker(),
-                    dateProvider: MockDateProvider()
-                )
-
-                let presentation = Task { @MainActor in
-                    PollingBox(try await service.presentExperience(
-                        flowId,
-                        from: nil,
-                        runtimeDelegate: recorder
-                    ))
-                }
-                await acquisitionGate.waitUntilSuspended()
-                let shutdown = Task { @MainActor in
-                    await service.shutdownCurrentExperience()
-                }
-                await Task.yield()
-                acquisitionGate.resume()
-                await shutdown.value
-
-                do {
-                    _ = try await presentation.value.value
-                    fail("the in-flight presentation should observe shutdown cancellation")
-                } catch is CancellationError {
-                    // Expected.
-                } catch {
-                    fail("expected CancellationError, received \(error)")
-                }
-                expect(mockWindowProvider.createdWindows).to(beEmpty())
-                expect(service.isExperiencePresented).to(beFalse())
-                expect(recorder.cleanupCompleted).to(beFalse())
-            }
-
             it("treats host dismissal as a no-op when no experience is presented") { @MainActor in
                 expect(service.isExperiencePresented).to(beFalse())
 
@@ -2064,358 +1106,6 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 expect(mockWindowProvider.createdWindows).to(beEmpty())
             }
 
-            it("attributes host dismissal to the presenting journey identity") { @MainActor in
-                let flowId = "host-dismiss-identity"
-                let journeyDistinctId = "journey-user"
-                let identity = MockIdentityService()
-                identity.setDistinctId("replacement-user")
-                mockEventLog.identity = identity
-                let journey = Journey(
-                    experience: makeExperience(id: "identity-experience"),
-                    distinctId: journeyDistinctId,
-                    now: Date()
-                )
-                let mockVC = MockExperienceViewController(
-                    mockExperienceVersionId: flowId
-                )
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                try! await service.presentExperience(
-                    flowId,
-                    from: journey,
-                    runtimeDelegate: nil
-                )
-
-                await service.dismissCurrentExperienceFromHost()
-
-                await polling(expect {
-                    mockEventLog.routedEvents.filter {
-                        $0.name == JourneyEvents.experienceDismissed
-                    }.count
-                }).value.toEventually(equal(1), timeout: .seconds(1))
-                let dismissed = mockEventLog.routedEvents.filter {
-                    $0.name == JourneyEvents.experienceDismissed
-                }
-                expect(dismissed.first?.distinctId).to(equal(journeyDistinctId))
-            }
-
-            it("keeps the presentation slot occupied until host input settles") { @MainActor in
-                let currentFlowId = "host-dismiss-immediate-current"
-                let currentVC = MockExperienceViewController(
-                    mockExperienceVersionId: currentFlowId
-                )
-                let replacementFlowId = "host-dismiss-immediate-replacement"
-                let replacementVC = MockExperienceViewController(
-                    mockExperienceVersionId: replacementFlowId
-                )
-                let recorder = ExperiencePresentationLifecycleRecorder()
-                let terminalizationGate = ExperiencePresentationTestGate()
-                recorder.hostDismissalHandler = {
-                    await terminalizationGate.wait()
-                }
-                mockExperienceService.mockViewControllers[currentFlowId] = currentVC
-                mockExperienceService.mockViewControllers[replacementFlowId] = replacementVC
-                try! await service.presentExperience(
-                    currentFlowId,
-                    from: nil,
-                    runtimeDelegate: recorder
-                )
-                let currentWindow = mockWindowProvider.createdWindows[0]
-
-                let dismissalCompleted = ExperiencePresentationTestSignal()
-                let dismissal = Task { @MainActor in
-                    await service.dismissCurrentExperienceFromHost()
-                    dismissalCompleted.signal()
-                }
-                await terminalizationGate.waitUntilSuspended()
-
-                expect(service.isExperiencePresented).to(beFalse())
-                expect(currentWindow.dismissCalled).to(beTrue())
-                expect(currentWindow.destroyCalled).to(beTrue())
-                expect(dismissalCompleted.isSignaled).to(beFalse())
-                expect(recorder.cleanupCompleted).to(beFalse())
-
-                do {
-                    _ = try await service.presentExperience(
-                        replacementFlowId,
-                        from: nil,
-                        runtimeDelegate: nil
-                    )
-                    fail("Expected teardown to retain presentation capacity")
-                } catch ExperiencePresentationError.presentationDeclined {
-                    // Teardown retains the sole presentation slot.
-                } catch {
-                    fail("Unexpected presentation error: \(error)")
-                }
-
-                terminalizationGate.resume()
-                await dismissal.value
-                expect(dismissalCompleted.isSignaled).to(beTrue())
-                expect(recorder.cleanupCompleted).to(beTrue())
-                expect(currentVC.shutdownRuntimeCallCount).to(equal(1))
-
-                let replacement = try! await service.presentExperience(
-                    replacementFlowId,
-                    from: nil,
-                    runtimeDelegate: nil
-                )
-                expect(replacement).to(beIdenticalTo(replacementVC))
-                expect(service.currentExperienceViewController)
-                    .to(beIdenticalTo(replacementVC))
-            }
-
-            it("retries rejected host input without restoring the hidden surface") { @MainActor in
-                let flowId = "host-dismiss-terminalization-retry"
-                let mockVC = MockExperienceViewController(
-                    mockExperienceVersionId: flowId
-                )
-                let recorder = ExperiencePresentationLifecycleRecorder()
-                recorder.hostDismissalResult = false
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                try! await service.presentExperience(
-                    flowId,
-                    from: nil,
-                    runtimeDelegate: recorder
-                )
-                let window = mockWindowProvider.createdWindows[0]
-
-                let dismissal = Task { @MainActor in
-                    await service.dismissCurrentExperienceFromHost()
-                }
-                await polling(expect(recorder.hostDismissalAttemptCount)).value
-                    .toEventually(equal(1), timeout: .seconds(1))
-                expect(service.isExperiencePresented).to(beFalse())
-                expect(window.dismissCalled).to(beTrue())
-                expect(window.destroyCalled).to(beTrue())
-                recorder.hostDismissalResult = true
-                await dismissal.value
-                expect(recorder.hostDismissalAttemptCount).to(beGreaterThanOrEqualTo(2))
-                expect(recorder.cleanupCompleted).to(beTrue())
-                expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
-            }
-
-            it("cancels rejected background host input during shutdown") { @MainActor in
-                let flowId = "shutdown-host-dismiss-terminalization-retry"
-                let mockVC = MockExperienceViewController(
-                    mockExperienceVersionId: flowId
-                )
-                let recorder = ExperiencePresentationLifecycleRecorder()
-                recorder.hostDismissalResult = false
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                try! await service.presentExperience(
-                    flowId,
-                    from: nil,
-                    runtimeDelegate: recorder
-                )
-
-                let dismissal = Task { @MainActor in
-                    await service.dismissCurrentExperienceFromHost()
-                }
-                await polling(expect(recorder.hostDismissalAttemptCount)).value
-                    .toEventually(equal(1), timeout: .seconds(1))
-                await service.shutdownCurrentExperience()
-                await dismissal.value
-
-                expect(service.isExperiencePresented).to(beFalse())
-                expect(recorder.cleanupCompleted).to(beTrue())
-                expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
-            }
-
-            it("hides the surface before waiting for an in-flight purchase") { @MainActor in
-                let testStore = SuspendedExperienceTestStore()
-                let eventSink = RecordingPresentationSystemEventSink()
-                let transactionService = TransactionService(
-                    productService: ProductService(),
-                    transactionObserver: MockTransactionObserver(),
-                    pendingPurchaseStore: InMemoryPendingPurchaseStore(),
-                    dateProvider: MockDateProvider(),
-                    settings: NuxieRuntimeSettings(
-                        configuration: NuxieConfiguration(apiKey: "host-dismiss-purchase")
-                    ),
-                    eventSink: eventSink,
-                    testStore: testStore
-                )
-                var product = StoreProduct(
-                    productId: "product-1",
-                    placementId: "placement-1",
-                    name: "Test product",
-                    price: "$1.00",
-                    period: nil
-                )
-                product.isTestStoreProduct = true
-                let flowId = "host-dismiss-purchase"
-                let mockVC = MockExperienceViewController(
-                    mockExperienceVersionId: flowId,
-                    products: [product],
-                    transactionService: transactionService,
-                    systemEventSink: eventSink
-                )
-                let recorder = ExperiencePresentationLifecycleRecorder()
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                try! await service.presentExperience(
-                    flowId,
-                    from: nil,
-                    runtimeDelegate: recorder
-                )
-                let window = mockWindowProvider.createdWindows[0]
-                let correlation = CommerceOutcomeCorrelation(
-                    eventId: "purchase-cancelled-after-host-dismiss",
-                    distinctId: "customer-a"
-                )
-                mockVC.performPurchase(
-                    placementId: product.placementId,
-                    outcomeCorrelation: correlation
-                )
-                await testStore.waitUntilPurchaseStarts()
-
-                let dismissalCompleted = ExperiencePresentationTestSignal()
-                let dismissal = Task { @MainActor in
-                    await service.dismissCurrentExperienceFromHost()
-                    dismissalCompleted.signal()
-                }
-                await polling(expect(window.destroyCalled)).value
-                    .toEventually(beTrue(), timeout: .seconds(1))
-
-                expect(service.isExperiencePresented).to(beFalse())
-                expect(window.dismissCalled).to(beTrue())
-                expect(window.destroyCalled).to(beTrue())
-                expect(recorder.hostDismissalAttemptCount).to(equal(0))
-                expect(dismissalCompleted.isSignaled).to(beFalse())
-
-                await testStore.resolvePurchase(.cancelled)
-                await dismissal.value
-                expect(recorder.hostDismissalAttemptCount).to(equal(1))
-                expect(recorder.cleanupCompleted).to(beTrue())
-                await polling(expect(eventSink.names)).value.toEventually(
-                    contain(SystemEventNames.purchaseCancelled),
-                    timeout: .seconds(1)
-                )
-                expect(eventSink.eventIds).to(contain(correlation.eventId))
-            }
-
-            it("cancels an in-flight purchase waiter during global shutdown") { @MainActor in
-                let testStore = SuspendedExperienceTestStore()
-                let transactionService = TransactionService(
-                    productService: ProductService(),
-                    transactionObserver: MockTransactionObserver(),
-                    pendingPurchaseStore: InMemoryPendingPurchaseStore(),
-                    dateProvider: MockDateProvider(),
-                    settings: NuxieRuntimeSettings(
-                        configuration: NuxieConfiguration(apiKey: "shutdown-host-purchase")
-                    ),
-                    eventSink: DiscardingSystemEventSink(),
-                    testStore: testStore
-                )
-                var product = StoreProduct(
-                    productId: "product-shutdown",
-                    placementId: "placement-shutdown",
-                    name: "Test product",
-                    price: "$1.00",
-                    period: nil
-                )
-                product.isTestStoreProduct = true
-                let flowId = "shutdown-host-purchase"
-                let mockVC = MockExperienceViewController(
-                    mockExperienceVersionId: flowId,
-                    products: [product],
-                    transactionService: transactionService
-                )
-                let recorder = ExperiencePresentationLifecycleRecorder()
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                try! await service.presentExperience(
-                    flowId,
-                    from: nil,
-                    runtimeDelegate: recorder
-                )
-                mockVC.performPurchase(placementId: product.placementId)
-                await testStore.waitUntilPurchaseStarts()
-                let dismissal = Task { @MainActor in
-                    await service.dismissCurrentExperienceFromHost()
-                }
-                await polling(expect(service.isExperiencePresented)).value
-                    .toEventually(beFalse(), timeout: .seconds(1))
-
-                let shutdownCompleted = ExperiencePresentationTestSignal()
-                let shutdown = Task { @MainActor in
-                    await service.shutdownCurrentExperience()
-                    shutdownCompleted.signal()
-                }
-                await polling(expect(shutdownCompleted.isSignaled)).value
-                    .toEventually(beTrue(), timeout: .seconds(1))
-                await dismissal.value
-                expect(recorder.cleanupCompleted).to(beTrue())
-                expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
-
-                await testStore.resolvePurchase(.cancelled)
-                await shutdown.value
-            }
-
-            it("hides the surface before waiting for an in-flight restore") { @MainActor in
-                let testStore = SuspendedExperienceTestStore()
-                let transactionService = TransactionService(
-                    productService: ProductService(),
-                    transactionObserver: MockTransactionObserver(),
-                    pendingPurchaseStore: InMemoryPendingPurchaseStore(),
-                    dateProvider: MockDateProvider(),
-                    settings: NuxieRuntimeSettings(
-                        configuration: NuxieConfiguration(apiKey: "host-dismiss-restore")
-                    ),
-                    eventSink: DiscardingSystemEventSink(),
-                    testStore: testStore
-                )
-                let flowId = "host-dismiss-restore"
-                let mockVC = MockExperienceViewController(
-                    mockExperienceVersionId: flowId,
-                    transactionService: transactionService
-                )
-                let recorder = ExperiencePresentationLifecycleRecorder()
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                try! await service.presentExperience(
-                    flowId,
-                    from: nil,
-                    runtimeDelegate: recorder
-                )
-                let window = mockWindowProvider.createdWindows[0]
-                mockVC.performRestore()
-                await testStore.waitUntilRestoreStarts()
-
-                let dismissalCompleted = ExperiencePresentationTestSignal()
-                let dismissal = Task { @MainActor in
-                    await service.dismissCurrentExperienceFromHost()
-                    dismissalCompleted.signal()
-                }
-                await polling(expect(window.destroyCalled)).value
-                    .toEventually(beTrue(), timeout: .seconds(1))
-
-                expect(service.isExperiencePresented).to(beFalse())
-                expect(window.dismissCalled).to(beTrue())
-                expect(window.destroyCalled).to(beTrue())
-                expect(recorder.hostDismissalAttemptCount).to(equal(0))
-                expect(dismissalCompleted.isSignaled).to(beFalse())
-
-                await testStore.resolveRestore()
-                await dismissal.value
-                expect(recorder.hostDismissalAttemptCount).to(equal(1))
-                expect(recorder.cleanupCompleted).to(beTrue())
-            }
-
-            it("should dismiss presented flow") { @MainActor in
-                // Present a flow first
-                let flowId = "test-dismiss"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                
-                try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                expect(service.isExperiencePresented).to(beTrue())
-                
-                // Dismiss it
-                await service.dismissCurrentExperience()
-                
-                // Verify dismissal
-                expect(service.isExperiencePresented).to(beFalse())
-                let window = mockWindowProvider.createdWindows.first
-                expect(window?.dismissCalled).to(beTrue())
-            }
-            
             it("should handle dismissal when no flow is presented") { @MainActor in
                 // No flow presented
                 expect(service.isExperiencePresented).to(beFalse())
@@ -2427,154 +1117,15 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 expect(service.isExperiencePresented).to(beFalse())
             }
 
-            it("detaches runtime ownership before destroying the window") { @MainActor in
-                var lifecycle: [String] = []
-                mockWindowProvider.onWindowLifecycleEvent = { lifecycle.append($0) }
-                let flowId = "ordered-cleanup"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                mockVC.onRuntimeLifecycleEvent = { lifecycle.append("runtime-\($0)") }
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                lifecycle.removeAll()
-
-                await service.dismissCurrentExperience()
-
-                expect(lifecycle).to(equal([
-                    "runtime-prepare-dismissal",
-                    "window-dismiss",
-                    "runtime-shutdown",
-                    "window-destroy",
-                ]))
-            }
-
-            it("delivers screen dismissal before runtime teardown") { @MainActor in
-                var lifecycle: [String] = []
-                mockWindowProvider.onWindowLifecycleEvent = { lifecycle.append($0) }
-                let flowId = "screen-dismissal-order"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                mockVC.shutdownRuntimeHandler = {
-                    lifecycle.append("runtime-shutdown")
-                }
-                let runtimeDelegate = ScreenDismissalOrderRuntimeDelegate {
-                    lifecycle.append("$screen_dismissed")
-                }
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                try! await service.presentExperience(
-                    flowId,
-                    from: nil,
-                    runtimeDelegate: runtimeDelegate
-                )
-                lifecycle.removeAll()
-
-                await service.dismissCurrentExperience()
-
-                expect(lifecycle).to(equal([
-                    "$screen_dismissed",
-                    "window-dismiss",
-                    "runtime-shutdown",
-                    "window-destroy",
-                ]))
-            }
         }
         
         describe("isExperiencePresented") {
-            it("should reflect presentation state accurately") { @MainActor in
-                // Initially no flow
-                expect(service.isExperiencePresented).to(beFalse())
-                
-                // Present flow
-                let flowId = "state-test"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                
-                try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                expect(service.isExperiencePresented).to(beTrue())
-                
-                // Dismiss flow
-                await service.dismissCurrentExperience()
-                expect(service.isExperiencePresented).to(beFalse())
-            }
         }
         
         describe("journey integration") {
-            it("should accept journey context") { @MainActor in
-                // Create mock experience and journey using TestBuilders
-                let experience = makeExperience(id: "experience-1")
-
-                let journey = Journey(
-                    experience: experience,
-                    distinctId: "user-1",
-                    now: Date()
-                )
-                
-                // Present with journey
-                let flowId = "journey-flow"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                
-                do {
-                    _ = try await service.presentExperience(flowId, from: journey, runtimeDelegate: nil)
-                } catch {
-                    fail("Unexpected presentExperience error: \(error)")
-                }
-                
-                // Verify presentation
-                expect(service.isExperiencePresented).to(beTrue())
-                
-                // Verify journey context is stored
-                expect(service.currentJourney?.id).toNot(beNil())
-            }
-            
-            it("should handle nil journey context") { @MainActor in
-                let flowId = "no-journey-flow"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                
-                do {
-                    _ = try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                } catch {
-                    fail("Unexpected presentExperience error: \(error)")
-                }
-                
-                expect(service.isExperiencePresented).to(beTrue())
-                expect(service.currentJourney).to(beNil())
-            }
         }
         
         describe("window management") {
-            it("should create window and present view controller") { @MainActor in
-                let flowId = "window-props"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                
-                try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                
-                let window = mockWindowProvider.createdWindows.first
-                expect(window).toNot(beNil())
-                expect(window?.presentCalled).to(beTrue())
-                expect(window?.presentedViewController).to(equal(mockVC))
-                expect(window?.isPresenting).to(beTrue())
-            }
-            
-            it("should properly clean up window on dismissal") { @MainActor in
-                let flowId = "cleanup-test"
-                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
-                mockExperienceService.mockViewControllers[flowId] = mockVC
-                
-                try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                let window = mockWindowProvider.createdWindows.first
-                
-                // Simulate dismissal
-                mockVC.onClose?(.userDismissed)
-                
-                // Wait for cleanup
-                await polling(expect(service.isExperiencePresented)).value
-                    .toEventually(beFalse(), timeout: .seconds(2))
-                
-                // Verify cleanup
-                expect(window?.destroyCalled).to(beTrue())
-                expect(window?.presentedViewController).to(beNil())
-            }
         }
     }
 }
@@ -2620,34 +1171,6 @@ private final class ScreenDismissalOrderRuntimeDelegate: ExperienceRuntimeDelega
 }
 
 @MainActor
-private final class ExperiencePresentationTestGate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
-
-    func wait() async {
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            let waiters = suspensionWaiters
-            suspensionWaiters.removeAll()
-            waiters.forEach { $0.resume() }
-        }
-    }
-
-    func waitUntilSuspended() async {
-        guard continuation == nil else { return }
-        await withCheckedContinuation { continuation in
-            suspensionWaiters.append(continuation)
-        }
-    }
-
-    func resume() {
-        let continuation = continuation
-        self.continuation = nil
-        continuation?.resume()
-    }
-}
-
-@MainActor
 private final class ExperiencePresentationTestSignal {
     private var wasSignaled = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -2667,102 +1190,6 @@ private final class ExperiencePresentationTestSignal {
         await withCheckedContinuation { continuation in
             waiters.append(continuation)
         }
-    }
-}
-
-private final class SuspendedViewControllerExperienceService:
-    ExperienceServiceProtocol,
-    @unchecked Sendable {
-    private let base: MockExperienceService
-    private let gate: ExperiencePresentationTestGate
-    private let suspendedVersionID: String?
-
-    init(
-        base: MockExperienceService,
-        gate: ExperiencePresentationTestGate,
-        suspendedVersionID: String? = nil
-    ) {
-        self.base = base
-        self.gate = gate
-        self.suspendedVersionID = suspendedVersionID
-    }
-
-    func fetchExperience(id: String) async throws -> Experience {
-        try await base.fetchExperience(id: id)
-    }
-
-    func fetchExperience(
-        experienceId: String,
-        versionId: String
-    ) async throws -> Experience {
-        try await base.fetchExperience(
-            experienceId: experienceId,
-            versionId: versionId
-        )
-    }
-
-    @MainActor
-    func viewController(for versionId: String) async throws -> ExperienceViewController {
-        try await base.viewController(for: versionId)
-    }
-
-    @MainActor
-    func viewController(
-        for versionId: String,
-        colorSchemeMode: ExperienceColorSchemeMode
-    ) async throws -> ExperienceViewController {
-        try await base.viewController(
-            for: versionId,
-            colorSchemeMode: colorSchemeMode
-        )
-    }
-
-    @MainActor
-    func viewController(
-        for versionId: String,
-        runtimeDelegate: ExperienceRuntimeDelegate?
-    ) async throws -> ExperienceViewController {
-        try await base.viewController(
-            for: versionId,
-            runtimeDelegate: runtimeDelegate
-        )
-    }
-
-    @MainActor
-    func viewController(
-        for versionId: String,
-        runtimeDelegate: ExperienceRuntimeDelegate?,
-        colorSchemeMode: ExperienceColorSchemeMode
-    ) async throws -> ExperienceViewController {
-        try await base.viewController(
-            for: versionId,
-            runtimeDelegate: runtimeDelegate,
-            colorSchemeMode: colorSchemeMode
-        )
-    }
-
-    @MainActor
-    func viewController(
-        for versionId: String,
-        runtimeDelegate: ExperienceRuntimeDelegate?,
-        colorSchemeMode: ExperienceColorSchemeMode,
-        presentationTraceContext: ExperiencePresentationTraceContext?,
-        initialScreenID: String?
-    ) async throws -> ExperienceViewController {
-        if suspendedVersionID == nil || suspendedVersionID == versionId {
-            await gate.wait()
-        }
-        return try await base.viewController(
-            for: versionId,
-            runtimeDelegate: runtimeDelegate,
-            colorSchemeMode: colorSchemeMode,
-            presentationTraceContext: presentationTraceContext,
-            initialScreenID: initialScreenID
-        )
-    }
-
-    func clearCache() async {
-        await base.clearCache()
     }
 }
 

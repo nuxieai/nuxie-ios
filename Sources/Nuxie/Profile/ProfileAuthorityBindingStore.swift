@@ -93,7 +93,7 @@ struct FileProfileAuthorityBindingStore: ProfileAuthorityBindingStore {
             from: data
         )
         guard authority.isValid else {
-            throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+            throw JourneyReleaseAuthenticationError.invalidDescriptor
         }
         return authority
     }

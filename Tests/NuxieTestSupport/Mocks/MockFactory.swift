@@ -54,19 +54,7 @@ public final class MockFactory: @unchecked Sendable {
     
     // Lazy instances - these will use the individual mock files
     private lazy var _identityService = MockIdentityService()
-    private lazy var _segmentService = MockSegmentService()
-    private lazy var _journeyStore = MockJourneyStore()
-    private lazy var _profileService: MockProfileService = {
-        let profile = MockProfileService()
-        let experiences = self._experienceService
-        profile.experienceResolver = { experienceId, versionId in
-            try await experiences.experienceForJourneyControl(
-                experienceId: experienceId,
-                versionId: versionId
-            )
-        }
-        return profile
-    }()
+    private lazy var _profileService = MockProfileService()
     private lazy var _eventLog: MockEventLog = {
         let log = MockEventLog()
         log.identity = self._identityService
@@ -75,12 +63,7 @@ public final class MockFactory: @unchecked Sendable {
     private lazy var _eventStore = MockEventStore()
     private lazy var _nuxieApi = MockNuxieApi()
     private lazy var _experienceService = MockExperienceService()
-    private lazy var _experiencePresentationService: MockExperiencePresentationService = {
-        let service = MockExperiencePresentationService()
-        service.eventLog = self._eventLog
-        return service
-    }()
-    private lazy var _triggerBroker = TriggerBroker()
+    private lazy var _experiencePresentationService = MockExperiencePresentationService()
     private lazy var _dateProvider = MockDateProvider()
     private lazy var _sleepProvider = MockSleepProvider()
     private lazy var _productService = MockProductService()
@@ -88,15 +71,12 @@ public final class MockFactory: @unchecked Sendable {
     
     // Public accessors
     public var identityService: MockIdentityService { Self.markUsed(); return _identityService }
-    public var segmentService: MockSegmentService { Self.markUsed(); return _segmentService }
-    public var journeyStore: MockJourneyStore { Self.markUsed(); return _journeyStore }
     public var profileService: MockProfileService { Self.markUsed(); return _profileService }
     public var eventLog: MockEventLog { Self.markUsed(); return _eventLog }
     public var eventStore: MockEventStore { Self.markUsed(); return _eventStore }
     public var nuxieApi: MockNuxieApi { Self.markUsed(); return _nuxieApi }
     var experienceService: MockExperienceService { Self.markUsed(); return _experienceService }
     var experiencePresentationService: MockExperiencePresentationService { Self.markUsed(); return _experiencePresentationService }
-    public var triggerBroker: TriggerBroker { Self.markUsed(); return _triggerBroker }
     public var dateProvider: MockDateProvider { Self.markUsed(); return _dateProvider }
     public var sleepProvider: MockSleepProvider { Self.markUsed(); return _sleepProvider }
     public var productService: MockProductService { Self.markUsed(); return _productService }
@@ -105,15 +85,12 @@ public final class MockFactory: @unchecked Sendable {
     public func resetAll() async {
         Self.markUsed()
         identityService.reset()
-        await segmentService.reset()
-        journeyStore.reset()
         profileService.reset()
         eventLog.reset()
         await eventStore.reset()
         await nuxieApi.reset()
         experienceService.reset()
-        experiencePresentationService.reset()
-        await triggerBroker.reset()
+        await experiencePresentationService.reset()
         dateProvider.reset()
         sleepProvider.reset()
         productService.reset()
@@ -126,13 +103,11 @@ public final class MockFactory: @unchecked Sendable {
         Self.markUsed()
         var overrides = NuxieCoreOverrides()
         overrides.identity = identityService
-        overrides.segments = segmentService
         overrides.profile = profileService
         overrides.eventLog = eventLog
         overrides.api = nuxieApi
         overrides.experiences = experienceService
         overrides.experiencePresentation = experiencePresentationService
-        overrides.triggerBroker = triggerBroker
         overrides.dateProvider = dateProvider
         overrides.sleepProvider = sleepProvider
         overrides.productService = productService
@@ -149,61 +124,4 @@ public final class MockFactory: @unchecked Sendable {
         return overrides
     }
 
-    /// Builds a real JourneyService over the shared mocks, plus a real
-    /// feature service / goal evaluator / IR runtime. Mirrors the collaborator
-    /// graph journey tests previously received from container defaults.
-    func makeJourneyService(
-        journeyStore: JourneyStoreProtocol,
-        experiencePresentation: ExperiencePresentationServiceProtocol? = nil,
-        presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace(),
-        restoredPresentationAttempt: ExperiencePresentationAttempt? = nil,
-        responseWriter: ResponseWriting? = nil,
-        segments suppliedSegments: SegmentServiceProtocol? = nil,
-        features suppliedFeatures: FeatureServiceProtocol? = nil,
-        featureInfo suppliedFeatureInfo: FeatureInfo? = nil
-    ) -> JourneyService {
-        Self.markUsed()
-        let featureInfo = suppliedFeatureInfo ?? FeatureInfo()
-        let irRuntime = IRRuntime(dateProvider: dateProvider)
-        let features: FeatureServiceProtocol = suppliedFeatures ?? FeatureService(
-            api: nuxieApi,
-            identity: identityService,
-            profile: profileService,
-            dateProvider: dateProvider,
-            featureInfo: featureInfo,
-            cacheTTL: NuxieInternalConfiguration().featureCacheTTL
-        )
-        let segments = suppliedSegments ?? segmentService
-        irRuntime.wire(
-            identity: identityService,
-            eventLog: eventLog,
-            segments: segments,
-            features: features
-        )
-        let goalEvaluator = GoalEvaluator(
-            eventLog: eventLog,
-            features: features,
-            identity: identityService,
-            dateProvider: dateProvider,
-            irRuntime: irRuntime
-        )
-        return JourneyService(
-            journeyStore: journeyStore,
-            experiences: experienceService,
-            profile: profileService,
-            identity: identityService,
-            segments: segments,
-            features: features,
-            experiencePresentation: experiencePresentation ?? experiencePresentationService,
-            eventLog: eventLog,
-            triggerBroker: triggerBroker,
-            dateProvider: dateProvider,
-            sleepProvider: sleepProvider,
-            goalEvaluator: goalEvaluator,
-            irRuntime: irRuntime,
-            api: responseWriter ?? nuxieApi,
-            presentationTrace: presentationTrace,
-            restoredPresentationAttempt: restoredPresentationAttempt
-        )
-    }
 }

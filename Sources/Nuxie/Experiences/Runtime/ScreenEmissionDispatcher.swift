@@ -491,10 +491,10 @@ private actor ScreenEmissionDispatcherState {
             name = eventName
             payload = eventPayload
         case .responseSet(let field, let value):
-            name = SystemEventNames.responseSet
+            name = JourneyResponseControlNames.responseSet
             payload = ["field": .string(field), "value": value]
         case .responseUnset(let field):
-            name = SystemEventNames.responseUnset
+            name = JourneyResponseControlNames.responseUnset
             payload = ["field": .string(field)]
         }
         return ScreenEmission(

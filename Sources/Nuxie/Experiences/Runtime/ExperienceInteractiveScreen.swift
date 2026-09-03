@@ -430,7 +430,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         declaredEventNames: Set<String>
     ) -> ExperienceInteractiveEffectKind {
         switch command.name {
-        case SystemEventNames.responseSet:
+        case JourneyResponseControlNames.responseSet:
             guard case .string(let field) = command.payload["field"],
                   !field.isEmpty,
                   let value = command.payload["value"] else {
@@ -440,7 +440,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
                 )
             }
             return .responseSet(field: field, value: value)
-        case SystemEventNames.responseUnset:
+        case JourneyResponseControlNames.responseUnset:
             guard case .string(let field) = command.payload["field"],
                   !field.isEmpty else {
                 return .rejectedHostCommand(
@@ -1110,13 +1110,13 @@ actor ExperienceInteractivePreparationCache {
         let id: UUID
         let rivDigest: String
         let byteCount: Int
-        let resourceMetricOwner: ExperienceReleaseResourceMetricOwner
+        let resourceMetricOwner: JourneyReleaseResourceMetricOwner
         let task: Task<ExperienceInteractivePreparation, Error>
     }
 
     private struct UnreportedResourceMetrics {
-        let owner: ExperienceReleaseResourceMetricOwner
-        let metrics: ExperienceReleaseResourceMetrics
+        let owner: JourneyReleaseResourceMetricOwner
+        let metrics: JourneyReleaseResourceMetrics
     }
 
     private var inspectionsByRIVDigest: [String: InspectionEntry] = [:]
@@ -1125,7 +1125,7 @@ actor ExperienceInteractivePreparationCache {
     private var preparedProvenances: Set<String> = []
     private var preparationReservations: [String: Set<UUID>] = [:]
     private var resourceMetricsByProvenance: [
-        String: ExperienceReleaseResourceMetrics
+        String: JourneyReleaseResourceMetrics
     ] = [:]
     private var unreportedResourceMetricsByProvenance: [
         String: UnreportedResourceMetrics
@@ -1159,7 +1159,7 @@ actor ExperienceInteractivePreparationCache {
     func preparation(
         provenance: String,
         payload: AuthenticatedRuntimePayload,
-        resourceMetricOwner: ExperienceReleaseResourceMetricOwner = .presentation
+        resourceMetricOwner: JourneyReleaseResourceMetricOwner = .presentation
     ) async throws -> ExperienceInteractivePreparation {
         if let existing = preparationsByProvenance[provenance] {
             markPreparationRecentlyUsed(provenance)
@@ -1202,7 +1202,7 @@ actor ExperienceInteractivePreparationCache {
                     .metricOwnerProvenance == provenance
                 let passCount = ownsInspection ? 2 : 1
                 let parsedBytes = entry.byteCount * passCount
-                let metrics = ExperienceReleaseResourceMetrics(
+                let metrics = JourneyReleaseResourceMetrics(
                     readBytes: 0,
                     hashedBytes: 0,
                     parsedBytes: parsedBytes,
@@ -1352,13 +1352,13 @@ actor ExperienceInteractivePreparationCache {
         provenance: String,
         rivDigest: String,
         byteCount: Int
-    ) -> ExperienceReleaseResourceMetrics {
+    ) -> JourneyReleaseResourceMetrics {
         if let recorded = resourceMetricsByProvenance[provenance] {
             return recorded
         }
         let passCount = preparedProvenances.contains(provenance) ? 1 : 0
         let parsedBytes = byteCount * passCount
-        return ExperienceReleaseResourceMetrics(
+        return JourneyReleaseResourceMetrics(
             readBytes: 0,
             hashedBytes: 0,
             parsedBytes: parsedBytes,
@@ -1372,8 +1372,8 @@ actor ExperienceInteractivePreparationCache {
 
     func consumeResourceMetrics(
         provenance: String,
-        resourceMetricOwner: ExperienceReleaseResourceMetricOwner = .presentation
-    ) -> ExperienceReleaseResourceMetrics {
+        resourceMetricOwner: JourneyReleaseResourceMetricOwner = .presentation
+    ) -> JourneyReleaseResourceMetrics {
         guard let unreported = unreportedResourceMetricsByProvenance[provenance],
               unreported.owner == resourceMetricOwner else { return .zero }
         unreportedResourceMetricsByProvenance[provenance] = nil
@@ -1424,7 +1424,7 @@ struct ExperienceInteractivePreparationHandle: Sendable {
     let payload: AuthenticatedRuntimePayload
 
     func preparation(
-        resourceMetricOwner: ExperienceReleaseResourceMetricOwner = .presentation
+        resourceMetricOwner: JourneyReleaseResourceMetricOwner = .presentation
     ) async throws -> ExperienceInteractivePreparation {
         try await cache.preparation(
             provenance: provenance,
@@ -1441,7 +1441,7 @@ struct ExperienceInteractivePreparationHandle: Sendable {
         await cache.reservePrepared(provenance: provenance)
     }
 
-    func resourceMetrics() async -> ExperienceReleaseResourceMetrics {
+    func resourceMetrics() async -> JourneyReleaseResourceMetrics {
         await cache.resourceMetrics(
             provenance: provenance,
             rivDigest: payload.renderPlan.scene.sha256,
@@ -1450,8 +1450,8 @@ struct ExperienceInteractivePreparationHandle: Sendable {
     }
 
     func consumeResourceMetrics(
-        resourceMetricOwner: ExperienceReleaseResourceMetricOwner = .presentation
-    ) async -> ExperienceReleaseResourceMetrics {
+        resourceMetricOwner: JourneyReleaseResourceMetricOwner = .presentation
+    ) async -> JourneyReleaseResourceMetrics {
         await cache.consumeResourceMetrics(
             provenance: provenance,
             resourceMetricOwner: resourceMetricOwner
@@ -1787,12 +1787,8 @@ actor ExperienceInteractiveScreen {
             controlActionIds: payload.definition
                 .flatMap { $0.controlsByScreen[screenID] }
                 .map { Set($0.keys) } ?? [],
-            declaredEventNames: Set(
-                payload.definition?.routes.keys.compactMap { key in
-                    guard key.host == .screen(screenID) else { return nil }
-                    return key.eventName
-                } ?? []
-            ),
+            declaredEventNames:
+                payload.definition?.declaredEventNamesByScreen[screenID] ?? [],
             textInputs: textInputs,
             imageIDsByName: imageIDsByName,
             viewModelsByIdentity: initialState.viewModelsByIdentity,

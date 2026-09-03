@@ -13,7 +13,7 @@ final class JourneyPlaneProfileTests: XCTestCase {
         XCTAssertEqual(profile.facts.assignments["é"]??.variantId, "one")
         XCTAssertEqual(profile.facts.assignments["e\u{0301}"]??.variantId, "two")
         for (key, expected) in [("é", false), ("e\u{0301}", true)] {
-            let matches = await DeviceLegEntryEvaluator.matches(
+            let matches = await JourneyEntryEvaluator.matches(
                 .init(type: .segment, eventName: nil, segmentId: key, member: true, condition: nil),
                 facts: profile.facts, references: .init(propertyKeys: [], segmentIds: [key], experimentIds: []),
                 foreground: true, event: nil, now: Date())
@@ -21,7 +21,7 @@ final class JourneyPlaneProfileTests: XCTestCase {
         }
     }
 
-    func testDecodesFlatFactsAndExactContinuationWithoutLegacyProtocol() throws {
+    func testDecodesCanonicalFactsAndExactContinuation() throws {
         let profile = try JourneyPlaneProfile.decode(JSONSerialization.data(withJSONObject: fixture()))
         XCTAssertEqual(profile.armedLegs.first?.binding.generation, 7)
         XCTAssertEqual(profile.armedLegs.first?.binding.type, .continuation)
@@ -32,13 +32,37 @@ final class JourneyPlaneProfileTests: XCTestCase {
         XCTAssertEqual(profile.releases.count, 1)
     }
 
+    func testMalformedExperimentAssignmentsBecomeUnfetchedFacts() throws {
+        var root = try fixture()
+        var facts = try XCTUnwrap(root["facts"] as? [String: Any])
+        facts["assignments"] = [
+            "wrong_shape": "variant_a",
+            "missing_holdout": ["variantId": "variant_a"],
+            "empty_variant": ["variantId": "", "isHoldout": false],
+            "wrong_holdout": ["variantId": "variant_a", "isHoldout": "false"],
+            "valid": ["variantId": "variant_b", "isHoldout": true],
+        ]
+        root["facts"] = facts
+
+        let profile = try JourneyPlaneProfile.decode(
+            JSONSerialization.data(withJSONObject: root)
+        )
+
+        for key in ["wrong_shape", "missing_holdout", "empty_variant", "wrong_holdout"] {
+            let delivered = try XCTUnwrap(profile.facts.assignments[key])
+            XCTAssertNil(delivered, key)
+        }
+        XCTAssertEqual(profile.facts.assignments["valid"]??.variantId, "variant_b")
+        XCTAssertEqual(profile.facts.assignments["valid"]??.isHoldout, true)
+    }
+
     func testRejectsUnknownFieldsMissingReleaseDuplicatesAndInvalidGeneration() throws {
-        for variant in ["legacy", "missing", "duplicate", "unreferenced", "mismatch", "binding", "generation", "fraction", "uuid", "presence", "membership"] {
+        for variant in ["unknown-field", "missing", "duplicate", "unreferenced", "mismatch", "binding", "generation", "fraction", "uuid", "presence", "membership"] {
             var root = try fixture()
             var arms = try XCTUnwrap(root["armedLegs"] as? [[String: Any]])
             var arm = try XCTUnwrap(arms.first)
             switch variant {
-            case "legacy": root["mailbox"] = []
+            case "unknown-field": root["unexpected"] = []
             case "missing": root["releases"] = []
             case "duplicate": arms.append(arm)
             case "unreferenced": arms = []

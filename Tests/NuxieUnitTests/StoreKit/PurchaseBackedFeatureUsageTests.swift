@@ -1692,8 +1692,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
 
     private func commercialContext() -> PurchaseCommercialContext {
         PurchaseCommercialContext(
-            release: AuthenticatedExperienceReleaseID(
-                identity: ExperienceReleaseIdentity(
+            release: AuthenticatedJourneyReleaseID(
+                identity: JourneyReleaseIdentity(
                     appId: "app-1",
                     environment: "live",
                     experienceId: "experience-1",

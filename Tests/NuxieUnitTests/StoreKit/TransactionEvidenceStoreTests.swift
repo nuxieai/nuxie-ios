@@ -1064,8 +1064,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             allowance: nil
         )]
         product.purchaseContext = PurchaseCommercialContext(
-            release: AuthenticatedExperienceReleaseID(
-                identity: ExperienceReleaseIdentity(
+            release: AuthenticatedJourneyReleaseID(
+                identity: JourneyReleaseIdentity(
                     appId: "projection-app",
                     environment: "live",
                     experienceId: "projection-experience",
