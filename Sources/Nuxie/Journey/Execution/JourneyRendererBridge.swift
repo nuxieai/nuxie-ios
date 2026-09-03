@@ -121,7 +121,9 @@ final class JourneyRendererBridge:
   func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController) {}
 
   @MainActor
-  func experienceViewControllerDidReveal(_ controller: ExperienceViewController) {}
+  func experienceViewControllerDidReveal(
+    _ controller: ExperienceViewController
+  ) async {}
 
   @MainActor
   func experienceViewController(
@@ -250,14 +252,17 @@ final class JourneyRendererBridge:
     }
   }
 
-  func experienceViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRuntimeDismiss(
-        journeyId: journeyId,
-        reason: reason,
-        controller: controller
-      )
-    }
+  @discardableResult
+  func experienceViewControllerDidRequestDismiss(
+    _ controller: ExperienceViewController,
+    reason: CloseReason
+  ) async -> Bool {
+    await journeyService?.handleRuntimeDismiss(
+      journeyId: journeyId,
+      reason: reason,
+      controller: controller
+    )
+    return true
   }
 
   @MainActor

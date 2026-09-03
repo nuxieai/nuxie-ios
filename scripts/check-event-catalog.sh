@@ -74,6 +74,7 @@ emission_call_pattern+='|trackForTrigger[[:space:]]*[(]|trackWithResponse[[:spac
 emission_call_pattern+='|trackScopedEvent[[:space:]]*[(]|captureStableSystemEvent[[:space:]]*[(]'
 emission_call_pattern+='|eventSink[.]capture[[:space:]]*[(]|[[:alnum:]_.]*captureOnly[[:space:]]*[(]'
 emission_call_pattern+='|[[:alnum:]_.]*emitSystemEvent[[:space:]]*[(]'
+emission_call_pattern+='|[[:alnum:]_.]*publishCommerceOutcome[[:space:]]*[(]'
 emission_call_pattern+='|[[:alnum:]_.]*capture[[:alnum:]_]*[[:space:]]*[(]'
 emission_call_pattern+='|[[:alnum:]_.]*emit[[:alnum:]_]*[[:space:]]*[(]'
 emission_call_pattern+='|storePreparedEventInHistory[[:space:]]*[(]'
@@ -83,9 +84,10 @@ emission_call_pattern+='|ScreenEmission[[:space:]]*[(]'
 # than constant references. This makes bare literals and indirect names visible.
 reverse_emission_call_pattern='[[:alnum:]_.]*[Ee]ventSink[.]emit[[:space:]]*[(]|eventLog[.]track(WithoutRouting)?[[:space:]]*[(]'
 reverse_emission_call_pattern+='|trackForTrigger[[:space:]]*[(]|trackWithResponse[[:space:]]*[(]'
-reverse_emission_call_pattern+='|trackScopedEvent[[:space:]]*[(]|captureStableSystemEvent[[:space:]]*[(]|captureAndRouteSystemEvent[[:space:]]*[(]'
+reverse_emission_call_pattern+='|trackScopedEvent[[:space:]]*[(]|captureStableSystemEvent[[:space:]]*[(]|captureAndRouteSystemEvent(Batch)?[[:space:]]*[(]'
 reverse_emission_call_pattern+='|eventSink[.]capture[[:space:]]*[(]|[[:alnum:]_.]*captureOnly[[:space:]]*[(]'
 reverse_emission_call_pattern+='|[[:alnum:]_.]*emitSystemEvent[[:space:]]*[(]'
+reverse_emission_call_pattern+='|[[:alnum:]_.]*publishCommerceOutcome[[:space:]]*[(]'
 reverse_emission_call_pattern+='|[[:alnum:]_.]*captureOwnedJourneySystemEvent[[:space:]]*[(]'
 reverse_emission_call_pattern+='|[[:alnum:]_.]*captureSystemEvent(Only)?[[:space:]]*[(]'
 reverse_emission_call_pattern+='|storePreparedEventInHistory[[:space:]]*[(]'
@@ -99,9 +101,9 @@ server_fact_builder_pattern='name:[[:space:]]*fact[.]event[.]rawValue'
 # call. Keep this allowlist short and explicit.
 is_allowlisted_catalog_site() {
   case "$1|$2" in
-    '$journey_converted|Sources/Nuxie/Events/EventLog.swift:2134' \
-      | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:2134' \
-      | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:2134' \
+    '$journey_converted|Sources/Nuxie/Events/EventLog.swift:2285' \
+      | '$journey_effect_completed|Sources/Nuxie/Events/EventLog.swift:2285' \
+      | '$journey_superseded|Sources/Nuxie/Events/EventLog.swift:2285' \
       | '$feature_used|Sources/Nuxie/Features/FeatureUseCommandQueue.swift:550')
       return 0
       ;;
@@ -115,11 +117,51 @@ is_allowlisted_catalog_site() {
 # catalog, so removing any one expected emitter entry fails closed.
 catalog_event_emitters_for_indirect_emission_site() {
   case "$1" in
-    'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:41')
+    'Sources/Nuxie/Journey/DeviceLegService.swift:1544')
+      # The device-leg permission callback captures exactly these six platform results.
+      printf '%s\t%s\n' \
+        '$notifications_denied' "$1" \
+        '$notifications_enabled' "$1" \
+        '$permission_denied' "$1" \
+        '$permission_granted' "$1" \
+        '$tracking_authorized' "$1" \
+        '$tracking_denied' "$1"
+      ;;
+    'Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411')
+      # The publication coordinator receives six permission results and three
+      # presentation lifecycle events from fixed typed service call sites.
+      printf '%s\t%s\n' \
+        '$notifications_denied' "$1" \
+        '$notifications_enabled' "$1" \
+        '$permission_denied' "$1" \
+        '$permission_granted' "$1" \
+        '$tracking_authorized' "$1" \
+        '$tracking_denied' "$1" \
+        '$products_unavailable' "$1" \
+        '$screen_dismissed' "$1" \
+        '$screen_shown' "$1"
+      ;;
+    'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:46')
       # The leg reporter selects exactly the two device-leg lifecycle facts.
       printf '%s\t%s\n' \
         '$journey_leg_started' "$1" \
         '$journey_leg_completed' "$1"
+      ;;
+    'Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:280')
+      # The milestone dispatcher constructs one stable journey milestone request.
+      printf '%s\t%s\n' '$journey_milestone' "$1"
+      ;;
+    'Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1134')
+      # The restore declaration constructs one stable restore-completed request.
+      printf '%s\t%s\n' '$restore_completed' "$1"
+      ;;
+    'Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1577')
+      # The purchase completion helper constructs one stable purchase-completed request.
+      printf '%s\t%s\n' '$purchase_completed' "$1"
+      ;;
+    'Sources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:2087')
+      # The transaction recovery path constructs one stable purchase-synced request.
+      printf '%s\t%s\n' '$purchase_synced' "$1"
       ;;
     'Sources/Nuxie/Journey/JourneyService.swift:3051')
       # The permission mapper stages exactly these six cataloged result names.
@@ -131,7 +173,7 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$tracking_authorized' "$1" \
         '$tracking_denied' "$1"
       ;;
-    'Sources/Nuxie/Experiences/ExperienceViewController.swift:871')
+    'Sources/Nuxie/Experiences/ExperienceViewController.swift:937')
       # The generic sink carries these six variable-selected permission results; other callers pass cataloged constants.
       printf '%s\t%s\n' \
         '$notifications_denied' "$1" \
@@ -141,23 +183,23 @@ catalog_event_emitters_for_indirect_emission_site() {
         '$tracking_authorized' "$1" \
         '$tracking_denied' "$1"
       ;;
-    'Sources/Nuxie/Experiences/ExperienceViewController.swift:1622')
+    'Sources/Nuxie/Experiences/ExperienceViewController.swift:1771')
       # Notification dispatch forwards one of two names to the cataloged emitSystemEvent sink seam.
       printf '%s\t%s\n' \
-        '$notifications_denied' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:871' \
-        '$notifications_enabled' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:871'
+        '$notifications_denied' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:937' \
+        '$notifications_enabled' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:937'
       ;;
-    'Sources/Nuxie/Experiences/ExperienceViewController.swift:1641')
+    'Sources/Nuxie/Experiences/ExperienceViewController.swift:1790')
       # Tracking dispatch forwards one of two names to the cataloged emitSystemEvent sink seam.
       printf '%s\t%s\n' \
-        '$tracking_authorized' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:871' \
-        '$tracking_denied' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:871'
+        '$tracking_authorized' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:937' \
+        '$tracking_denied' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:937'
       ;;
-    'Sources/Nuxie/Experiences/ExperienceViewController.swift:1660')
+    'Sources/Nuxie/Experiences/ExperienceViewController.swift:1809')
       # Permission dispatch forwards one of two names to the cataloged emitSystemEvent sink seam.
       printf '%s\t%s\n' \
-        '$permission_denied' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:871' \
-        '$permission_granted' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:871'
+        '$permission_denied' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:937' \
+        '$permission_granted' 'Sources/Nuxie/Experiences/ExperienceViewController.swift:937'
       ;;
     'Sources/Nuxie/Journey/JourneyService.swift:3147')
       # The scoped milestone stage is constructed from $journey_milestone.
@@ -168,7 +210,7 @@ catalog_event_emitters_for_indirect_emission_site() {
       printf '%s\t%s\n' \
         '$permission_denied' 'Sources/Nuxie/Journey/JourneyService.swift:3466'
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:2134')
+    'Sources/Nuxie/Events/EventLog.swift:2285')
       # JourneyDownFact.Event has exactly these three cataloged raw values.
       printf '%s\t%s\n' \
         '$journey_converted' "$1" \
@@ -177,7 +219,7 @@ catalog_event_emitters_for_indirect_emission_site() {
       ;;
     'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:550' \
       | 'Sources/Nuxie/Features/FeatureUseCommandQueue.swift:705' \
-      | 'Sources/Nuxie/NuxieSDK.swift:1215')
+      | 'Sources/Nuxie/NuxieSDK.swift:1217')
       # The accepted direct-response feature event keeps its authoritative id
       # when it is copied into delivered local history.
       printf '%s\t%s\n' '$feature_used' "$1"
@@ -199,33 +241,33 @@ catalog_event_emitters_for_indirect_emission_site() {
 # reserved SDK-authored names are checked instead.
 is_allowlisted_indirect_emission_site() {
   case "$1" in
-    'Sources/Nuxie/Events/EventLog.swift:1199' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1395' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1904' \
-      | 'Sources/Nuxie/Events/EventLog.swift:3278')
+    'Sources/Nuxie/Events/EventLog.swift:1253' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1449' \
+      | 'Sources/Nuxie/Events/EventLog.swift:2055' \
+      | 'Sources/Nuxie/Events/EventLog.swift:3462')
       # Delivery-path apiClient.trackEvent calls transport an already-built
       # NuxieEvent; the event name originated in a capture lane whose call
       # site is checked above, so these sites are transport, not emission.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:307')
+    'Sources/Nuxie/Events/EventLog.swift:350')
       # Protocol convenience forwards names; concrete SDK callers are checked at their call sites.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:326')
+    'Sources/Nuxie/Events/EventLog.swift:369')
       # The ownership convenience forwards names; its concrete producer is checked at the owned capture call site.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:657' \
-      | 'Sources/Nuxie/Events/EventLog.swift:631' \
-      | 'Sources/Nuxie/Events/EventLog.swift:645' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1102' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1114')
+    'Sources/Nuxie/Events/EventLog.swift:674' \
+      | 'Sources/Nuxie/Events/EventLog.swift:688' \
+      | 'Sources/Nuxie/Events/EventLog.swift:700' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1156' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1168')
       # EventLog overloads forward names; concrete SDK callers are checked at their call sites.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:1472' \
-      | 'Sources/Nuxie/Events/EventLog.swift:1494')
+    'Sources/Nuxie/Events/EventLog.swift:1526' \
+      | 'Sources/Nuxie/Events/EventLog.swift:1550')
       # Stable-capture wrappers forward names; their concrete scoped producers are cataloged.
       return 0
       ;;
@@ -239,13 +281,14 @@ is_allowlisted_indirect_emission_site() {
       # Capture protocol/service layers forward names; concrete event-sink callers are checked upstream.
       return 0
       ;;
-    'Sources/Nuxie/DI/RuntimeProviders.swift:58' \
-      | 'Sources/Nuxie/DI/RuntimeProviders.swift:66' \
-      | 'Sources/Nuxie/DI/RuntimeProviders.swift:74' \
-      | 'Sources/Nuxie/DI/RuntimeProviders.swift:122' \
-      | 'Sources/Nuxie/DI/RuntimeProviders.swift:137')
-      # Runtime role adapters and stable-capture policy forward names;
-      # concrete event-sink callers are checked at their cataloged sites.
+    'Sources/Nuxie/DI/RuntimeProviders.swift:46' \
+      | 'Sources/Nuxie/DI/RuntimeProviders.swift:65' \
+      | 'Sources/Nuxie/DI/RuntimeProviders.swift:173' \
+      | 'Sources/Nuxie/DI/RuntimeProviders.swift:181' \
+      | 'Sources/Nuxie/DI/RuntimeProviders.swift:275')
+      # Runtime role adapters, the ordered stable-capture retry queue, and
+      # capture-only policy forward names; concrete event-sink callers are
+      # checked at their cataloged sites.
       return 0
       ;;
     'Sources/Nuxie/Journey/JourneyService.swift:3155')
@@ -264,19 +307,28 @@ is_allowlisted_indirect_emission_site() {
       # Authored send-event names are user-defined; the $event_sent rider below is cataloged.
       return 0
       ;;
-    'Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:175')
+    'Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:224')
       # Authenticated device-leg send_event names are rejected at admission
       # when they use the reserved $ prefix, so this site emits only authored
       # application events outside the reserved catalog.
       return 0
       ;;
-    'Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:296')
+    'Sources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:349')
       # Stable rider wrapper; its two concrete callers are independently
       # cataloged at their JourneyEvents constant sites.
       return 0
       ;;
-    'Sources/Nuxie/Events/EventLog.swift:4069' \
-      | 'Sources/Nuxie/Events/EventLog.swift:4091')
+    'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:85' \
+      | 'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:117' \
+      | 'Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:122')
+      # The exposure reporter's stable-capture helper forwards one of the
+      # three constants cataloged at its typed projection sites.
+      return 0
+      ;;
+    'Sources/Nuxie/Events/EventLog.swift:4275' \
+      | 'Sources/Nuxie/Events/EventLog.swift:4333' \
+      | 'Sources/Nuxie/Events/EventLog.swift:4349' \
+      | 'Sources/Nuxie/Events/EventLog.swift:4367')
       # Routed stable capture is the ordered implementation seam; concrete
       # device-leg producers are checked at their own call sites.
       return 0
@@ -287,6 +339,13 @@ is_allowlisted_indirect_emission_site() {
       ;;
     'Sources/Nuxie/Experiences/ExperienceScreenViewController.swift:755')
       # Runtime journey and host-command names are variable; reserved response names use the concrete calls above.
+      return 0
+      ;;
+    'Sources/Nuxie/Experiences/ExperienceViewController.swift:2472' \
+      | 'Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1023' \
+      | 'Sources/Nuxie/StoreKit/Transactions/TransactionService.swift:1027')
+      # Commerce outcome wrappers forward names whose concrete reserved-event
+      # callers are independently cataloged at their constant-bearing sites.
       return 0
       ;;
     *)
@@ -331,87 +390,114 @@ done < <(
 # This deliberately duplicates the mechanically visible routing choice so a
 # coordinated lane+tuple catalog edit cannot validate itself.
 production_lane_rows=$'$app_action_requested\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3836
-$app_action_requested\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:284
+$app_action_requested\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:336
 $app_backgrounded\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:63
 $app_installed\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:47
 $app_opened\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:58
 $app_opened\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:73
 $app_updated\ttrackForTrigger\tSources/Nuxie/Core/AppLifecycleTracker.swift:53
 $customer_updated\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3530
-$customer_updated\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:216
+$customer_updated\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:266
 $event_sent\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3400
 $event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:3266
 $event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4106
 $event_sent\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4245
 $experience_artifact_load_failed\tprocessCapture\tSources/Nuxie/Experiences/ExperienceViewModel.swift:370
 $experience_artifact_load_succeeded\tprocessCapture\tSources/Nuxie/Experiences/ExperienceViewModel.swift:352
-$experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:864
-$experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:876
-$experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:432
-$experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3298
-$experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3257
-$experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3314
+$experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1573
+$experience_dismissed\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1625
+$experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1585
+$experience_errored\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:1616
+$experience_shown\tprocessCapture\tSources/Nuxie/Experiences/ExperiencePresentationService.swift:547
+$experiment_exposure\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3298\n$experiment_exposure\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:139
+$experiment_exposure_error\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3257\n$experiment_exposure_error\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:146
+$experiment_exposure_fallback\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3314\n$experiment_exposure_fallback\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:143
 $feature_used\tfeatureCommand\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:550
 $feature_used\tstorePreparedEventInHistory\tSources/Nuxie/Features/FeatureUseCommandQueue.swift:705
-$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1215
-$identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:674
+$feature_used\tstorePreparedEventInHistory\tSources/Nuxie/NuxieSDK.swift:1217
+$identify\tprocessCapture\tSources/Nuxie/NuxieSDK.swift:676
 $journey_claimed\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:984
 $journey_converted\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5408
-$journey_converted\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:2134
-$journey_effect_completed\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:2134
+$journey_converted\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:2285
+$journey_effect_completed\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:2285
 $journey_effect_requested\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:4143
 $journey_enrolled\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:658
 $journey_exited\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:4912
 $journey_exited\tcaptureStableSystemEvent\tSources/Nuxie/Journey/JourneyService.swift:5092
 $journey_exited\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:5917
 $journey_handoff\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:4539
-$journey_leg_started\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:41
-$journey_leg_completed\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:41
+$journey_leg_started\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:46
+$journey_leg_completed\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Events/DeviceLegReporter.swift:46
 $journey_milestone\ttrackWithResponse\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:3492
 $journey_milestone\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3147
-$journey_milestone\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:230
+$journey_milestone\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegEffectDispatcher.swift:280
 $journey_parked\tprocessCapture\tSources/Nuxie/Journey/JourneyService.swift:4762
-$journey_superseded\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:2134
+$journey_superseded\tcommitServerFacts\tSources/Nuxie/Events/EventLog.swift:2285
 $journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1371
 $journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/JourneyService.swift:1423
 $journey_transition\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:1894
 $journey_transition\ttrackWithResponse\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:2722
 $notifications_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3051
-$notifications_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
+$notifications_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:937
+$notifications_denied\tcaptureStableSystemEvent\tSources/Nuxie/Journey/DeviceLegService.swift:1544
 $notifications_enabled\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3051
-$notifications_enabled\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
+$notifications_enabled\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:937
+$notifications_enabled\tcaptureStableSystemEvent\tSources/Nuxie/Journey/DeviceLegService.swift:1544
 $permission_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3051
 $permission_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3466
-$permission_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
+$permission_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:937
+$permission_denied\tcaptureStableSystemEvent\tSources/Nuxie/Journey/DeviceLegService.swift:1544
 $permission_granted\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3051
-$permission_granted\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
-$products_unavailable\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:992
-$purchase_cancelled\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2174
-$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1558
-$purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2158
-$purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2216
-$purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2239
-$purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:559
-$purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:572
+$permission_granted\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:937
+$permission_granted\tcaptureStableSystemEvent\tSources/Nuxie/Journey/DeviceLegService.swift:1544
+$products_unavailable\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:992\n$products_unavailable\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411
+$purchase_cancelled\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2355
+$purchase_cancelled\tcaptureStableSystemEvent\tSources/Nuxie/Experiences/ExperienceViewController.swift:2355
+$purchase_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1577
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2335
+$purchase_failed\tcaptureStableSystemEvent\tSources/Nuxie/Experiences/ExperienceViewController.swift:2335
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2398
+$purchase_failed\tcaptureStableSystemEvent\tSources/Nuxie/Experiences/ExperienceViewController.swift:2398
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2422
+$purchase_failed\tcaptureStableSystemEvent\tSources/Nuxie/Experiences/ExperienceViewController.swift:2422
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:576
+$purchase_failed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:576
 $purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:593
-$purchase_pending\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2188
-$purchase_synced\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1863
-$purchase_synced\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:2058
+$purchase_failed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:593
+$purchase_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:618
+$purchase_failed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:618
+$purchase_pending\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2370
+$purchase_synced\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1884
+$purchase_synced\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:2087
 $response_set\tnone\tSources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:494
 $response_unset\tnone\tSources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:497
-$restore_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1116
-$restore_completed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:934
-$restore_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:880
-$restore_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:943
-$restore_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2262
-$restore_no_purchases\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:889
-$restore_no_purchases\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:954
-$screen_dismissed\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:761
-$screen_shown\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:698
+$restore_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionObserver.swift:1134
+$restore_completed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:983
+$restore_completed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:983
+$restore_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:921
+$restore_failed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:921
+$restore_failed\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:994
+$restore_failed\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:994
+$restore_failed\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:2450
+$restore_failed\tcaptureStableSystemEvent\tSources/Nuxie/Experiences/ExperienceViewController.swift:2450
+$restore_no_purchases\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:934
+$restore_no_purchases\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:934
+$restore_no_purchases\ttrackForTrigger\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:1009
+$restore_no_purchases\tcaptureStableSystemEvent\tSources/Nuxie/StoreKit/Transactions/TransactionService.swift:1009
+$screen_dismissed\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:761\n$screen_dismissed\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411
+$screen_shown\tprocessCapture\tSources/Nuxie/Journey/Execution/JourneyRunner.swift:698\n$screen_shown\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411
 $tracking_authorized\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3051
-$tracking_authorized\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871
+$tracking_authorized\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:937
+$tracking_authorized\tcaptureStableSystemEvent\tSources/Nuxie/Journey/DeviceLegService.swift:1544
 $tracking_denied\ttrackForTrigger\tSources/Nuxie/Journey/JourneyService.swift:3051
-$tracking_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:871'
+$tracking_denied\ttrackForTrigger\tSources/Nuxie/Experiences/ExperienceViewController.swift:937
+$tracking_denied\tcaptureStableSystemEvent\tSources/Nuxie/Journey/DeviceLegService.swift:1544
+$notifications_denied\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411
+$notifications_enabled\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411
+$permission_denied\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411
+$permission_granted\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411
+$tracking_authorized\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411
+$tracking_denied\tcaptureStableSystemEvent\tSources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411'
 
 lane_source_pattern() {
   case "$1" in
@@ -419,13 +505,13 @@ lane_source_pattern() {
       printf '%s' 'eventLog[.]track[(]|trackWithoutRouting[(]'
       ;;
     trackForTrigger)
-      printf '%s' '(trackForTrigger|trackScopedEvent|eventSink[.]emit|emitSystemEvent)[(]'
+      printf '%s' '(trackForTrigger|trackScopedEvent|eventSink[.]emit|emitSystemEvent|publishCommerceOutcome)[(]'
       ;;
     trackWithResponse)
       printf '%s' 'trackWithResponse[(]'
       ;;
     captureStableSystemEvent)
-      printf '%s' '(eventSink[.](capture|captureStableSystemEvent)|captureOnly|captureOwnedJourneySystemEvent|captureSystemEvent|captureAndRouteSystemEvent|captureRider)[(]'
+      printf '%s' '(eventSink[.](capture|captureStableSystemEvent)|captureOnly|captureStableSystemEvent|captureOwnedJourneySystemEvent|captureSystemEvent|captureAndRouteSystemEvent(Batch)?|captureRider|publishCommerceOutcome)[(]'
       ;;
     storePreparedEventInHistory)
       printf '%s' 'storePreparedEventInHistory[(]'
@@ -478,7 +564,7 @@ while IFS=$'\t' read -r event_name production_lane emitter; do
   # Permission names at this controller site are selected before crossing a
   # callback boundary; their trackForTrigger behavior is pinned in the Swift
   # conformance table because it is not locally inferable from the source row.
-  if [[ "$emitter" == "Sources/Nuxie/Experiences/ExperienceViewController.swift:871" ]]; then
+  if [[ "$emitter" == "Sources/Nuxie/Experiences/ExperienceViewController.swift:937" ]]; then
     continue
   fi
 
@@ -494,6 +580,10 @@ while IFS=$'\t' read -r event_name production_lane emitter; do
     source_radius=8
   elif [[ "$emitter" == Sources/Nuxie/Experiences/Runtime/ScreenEmissionDispatcher.swift:* ]]; then
     source_radius=10
+  elif [[ "$emitter" == Sources/Nuxie/Journey/Events/DeviceLegReporter.swift:* ]]; then
+    # Exposure kind projection selects the finite event name before the
+    # reporter enters its single stable-capture path.
+    source_radius=64
   fi
   first_line=$((source_line > source_radius ? source_line - source_radius : 1))
   last_line=$((source_line + source_radius))
@@ -772,7 +862,7 @@ while IFS=$'\t' read -r event_name constant event_status emitter; do
           || "$constant" == SystemEventNames.tracking* ]]; then
     # Permission names are selected in the controller, then cross either the
     # generic scoped track call or the generic SystemEventSink emission call.
-    if rg -Fq -- "eventName = $constant" \
+    if rg -q -- "(eventName =|return)[[:space:]]+$constant" \
         Sources/Nuxie/Experiences/ExperienceViewController.swift; then
       token_found=true
     fi
@@ -785,6 +875,18 @@ while IFS=$'\t' read -r event_name constant event_status emitter; do
         Sources/Nuxie/Journey/JourneyService.swift; then
     # The scoped path stages the exact milestone name before the generic
     # trackScopedEvent call validated above.
+    token_found=true
+  fi
+
+  if [[ "$token_found" != true
+      && "$emitter" == "Sources/Nuxie/Journey/Execution/DeviceLegPresentationPublicationCoordinator.swift:411"
+      && ( "$constant" == "SystemEventNames.productsUnavailable"
+          || "$constant" == "SystemEventNames.screenDismissed"
+          || "$constant" == "SystemEventNames.screenShown" ) ]] \
+      && rg -Fq -- "name: $constant" Sources/Nuxie/Journey/DeviceLegService.swift; then
+    # The stable-capture helper receives one of three fixed lifecycle names at
+    # its typed service call sites. The reverse map above independently pins
+    # that finite set to this generic sink.
     token_found=true
   fi
 

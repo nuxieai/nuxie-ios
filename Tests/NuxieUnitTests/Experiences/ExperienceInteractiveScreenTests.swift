@@ -3992,7 +3992,11 @@ private final class PurchaseRecordingExperienceViewController: MockExperienceVie
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func performPurchase(placementId: String) {
+    override func performPurchase(
+        placementId: String,
+        outcomeCorrelation: CommerceOutcomeCorrelation?
+    ) {
+        _ = outcomeCorrelation
         placementIDs.append(placementId)
     }
 }

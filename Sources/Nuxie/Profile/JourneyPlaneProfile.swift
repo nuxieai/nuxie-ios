@@ -166,7 +166,7 @@ extension ArmedDeviceLeg: Codable, Sendable {}
 extension ArmedDeviceLeg.Reference: Codable, Equatable, Hashable, Sendable {}
 extension ArmedDeviceLeg.Binding: Codable, Equatable, Hashable, Sendable {}
 extension ArmedDeviceLeg.Binding.Kind: Codable, Sendable {}
-extension ArmedDeviceLeg.Context: Codable, Sendable {}
+extension ArmedDeviceLeg.Context: Codable, Equatable, Sendable {}
 extension DeviceLegReleaseProfileEntry: Codable, Sendable {}
 extension DeviceLegReleaseProfileEntry.Locator: Codable, Sendable {}
 extension JourneyPlaneProfile: Codable, Sendable {}

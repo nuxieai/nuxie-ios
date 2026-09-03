@@ -35,6 +35,11 @@ struct PurchaseSyncResult: Sendable {
     }
 }
 
+struct CommerceOutcomeCorrelation: Equatable, Sendable {
+    let eventId: String
+    let distinctId: String
+}
+
 enum PendingPurchaseOwnershipResolution: Sendable {
     case none
     case unique(PendingPurchaseRecord)
@@ -407,9 +412,14 @@ actor TransactionService {
     
     /// Purchase a product
     /// - Parameter product: The exact StoreProduct retained after presentation.
+    /// - Parameter outcomeCorrelation: Stable Journey event ownership for the
+    ///   resulting purchase outcome, when checkout began in a Journey.
     /// - Throws: StoreKitError when checkout does not complete.
     @discardableResult
-    public func purchase(_ product: StoreProduct) async throws -> PurchaseSyncResult {
+    public func purchase(
+        _ product: StoreProduct,
+        outcomeCorrelation: CommerceOutcomeCorrelation? = nil
+    ) async throws -> PurchaseSyncResult {
         LogDebug("TransactionService: Starting purchase for product: \(product.productId)")
 
         var activeCheckoutKeyToClear: String?
@@ -423,7 +433,9 @@ actor TransactionService {
         // provider call below can suspend while identify/reset changes the
         // active SDK identity, so never re-read mutable identity for purchase
         // attribution after this point.
-        let initiatingDistinctId = identityService?.getDistinctId() ?? "anonymous"
+        let initiatingDistinctId = outcomeCorrelation?.distinctId
+            ?? identityService?.getDistinctId()
+            ?? "anonymous"
         var checkoutProduct: StoreProduct
         let outcome: NativePurchaseResult?
         let purchaseOutcome: PurchaseOutcome
@@ -445,7 +457,8 @@ actor TransactionService {
                 product: checkoutProduct,
                 distinctId: initiatingDistinctId,
                 testStoreTransactionId: response.transactionId,
-                usesTestStore: true
+                usesTestStore: true,
+                outcomeCorrelation: outcomeCorrelation
             )
         } else {
             let checkoutToken = try await checkoutIntroEligibilityToken(
@@ -472,7 +485,8 @@ actor TransactionService {
                                 context: context,
                                 transactionId: nil,
                                 testStore: false
-                            )
+                            ),
+                            outcomeEventId: outcomeCorrelation?.eventId
                         ),
                         source: .externalDelegate
                     )
@@ -503,7 +517,8 @@ actor TransactionService {
                     evidenceAuthority: .nativeStoreKit,
                     localEntitlementGrants: optimisticLocalEntitlementGrants(
                         checkoutProduct.localEntitlementGrants
-                    )
+                    ),
+                    outcomeEventId: outcomeCorrelation?.eventId
                 )
                 if let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken {
                     let key = activeCheckoutKey(
@@ -522,7 +537,8 @@ actor TransactionService {
                     product: checkoutProduct,
                     distinctId: initiatingDistinctId,
                     testStoreTransactionId: nil,
-                    usesTestStore: false
+                    usesTestStore: false,
+                    outcomeCorrelation: outcomeCorrelation
                 )
             }
         }
@@ -556,26 +572,34 @@ actor TransactionService {
                     distinctId: initiatingDistinctId
                 )
             }
-            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
+            await publishCommerceOutcome(
+                SystemEventNames.purchaseFailed,
+                properties: [
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
                 "reason": "already_owned",
                 "test_store": usesTestStore,
-            ])
+                ],
+                correlation: outcomeCorrelation
+            )
             return PurchaseSyncResult()
 
         case .subscriptionChangeRequired:
             removeCheckoutRecovery(for: checkoutProduct)
             let error = StoreKitError.subscriptionChangeRequired(product.storeProductId)
             LogInfo("TransactionService: Subscription change required for product: \(product.productId)")
-            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
+            await publishCommerceOutcome(
+                SystemEventNames.purchaseFailed,
+                properties: [
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
                 "reason": "subscription_change_required",
                 "test_store": usesTestStore,
-            ])
+                ],
+                correlation: outcomeCorrelation
+            )
             throw error
 
         case .cancelled:
@@ -590,13 +614,17 @@ actor TransactionService {
             }
             LogError("TransactionService: Purchase failed for product: \(product.productId), error: \(error)")
             // Track failed purchase event
-            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
+            await publishCommerceOutcome(
+                SystemEventNames.purchaseFailed,
+                properties: [
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
                 "error": error.localizedDescription,
                 "test_store": usesTestStore,
-            ])
+                ],
+                correlation: outcomeCorrelation
+            )
             throw StoreKitError.purchaseFailed(error)
             
         case .pending:
@@ -655,7 +683,8 @@ actor TransactionService {
         product: StoreProduct,
         distinctId: String,
         testStoreTransactionId: String?,
-        usesTestStore: Bool
+        usesTestStore: Bool,
+        outcomeCorrelation: CommerceOutcomeCorrelation?
     ) -> PurchaseOutcome {
         switch result {
         case .purchased(let evidence):
@@ -665,11 +694,12 @@ actor TransactionService {
                         operationId: testStoreTransactionId
                             ?? UUID().uuidString.lowercased(),
                         distinctId: distinctId,
-                        kind: .purchased(
-                            context: context,
-                            transactionId: testStoreTransactionId,
-                            testStore: true
-                        )
+                            kind: .purchased(
+                                context: context,
+                                transactionId: testStoreTransactionId,
+                                testStore: true
+                            ),
+                            outcomeEventId: outcomeCorrelation?.eventId
                     ),
                     source: .checkout
                 )
@@ -693,6 +723,7 @@ actor TransactionService {
                         product.localEntitlementGrants
                     ),
                     commercialContext: product.purchaseContext,
+                    checkoutCompletionEventId: outcomeCorrelation?.eventId,
                     finishRequired: settings.purchaseHandlingMode() != .observer,
                     resolvesPendingPurchase: true,
                     allowsDurableCheckoutAuthority: true,
@@ -736,7 +767,8 @@ actor TransactionService {
         product: StoreProduct,
         distinctId: String,
         evidenceAuthority: PurchaseEvidenceAuthority,
-        localEntitlementGrants: [StoreProduct.LocalEntitlementGrant]
+        localEntitlementGrants: [StoreProduct.LocalEntitlementGrant],
+        outcomeEventId: String?
     ) throws -> StoreProduct {
         guard let commercialContext = product.purchaseContext else {
             throw StoreKitError.apiMisuse(
@@ -776,9 +808,10 @@ actor TransactionService {
             },
             state: .checkout,
             evidenceAuthority: evidenceAuthority,
-            checkoutCompletionEventId: (["purchase-completed-checkout"]
-                + purchaseStorageScope.storageComponents
-                + [UUID().uuidString.lowercased()]).joined(separator: ":")
+            checkoutCompletionEventId: outcomeEventId
+                ?? (["purchase-completed-checkout"]
+                    + purchaseStorageScope.storageComponents
+                    + [UUID().uuidString.lowercased()]).joined(separator: ":")
         )
         var entries = pendingPurchases()
         let recoveryKey = pendingKey(
@@ -850,11 +883,17 @@ actor TransactionService {
     }
     
     /// Restore previous purchases
+    /// - Parameter outcomeCorrelation: Stable Journey event ownership for the
+    ///   resulting restore outcome, when restore began in a Journey.
     /// - Throws: StoreKitError when restore fails.
-    public func restore() async throws {
+    public func restore(
+        outcomeCorrelation: CommerceOutcomeCorrelation? = nil
+    ) async throws {
         LogDebug("TransactionService: Starting restore purchases")
 
-        let initiatingDistinctId = identityService?.getDistinctId() ?? "anonymous"
+        let initiatingDistinctId = outcomeCorrelation?.distinctId
+            ?? identityService?.getDistinctId()
+            ?? "anonymous"
         // Test Store is an isolated billing environment and has the same
         // precedence for purchase and restore. A configured host delegate is
         // consulted only when Test Store is not active.
@@ -865,7 +904,8 @@ actor TransactionService {
                     ExternalPurchaseDeclaration(
                         operationId: UUID().uuidString.lowercased(),
                         distinctId: initiatingDistinctId,
-                        kind: .restored(testStore: false)
+                        kind: .restored(testStore: false),
+                        outcomeEventId: outcomeCorrelation?.eventId
                     ),
                     source: .externalDelegate
                 ))
@@ -876,17 +916,25 @@ actor TransactionService {
                 return
             case .failed(let error):
                 LogError("TransactionService: Restore failed, error: \(error)")
-                if isActiveCustomer(initiatingDistinctId) {
-                    eventSink.emit(SystemEventNames.restoreFailed, properties: [
+                if outcomeCorrelation != nil || isActiveCustomer(initiatingDistinctId) {
+                    await publishCommerceOutcome(
+                        SystemEventNames.restoreFailed,
+                        properties: [
                         "error": error.localizedDescription,
                         "test_store": false,
-                    ])
+                        ],
+                        correlation: outcomeCorrelation
+                    )
                 }
                 throw StoreKitError.restoreFailed(error)
             case .noPurchases:
                 LogInfo("TransactionService: No purchases to restore")
-                if isActiveCustomer(initiatingDistinctId) {
-                    eventSink.emit(SystemEventNames.restoreNoPurchases, properties: [:])
+                if outcomeCorrelation != nil || isActiveCustomer(initiatingDistinctId) {
+                    await publishCommerceOutcome(
+                        SystemEventNames.restoreNoPurchases,
+                        properties: [:],
+                        correlation: outcomeCorrelation
+                    )
                 }
                 return
             }
@@ -930,31 +978,57 @@ actor TransactionService {
                 )
             }
             // Track successful restore event
-            if isActiveCustomer(initiatingDistinctId) {
-                eventSink.emit(SystemEventNames.restoreCompleted, properties: usesTestStore
-                    ? ["test_store": true]
-                    : nil)
+            if outcomeCorrelation != nil || isActiveCustomer(initiatingDistinctId) {
+                await publishCommerceOutcome(
+                    SystemEventNames.restoreCompleted,
+                    properties: usesTestStore ? ["test_store": true] : nil,
+                    correlation: outcomeCorrelation
+                )
             }
             
         case .failed(let error):
             LogError("TransactionService: Restore failed, error: \(error)")
             // Track failed restore event
-            if isActiveCustomer(initiatingDistinctId) {
-                eventSink.emit(SystemEventNames.restoreFailed, properties: [
+            if outcomeCorrelation != nil || isActiveCustomer(initiatingDistinctId) {
+                await publishCommerceOutcome(
+                    SystemEventNames.restoreFailed,
+                    properties: [
                     "error": error.localizedDescription,
                     "test_store": usesTestStore
-                ])
+                    ],
+                    correlation: outcomeCorrelation
+                )
             }
             throw StoreKitError.restoreFailed(error)
             
         case .noPurchases:
             LogInfo("TransactionService: No purchases to restore")
             // Track no purchases event
-            if isActiveCustomer(initiatingDistinctId) {
-                eventSink.emit(SystemEventNames.restoreNoPurchases, properties: usesTestStore
-                    ? ["test_store": true]
-                    : nil)
+            if outcomeCorrelation != nil || isActiveCustomer(initiatingDistinctId) {
+                await publishCommerceOutcome(
+                    SystemEventNames.restoreNoPurchases,
+                    properties: usesTestStore ? ["test_store": true] : nil,
+                    correlation: outcomeCorrelation
+                )
             }
+        }
+    }
+
+    private func publishCommerceOutcome(
+        _ name: String,
+        properties: [String: Any]?,
+        correlation: CommerceOutcomeCorrelation?
+    ) async {
+        let properties = UncheckedSendable(properties)
+        guard await eventSink.emitOrCaptureCommerceOutcome(
+            name,
+            properties: properties,
+            correlation: correlation
+        ) else {
+            LogError(
+                "TransactionService: correlated commerce outcome has no capture retry owner"
+            )
+            return
         }
     }
 }

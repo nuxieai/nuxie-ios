@@ -33,6 +33,7 @@ struct NuxieCoreOverrides {
   var localeProvider: LocaleIdentifierProviding?
   var purchaseSettings: PurchaseSettingsProviding?
   var presentationTrace: ExperiencePresentationTraceRecording?
+  var deviceLegPresentation: (any DeviceLegPresenting)?
   /// Explicit test-host control. Nil preserves the legacy qualification-host
   /// behavior for callers that install a presentation trace recorder.
   var presentationDiagnosticsEnabled: Bool?
@@ -73,6 +74,7 @@ final class NuxieCore: @unchecked Sendable {
   let features: FeatureServiceProtocol
   let triggerBroker: TriggerBrokerProtocol
   let experiencePresentation: ExperiencePresentationServiceProtocol
+  let deviceLegPresentation: any DeviceLegPresenting
   let goalEvaluator: GoalEvaluatorProtocol
   let journeyStore: JourneyStoreProtocol
   let journeys: JourneyServiceProtocol
@@ -119,9 +121,11 @@ final class NuxieCore: @unchecked Sendable {
     // and observer ↔ transactionService). The box is set at the end of init
     // and only read after init completes.
     let builtTransactionService = LateBound<TransactionService>()
+    let builtTransactionObserver = LateBound<TransactionObserverProtocol>()
     let builtTriggerService = LateBound<TriggerServiceProtocol>()
     let builtFeatureService = LateBound<FeatureServiceProtocol>()
     let systemEvents = overrides.systemEvents ?? TriggerSystemEventSink(
+      routedEvents: eventLog,
       triggerProvider: { builtTriggerService.get() }
     )
     let localeProvider = overrides.localeProvider ?? runtimeSettings
@@ -182,6 +186,33 @@ final class NuxieCore: @unchecked Sendable {
       apiKey: configuration.apiKey,
       environment: configuration.environment
     )
+    let experiences = overrides.experiences ?? ExperienceService(
+      productService: productService,
+      introEligibilityTokenProvider: introEligibilityTokenProvider,
+      introEligibilityOverrideHealth: introEligibilityOverrideHealth,
+      eventLog: eventLog,
+      transactionServiceProvider: { builtTransactionService.get() },
+      systemEventSink: systemEvents,
+      releaseStore: releaseStore,
+      presentationDiagnosticsEnabled:
+        internalConfiguration.presentationDiagnosticsEnabled
+          || (overrides.presentationDiagnosticsEnabled
+            ?? (overrides.presentationTrace != nil)),
+      warmLoadsInitiallySuspended: overrides.experienceWarmLoadsInitiallySuspended,
+      testStoreEnabled: configuration.testStoreEnabled
+    )
+    let triggerBroker = overrides.triggerBroker ?? TriggerBroker()
+    let defaultExperiencePresentation = ExperiencePresentationService(
+      windowProvider: nil,
+      experiences: experiences,
+      eventLog: eventLog,
+      triggerBroker: triggerBroker,
+      dateProvider: dateProvider
+    )
+    let experiencePresentation = overrides.experiencePresentation
+      ?? defaultExperiencePresentation
+    let deviceLegPresentation = overrides.deviceLegPresentation
+      ?? defaultExperiencePresentation
     let deviceLegs: (any DeviceLegServiceProtocol)?
     if let timezones = SignedTimezoneBundle.installed {
       deviceLegs = DeviceLegService(
@@ -199,11 +230,16 @@ final class NuxieCore: @unchecked Sendable {
             entityId: nil
           )
         },
+        storeEntitlements: {
+          guard !configuration.testStoreEnabled else { return [] }
+          return await builtTransactionObserver.get().currentEntitledStoreProductIds()
+        },
         dispatcher: DeviceLegEffectDispatcher(
           identity: identity,
           events: eventLog,
           appActionHandler: appActionHandler
         ),
+        presenter: deviceLegPresentation,
         pinnedReleaseAuthenticator: { entry, reference in
           try await deviceLegProfiles.authenticatePinnedRelease(
             entry,
@@ -216,21 +252,6 @@ final class NuxieCore: @unchecked Sendable {
       LogError("Device-leg runtime unavailable: signed timezone bundle missing")
       deviceLegs = nil
     }
-    let experiences = overrides.experiences ?? ExperienceService(
-      productService: productService,
-      introEligibilityTokenProvider: introEligibilityTokenProvider,
-      introEligibilityOverrideHealth: introEligibilityOverrideHealth,
-      eventLog: eventLog,
-      transactionServiceProvider: { builtTransactionService.get() },
-      systemEventSink: systemEvents,
-      releaseStore: releaseStore,
-      presentationDiagnosticsEnabled:
-        internalConfiguration.presentationDiagnosticsEnabled
-          || (overrides.presentationDiagnosticsEnabled
-            ?? (overrides.presentationTrace != nil)),
-      warmLoadsInitiallySuspended: overrides.experienceWarmLoadsInitiallySuspended,
-      testStoreEnabled: configuration.testStoreEnabled
-    )
     let profile = overrides.profile ?? ProfileService(
       identity: identity,
       api: api,
@@ -295,14 +316,6 @@ final class NuxieCore: @unchecked Sendable {
       identity: identity, eventLog: eventLog,
       segments: segments, features: features)
 
-    let triggerBroker = overrides.triggerBroker ?? TriggerBroker()
-    let experiencePresentation = overrides.experiencePresentation ?? ExperiencePresentationService(
-      windowProvider: nil,
-      experiences: experiences,
-      eventLog: eventLog,
-      triggerBroker: triggerBroker,
-      dateProvider: dateProvider
-    )
     let goalEvaluator = overrides.goalEvaluator ?? GoalEvaluator(
       eventLog: eventLog,
       features: features,
@@ -375,6 +388,7 @@ final class NuxieCore: @unchecked Sendable {
       dateProvider: dateProvider,
       recoverySources: overrides.transactionRecoverySources
     )
+    builtTransactionObserver.set(transactionObserver)
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
       customStoragePath: internalConfiguration.customStoragePath,
       scope: purchaseStorageScope
@@ -439,6 +453,7 @@ final class NuxieCore: @unchecked Sendable {
     self.features = features
     self.triggerBroker = triggerBroker
     self.experiencePresentation = experiencePresentation
+    self.deviceLegPresentation = deviceLegPresentation
     self.goalEvaluator = goalEvaluator
     self.journeyStore = journeyStore
     self.journeys = journeys

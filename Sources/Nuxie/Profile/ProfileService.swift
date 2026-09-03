@@ -202,8 +202,9 @@ private final class ProfileAdmissionGeneration: @unchecked Sendable {
         }
     }
 
-    func invalidate() {
-        _ = claim()
+    @discardableResult
+    func invalidate() -> UInt64 {
+        claim()
     }
 
     func matches(_ generation: UInt64) -> Bool {
@@ -224,6 +225,15 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// intentionally re-read by `isCurrentAdmission` because runtime settings
     /// can change without first entering this actor.
     private struct ProfileAdmission: Sendable {
+        let distinctId: String
+        let generation: UInt64
+        let locale: String
+    }
+
+    /// A report acknowledgement may wake the retained legacy mailbox path,
+    /// but it is not a canonical profile sync point. This token fences that
+    /// reduced request without claiming or invalidating profile admission.
+    private struct MailboxRefreshAdmission: Sendable {
         let distinctId: String
         let generation: UInt64
         let locale: String
@@ -252,6 +262,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     private var journeyMailboxHandler:
         (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     private var mailboxRefreshInFlight = false
+    private var mailboxRefreshGeneration: UInt64 = 0
     /// Highest admission generation whose customer-scoped portions committed.
     /// A stale request's reduced commit must not land after a NEWER admission
     /// (a replacement fetch under the new locale) already committed.
@@ -650,7 +661,9 @@ internal actor ProfileService: ProfileServiceProtocol {
             admission: cacheStoreAdmission(for: admission)
         ) ?? true
         if clearedDeviceProfile {
-            await deviceLegRuntime?.profileDidClear(
+            await deviceLegRuntime?.profileDidWithdraw(
+                authority: try? await authorityStore.authority(),
+                admissionGeneration: admission.generation,
                 distinctId: admission.distinctId
             )
         }
@@ -721,8 +734,9 @@ internal actor ProfileService: ProfileServiceProtocol {
         }
         guard isCurrentAdmission(admission) else { return false }
 
-        let prepared = try await experienceService.prepareReleaseProfile(
-            profile.planeProfile == nil ? profile.releases : nil
+        let preparedReleaseProfile = try await experienceService.prepareReleaseProfile(
+            profile.planeProfile == nil ? profile.releases : nil,
+            deviceLegSnapshot: preparedDeviceProfile?.snapshot
         )
         guard isCurrentAdmission(admission) else { return false }
 
@@ -740,23 +754,6 @@ internal actor ProfileService: ProfileServiceProtocol {
             }
             guard isCurrentAdmission(admission) else { return false }
         }
-
-        guard let routingCatalog = try await experienceService.commitReleaseProfile(
-            prepared,
-            generation: admission.generation,
-            admission: cacheStoreAdmission(for: admission)
-        ) else { return false }
-        guard isCurrentAdmission(admission) else { return false }
-
-        let installedMembership = await segmentService.replaceSnapshot(
-            profile.segmentMemberships,
-            definitions: profile.segments,
-            for: distinctId,
-            profileGeneration: admission.generation,
-            admission: cacheStoreAdmission(for: admission)
-        )
-        guard installedMembership,
-              isCurrentAdmission(admission) else { return false }
 
         let committedDeviceSnapshot: DeviceLegProfileCatalog.Snapshot?
         if let preparedDeviceProfile {
@@ -777,6 +774,27 @@ internal actor ProfileService: ProfileServiceProtocol {
             committedDeviceSnapshot = nil
         }
         guard isCurrentAdmission(admission) else { return false }
+
+        // StoreKit and optimistic-entitlement authority must derive only from
+        // a canonical profile whose replay high-water has committed. Attaching
+        // the prepared snapshot earlier would publish commerce authority even
+        // when the durable high-water write subsequently rejected the profile.
+        guard let routingCatalog = try await experienceService.commitReleaseProfile(
+            preparedReleaseProfile,
+            generation: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
+        ) else { return false }
+        guard isCurrentAdmission(admission) else { return false }
+
+        let installedMembership = await segmentService.replaceSnapshot(
+            profile.segmentMemberships,
+            definitions: profile.segments,
+            for: distinctId,
+            profileGeneration: admission.generation,
+            admission: cacheStoreAdmission(for: admission)
+        )
+        guard installedMembership,
+              isCurrentAdmission(admission) else { return false }
 
         // Advance the customer-commit tracker before the first customer-
         // scoped write so a stale reduced fallback cannot interleave with
@@ -819,11 +837,17 @@ internal actor ProfileService: ProfileServiceProtocol {
         if let committedDeviceSnapshot, let preparedDeviceProfile {
             await deviceLegRuntime?.profileDidCommit(
                 committedDeviceSnapshot,
+                artifacts: preparedReleaseProfile.deviceLegArtifacts,
                 authority: preparedDeviceProfile.authority,
+                admissionGeneration: admission.generation,
                 distinctId: distinctId
             )
         } else {
-            await deviceLegRuntime?.profileDidClear(distinctId: distinctId)
+            await deviceLegRuntime?.profileDidWithdraw(
+                authority: try? await authorityStore.authority(),
+                admissionGeneration: admission.generation,
+                distinctId: distinctId
+            )
         }
 
         // Server facts and mailbox work are customer-scoped, not localized:
@@ -932,12 +956,17 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     func clearCache(distinctId: String) async {
-        invalidateProfileRequests()
+        let admissionGeneration = invalidateProfileRequests()
+        invalidateMailboxRefresh()
         // Clear memory
         cachedProfile = nil
         triggerAdmission = nil
         await deviceLegProfiles?.clear(distinctId: distinctId)
-        await deviceLegRuntime?.profileDidClear(distinctId: distinctId)
+        await deviceLegRuntime?.profileDidWithdraw(
+            authority: try? await authorityStore.authority(),
+            admissionGeneration: admissionGeneration,
+            distinctId: distinctId
+        )
         
         // Clear disk
         await diskCache.remove(forKey: distinctId)
@@ -950,12 +979,15 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     func clearAllCache() async {
-        invalidateProfileRequests()
+        let admissionGeneration = invalidateProfileRequests()
+        invalidateMailboxRefresh()
         // Clear memory
         cachedProfile = nil
         triggerAdmission = nil
         await deviceLegProfiles?.clearAll()
-        await deviceLegRuntime?.profileDidClearAll()
+        await deviceLegRuntime?.profileDidClearAll(
+            admissionGeneration: admissionGeneration
+        )
         
         // Clear disk
         await diskCache.clearAll()
@@ -1022,6 +1054,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     ) async {
         journeyMailboxHandler = handler
         if handler == nil {
+            invalidateMailboxRefresh()
             await eventLog.setMailboxPendingHandler(nil)
         } else {
             await installMailboxPendingHandler()
@@ -1032,13 +1065,65 @@ internal actor ProfileService: ProfileServiceProtocol {
         guard !mailboxRefreshInFlight else { return }
         mailboxRefreshInFlight = true
         defer { mailboxRefreshInFlight = false }
+
+        let admission = beginMailboxRefresh()
+        let cached = cachedProfileForDistinctId(admission.distinctId)
+        let validator = cached?.locale == admission.locale
+            ? cached?.validator
+            : nil
         do {
-            _ = try await refreshProfile(
-                distinctId: identityService.getDistinctId()
+            let result = try await api.fetchProfile(
+                for: admission.distinctId,
+                locale: admission.locale,
+                revalidating: validator
             )
+            guard isCurrentMailboxRefresh(admission) else { return }
+
+            switch result {
+            case .modified(let profile, _):
+                // The legacy wake may consume only the append-only delivery
+                // channels. In particular, it must not publish planeProfile,
+                // release, membership, assignment, property, cache, or runtime
+                // state between the launch/foreground canonical sync points.
+                if let facts = profile.facts, !facts.isEmpty {
+                    await eventLog.commitServerFacts(
+                        facts,
+                        distinctId: admission.distinctId
+                    )
+                    guard isCurrentMailboxRefresh(admission) else { return }
+                }
+                if let mailbox = profile.mailbox, !mailbox.isEmpty {
+                    await journeyMailboxHandler?(mailbox, admission.distinctId)
+                }
+
+            case .notModified:
+                guard validator != nil else {
+                    throw NuxieNetworkError.invalidResponse
+                }
+            }
         } catch {
             LogWarning("Immediate mailbox profile refresh failed: \(error)")
         }
+    }
+
+    private func beginMailboxRefresh() -> MailboxRefreshAdmission {
+        mailboxRefreshGeneration &+= 1
+        return MailboxRefreshAdmission(
+            distinctId: identityService.getDistinctId(),
+            generation: mailboxRefreshGeneration,
+            locale: effectiveLocale
+        )
+    }
+
+    private func isCurrentMailboxRefresh(
+        _ admission: MailboxRefreshAdmission
+    ) -> Bool {
+        mailboxRefreshGeneration == admission.generation
+            && identityService.getDistinctId() == admission.distinctId
+    }
+
+    private func invalidateMailboxRefresh() {
+        mailboxRefreshGeneration &+= 1
     }
 
     private func installMailboxPendingHandler() async {
@@ -1050,6 +1135,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Handle user change - clear old cache and load new
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
         LogInfo("User changed from \(NuxieLogger.shared.logDistinctID(oldDistinctId)) to \(NuxieLogger.shared.logDistinctID(newDistinctId))")
+        invalidateMailboxRefresh()
         let admission = beginProfileRequest(distinctId: newDistinctId)
 
         guard isCurrentAdmission(admission) else { return }
@@ -1060,7 +1146,10 @@ internal actor ProfileService: ProfileServiceProtocol {
             admission: cacheStoreAdmission(for: admission)
         ) ?? true
         if clearedDeviceProfile {
-            await deviceLegRuntime?.profileDidClear(distinctId: oldDistinctId)
+            await deviceLegRuntime?.profileDidClear(
+                distinctId: oldDistinctId,
+                admissionGeneration: admission.generation
+            )
         }
         guard isCurrentAdmission(admission) else { return }
         refreshTimer?.cancel()
@@ -1164,7 +1253,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         )
     }
 
-    private func invalidateProfileRequests() {
+    @discardableResult
+    private func invalidateProfileRequests() -> UInt64 {
         profileAdmissionGeneration.invalidate()
     }
 

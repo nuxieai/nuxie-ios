@@ -83,7 +83,7 @@ actor DeviceLegProfileCatalog {
     }
 
     struct Prepared: Sendable {
-        fileprivate let snapshot: Snapshot
+        let snapshot: Snapshot
         fileprivate let promotions:
             [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
         let authority: ProfileDeliveryAuthority
@@ -209,6 +209,29 @@ actor DeviceLegProfileCatalog {
             }
         }
 
+        var referencedPropertyKeys: [String] = []
+        var referencedSegmentIds: [String] = []
+        var referencedExperimentIds: [String] = []
+        for release in authenticated.values {
+            referencedPropertyKeys.append(
+                contentsOf: release.descriptor.leg.facts.propertyKeys
+            )
+            referencedSegmentIds.append(
+                contentsOf: release.descriptor.leg.facts.segmentIds
+            )
+            referencedExperimentIds.append(
+                contentsOf: release.descriptor.leg.facts.experimentIds
+            )
+        }
+        guard Self.exactKeySet(validatedProfile.facts.properties.keys)
+                == Self.exactKeySet(referencedPropertyKeys),
+              Self.exactKeySet(validatedProfile.facts.memberships.keys)
+                == Self.exactKeySet(referencedSegmentIds),
+              Self.exactKeySet(validatedProfile.facts.assignments.keys)
+                == Self.exactKeySet(referencedExperimentIds) else {
+            throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+        }
+
         return Prepared(
             snapshot: Snapshot(
                 profile: validatedProfile,
@@ -312,5 +335,12 @@ actor DeviceLegProfileCatalog {
         return SHA256.hash(data: Data(value.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
+    }
+
+    /// Swift String equality normalizes canonically equivalent spellings,
+    /// while JSON object keys and compiled fact references use code-unit
+    /// identity. Compare their UTF-16 spellings to preserve that boundary.
+    private static func exactKeySet(_ keys: [String]) -> Set<[UInt16]> {
+        Set(keys.map { Array($0.utf16) })
     }
 }

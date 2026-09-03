@@ -68,27 +68,75 @@ private actor DeviceLegProfileSequenceAPI: ProfileFetching {
 private actor RecordingDeviceLegProfileConsumer: DeviceLegProfileConsuming {
     private(set) var commits: [DeviceLegProfileCatalog.Snapshot] = []
     private(set) var authorities: [ProfileDeliveryAuthority] = []
+    private(set) var withdrawnDistinctIds: [String] = []
     private(set) var clearedDistinctIds: [String] = []
     private(set) var clearAllCount = 0
 
     func profileDidCommit(
         _ snapshot: DeviceLegProfileCatalog.Snapshot,
+        artifacts: PreparedDeviceLegArtifacts?,
         authority: ProfileDeliveryAuthority,
+        admissionGeneration: UInt64,
         distinctId: String
     ) {
         _ = distinctId
+        _ = artifacts
+        _ = admissionGeneration
         commits.append(snapshot)
         authorities.append(authority)
     }
 
-    func profileDidClear(distinctId: String) {
+    func profileDidWithdraw(
+        authority: ProfileDeliveryAuthority?,
+        admissionGeneration: UInt64,
+        distinctId: String
+    ) {
+        _ = authority
+        _ = admissionGeneration
+        withdrawnDistinctIds.append(distinctId)
+    }
+
+    func profileDidClear(
+        distinctId: String,
+        admissionGeneration: UInt64
+    ) {
+        _ = admissionGeneration
         clearedDistinctIds.append(distinctId)
     }
 
-    func profileDidClearAll() {
+    func profileDidClearAll(admissionGeneration: UInt64) {
+        _ = admissionGeneration
         clearAllCount += 1
     }
 }
+
+private actor DeviceLegMailboxProbe {
+    private(set) var journeyIds: [String] = []
+    private(set) var distinctIds: [String] = []
+
+    func record(_ entries: [JourneyMailboxEntry], distinctId: String) {
+        journeyIds.append(contentsOf: entries.map(\.journeyId))
+        distinctIds.append(distinctId)
+    }
+}
+
+private actor RejectingHighWaterCommitStore {
+    func admitActiveBatch(
+        _ candidates: [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
+    ) throws {
+        _ = candidates
+        throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
+    }
+
+    func highWater(
+        for key: ExperienceReleaseHighWaterKey
+    ) -> ExperienceReleaseHighWaterMark? {
+        _ = key
+        return nil
+    }
+}
+
+extension RejectingHighWaterCommitStore: ExperienceReleaseHighWaterStore {}
 
 final class DeviceLegProfileServiceTests: XCTestCase {
     func testForegroundAlwaysRevalidatesFreshCanonicalProfile() async throws {
@@ -124,6 +172,90 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         let foregroundFetchCount = await api.fetchCount
         XCTAssertEqual(foregroundFetchCount, 2)
         XCTAssertTrue(sleepProvider.sleepCalls.isEmpty)
+    }
+
+    func testMailboxHintCannotRepublishCanonicalProfile() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let timestamp = Date(timeIntervalSince1970: 1_788_000_000)
+        let mailbox = JourneyMailboxEntry(
+            journeyId: "legacy-mailbox-journey",
+            experienceId: "legacy-mailbox-experience",
+            experienceVersion: "legacy-mailbox-version",
+            epoch: 1,
+            stateVersion: JourneyStateEnvelope.currentVersion,
+            envelope: JourneyStateEnvelope(
+                context: [:],
+                executionState: JourneyExecutionState(),
+                snapshots: [:],
+                responseSession: nil
+            ),
+            expiresAt: timestamp.addingTimeInterval(3_600)
+        )
+        let initial = ProfileResponse(
+            segments: [],
+            userProperties: ["source": AnyCodable("foreground")],
+            planeProfile: fixture.profile
+        )
+        let hinted = ProfileResponse(
+            segments: [],
+            userProperties: ["source": AnyCodable("report_ack")],
+            mailbox: [mailbox],
+            planeProfile: fixture.profile
+        )
+        let api = DeviceLegProfileSequenceAPI(
+            [.response(initial), .response(hinted)],
+            authority: fixture.deliveryAuthority
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let cache = InMemoryCachedProfileStore(ttl: nil)
+        let experiences = MockExperienceService()
+        let runtime = RecordingDeviceLegProfileConsumer()
+        let eventLog = MockEventLog()
+        let mailboxProbe = DeviceLegMailboxProbe()
+        let service = makeService(
+            cache: cache,
+            identity: identity,
+            api: api,
+            experiences: experiences,
+            catalog: try makeCatalog(
+                fixture,
+                store: InMemoryExperienceReleaseHighWaterStore()
+            ),
+            runtime: runtime,
+            eventLog: eventLog
+        )
+        await service.setJourneyMailboxHandler { entries, distinctId in
+            await mailboxProbe.record(entries, distinctId: distinctId)
+        }
+
+        _ = try await service.refetchProfile(distinctId: "customer")
+        await eventLog.deliverEventResponseSignals(
+            EventResponse(status: "ok", mailboxPending: true)
+        )
+
+        let runtimeCommits = await runtime.commits
+        let cached = await cache.retrieve(
+            forKey: "customer",
+            allowStale: true
+        )
+        let deliveredJourneyIds = await mailboxProbe.journeyIds
+        let deliveredDistinctIds = await mailboxProbe.distinctIds
+        let fetchCount = await api.fetchCount
+        XCTAssertEqual(fetchCount, 2)
+        XCTAssertEqual(runtimeCommits.count, 1)
+        XCTAssertEqual(experiences.committedDeviceLegReleaseCounts, [1])
+        XCTAssertEqual(cached?.validator?.rawValue, "\"device-leg-profile-1\"")
+        XCTAssertEqual(
+            cached?.response.userProperties?["source"],
+            AnyCodable("foreground")
+        )
+        XCTAssertEqual(
+            identity.getUserProperties()["source"] as? String,
+            "foreground"
+        )
+        XCTAssertEqual(deliveredJourneyIds, ["legacy-mailbox-journey"])
+        XCTAssertEqual(deliveredDistinctIds, ["customer"])
     }
 
     func testLegacyPeriodicRefreshDoesNotSpinWhenSleepReturnsEarly() async throws {
@@ -185,6 +317,7 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         let current = try XCTUnwrap(currentSnapshot)
         XCTAssertEqual(current.releasesByDigest.count, 1)
         XCTAssertNil(experiences.committedReleaseProfiles.last ?? nil)
+        XCTAssertEqual(experiences.committedDeviceLegReleaseCounts, [1])
         let initialRuntimeCommits = await runtime.commits
         XCTAssertEqual(initialRuntimeCommits.count, 1)
         XCTAssertEqual(initialRuntimeCommits.first?.releasesByDigest.count, 1)
@@ -207,12 +340,99 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         XCTAssertNotNil(retainedProfile?.planeProfile)
         let retainedRuntimeCommits = await runtime.commits
         XCTAssertEqual(retainedRuntimeCommits.count, 1)
+        XCTAssertEqual(experiences.committedDeviceLegReleaseCounts, [1])
 
         _ = try await service.refetchProfile(distinctId: "customer")
         let cleared = await catalog.snapshot(distinctId: "customer")
         XCTAssertNil(cleared)
-        let runtimeClears = await runtime.clearedDistinctIds
-        XCTAssertEqual(runtimeClears, ["customer"])
+        XCTAssertEqual(experiences.committedDeviceLegReleaseCounts, [1, nil])
+        let runtimeWithdrawals = await runtime.withdrawnDistinctIds
+        XCTAssertEqual(runtimeWithdrawals, ["customer"])
+    }
+
+    func testHighWaterCommitFailureDoesNotPublishDeviceProductAuthority() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let experiences = MockExperienceService()
+        let runtime = RecordingDeviceLegProfileConsumer()
+        let catalog = try makeCatalog(
+            fixture,
+            store: RejectingHighWaterCommitStore()
+        )
+        let service = makeService(
+            cache: InMemoryCachedProfileStore(ttl: nil),
+            identity: identity,
+            api: DeviceLegProfileSequenceAPI([
+                .response(ProfileResponse(planeProfile: fixture.profile))
+            ], authority: fixture.deliveryAuthority),
+            experiences: experiences,
+            catalog: catalog,
+            runtime: runtime
+        )
+
+        do {
+            _ = try await service.refetchProfile(distinctId: "customer")
+            XCTFail("Expected replay high-water rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .replayRejected
+            )
+        }
+
+        let catalogSnapshot = await catalog.snapshot(distinctId: "customer")
+        let runtimeCommits = await runtime.commits
+        XCTAssertNil(catalogSnapshot)
+        XCTAssertTrue(runtimeCommits.isEmpty)
+        XCTAssertTrue(experiences.committedReleaseProfiles.isEmpty)
+        XCTAssertTrue(experiences.committedDeviceLegReleaseCounts.isEmpty)
+    }
+
+    func testDeviceLegPreparationFailureWithholdsCanonicalProfileAuthority() async throws {
+        let fixture = try DeviceLegPlaneProfileTestFixture.load()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let cache = InMemoryCachedProfileStore(ttl: nil)
+        let experiences = MockExperienceService()
+        experiences.deviceLegArtifactPreparationFailuresRemaining = 1
+        let runtime = RecordingDeviceLegProfileConsumer()
+        let catalog = try makeCatalog(
+            fixture,
+            store: InMemoryExperienceReleaseHighWaterStore()
+        )
+        let service = makeService(
+            cache: cache,
+            identity: identity,
+            api: DeviceLegProfileSequenceAPI([
+                .response(ProfileResponse(planeProfile: fixture.profile))
+            ], authority: fixture.deliveryAuthority),
+            experiences: experiences,
+            catalog: catalog,
+            runtime: runtime
+        )
+
+        do {
+            _ = try await service.refetchProfile(distinctId: "customer")
+            XCTFail("Expected required device-leg artifact acquisition to fail")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet)
+        }
+
+        let catalogSnapshot = await catalog.snapshot(distinctId: "customer")
+        let runtimeCommits = await runtime.commits
+        let cachedProfile = await cache.retrieve(
+            forKey: "customer",
+            allowStale: true
+        )
+        let triggerAdmission = await service.getTriggerAdmission(
+            distinctId: "customer"
+        )
+        XCTAssertNil(catalogSnapshot)
+        XCTAssertTrue(runtimeCommits.isEmpty)
+        XCTAssertTrue(experiences.committedDeviceLegReleaseCounts.isEmpty)
+        XCTAssertNil(cachedProfile)
+        XCTAssertNil(triggerAdmission)
     }
 
     func testDiskReloadReauthenticatesCanonicalAuthorityWhileOffline() async throws {
@@ -343,12 +563,12 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         await service.onAppBecameActive()
 
         let retainedSnapshot = await catalog.snapshot(distinctId: "customer")
-        let clearedDistinctIds = await runtime.clearedDistinctIds
+        let withdrawnDistinctIds = await runtime.withdrawnDistinctIds
         let retainedProfile = await service.getCachedProfile(
             distinctId: "customer"
         )
         XCTAssertNotNil(retainedSnapshot)
-        XCTAssertTrue(clearedDistinctIds.isEmpty)
+        XCTAssertTrue(withdrawnDistinctIds.isEmpty)
         XCTAssertNotNil(retainedProfile?.planeProfile)
     }
 
@@ -400,6 +620,7 @@ final class DeviceLegProfileServiceTests: XCTestCase {
         experiences: MockExperienceService,
         catalog: DeviceLegProfileCatalog,
         runtime: (any DeviceLegProfileConsuming)? = nil,
+        eventLog: ProfileEventSink = MockEventLog(),
         sleepProvider: MockSleepProvider = MockSleepProvider(),
         dateProvider: MockDateProvider = MockDateProvider(),
         authorityStore: any ProfileAuthorityBindingStore =
@@ -413,7 +634,7 @@ final class DeviceLegProfileServiceTests: XCTestCase {
             experiences: experiences,
             deviceLegProfiles: catalog,
             deviceLegRuntime: runtime,
-            eventLog: MockEventLog(),
+            eventLog: eventLog,
             dateProvider: dateProvider,
             sleepProvider: sleepProvider,
             localeProvider: ConfigurationLocaleIdentifierProvider(

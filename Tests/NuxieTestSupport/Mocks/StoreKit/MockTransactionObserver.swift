@@ -25,6 +25,8 @@ public struct MockPurchaseOutcomeRecord: Sendable {
     public let source: String
     /// The stable operation identifier for an external declaration, when present.
     public let operationId: String?
+    /// The stable terminal event identifier requested by the caller, when present.
+    public let outcomeEventId: String?
     /// The store or host transaction identifier, when present.
     public let transactionId: String?
     /// The customer identifier attributed to the outcome, when present.
@@ -97,6 +99,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
                 kind: .verified,
                 source: source.rawValue,
                 operationId: nil,
+                outcomeEventId: evidence.checkoutCompletionEventId,
                 transactionId: evidence.transactionId,
                 distinctId: evidence.attributedDistinctId,
                 productId: evidence.productId,
@@ -150,6 +153,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
                     kind: .externalPurchased,
                     source: source.rawValue,
                     operationId: declaration.operationId,
+                    outcomeEventId: declaration.outcomeEventId,
                     transactionId: transactionId,
                     distinctId: declaration.distinctId,
                     productId: context.productId,
@@ -163,6 +167,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
                     kind: .externalRestored,
                     source: source.rawValue,
                     operationId: declaration.operationId,
+                    outcomeEventId: declaration.outcomeEventId,
                     transactionId: nil,
                     distinctId: declaration.distinctId,
                     productId: nil,
@@ -189,6 +194,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
                 kind: .cancelled,
                 source: source.rawValue,
                 operationId: nil,
+                outcomeEventId: nil,
                 transactionId: nil,
                 distinctId: nil,
                 productId: nil,
@@ -204,6 +210,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
                 kind: .pending,
                 source: source.rawValue,
                 operationId: nil,
+                outcomeEventId: nil,
                 transactionId: nil,
                 distinctId: nil,
                 productId: nil,
@@ -219,6 +226,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
                 kind: .failed,
                 source: source.rawValue,
                 operationId: nil,
+                outcomeEventId: nil,
                 transactionId: nil,
                 distinctId: nil,
                 productId: nil,

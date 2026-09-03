@@ -32,7 +32,7 @@ final class DeviceLegControlExecutorTests: XCTestCase {
             let result = executor.evaluate(step: vector.step, context: suite.context, assignments: suite.assignments,
                                            nowMillis: vector.nowMillis, checkpoint: vector.checkpoint, signal: signal)
             switch (vector.expected.kind, result) {
-            case ("advance", .advance(let stepId, let context)):
+            case ("advance", .advance(let stepId, let context, _)):
                 XCTAssertEqual(stepId, vector.expected.stepId, vector.id)
                 if let event = vector.expected.event {
                     XCTAssertEqual(try ExactJSONCodec.encode(context.event), try ExactJSONCodec.encode(event), vector.id)
@@ -61,7 +61,7 @@ final class DeviceLegControlExecutorTests: XCTestCase {
         if case .invalid = executor.evaluate(step: delay, context: context, assignments: [:], nowMillis: .max) {} else { XCTFail() }
         let purchase = DeviceLeg.Step(kind: .action, id: "purchase", action: ["type": .string("purchase")],
                                       outlets: ["completed": "done"], outcome: nil)
-        if case .advance(let step, _) = executor.selectOutlet(purchase, outlet: "completed", context: context) {
+        if case .advance(let step, _, _) = executor.selectOutlet(purchase, outlet: "completed", context: context) {
             XCTAssertEqual(step, "done")
         } else { XCTFail() }
         if case .invalid = executor.selectOutlet(purchase, outlet: "failed", context: context) {} else { XCTFail() }

@@ -24,6 +24,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _eventHandlers: [(String, (NuxieEvent) -> Void)] = []
     private var _getEventsForUserCallCount = 0
     private var _drainCallCount = 0
+    private var _committedRoutingDrainCallCount = 0
     private var _committedServerFacts: [(facts: [JourneyDownFact], distinctId: String)] = []
     private var _mailboxPendingHandler: (@Sendable () async -> Void)?
     private var _journeyOwnershipRejectedHandler:
@@ -37,6 +38,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         (@Sendable (NuxieEvent) -> NuxieEvent?)?
     private var _prepareTriggerPropertiesHandler: (@Sendable () async -> Void)?
     private var _commitPreparedTriggerHandler: (@Sendable () async -> Void)?
+    private var _routedCaptureHandler:
+        (@Sendable (_ event: String, _ eventId: String) async -> Void)?
     private var _drainHandler: (@Sendable () async -> Void)?
     private var _trackWithResponseHandler: (@Sendable (String) async -> Void)?
     private var _capturedEventObserver: (@Sendable (NuxieEvent) -> Void)?
@@ -44,6 +47,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _shouldFailJourneyOwnershipCheck = false
     private var _stableCaptures: [String: DurableTriggerCapture] = [:]
     private var _stableOwnedCaptures: [String: DurableTriggerCapture] = [:]
+    private var _stableCaptureBatchFailureIndex: Int?
+    private var _routedCaptureFailuresRemaining = 0
     private var _resetGeneration: UInt64 = 0
 
     public var preparedTriggerBeforeSend:
@@ -60,6 +65,12 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     public var commitPreparedTriggerHandler: (@Sendable () async -> Void)? {
         get { lock.withLock { _commitPreparedTriggerHandler } }
         set { lock.withLock { _commitPreparedTriggerHandler = newValue } }
+    }
+
+    public var routedCaptureHandler:
+        (@Sendable (_ event: String, _ eventId: String) async -> Void)? {
+        get { lock.withLock { _routedCaptureHandler } }
+        set { lock.withLock { _routedCaptureHandler = newValue } }
     }
 
     public var drainHandler: (@Sendable () async -> Void)? {
@@ -80,6 +91,14 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         get { lock.withLock { _shouldFailJourneyOwnershipCheck } }
         set { lock.withLock { _shouldFailJourneyOwnershipCheck = newValue } }
     }
+    public var stableCaptureBatchFailureIndex: Int? {
+        get { lock.withLock { _stableCaptureBatchFailureIndex } }
+        set { lock.withLock { _stableCaptureBatchFailureIndex = newValue } }
+    }
+    public var routedCaptureFailuresRemaining: Int {
+        get { lock.withLock { _routedCaptureFailuresRemaining } }
+        set { lock.withLock { _routedCaptureFailuresRemaining = max(newValue, 0) } }
+    }
     
     public private(set) var routedEvents: [NuxieEvent] {
         get { lock.withLock { _routedEvents } }
@@ -98,6 +117,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
     public var drainCallCount: Int {
         lock.withLock { _drainCallCount }
+    }
+    public var committedRoutingDrainCallCount: Int {
+        lock.withLock { _committedRoutingDrainCallCount }
     }
     public var committedServerFacts: [(facts: [JourneyDownFact], distinctId: String)] {
         lock.withLock { _committedServerFacts }
@@ -236,51 +258,223 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
 
     public func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> DurableTriggerCapture? {
-        let subscriberAdmissions = captureCommittedAdmissions()
-        guard let capture = await captureSystemEvent(
-            event,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId
-        ) else { return nil }
-        guard capture.routesLocally, capture.isNewlyCommitted else {
-            return capture
+        await captureAndRoute(request) {
+            await self.captureSystemEvent(
+                request.name,
+                properties: request.properties,
+                eventId: request.eventId,
+                distinctId: request.distinctId
+            )
         }
-        _ = await route(
-            capture.event,
-            subscriberAdmissions: subscriberAdmissions
-        )
-        return capture
     }
 
     public func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String,
+        _ request: StableSystemEventCaptureRequest,
         admission: any StableEventCaptureCommitAdmission
     ) async -> DurableTriggerCapture? {
+        await captureAndRoute(request) {
+            await self.captureSystemEvent(
+                request.name,
+                properties: request.properties,
+                eventId: request.eventId,
+                distinctId: request.distinctId,
+                admission: admission
+            )
+        }
+    }
+
+    public func captureAndRouteSystemEvent(
+        _ request: StableSystemEventCaptureRequest,
+        occurredAt: Date,
+        admission: any StableEventCaptureCommitAdmission
+    ) async -> DurableTriggerCapture? {
+        await captureAndRoute(request) {
+            await self.captureSystemEvent(
+                request.name,
+                properties: request.properties,
+                eventId: request.eventId,
+                distinctId: request.distinctId,
+                occurredAt: occurredAt,
+                admission: admission
+            )
+        }
+    }
+
+    private func captureAndRoute(
+        _ request: StableSystemEventCaptureRequest,
+        capture: () async -> DurableTriggerCapture?
+    ) async -> DurableTriggerCapture? {
+        let captureHandler = lock.withLock { _routedCaptureHandler }
+        await captureHandler?(request.name, request.eventId)
+        let shouldFail = lock.withLock { () -> Bool in
+            guard _routedCaptureFailuresRemaining > 0 else { return false }
+            _routedCaptureFailuresRemaining -= 1
+            return true
+        }
+        guard !shouldFail else { return nil }
         let subscriberAdmissions = captureCommittedAdmissions()
-        guard let capture = await captureSystemEvent(
-            event,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId,
-            admission: admission
-        ) else { return nil }
-        guard capture.routesLocally, capture.isNewlyCommitted else {
-            return capture
+        guard let result = await capture() else { return nil }
+        guard result.routesLocally, result.isNewlyCommitted else {
+            return result
         }
         _ = await route(
-            capture.event,
+            result.event,
             subscriberAdmissions: subscriberAdmissions
         )
-        return capture
+        return result
+    }
+
+    public func captureAndRouteSystemEventBatch(
+        _ items: [RoutedStableSystemEventBatchItem],
+        admission: any StableEventCaptureBatchCommitAdmission
+    ) async -> [String: DurableTriggerCapture]? {
+        guard !items.contains(where: { $0.request.name.isEmpty }),
+              Set(items.map(\.request.eventId)).count == items.count else {
+            return nil
+        }
+        guard !items.isEmpty else { return [:] }
+        let subscriberAdmissions = captureCommittedAdmissions()
+        var capturesByEventId = lock.withLock {
+            Dictionary(uniqueKeysWithValues: items.compactMap { item in
+                _stableCaptures[item.request.eventId].map { existing in
+                    (
+                        item.request.eventId,
+                        DurableTriggerCapture(
+                            event: existing.event,
+                            routesLocally: existing.routesLocally,
+                            isNewlyCommitted: false
+                        )
+                    )
+                }
+            })
+        }
+        let pendingItems = items.filter {
+            capturesByEventId[$0.request.eventId] == nil
+        }
+        guard !pendingItems.isEmpty else { return capturesByEventId }
+        var candidates: [(
+            item: RoutedStableSystemEventBatchItem,
+            capture: DurableTriggerCapture
+        )] = []
+        candidates.reserveCapacity(pendingItems.count)
+
+        for item in pendingItems {
+            let original: NuxieEvent
+            let transformed: NuxieEvent?
+            switch item.preparation {
+            case .prepared(let event):
+                original = NuxieEvent(
+                    id: item.request.eventId,
+                    name: item.request.name,
+                    distinctId: item.request.distinctId,
+                    properties: item.request.properties ?? [:],
+                    timestamp: item.occurredAt
+                )
+                transformed = event
+            case .unprepared:
+                let enriched = await prepareTriggerProperties(
+                    item.request.properties
+                )
+                original = NuxieEvent(
+                    id: item.request.eventId,
+                    name: item.request.name,
+                    distinctId: item.request.distinctId,
+                    properties: enriched,
+                    timestamp: item.occurredAt
+                )
+                transformed = await applyBeforeSend(to: original).map {
+                    var properties = $0.properties
+                    properties["$distinct_id"] = item.request.distinctId
+                    return NuxieEvent(
+                        id: item.request.eventId,
+                        name: $0.name,
+                        forwardingName: original.forwardingName,
+                        distinctId: item.request.distinctId,
+                        properties: properties,
+                        timestamp: item.occurredAt
+                    )
+                }
+            }
+            candidates.append((
+                item: item,
+                capture: transformed.map { DurableTriggerCapture(event: $0) }
+                    ?? DurableTriggerCapture(
+                        event: original,
+                        routesLocally: false
+                    )
+            ))
+        }
+
+        var committedCaptures: [(capture: DurableTriggerCapture, isNew: Bool)] = []
+        do {
+            guard let _ = try admission.commitBatchIfCurrent({ [self] in
+                try lock.withLock {
+                    var captures = _stableCaptures
+                    var results: [(capture: DurableTriggerCapture, isNew: Bool)] = []
+                    results.reserveCapacity(candidates.count)
+                    for (index, candidate) in candidates.enumerated() {
+                        if _stableCaptureBatchFailureIndex == index {
+                            throw NSError(
+                                domain: "MockEventLog",
+                                code: 1,
+                                userInfo: [
+                                    NSLocalizedDescriptionKey:
+                                        "Injected stable capture batch failure"
+                                ]
+                            )
+                        }
+                        let request = candidate.item.request
+                        if let existing = captures[request.eventId] {
+                            results.append((
+                                capture: DurableTriggerCapture(
+                                    event: existing.event,
+                                    routesLocally: existing.routesLocally,
+                                    isNewlyCommitted: false
+                                ),
+                                isNew: false
+                            ))
+                        } else {
+                            captures[request.eventId] = candidate.capture
+                            results.append((capture: candidate.capture, isNew: true))
+                        }
+                    }
+                    _stableCaptures = captures
+                    _trackForTriggerCalls.append(contentsOf: candidates.map {
+                        (
+                            event: $0.item.request.name,
+                            properties: $0.item.request.properties,
+                            persistToHistory: true,
+                            distinctIdOverride: $0.item.request.distinctId
+                        )
+                    })
+                    committedCaptures = results
+                    return results.map { _ in
+                        StableEventCaptureCommit(
+                            outcome: .dropped,
+                            commitSequence: nil
+                        )
+                    }
+                }
+            }) else {
+                return nil
+            }
+        } catch {
+            return nil
+        }
+
+        for committed in committedCaptures
+            where committed.isNew && committed.capture.routesLocally {
+            _ = await route(
+                committed.capture.event,
+                subscriberAdmissions: subscriberAdmissions
+            )
+        }
+        for (candidate, committed) in zip(candidates, committedCaptures) {
+            capturesByEventId[candidate.item.request.eventId] = committed.capture
+        }
+        return capturesByEventId
     }
     
     public func routeBatch(_ events: [NuxieEvent]) async -> [NuxieEvent] {
@@ -651,12 +845,14 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _commitPreparedTriggerHandler = nil
             _prepareTriggerPropertiesHandler = nil
             _drainHandler = nil
+            _committedRoutingDrainCallCount = 0
             _trackWithResponseHandler = nil
             _capturedEventObserver = nil
             _journeyOwnershipFences.removeAll()
             _shouldFailJourneyOwnershipCheck = false
             _stableCaptures.removeAll()
             _stableOwnedCaptures.removeAll()
+            _stableCaptureBatchFailureIndex = nil
             lastEventTimes.removeAll()
             _trackWithResponseCalls.removeAll()
             _trackForTriggerCalls.removeAll()
@@ -834,6 +1030,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         properties: sending [String: Any]?,
         eventId: String,
         distinctId: String,
+        occurredAt: Date? = nil,
         admission: (any StableEventCaptureCommitAdmission)?
     ) async -> DurableTriggerCapture? {
         let propertiesBox = UncheckedSendable(properties)
@@ -857,7 +1054,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             id: eventId,
             name: event,
             distinctId: distinctId,
-            properties: enriched
+            properties: enriched,
+            timestamp: occurredAt ?? Date()
         )
         let transformed = await applyBeforeSend(to: original).map {
             NuxieEvent(
@@ -1217,6 +1415,13 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
         let handler = lock.withLock { _drainHandler }
         await handler?()
+    }
+
+    public func drainCommittedRouting() async -> Bool {
+        lock.withLock {
+            _committedRoutingDrainCallCount += 1
+        }
+        return true
     }
 
     // MARK: - Lifecycle Events

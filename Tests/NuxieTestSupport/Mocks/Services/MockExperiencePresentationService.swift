@@ -4,7 +4,7 @@ import Foundation
 /// Mock implementation of ExperiencePresentationService for testing
 // @unchecked Sendable: all mutable state is serialized through `lock`.
 // Non-final because integration tests subclass it to observe call ordering.
-class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, @unchecked Sendable {
+class MockExperiencePresentationService: @unchecked Sendable {
 
     private let lock = NSLock()
 
@@ -406,3 +406,6 @@ class MockExperiencePresentationService: ExperiencePresentationServiceProtocol, 
         }
     }
 }
+
+extension MockExperiencePresentationService:
+    ExperiencePresentationServiceProtocol {}

@@ -7,15 +7,21 @@ struct PreparedExperienceReleaseProfile: Sendable {
     let profile: ExperienceReleaseProfile?
     let catalog: AuthenticatedExperienceReleaseCatalog?
     let references: [ExperienceReference]?
+    let deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
+    let deviceLegArtifacts: PreparedDeviceLegArtifacts?
 
     init(
         profile: ExperienceReleaseProfile?,
         catalog: AuthenticatedExperienceReleaseCatalog?,
-        references: [ExperienceReference]? = nil
+        references: [ExperienceReference]? = nil,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot? = nil,
+        deviceLegArtifacts: PreparedDeviceLegArtifacts? = nil
     ) {
         self.profile = profile
         self.catalog = catalog
         self.references = references ?? catalog?.references
+        self.deviceLegSnapshot = deviceLegSnapshot
+        self.deviceLegArtifacts = deviceLegArtifacts
     }
 }
 
@@ -53,7 +59,8 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     ) async throws -> [ExperienceReference]?
 
     func prepareReleaseProfile(
-        _ profile: ExperienceReleaseProfile?
+        _ profile: ExperienceReleaseProfile?,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
     ) async throws -> PreparedExperienceReleaseProfile
 
     func commitReleaseProfile(
@@ -141,6 +148,15 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         initialScreenID: String?
     ) async throws -> ExperienceViewController
 
+    @MainActor
+    func viewController(
+        forDeviceLeg release: AuthenticatedDeviceLegRelease,
+        delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode
+    ) async throws -> ExperienceViewController
+
     func clearCache() async
 
     /// Internal qualification boundary for observing a genuinely memory-warm
@@ -173,6 +189,22 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
 }
 
 extension ExperienceServiceProtocol {
+    func prepareReleaseProfile(
+        _ profile: ExperienceReleaseProfile?
+    ) async throws -> PreparedExperienceReleaseProfile {
+        try await prepareReleaseProfile(profile, deviceLegSnapshot: nil)
+    }
+
+    func prepareReleaseProfile(
+        _ profile: ExperienceReleaseProfile?,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
+    ) async throws -> PreparedExperienceReleaseProfile {
+        guard deviceLegSnapshot == nil else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
+        return PreparedExperienceReleaseProfile(profile: profile, catalog: nil)
+    }
+
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfile?
     ) async throws -> [ExperienceReference]? {
@@ -200,10 +232,21 @@ extension ExperienceServiceProtocol {
     func setProductAuthorityChangeHandler(
         _ handler: @escaping @Sendable () async -> Void
     ) { _ = handler }
-    func prepareReleaseProfile(
-        _ profile: ExperienceReleaseProfile?
-    ) async throws -> PreparedExperienceReleaseProfile {
-        PreparedExperienceReleaseProfile(profile: profile, catalog: nil)
+    @MainActor
+    func viewController(
+        forDeviceLeg release: AuthenticatedDeviceLegRelease,
+        delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode
+    ) async throws -> ExperienceViewController {
+        _ = delivery
+        _ = pinnedArtifacts
+        _ = runtimeDelegate
+        _ = colorSchemeMode
+        throw ExperienceError.notFound(
+            release.descriptor.identity.experienceVersionId
+        )
     }
     func commitReleaseProfile(
         _ prepared: PreparedExperienceReleaseProfile,
@@ -289,6 +332,7 @@ extension ExperienceServiceProtocol {
 
 final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let experienceLoader: ExperienceLoader
+    private let releaseStore: ExperienceReleaseAcquisitionStore
     private let eventLog: EventCapturing
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let productService: ProductService
@@ -338,6 +382,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         self.transactionServiceProvider = transactionServiceProvider
         self.productService = productService
         self.systemEventSink = systemEventSink
+        self.releaseStore = releaseStore
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         experienceLoader = ExperienceLoader(
             productService: productService,
@@ -366,9 +411,13 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     }
 
     func prepareReleaseProfile(
-        _ profile: ExperienceReleaseProfile?
+        _ profile: ExperienceReleaseProfile?,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
     ) async throws -> PreparedExperienceReleaseProfile {
-        try await experienceLoader.prepareReleaseProfile(profile)
+        try await experienceLoader.prepareReleaseProfile(
+            profile,
+            deviceLegSnapshot: deviceLegSnapshot
+        )
     }
 
     func commitReleaseProfile(
@@ -622,6 +671,51 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         controller.presentationTraceContext = presentationTraceContext
         controller.notificationPermissionEventReceiver =
             runtimeDelegate as? NotificationPermissionEventReceiver
+        controller.requestPermissionEventReceiver =
+            runtimeDelegate as? RequestPermissionEventReceiver
+        controller.trackingPermissionEventReceiver =
+            runtimeDelegate as? TrackingPermissionEventReceiver
+        return controller
+    }
+
+    @MainActor
+    func viewController(
+        forDeviceLeg release: AuthenticatedDeviceLegRelease,
+        delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode = .system
+    ) async throws -> ExperienceViewController {
+        let introEligibilityAuthorization = (
+            runtimeDelegate as? any IntroEligibilityAuthorizationContextProviding
+        )?.introEligibilityAuthorizationContext
+        let prepared = try await releaseStore.preparePresentation(
+            release: release,
+            delivery: delivery,
+            pinnedArtifacts: pinnedArtifacts,
+            productResolver: { [experienceLoader] screenID in
+                try await experienceLoader.productsForDeviceLegPresentation(
+                    release: release,
+                    screenID: screenID,
+                    introEligibilityAuthorization: introEligibilityAuthorization
+                )
+            }
+        )
+        let controller = ExperienceViewController(
+            experience: prepared.experience,
+            artifactLoader: prepared.artifactLoader,
+            eventLog: eventLog,
+            presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
+            transactionService: transactionServiceProvider(),
+            productService: productService,
+            systemEventSink: systemEventSink
+        )
+        controller.colorSchemeMode = colorSchemeMode
+        controller.runtimeDelegate = runtimeDelegate
+        controller.notificationPermissionEventReceiver =
+            runtimeDelegate as? NotificationPermissionEventReceiver
+        controller.requestPermissionEventReceiver =
+            runtimeDelegate as? RequestPermissionEventReceiver
         controller.trackingPermissionEventReceiver =
             runtimeDelegate as? TrackingPermissionEventReceiver
         return controller

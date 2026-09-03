@@ -16,7 +16,7 @@ struct DeviceLegPlaneProfileTestFixture {
         )
     }
 
-    static func load() throws -> Self {
+    static func load(entryKey: String = "entry") throws -> Self {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -27,7 +27,7 @@ struct DeviceLegPlaneProfileTestFixture {
             JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL))
                 as? [String: Any]
         )
-        let entry = try XCTUnwrap(releaseFixture["entry"] as? [String: Any])
+        let entry = try XCTUnwrap(releaseFixture[entryKey] as? [String: Any])
         let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
         let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
         let root: [String: Any] = [
@@ -39,7 +39,7 @@ struct DeviceLegPlaneProfileTestFixture {
             ],
             "features": [],
             "facts": [
-                "properties": ["ready": ["present": true, "value": true]],
+                "properties": [:],
                 "memberships": [:],
                 "assignments": [:],
             ],

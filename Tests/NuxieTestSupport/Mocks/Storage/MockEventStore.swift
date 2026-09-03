@@ -24,6 +24,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _pendingIds: Set<String> = []
     private var _deliveredIds: [String] = []
     private var _stableDroppedAt: [String: Date] = [:]
+    private var _pendingStableRouteIds: [String] = []
+    private var _deliveredStableRouteIds: Set<String> = []
     private var _historyCoverageStart: Date?
     private var _journeyOwnershipFences: [String: Int] = [:]
     private var _unresolvedJourneyOwnershipResponses:
@@ -53,6 +55,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
     public var stableDroppedIds: Set<String> {
         lock.withLock { Set(_stableDroppedAt.keys) }
+    }
+    public var pendingStableRouteIds: [String] {
+        lock.withLock { _pendingStableRouteIds }
     }
     public var historyCoverageStart: Date? {
         get { lock.withLock { _historyCoverageStart } }
@@ -84,6 +89,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _shouldFailUnresolvedJourneyOwnershipResponseRecord = false
     private var _pendingDeliveryQueryDelay: TimeInterval = 0
     private var _pendingInsertDelayNanoseconds: UInt64 = 0
+    private var _suspendNextInsert = false
     private var _suspendedInsertIds: Set<String> = []
     private var _suspendedInsertContinuations: [String: CheckedContinuation<Void, Never>] = [:]
     private var _suspendedStableCaptureAfterCommitIds: Set<String> = []
@@ -96,6 +102,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _waitingStableCaptureBeforeCommitIds: Set<String> = []
     private var _stableCaptureDelayNanoseconds: UInt64 = 0
     private var _stableCaptureCommitCallCount = 0
+    private var _stableCaptureBatchFailureIndex: Int?
 
     public var shouldFailInitialize: Bool {
         get { lock.withLock { _initializeFailure != .none } }
@@ -144,6 +151,16 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     /// Tests use this to interleave EventLog lanes without timing assumptions.
     public func suspendInsert(id: String) {
         _ = lock.withLock { _suspendedInsertIds.insert(id) }
+    }
+
+    /// Holds the next insert without requiring the caller to know the event's
+    /// generated id in advance.
+    public func suspendNextInsert() {
+        lock.withLock { _suspendNextInsert = true }
+    }
+
+    public var waitingInsertIds: Set<String> {
+        lock.withLock { Set(_suspendedInsertContinuations.keys) }
     }
 
     public func resumeInsert(id: String) {
@@ -199,6 +216,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
     public var stableCaptureCommitCallCount: Int {
         lock.withLock { _stableCaptureCommitCallCount }
+    }
+    public var stableCaptureBatchFailureIndex: Int? {
+        get { lock.withLock { _stableCaptureBatchFailureIndex } }
+        set { lock.withLock { _stableCaptureBatchFailureIndex = newValue } }
     }
 
     // Call tracking (lock-guarded)
@@ -271,12 +292,15 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _originsByEventId.removeAll()
             _pendingIds.removeAll()
             _stableDroppedAt.removeAll()
+            _pendingStableRouteIds.removeAll()
+            _deliveredStableRouteIds.removeAll()
             _historyCoverageStart = nil
             _journeyOwnershipFences.removeAll()
             _unresolvedJourneyOwnershipResponses.removeAll()
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
+            _suspendNextInsert = false
             _suspendedInsertIds.removeAll()
             _suspendedInsertContinuations.removeAll()
             _suspendedStableCaptureAfterCommitIds.removeAll()
@@ -305,7 +329,13 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         if delayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
-        let shouldSuspend = lock.withLock { _suspendedInsertIds.contains(event.id) }
+        let shouldSuspend = lock.withLock {
+            if _suspendNextInsert {
+                _suspendNextInsert = false
+                _suspendedInsertIds.insert(event.id)
+            }
+            return _suspendedInsertIds.contains(event.id)
+        }
         if shouldSuspend {
             await withCheckedContinuation { continuation in
                 let resumeImmediately = lock.withLock { () -> Bool in
@@ -360,6 +390,26 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         assigningCommitSequence: Bool,
         admission: (any StableEventCaptureCommitAdmission)?
     ) async throws -> StableEventCaptureCommit {
+        try await commitStableCapture(
+            eventId: eventId,
+            event: event,
+            recordedAt: recordedAt,
+            ownership: ownership,
+            assigningCommitSequence: assigningCommitSequence,
+            admission: admission,
+            stageRoute: false
+        )
+    }
+
+    private func commitStableCapture(
+        eventId: String,
+        event: StoredEvent?,
+        recordedAt: Date,
+        ownership: JourneyEventOwnership?,
+        assigningCommitSequence: Bool,
+        admission: (any StableEventCaptureCommitAdmission)?,
+        stageRoute: Bool
+    ) async throws -> StableEventCaptureCommit {
         let delayNanoseconds = lock.withLock {
             _stableCaptureCommitCallCount += 1
             return _stableCaptureDelayNanoseconds
@@ -387,13 +437,30 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
         let operation = { [self] () throws -> StableEventCaptureCommit in
           try lock.withLock { () -> StableEventCaptureCommit in
+            func stagingRouteIfNeeded(
+                _ commit: StableEventCaptureCommit
+            ) -> StableEventCaptureCommit {
+                guard stageRoute, case .captured = commit.outcome else {
+                    return commit
+                }
+                if !_deliveredStableRouteIds.contains(eventId),
+                   !_pendingStableRouteIds.contains(eventId) {
+                    _pendingStableRouteIds.append(eventId)
+                }
+                return StableEventCaptureCommit(
+                    outcome: commit.outcome,
+                    commitSequence: commit.commitSequence,
+                    localRoutePending: _pendingStableRouteIds.contains(eventId)
+                )
+            }
+
             _storeEventCallCount += 1
             if _shouldFailStore { throw mockError(2, "Mock store error") }
             if let existing = _storedEvents.first(where: { $0.id == eventId }) {
-                return StableEventCaptureCommit(
+                return stagingRouteIfNeeded(StableEventCaptureCommit(
                     outcome: .captured(existing, isNew: false),
                     commitSequence: takeCommitSequence(if: assigningCommitSequence)
-                )
+                ))
             }
             if _stableDroppedAt[eventId] != nil {
                 return StableEventCaptureCommit(
@@ -431,10 +498,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _storedEvents.append(event)
             _originsByEventId[eventId] = .device
             _pendingIds.insert(eventId)
-            return StableEventCaptureCommit(
+            return stagingRouteIfNeeded(StableEventCaptureCommit(
                 outcome: .captured(event, isNew: true),
                 commitSequence: takeCommitSequence(if: assigningCommitSequence)
-            )
+            ))
           }
         }
         let commit: StableEventCaptureCommit
@@ -463,6 +530,195 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             }
         }
         return commit
+    }
+
+    public func commitStableCaptureAndStageRoute(
+        eventId: String,
+        event: StoredEvent?,
+        recordedAt: Date,
+        ownership: JourneyEventOwnership?,
+        assigningCommitSequence: Bool,
+        admission: (any StableEventCaptureCommitAdmission)?
+    ) async throws -> StableEventCaptureCommit {
+        try await commitStableCapture(
+            eventId: eventId,
+            event: event,
+            recordedAt: recordedAt,
+            ownership: ownership,
+            assigningCommitSequence: assigningCommitSequence,
+            admission: admission,
+            stageRoute: true
+        )
+    }
+
+    public func commitStableCaptureBatch(
+        _ records: [StableEventCaptureRecord],
+        assigningCommitSequence: Bool,
+        admission: (any StableEventCaptureBatchCommitAdmission)?
+    ) async throws -> [StableEventCaptureCommit] {
+        try await commitStableCaptureBatch(
+            records,
+            assigningCommitSequence: assigningCommitSequence,
+            admission: admission,
+            stageRoutes: false
+        )
+    }
+
+    private func commitStableCaptureBatch(
+        _ records: [StableEventCaptureRecord],
+        assigningCommitSequence: Bool,
+        admission: (any StableEventCaptureBatchCommitAdmission)?,
+        stageRoutes: Bool
+    ) async throws -> [StableEventCaptureCommit] {
+        let operation = { [self] () throws -> [StableEventCaptureCommit] in
+            try lock.withLock {
+                if _shouldFailStore { throw mockError(2, "Mock store error") }
+                var storedEvents = _storedEvents
+                var originsByEventId = _originsByEventId
+                var pendingIds = _pendingIds
+                var stableDroppedAt = _stableDroppedAt
+                var pendingStableRouteIds = _pendingStableRouteIds
+                var nextCommitSequence = _nextCommitSequence
+                var commits: [StableEventCaptureCommit] = []
+                commits.reserveCapacity(records.count)
+
+                func takeSequence() -> UInt64? {
+                    guard assigningCommitSequence else { return nil }
+                    defer { nextCommitSequence &+= 1 }
+                    return nextCommitSequence
+                }
+
+                for (index, record) in records.enumerated() {
+                    if _stableCaptureBatchFailureIndex == index {
+                        throw mockError(8, "Mock stable capture batch error")
+                    }
+                    if let existing = storedEvents.first(where: {
+                        $0.id == record.eventId
+                    }) {
+                        commits.append(.init(
+                            outcome: .captured(existing, isNew: false),
+                            commitSequence: takeSequence()
+                        ))
+                        continue
+                    }
+                    if stableDroppedAt[record.eventId] != nil {
+                        commits.append(.init(
+                            outcome: .dropped,
+                            commitSequence: takeSequence()
+                        ))
+                        continue
+                    }
+                    if let ownership = record.ownership,
+                       (_journeyOwnershipFences[ownership.journeyId] ?? Int.min)
+                        >= ownership.epoch {
+                        commits.append(.init(
+                            outcome: .ownershipLost,
+                            commitSequence: takeSequence()
+                        ))
+                        continue
+                    }
+                    if let ownership = record.ownership,
+                       _unresolvedJourneyOwnershipResponses.values
+                        .flatMap({ $0 })
+                        .contains(where: {
+                            $0.journeyId == ownership.journeyId
+                                && $0.epoch >= ownership.epoch
+                        }) {
+                        throw mockError(
+                            3,
+                            "Mock unresolved journey ownership response"
+                        )
+                    }
+                    if let event = record.event {
+                        storedEvents.append(event)
+                        originsByEventId[record.eventId] = .device
+                        pendingIds.insert(record.eventId)
+                        commits.append(.init(
+                            outcome: .captured(event, isNew: true),
+                            commitSequence: takeSequence()
+                        ))
+                    } else {
+                        stableDroppedAt[record.eventId] = record.recordedAt
+                        commits.append(.init(
+                            outcome: .dropped,
+                            commitSequence: takeSequence()
+                        ))
+                    }
+                }
+
+                if stageRoutes {
+                    commits = zip(records, commits).map { record, commit in
+                        guard case .captured = commit.outcome else {
+                            return commit
+                        }
+                        if !_deliveredStableRouteIds.contains(record.eventId),
+                           !pendingStableRouteIds.contains(record.eventId) {
+                            pendingStableRouteIds.append(record.eventId)
+                        }
+                        return StableEventCaptureCommit(
+                            outcome: commit.outcome,
+                            commitSequence: commit.commitSequence,
+                            localRoutePending: pendingStableRouteIds.contains(
+                                record.eventId
+                            )
+                        )
+                    }
+                }
+
+                _stableCaptureCommitCallCount += records.count
+                _storeEventCallCount += records.count
+                _storedEvents = storedEvents
+                _originsByEventId = originsByEventId
+                _pendingIds = pendingIds
+                _stableDroppedAt = stableDroppedAt
+                _pendingStableRouteIds = pendingStableRouteIds
+                _nextCommitSequence = nextCommitSequence
+                return commits
+            }
+        }
+        if let admission {
+            guard let committed = try admission.commitBatchIfCurrent(operation) else {
+                throw StableEventCaptureCommitAdmissionError.rejected
+            }
+            return committed
+        }
+        return try operation()
+    }
+
+    public func commitStableCaptureBatchAndStageRoutes(
+        _ records: [StableEventCaptureRecord],
+        assigningCommitSequence: Bool,
+        admission: (any StableEventCaptureBatchCommitAdmission)?
+    ) async throws -> [StableEventCaptureCommit] {
+        try await commitStableCaptureBatch(
+            records,
+            assigningCommitSequence: assigningCommitSequence,
+            admission: admission,
+            stageRoutes: true
+        )
+    }
+
+    public func queryPendingStableRoutes(
+        distinctId: String
+    ) async throws -> [StoredEvent] {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            return _pendingStableRouteIds.compactMap { eventId in
+                _storedEvents.first {
+                    $0.id == eventId && $0.distinctId == distinctId
+                }
+            }
+        }
+    }
+
+    public func markStableRouteDelivered(eventId: String) async throws {
+        try lock.withLock {
+            if _shouldFailMarkDelivered {
+                throw mockError(4, "Mock mark stable route delivered error")
+            }
+            _pendingStableRouteIds.removeAll { $0 == eventId }
+            _deliveredStableRouteIds.insert(eventId)
+        }
     }
 
     private func takeCommitSequence(if requested: Bool) -> UInt64? {
@@ -827,6 +1083,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
+            _suspendNextInsert = false
             _suspendedInsertIds.removeAll()
             _suspendedInsertContinuations.removeAll()
             _suspendedStableCaptureAfterCommitIds.removeAll()

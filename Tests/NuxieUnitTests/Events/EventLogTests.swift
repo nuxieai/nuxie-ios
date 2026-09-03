@@ -69,6 +69,178 @@ final class EventLogTests: AsyncSpec {
                     await expect { await received.names }.to(equal(["first", "second", "third"]))
                 }
 
+                it("does not let a stable capture overtake accepted fire-and-forget work") {
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    try await log.configure(configuration: testConfig)
+                    mockStore.suspendNextInsert()
+
+                    log.track(
+                        "ordinary-before-stable",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await expect { mockStore.waitingInsertIds.isEmpty }
+                        .toEventually(beFalse(), timeout: .seconds(1))
+                    guard let ordinaryID = mockStore.waitingInsertIds.first else {
+                        return fail("Expected the ordinary insert to be suspended")
+                    }
+                    defer { mockStore.resumeInsert(id: ordinaryID) }
+
+                    let stableTask = Task {
+                        await log.captureAndRouteSystemEvent(
+                            .init(
+                                name: JourneyEvents.journeyLegStarted,
+                                properties: nil,
+                                eventId: "stable-after-ordinary",
+                                distinctId: "customer-a"
+                            )
+                        )
+                    }
+                    for _ in 0..<10 { await Task.yield() }
+
+                    expect(mockStore.stableCaptureCommitCallCount).to(equal(0))
+                    expect(mockStore.storedEvents.map(\.name))
+                        .toNot(contain(JourneyEvents.journeyLegStarted))
+
+                    mockStore.resumeInsert(id: ordinaryID)
+                    guard await stableTask.value != nil else {
+                        return fail("Expected stable capture")
+                    }
+                    await log.drain()
+
+                    expect(mockStore.storedEvents.map(\.name)).to(equal([
+                        "ordinary-before-stable",
+                        JourneyEvents.journeyLegStarted,
+                    ]))
+                    await expect { await received.names }.to(equal([
+                        "ordinary-before-stable",
+                        JourneyEvents.journeyLegStarted,
+                    ]))
+                }
+
+                it("allows a committed subscriber to durably capture another routed event") {
+                    let received = ReceivedEvents()
+                    let sink = TriggerSystemEventSink(
+                        routedEvents: log,
+                        triggerProvider: { MockTriggerService() }
+                    )
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                        guard event.name == "outer" else { return }
+                        let committed = await sink.capture(
+                            .init(
+                                name: "nested",
+                                properties: nil,
+                                eventId: "nested-from-committed-subscriber",
+                                distinctId: event.distinctId
+                            )
+                        )
+                        // A nested capture cannot drain the route worker that
+                        // is currently invoking this subscriber. Its owner
+                        // must retain retry evidence until a later attempt can
+                        // observe the completed durable route receipt.
+                        expect(committed).to(beFalse())
+                    }
+                    try await log.configure(configuration: testConfig)
+
+                    log.track(
+                        "outer",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await log.drain()
+
+                    await expect { await received.names }.to(equal(["outer", "nested"]))
+                    await expect { mockStore.pendingStableRouteIds }
+                        .toEventually(beEmpty())
+                }
+
+                it("replays a stable local route left pending by a prior process") {
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    try await log.configure(configuration: testConfig)
+                    let stored = try StoredEvent(
+                        id: "stable-route-from-prior-process",
+                        name: "recovered-local-route",
+                        properties: ["source": "recovery"],
+                        timestamp: Date(timeIntervalSince1970: 1_000),
+                        distinctId: "customer-a"
+                    )
+                    let committed = try await mockStore
+                        .commitStableCaptureAndStageRoute(
+                            eventId: stored.id,
+                            event: stored,
+                            recordedAt: stored.timestamp,
+                            ownership: nil,
+                            assigningCommitSequence: false,
+                            admission: nil
+                        )
+                    expect(committed.localRoutePending).to(beTrue())
+
+                    let replayed = await log.replayPendingStableRoutes(
+                        distinctId: "customer-a"
+                    )
+                    let replayedAgain = await log.replayPendingStableRoutes(
+                        distinctId: "customer-a"
+                    )
+
+                    expect(replayed).to(beTrue())
+                    expect(replayedAgain).to(beTrue())
+                    await expect { await received.names }.to(equal([
+                        "recovered-local-route",
+                    ]))
+                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                }
+
+                it("retries a failed stable-route acknowledgement without rerouting") {
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    try await log.configure(configuration: testConfig)
+                    mockStore.shouldFailMarkDelivered = true
+                    let request = StableSystemEventCaptureRequest(
+                        name: "route-with-transient-ack-failure",
+                        properties: nil,
+                        eventId: "stable-route-ack-retry",
+                        distinctId: "customer-a"
+                    )
+
+                    let first = await log.captureAndRouteSystemEvent(request)
+                    let firstDrain = await log.drainCommittedRouting()
+                    let duplicate = await log.captureAndRouteSystemEvent(request)
+                    let duplicateDrain = await log.drainCommittedRouting()
+
+                    expect(first?.isNewlyCommitted).to(beTrue())
+                    expect(first?.localRoutePending).to(beTrue())
+                    expect(firstDrain).to(beFalse())
+                    expect(duplicate?.isNewlyCommitted).to(beFalse())
+                    expect(duplicate?.localRoutePending).to(beTrue())
+                    expect(duplicateDrain).to(beFalse())
+                    await expect { await received.names }.to(equal([
+                        "route-with-transient-ack-failure",
+                    ]))
+                    expect(mockStore.pendingStableRouteIds).to(equal([
+                        request.eventId,
+                    ]))
+
+                    mockStore.shouldFailMarkDelivered = false
+                    let recovered = await log.drainCommittedRouting()
+
+                    expect(recovered).to(beTrue())
+                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                    await expect { await received.names }.to(equal([
+                        "route-with-transient-ack-failure",
+                    ]))
+                }
+
                 it("only announces events after they are persisted pending delivery") {
                     let persistedAtAnnounce = PersistenceProbe()
                     let store = mockStore!
@@ -209,10 +381,12 @@ final class EventLogTests: AsyncSpec {
                     defer { mockStore.resumeStableCaptureAfterCommit(id: stableId) }
                     let stableTask = Task {
                         await log.captureAndRouteSystemEvent(
-                            JourneyEvents.journeyLegStarted,
-                            properties: nil,
-                            eventId: stableId,
-                            distinctId: "customer-a"
+                            .init(
+                                name: JourneyEvents.journeyLegStarted,
+                                properties: nil,
+                                eventId: stableId,
+                                distinctId: "customer-a"
+                            )
                         )
                     }
                     await expect {
@@ -234,6 +408,106 @@ final class EventLogTests: AsyncSpec {
                     await expect { await received.names }.to(equal([
                         JourneyEvents.journeyLegStarted,
                         "later",
+                    ]))
+                }
+
+                it("routes a stable event batch only after every item commits") {
+                    mockIdentity.setDistinctId("customer-a")
+                    guard let identityFence = mockIdentity.performWithCurrentIdentityFence(
+                        "customer-a",
+                        { _ in () }
+                    ) else {
+                        return fail("Expected current identity fence")
+                    }
+                    let executionFence = DeviceLegProfileFence()
+                    let generation = executionFence.advance()
+                    guard let executionToken = executionFence.token(
+                        ifCurrent: generation
+                    ) else {
+                        return fail("Expected current execution fence")
+                    }
+                    let admission = DeviceLegCommitAdmission(
+                        identity: mockIdentity,
+                        identityFenceToken: identityFence.token,
+                        executionFence: executionFence,
+                        executionFenceToken: executionToken
+                    )
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    try await log.configure(configuration: testConfig)
+                    let batch = [
+                        RoutedStableSystemEventBatchItem(
+                            request: .init(
+                                name: "first",
+                                properties: [:],
+                                eventId: "stable-batch:first",
+                                distinctId: "customer-a"
+                            ),
+                            occurredAt: Date(timeIntervalSince1970: 1_000)
+                        ),
+                        RoutedStableSystemEventBatchItem(
+                            request: .init(
+                                name: "second",
+                                properties: [:],
+                                eventId: "stable-batch:second",
+                                distinctId: "customer-a"
+                            ),
+                            occurredAt: Date(timeIntervalSince1970: 1_001)
+                        ),
+                    ]
+
+                    mockStore.stableCaptureBatchFailureIndex = 1
+                    let failed = await log.captureAndRouteSystemEventBatch(
+                        batch,
+                        admission: admission
+                    )
+                    expect(failed).to(beNil())
+                    expect(mockStore.storedEvents).to(beEmpty())
+                    await expect { await received.names }.to(beEmpty())
+
+                    mockStore.stableCaptureBatchFailureIndex = nil
+                    mockStore.suspendNextInsert()
+                    log.track(
+                        "ordinary-before-batch",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await expect { mockStore.waitingInsertIds.isEmpty }
+                        .toEventually(beFalse(), timeout: .seconds(1))
+                    guard let ordinaryID = mockStore.waitingInsertIds.first else {
+                        return fail("Expected the ordinary insert to be suspended")
+                    }
+                    defer { mockStore.resumeInsert(id: ordinaryID) }
+                    let batchTask = Task {
+                        await log.captureAndRouteSystemEventBatch(
+                            batch,
+                            admission: admission
+                        )
+                    }
+                    for _ in 0..<10 { await Task.yield() }
+                    expect(mockStore.storedEvents.map(\.name)).toNot(contain("first"))
+                    expect(mockStore.storedEvents.map(\.name)).toNot(contain("second"))
+
+                    mockStore.resumeInsert(id: ordinaryID)
+                    let committed = await batchTask.value
+                    expect(committed).toNot(beNil())
+                    expect(committed?["stable-batch:first"]?.routesLocally)
+                        .to(beTrue())
+                    expect(committed?["stable-batch:second"]?.routesLocally)
+                        .to(beTrue())
+                    await log.drain()
+                    expect(mockStore.storedEvents.map(\.name)).to(equal([
+                        "ordinary-before-batch",
+                        "first",
+                        "second",
+                    ]))
+                    await expect { await received.names }.to(equal([
+                        "ordinary-before-batch",
+                        "first",
+                        "second",
                     ]))
                 }
             }

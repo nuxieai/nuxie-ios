@@ -17,6 +17,16 @@ private actor OrchestrationForwardingRecorder {
     func idSnapshot() -> [String] { events.map(\.event.id) }
 }
 
+private actor OrchestrationCommittedRecorder {
+    private var events: [NuxieEvent] = []
+
+    func record(_ event: NuxieEvent) {
+        events.append(event)
+    }
+
+    func names() -> [String] { events.map(\.name) }
+}
+
 /// Orchestration harness (cleanup plan, Phase 1).
 ///
 /// Unlike the unit suites — which mock EventLog itself and therefore can
@@ -270,6 +280,169 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 await relaunchService.drain()
                 await expect { await replayRecorder.snapshot() }.to(beEmpty())
                 await relaunchService.close()
+            }
+
+            it("replays an unacknowledged stable local route after relaunch exactly once") {
+                identity.setDistinctId("customer-a")
+                await eventLog.close()
+
+                // Simulate a process exit after the atomic event + route-receipt
+                // commit but before an in-memory subscriber can acknowledge it.
+                let seedStore = SQLiteEventStore()
+                try await seedStore.initialize(
+                    path: URL(fileURLWithPath: storagePath)
+                )
+                let event = try StoredEvent(
+                    id: "orchestration-stable-route-recovery",
+                    name: JourneyEvents.journeyMilestone,
+                    properties: ["journey_id": "journey-route-recovery"],
+                    timestamp: Date(timeIntervalSince1970: 1_000),
+                    distinctId: "customer-a"
+                )
+                let commit = try await seedStore.commitStableCaptureAndStageRoute(
+                    eventId: event.id,
+                    event: event,
+                    recordedAt: event.timestamp,
+                    ownership: nil,
+                    assigningCommitSequence: true,
+                    admission: nil
+                )
+                expect(commit.localRoutePending).to(beTrue())
+                await seedStore.close()
+
+                let replayRoutes = OrchestrationCommittedRecorder()
+                let relaunched = EventLog(
+                    identity: identity,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                eventLog = relaunched
+                await relaunched.subscribeCommitted { routed in
+                    await replayRoutes.record(routed)
+                }
+                try await relaunched.configure(configuration: config)
+
+                let replayed = await relaunched.replayPendingStableRoutes(
+                    distinctId: "customer-a"
+                )
+                expect(replayed).to(beTrue())
+                await expect { await replayRoutes.names() }
+                    .to(equal([JourneyEvents.journeyMilestone]))
+                await relaunched.close()
+
+                let secondReplayRoutes = OrchestrationCommittedRecorder()
+                let secondRelaunch = EventLog(
+                    identity: identity,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                eventLog = secondRelaunch
+                await secondRelaunch.subscribeCommitted { routed in
+                    await secondReplayRoutes.record(routed)
+                }
+                try await secondRelaunch.configure(configuration: config)
+
+                let alreadyAcknowledged = await secondRelaunch
+                    .replayPendingStableRoutes(distinctId: "customer-a")
+                expect(alreadyAcknowledged).to(beTrue())
+                await expect { await secondReplayRoutes.names() }.to(beEmpty())
+            }
+
+            it("orders a real stable batch and deduplicates it across relaunch") {
+                identity.setDistinctId("customer-a")
+                guard let identityFence = identity.performWithCurrentIdentityFence(
+                    "customer-a",
+                    { _ in () }
+                ) else {
+                    return fail("Expected current identity fence")
+                }
+                let executionFence = DeviceLegProfileFence()
+                let generation = executionFence.advance()
+                guard let executionToken = executionFence.token(ifCurrent: generation) else {
+                    return fail("Expected current execution fence")
+                }
+                let admission = DeviceLegCommitAdmission(
+                    identity: identity,
+                    identityFenceToken: identityFence.token,
+                    executionFence: executionFence,
+                    executionFenceToken: executionToken
+                )
+                let initialRoutes = OrchestrationCommittedRecorder()
+                await eventLog.subscribeCommitted { event in
+                    await initialRoutes.record(event)
+                }
+                let batch = [
+                    RoutedStableSystemEventBatchItem(
+                        request: .init(
+                            name: "renderer-first",
+                            properties: [:],
+                            eventId: "orchestration-renderer:first",
+                            distinctId: "customer-a"
+                        ),
+                        occurredAt: Date(timeIntervalSince1970: 1_000)
+                    ),
+                    RoutedStableSystemEventBatchItem(
+                        request: .init(
+                            name: "renderer-second",
+                            properties: [:],
+                            eventId: "orchestration-renderer:second",
+                            distinctId: "customer-a"
+                        ),
+                        occurredAt: Date(timeIntervalSince1970: 1_001)
+                    ),
+                ]
+
+                eventLog.track(
+                    "ordinary-before-renderer-batch",
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                let firstCapture = await eventLog.captureAndRouteSystemEventBatch(
+                    batch,
+                    admission: admission
+                )
+                expect(firstCapture?["orchestration-renderer:first"]?.isNewlyCommitted)
+                    .to(beTrue())
+                expect(firstCapture?["orchestration-renderer:second"]?.isNewlyCommitted)
+                    .to(beTrue())
+                await eventLog.drain()
+                await expect { await initialRoutes.names() }.to(equal([
+                    "ordinary-before-renderer-batch",
+                    "renderer-first",
+                    "renderer-second",
+                ]))
+                await eventLog.close()
+
+                let replayRoutes = OrchestrationCommittedRecorder()
+                let relaunched = EventLog(
+                    identity: identity,
+                    dateProvider: dateProvider,
+                    apiClient: api
+                )
+                eventLog = relaunched
+                await relaunched.subscribeCommitted { event in
+                    await replayRoutes.record(event)
+                }
+                try await relaunched.configure(configuration: config)
+                let replayCapture = await relaunched.captureAndRouteSystemEventBatch(
+                    batch,
+                    admission: admission
+                )
+                expect(replayCapture?["orchestration-renderer:first"]?.isNewlyCommitted)
+                    .to(beFalse())
+                expect(replayCapture?["orchestration-renderer:second"]?.isNewlyCommitted)
+                    .to(beFalse())
+                await relaunched.drain()
+                await expect { await replayRoutes.names() }.to(beEmpty())
+
+                let stored = await relaunched.getRecentEvents(limit: 20)
+                expect(stored.filter {
+                    $0.id == "orchestration-renderer:first"
+                }.count).to(equal(1))
+                expect(stored.filter {
+                    $0.id == "orchestration-renderer:second"
+                }.count).to(equal(1))
             }
         }
     }

@@ -532,6 +532,76 @@ final class EventStorageTests: AsyncSpec {
                 await reopened.close()
             }
 
+            it("persists a stable local-route receipt until subscriber delivery is acknowledged") {
+                let event = try StoredEvent(
+                    id: "stable-route-across-relaunch",
+                    name: "$purchase_completed",
+                    properties: ["source": "device_journey"],
+                    timestamp: Date(timeIntervalSince1970: 1_000),
+                    distinctId: "customer-a"
+                )
+                let committed = try await internalEventStore
+                    .commitStableCaptureAndStageRoute(
+                        eventId: event.id,
+                        event: event,
+                        recordedAt: event.timestamp,
+                        ownership: nil,
+                        assigningCommitSequence: true,
+                        admission: nil
+                    )
+                guard case .captured(_, isNew: true) = committed.outcome else {
+                    return fail("expected a newly captured stable event")
+                }
+                expect(committed.localRoutePending).to(beTrue())
+                let initiallyPending = try await internalEventStore.queryPendingStableRoutes(
+                    distinctId: "customer-a"
+                )
+                expect(initiallyPending.map(\.id)).to(equal([event.id]))
+
+                await internalEventStore.close()
+                internalEventStore = SQLiteEventStore()
+                try await internalEventStore.initialize(
+                    path: URL(fileURLWithPath: tempDbPath)
+                )
+
+                let reopenedPending = try await internalEventStore.queryPendingStableRoutes(
+                    distinctId: "customer-a"
+                )
+                expect(reopenedPending.map(\.id)).to(equal([event.id]))
+                let replay = try await internalEventStore
+                    .commitStableCaptureAndStageRoute(
+                        eventId: event.id,
+                        event: nil,
+                        recordedAt: Date(timeIntervalSince1970: 2_000),
+                        ownership: nil,
+                        assigningCommitSequence: true,
+                        admission: nil
+                    )
+                guard case .captured(let canonical, isNew: false) = replay.outcome else {
+                    return fail("expected the canonical captured event on replay")
+                }
+                expect(canonical.id).to(equal(event.id))
+                expect(replay.localRoutePending).to(beTrue())
+
+                try await internalEventStore.markStableRouteDelivered(
+                    eventId: event.id
+                )
+                let deliveredPending = try await internalEventStore.queryPendingStableRoutes(
+                    distinctId: "customer-a"
+                )
+                expect(deliveredPending).to(beEmpty())
+                let acknowledgedReplay = try await internalEventStore
+                    .commitStableCaptureAndStageRoute(
+                        eventId: event.id,
+                        event: nil,
+                        recordedAt: Date(timeIntervalSince1970: 3_000),
+                        ownership: nil,
+                        assigningCommitSequence: true,
+                        admission: nil
+                    )
+                expect(acknowledgedReplay.localRoutePending).to(beFalse())
+            }
+
             it("prevents stale-epoch stable capture after ownership loss across relaunch") {
                 let journeyId = "journey-owned-on-another-device"
                 try await internalEventStore.recordJourneyOwnershipLoss(
@@ -665,6 +735,60 @@ final class EventStorageTests: AsyncSpec {
                 let cleared = try await internalEventStore
                     .hasUnresolvedJourneyOwnershipResponse(ownership)
                 expect(cleared).to(beFalse())
+            }
+
+            it("rolls back every stable capture when a later batch item fails") {
+                let ownership = JourneyEventOwnership(
+                    journeyId: "journey-with-unresolved-ownership",
+                    epoch: 4
+                )
+                try await internalEventStore.recordUnresolvedJourneyOwnershipResponse(
+                    sourceEventId: "unresolved-source",
+                    ownership: ownership,
+                    recordedAt: Date(timeIntervalSince1970: 1_000)
+                )
+                let first = try StoredEvent(
+                    id: "screen-batch:first",
+                    name: "first",
+                    distinctId: "customer-a"
+                )
+                let blocked = try StoredEvent(
+                    id: "screen-batch:blocked",
+                    name: "blocked",
+                    distinctId: "customer-a"
+                )
+
+                await expect {
+                    try await internalEventStore.commitStableCaptureBatch(
+                        [
+                            StableEventCaptureRecord(
+                                eventId: first.id,
+                                event: first,
+                                recordedAt: Date(timeIntervalSince1970: 2_000),
+                                ownership: nil
+                            ),
+                            StableEventCaptureRecord(
+                                eventId: blocked.id,
+                                event: blocked,
+                                recordedAt: Date(timeIntervalSince1970: 2_001),
+                                ownership: ownership
+                            ),
+                        ],
+                        assigningCommitSequence: true,
+                        admission: nil
+                    )
+                }.to(throwError())
+
+                let firstOutcome = try await internalEventStore.queryStableCapture(
+                    id: first.id
+                )
+                let blockedOutcome = try await internalEventStore.queryStableCapture(
+                    id: blocked.id
+                )
+                let pending = try await internalEventStore.queryPendingDelivery(limit: 10)
+                expect(firstOutcome).to(beNil())
+                expect(blockedOutcome).to(beNil())
+                expect(pending).to(beEmpty())
             }
 
             it("inserts a stable pending event exactly once") {

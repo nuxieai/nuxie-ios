@@ -6,11 +6,31 @@ class MockExperienceViewController: ExperienceViewController {
     private(set) var prepareForPresentationCallCount = 0
     private(set) var shutdownRuntimeCallCount = 0
     private(set) var prepareForDismissalCallCount = 0
+    private(set) var navigationScreenIds: [String] = []
+    private(set) var navigationTransitions: [Any?] = []
+    private(set) var performDismissReasons: [CloseReason] = []
+    private(set) var performedOpenLinks: [(urlString: String, target: String?)] = []
+    private(set) var notificationPermissionResolutionCount = 0
+    private(set) var requestPermissionResolutionTypes: [String] = []
+    private(set) var trackingPermissionResolutionCount = 0
     private(set) var runtimeLifecycleEvents: [String] = []
     private var didPrepareForCurrentDismissal = false
     var prepareForPresentationHandler: (@MainActor () async -> Void)?
     var shutdownRuntimeHandler: (@MainActor () async -> Void)?
     var prepareForDismissalHandler: (@MainActor () async -> Void)?
+    var navigationResult = ExperienceScreenNavigationResult.navigated
+    var notificationPermissionEvent = DeviceLegPresentationPermissionEvent(
+        name: SystemEventNames.notificationsEnabled,
+        properties: [:]
+    )
+    var requestPermissionEvent = DeviceLegPresentationPermissionEvent(
+        name: SystemEventNames.permissionGranted,
+        properties: ["type": "camera"]
+    )
+    var trackingPermissionEvent = DeviceLegPresentationPermissionEvent(
+        name: SystemEventNames.trackingAuthorized,
+        properties: [:]
+    )
     var onRuntimeLifecycleEvent: ((String) -> Void)?
     
     // MARK: - Initialization
@@ -119,6 +139,59 @@ class MockExperienceViewController: ExperienceViewController {
             method: reason.map { ExperienceScreenDismissalMethod.value(for: $0) }
                 ?? "experience"
         )
+    }
+
+    override func navigateAndWait(
+        to screenId: String,
+        transition: Any? = nil
+    ) async -> Bool {
+        (await navigateAndWaitResult(
+            to: screenId,
+            transition: transition
+        )).reachedTarget
+    }
+
+    override func navigateAndWaitResult(
+        to screenId: String,
+        transition: Any? = nil
+    ) async -> ExperienceScreenNavigationResult {
+        navigationScreenIds.append(screenId)
+        navigationTransitions.append(transition)
+        return navigationResult
+    }
+
+    override func resolveDeviceLegNotificationPermissionEvent(
+        journeyId: String
+    ) async -> DeviceLegPresentationPermissionEvent {
+        _ = journeyId
+        notificationPermissionResolutionCount += 1
+        return notificationPermissionEvent
+    }
+
+    override func resolveDeviceLegRequestPermissionEvent(
+        permissionType: String,
+        journeyId: String
+    ) async -> DeviceLegPresentationPermissionEvent {
+        _ = journeyId
+        requestPermissionResolutionTypes.append(permissionType)
+        return requestPermissionEvent
+    }
+
+    override func resolveDeviceLegTrackingPermissionEvent(
+        journeyId: String
+    ) async -> DeviceLegPresentationPermissionEvent {
+        _ = journeyId
+        trackingPermissionResolutionCount += 1
+        return trackingPermissionEvent
+    }
+
+    override func performDismiss(reason: CloseReason = .userDismissed) {
+        performDismissReasons.append(reason)
+        super.performDismiss(reason: reason)
+    }
+
+    override func performOpenLink(urlString: String, target: String? = nil) {
+        performedOpenLinks.append((urlString, target))
     }
     
     // MARK: - Test Helper Methods

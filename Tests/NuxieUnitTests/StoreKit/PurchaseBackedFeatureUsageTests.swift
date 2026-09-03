@@ -205,20 +205,17 @@ private final class PurchaseBackedEventSink: SystemEventSink, @unchecked Sendabl
     }
 
     func capture(
-        _ name: String,
-        properties: [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
         lock.withLock {
             let result = captureResults.isEmpty ? true : captureResults.removeFirst()
             captures.append(Capture(
-                name: name,
-                properties: properties,
-                eventId: eventId,
-                distinctId: distinctId
+                name: request.name,
+                properties: request.properties,
+                eventId: request.eventId,
+                distinctId: request.distinctId
             ))
-            if result { capturedEvents.append((name, properties)) }
+            if result { capturedEvents.append((request.name, request.properties)) }
             return result
         }
     }

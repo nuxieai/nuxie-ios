@@ -2,23 +2,77 @@ import CryptoKit
 import Foundation
 
 struct DeviceLegRun {
+    /// Profile values that an admitted run still needs after delivery changes
+    /// or disappears. Execution ownership is positional and cannot depend on
+    /// the server continuing to advertise an already-started leg.
+    struct ExecutionSnapshot: Codable, Sendable {
+        let delivery: ExperienceReleaseDelivery
+        let assignments: ExactJSONObject<DeviceLegFactTable.Assignment?>
+    }
+
     struct Park {
         let wakeAt: Date?
         let anchorAt: Date?
+        var pendingEvent: DeviceLegControlExecutor.Event?
+        var pendingResponsesChanged: Bool
 
-        init(wakeAt: Date?, anchorAt: Date? = nil) {
+        init(
+            wakeAt: Date?,
+            anchorAt: Date? = nil,
+            pendingEvent: DeviceLegControlExecutor.Event? = nil,
+            pendingResponsesChanged: Bool = false
+        ) {
             self.wakeAt = wakeAt
             self.anchorAt = anchorAt
+            self.pendingEvent = pendingEvent
+            self.pendingResponsesChanged = pendingResponsesChanged
         }
     }
     struct Completion {
         let outcome: String
         let at: Date
     }
+    struct ExperimentExposure: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Sendable {
+            case assigned
+            case fallback
+            case invalidAssignment
+        }
+
+        let experimentId: String
+        let variantId: String
+        let assignedVariantId: String?
+        let isHoldout: Bool
+        let kind: Kind
+        let eventId: String
+        let selectedAt: Date
+        /// The authenticated screen activation that first made this selected
+        /// path visible. An unrelated later screen cannot expose it.
+        var presentationScreenId: String?
+        var shownAt: Date?
+        var queued: Bool
+    }
+
+    struct PendingPresentationPublication: Codable, Equatable, Sendable {
+        struct Item: Codable, Equatable, Sendable {
+            let name: String
+            let properties: ExactJSONObject<ExperienceReleaseJSONValue>
+            let eventId: String
+            let occurredAt: Date
+        }
+
+        let invocationId: String
+        let source: ScreenEmissionSource
+        let context: ArmedDeviceLeg.Context
+        let responsesChanged: Bool
+        let items: [Item]
+    }
 
     let journeyId: String
     let generation: Int
     let reference: ArmedDeviceLeg.Reference
+    let executionSnapshot: ExecutionSnapshot?
+    let artifactSHA256s: [String]
     let reentry: DeviceLeg.Reentry?
     let startedAt: Date
     let isEnrollment: Bool
@@ -33,6 +87,14 @@ struct DeviceLegRun {
     /// A claimed effect is deliberately not a resume point: process death
     /// after this write abandons the run instead of replaying the effect.
     var effectReceipts: [String: String] = [:]
+    /// Experiment decisions survive until a selected variant reaches a visible
+    /// presentation. A stable event identity makes post-show reporting
+    /// idempotent across retries and process recovery.
+    var experimentExposures: [ExperimentExposure] = []
+    /// A renderer invocation first records its answers and ordinary stable
+    /// events here in one file replacement. EventLog then consumes these IDs;
+    /// a crash can replay them without replaying the screen action.
+    var pendingPresentationPublication: PendingPresentationPublication?
     var completion: Completion?
 
     var id: String { "\(journeyId):\(generation)" }
@@ -41,12 +103,12 @@ struct DeviceLegRun {
 struct DeviceLegStateArmReceipt: Codable, Hashable, Sendable {
     let reference: ArmedDeviceLeg.Reference
     let binding: ArmedDeviceLeg.Binding
-    let entryKind: String
+    let entryKind: DeviceLegEntryCondition.Kind
 
     init(_ arm: ArmedDeviceLeg) {
         reference = arm.reference
         binding = arm.binding
-        entryKind = arm.entryCondition.type.rawValue
+        entryKind = arm.entryCondition.type
     }
 }
 
@@ -99,41 +161,35 @@ struct DeviceLegRunJournal {
     let distinctId: String
     private let root: URL
     private let file: URL
-    private let releasePinRoot: URL
-    private let releasePinDirectory: URL
+    private let releasePins: DeviceLegReleasePinStore
     private let revocationFile: URL
     private let lockScope: CacheFilesystemLockScope
-    private let releasePinBudgetBytes: Int
-    private let releasePinCountLimit: Int
+    private let beforePersist: (@Sendable () throws -> Void)?
     /// A canonical profile may carry up to 24 MiB of admitted context. Keep
     /// the previous 16 MiB journal allowance as headroom for cursors,
     /// responses, receipts, and the reentry checklist.
     private static let maximumBytes = 40 * 1_024 * 1_024
-    private static let maximumReleasePinBytes =
-        ExperienceReleaseDescriptorLimits.profileBytes
-    private static let defaultReleasePinBudgetBytes = 256 * 1_024 * 1_024
-    private static let defaultReleasePinCountLimit = 1_024
 
     init(
         directory: URL,
         distinctId: String,
         storageScope: DeviceLegStorageScope = .testFixture,
-        releasePinBudgetBytes: Int = Self.defaultReleasePinBudgetBytes,
-        releasePinCountLimit: Int = Self.defaultReleasePinCountLimit
+        releasePinBudgetBytes: Int = DeviceLegReleasePinStore.defaultBudgetBytes,
+        releasePinCountLimit: Int = DeviceLegReleasePinStore.defaultCountLimit,
+        beforePersist: (@Sendable () throws -> Void)? = nil
     ) throws {
         self.distinctId = distinctId
-        self.releasePinBudgetBytes = max(0, releasePinBudgetBytes)
-        self.releasePinCountLimit = max(0, releasePinCountLimit)
+        self.beforePersist = beforePersist
         let root = directory.appendingPathComponent("device-leg-journal-v1", isDirectory: true)
         self.root = root
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let digest = storageScope.customerDigest(distinctId: distinctId)
-        releasePinRoot = root.appendingPathComponent(
-            "release-pins",
-            isDirectory: true
+        releasePins = DeviceLegReleasePinStore(
+            journalRoot: root,
+            customerDigest: digest,
+            budgetBytes: releasePinBudgetBytes,
+            countLimit: releasePinCountLimit
         )
-        releasePinDirectory = releasePinRoot
-            .appendingPathComponent(digest, isDirectory: true)
         file = root.appendingPathComponent("\(digest).json")
         revocationFile = root.appendingPathComponent(
             "\(digest).revoked",
@@ -147,6 +203,8 @@ struct DeviceLegRunJournal {
     func admit(
         arm: ArmedDeviceLeg,
         release: DeviceLegReleaseProfileEntry,
+        artifactSource: DeviceLegReleaseArtifactSource? = nil,
+        executionSnapshot: DeviceLegRun.ExecutionSnapshot,
         reentry: DeviceLeg.Reentry,
         entryStepId: String,
         at: Date,
@@ -161,17 +219,16 @@ struct DeviceLegRunJournal {
         guard Self.pin(release, matches: arm.reference) else {
             throw DeviceLegJournalError.invalidState
         }
-        let releaseBytes = try ExactJSONCodec.encode(release)
-        guard releaseBytes.count <= Self.maximumReleasePinBytes else {
-            throw DeviceLegJournalError.storageLimit
+        guard artifactSource?.descriptorSHA256
+                == arm.reference.descriptorSha256
+                || artifactSource == nil else {
+            throw DeviceLegJournalError.invalidState
         }
         let file = file
         let root = root
-        let releasePinRoot = releasePinRoot
-        let releasePinDirectory = releasePinDirectory
-        let releasePinBudgetBytes = releasePinBudgetBytes
-        let releasePinCountLimit = releasePinCountLimit
+        let releasePins = releasePins
         let revocationFile = revocationFile
+        let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
             to: root,
             lockScope: lockScope
@@ -179,10 +236,7 @@ struct DeviceLegRunJournal {
             // Another customer instance may have removed this still-empty
             // directory as an orphan before this journal's first admission.
             // Recreate it inside the root transaction before cleanup/write.
-            try FileManager.default.createDirectory(
-                at: releasePinDirectory,
-                withIntermediateDirectories: true
-            )
+            try releasePins.ensureCustomerDirectory()
             guard !FileManager.default.fileExists(atPath: revocationFile.path) else {
                 return nil
             }
@@ -191,15 +245,10 @@ struct DeviceLegRunJournal {
                state.stateArmReceipts?.contains(stateArmReceipt) == true {
                 return nil
             }
-            try Self.removeUnreferencedReleasePins(
-                from: releasePinDirectory,
-                state: state
-            )
-            try Self.removeGlobalOrphanReleasePins(
-                from: releasePinRoot,
-                journalRoot: root,
-                excludingCustomerDirectory: releasePinDirectory
-            )
+            try releasePins.removeUnreferenced(Self.pinReferences(state))
+            try releasePins.removeGlobalOrphans(journalRoot: root) {
+                Self.pinReferences(try Self.load($0))
+            }
             let previous = state.checklist[arm.reference.experienceId]
             let journeyId: String
             let generation: Int
@@ -228,55 +277,38 @@ struct DeviceLegRunJournal {
                 generation = boundGeneration
                 if previous?.journeyId == journeyId, let previous, previous.generation >= generation { return nil }
             }
-            let run = DeviceLegRun(journeyId: journeyId, generation: generation, reference: arm.reference,
-                                   reentry: reentry,
-                                   startedAt: at, isEnrollment: arm.binding.type == .new,
-                                   startedEventId: UUID.v7().uuidString.lowercased(),
-                                   completedEventId: UUID.v7().uuidString.lowercased(),
-                                   stepId: entryStepId, context: arm.context)
-            guard state.runs[run.id] == nil else { return nil }
+            let runId = "\(journeyId):\(generation)"
+            guard state.runs[runId] == nil else { return nil }
             guard state.runs.count < 1024 else { throw DeviceLegJournalError.storageLimit }
-            let pinFile = try Self.releasePinFile(
+            let inheritedArtifactSHA256s = state.runs.values.first(where: {
+                $0.reference.descriptorSha256
+                    == arm.reference.descriptorSha256
+            })?.artifactSHA256s ?? []
+            let preparedPins = try releasePins.prepareAdmission(
+                release: release,
                 descriptorSHA256: arm.reference.descriptorSha256,
-                directory: releasePinDirectory
+                artifactSource: artifactSource,
+                inheritedArtifactSHA256s: inheritedArtifactSHA256s
             )
-            let pinExisted = FileManager.default.fileExists(
-                atPath: pinFile.path
+            let run = DeviceLegRun(
+                journeyId: journeyId,
+                generation: generation,
+                reference: arm.reference,
+                executionSnapshot: executionSnapshot,
+                artifactSHA256s: preparedPins.artifactSHA256s,
+                reentry: reentry,
+                startedAt: at,
+                isEnrollment: arm.binding.type == .new,
+                startedEventId: UUID.v7().uuidString.lowercased(),
+                completedEventId: UUID.v7().uuidString.lowercased(),
+                stepId: entryStepId,
+                context: arm.context
             )
-            let inventory = try Self.releasePinInventory(
-                in: releasePinRoot
-            )
-            guard inventory.count <= releasePinCountLimit,
-                  inventory.totalBytes <= releasePinBudgetBytes else {
-                throw DeviceLegJournalError.storageLimit
-            }
-            if pinExisted {
-                guard try Self.loadReleasePinBytes(pinFile) == releaseBytes else {
-                    throw DeviceLegJournalError.invalidState
-                }
-            } else {
-                let (nextBytes, overflowed) = inventory.totalBytes
-                    .addingReportingOverflow(releaseBytes.count)
-                guard inventory.count < releasePinCountLimit,
-                      !overflowed,
-                      nextBytes <= releasePinBudgetBytes else {
-                    throw DeviceLegJournalError.storageLimit
-                }
-                try releaseBytes.write(
-                    to: pinFile,
-                    options: [
-                        .atomic,
-                        .completeFileProtectionUntilFirstUserAuthentication,
-                    ]
-                )
-            }
             state.runs[run.id] = run
             if let stateArmReceipt {
                 var receipts = state.stateArmReceipts ?? []
                 guard receipts.insert(stateArmReceipt).inserted else {
-                    if !pinExisted {
-                        try? FileManager.default.removeItem(at: pinFile)
-                    }
+                    preparedPins.rollback()
                     return nil
                 }
                 state.stateArmReceipts = receipts
@@ -286,24 +318,22 @@ struct DeviceLegRunJournal {
                     guard try profileFence.performIfCurrent(
                         profileFenceToken,
                         { () -> Void in
+                            try beforePersist?()
                             try Self.persist(state, to: file)
                             onAdmitted()
                         }
                     ) != nil else {
-                        if !pinExisted {
-                            try? FileManager.default.removeItem(at: pinFile)
-                        }
+                        preparedPins.rollback()
                         return nil
                     }
                 } else {
+                    try beforePersist?()
                     try Self.persist(state, to: file)
                     onAdmitted()
                 }
                 return run
             } catch {
-                if !pinExisted {
-                    try? FileManager.default.removeItem(at: pinFile)
-                }
+                preparedPins.rollback()
                 throw error
             }
         }
@@ -317,7 +347,7 @@ struct DeviceLegRunJournal {
         descriptorSHA256: String
     ) async throws -> DeviceLegReleaseProfileEntry? {
         let file = file
-        let releasePinDirectory = releasePinDirectory
+        let releasePins = releasePins
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
             to: file,
             lockScope: lockScope
@@ -328,16 +358,25 @@ struct DeviceLegRunJournal {
             }) else {
                 return nil
             }
-            let pinFile = try Self.releasePinFile(
-                descriptorSHA256: descriptorSHA256,
-                directory: releasePinDirectory
+            return try releasePins.release(
+                descriptorSHA256: descriptorSHA256
             )
-            guard FileManager.default.fileExists(atPath: pinFile.path) else {
-                return nil
-            }
-            return try ExactJSONCodec.decode(
-                DeviceLegReleaseProfileEntry.self,
-                from: Self.loadReleasePinBytes(pinFile)
+        }
+    }
+
+    func pinnedArtifacts(
+        forRunId runId: String
+    ) async throws -> DeviceLegPinnedReleaseArtifacts? {
+        let file = file
+        let releasePins = releasePins
+        return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
+            to: file,
+            lockScope: lockScope
+        ) {
+            let state = try Self.load(file)
+            guard let run = state.runs[runId] else { return nil }
+            return try releasePins.pinnedArtifacts(
+                sha256s: run.artifactSHA256s
             )
         }
     }
@@ -359,7 +398,9 @@ struct DeviceLegRunJournal {
     /// Reopens one state latch without disturbing receipts for other entry
     /// kinds. The filesystem transaction keeps multiple SDK instances from
     /// starting the same arm when they observe the latch transition together.
-    func clearStateArmReceipts(entryKind: String) async throws {
+    func clearStateArmReceipts(
+        entryKind: DeviceLegEntryCondition.Kind
+    ) async throws {
         try await update { state in
             state.stateArmReceipts = Set(
                 (state.stateArmReceipts ?? []).filter {
@@ -420,10 +461,83 @@ struct DeviceLegRunJournal {
         }
     }
 
+    @discardableResult
+    func stagePresentationPublication(
+        _ id: String,
+        expectedStepId: String,
+        expectedCheckpoint: DeviceLegControlExecutor.Checkpoint?,
+        publication: DeviceLegRun.PendingPresentationPublication,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        let expectedPark = expectedCheckpoint.map {
+            DeviceLegRun.Park(
+                wakeAt: DeviceLegTime.date($0.wakeAtMillis),
+                anchorAt: DeviceLegTime.date($0.anchorAtMillis)
+            )
+        }
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
+            guard var run = state.runs[id],
+                  run.startedQueued,
+                  run.completion == nil,
+                  run.stepId == expectedStepId,
+                  run.park == expectedPark else {
+                throw DeviceLegJournalError.invalidState
+            }
+            if let pending = run.pendingPresentationPublication {
+                guard pending == publication else {
+                    throw DeviceLegJournalError.invalidState
+                }
+                return
+            }
+            run.context = publication.context
+            run.pendingPresentationPublication = publication
+            state.runs[id] = run
+        }
+        return try await updateIfCurrent(admission, mutation) != nil
+    }
+
+    @discardableResult
+    func clearPresentationPublication(
+        _ id: String,
+        invocationId: String,
+        retainingResponsesChanged: Bool = false,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
+            guard var run = state.runs[id], run.completion == nil else {
+                throw DeviceLegJournalError.invalidState
+            }
+            guard let pending = run.pendingPresentationPublication else {
+                return
+            }
+            guard pending.invocationId == invocationId else {
+                throw DeviceLegJournalError.invalidState
+            }
+            if retainingResponsesChanged {
+                guard var park = run.park else {
+                    throw DeviceLegJournalError.invalidState
+                }
+                park.pendingResponsesChanged = true
+                run.park = park
+            }
+            run.pendingPresentationPublication = nil
+            state.runs[id] = run
+        }
+        return try await updateIfCurrent(admission, mutation) != nil
+    }
+
     /// Persist one executor transition before another step or effect runs.
-    func transition(_ id: String, stepId: String, context: ArmedDeviceLeg.Context,
-                    checkpoint: DeviceLegControlExecutor.Checkpoint? = nil) async throws {
-        try await update { state in
+    @discardableResult
+    func transition(
+        _ id: String,
+        stepId: String,
+        context: ArmedDeviceLeg.Context,
+        checkpoint: DeviceLegControlExecutor.Checkpoint? = nil,
+        experimentExposure: DeviceLegRun.ExperimentExposure? = nil,
+        clearingPresentationPublication invocationId: String? = nil,
+        admission: DeviceLegCommitAdmission? = nil
+    ) async throws -> Bool {
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
             guard var run = state.runs[id], run.startedQueued, run.completion == nil else {
                 throw DeviceLegJournalError.invalidState
             }
@@ -432,15 +546,103 @@ struct DeviceLegRunJournal {
             run.effectReceipts.removeValue(forKey: run.stepId)
             run.stepId = stepId
             run.context = context
-            run.park = checkpoint.map {
-                .init(wakeAt: Self.date($0.wakeAtMillis), anchorAt: Self.date($0.anchorAtMillis))
+            if let experimentExposure,
+               !run.experimentExposures.contains(where: {
+                   $0.experimentId == experimentExposure.experimentId
+               }) {
+                run.experimentExposures.append(experimentExposure)
             }
+            if let invocationId {
+                guard run.pendingPresentationPublication?.invocationId
+                    == invocationId else {
+                    throw DeviceLegJournalError.invalidState
+                }
+                run.pendingPresentationPublication = nil
+            }
+            run.park = checkpoint.map {
+                .init(
+                    wakeAt: DeviceLegTime.date($0.wakeAtMillis),
+                    anchorAt: DeviceLegTime.date($0.anchorAtMillis)
+                )
+            }
+            state.runs[id] = run
+        }
+        if let admission {
+            return try await updateIfCurrent(admission, mutation) != nil
+        }
+        try await update(mutation)
+        return true
+    }
+
+    @discardableResult
+    func bindExperimentExposures(
+        _ id: String,
+        to screenId: String,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id], run.startedQueued,
+                  run.completion == nil else {
+                throw DeviceLegJournalError.invalidState
+            }
+            for index in run.experimentExposures.indices
+            where !run.experimentExposures[index].queued
+                && run.experimentExposures[index].shownAt == nil
+                && run.experimentExposures[index].presentationScreenId == nil {
+                run.experimentExposures[index].presentationScreenId = screenId
+            }
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
+    @discardableResult
+    func markExperimentExposuresShown(
+        _ id: String,
+        screenId: String,
+        at: Date,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id], run.startedQueued,
+                  run.completion == nil else {
+                throw DeviceLegJournalError.invalidState
+            }
+            for index in run.experimentExposures.indices
+            where !run.experimentExposures[index].queued
+                && run.experimentExposures[index].presentationScreenId == screenId
+                && run.experimentExposures[index].shownAt == nil {
+                run.experimentExposures[index].shownAt = at
+            }
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
+    func markExperimentExposureQueued(
+        _ id: String,
+        eventId: String
+    ) async throws {
+        try await update { state in
+            guard var run = state.runs[id],
+                  let index = run.experimentExposures.firstIndex(where: {
+                      $0.eventId == eventId
+                  }), run.experimentExposures[index].shownAt != nil else {
+                throw DeviceLegJournalError.invalidState
+            }
+            run.experimentExposures[index].queued = true
             state.runs[id] = run
         }
     }
 
-    func park(_ id: String, stepId: String, until: Date?) async throws {
-        try await update { state in
+    @discardableResult
+    func park(
+        _ id: String,
+        stepId: String,
+        until: Date?,
+        admission: DeviceLegCommitAdmission? = nil
+    ) async throws -> Bool {
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
             guard var run = state.runs[id], run.startedQueued, run.completion == nil else {
                 throw DeviceLegJournalError.invalidState
             }
@@ -448,6 +650,47 @@ struct DeviceLegRunJournal {
             run.park = .init(wakeAt: until)
             state.runs[id] = run
         }
+        if let admission {
+            return try await updateIfCurrent(admission, mutation) != nil
+        }
+        try await update(mutation)
+        return true
+    }
+
+    /// Retains the first event that satisfies a parked rendered wait while the
+    /// host is backgrounded. The park remains the resumable checkpoint until
+    /// foreground presentation admission opens again.
+    @discardableResult
+    func stageParkedEvent(
+        _ id: String,
+        expectedStepId: String,
+        expectedCheckpoint: DeviceLegControlExecutor.Checkpoint,
+        event: DeviceLegControlExecutor.Event,
+        admission: DeviceLegCommitAdmission
+    ) async throws -> Bool {
+        let expectedWakeAt = DeviceLegTime.date(
+            expectedCheckpoint.wakeAtMillis
+        )
+        let expectedAnchorAt = DeviceLegTime.date(
+            expectedCheckpoint.anchorAtMillis
+        )
+        return try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id],
+                  run.startedQueued,
+                  run.completion == nil,
+                  run.stepId == expectedStepId,
+                  var park = run.park,
+                  park.wakeAt == expectedWakeAt,
+                  park.anchorAt == expectedAnchorAt else {
+                throw DeviceLegJournalError.invalidState
+            }
+            if park.pendingEvent == nil {
+                park.pendingEvent = event
+                run.park = park
+                state.runs[id] = run
+            }
+            return true
+        } ?? false
     }
 
     /// Persist a stable effect identity before dispatch. Re-entering an
@@ -479,16 +722,14 @@ struct DeviceLegRunJournal {
     func recover(at: Date) async throws -> [DeviceLegRun] {
         let root = root
         let file = file
-        let releasePinDirectory = releasePinDirectory
+        let releasePins = releasePins
         let revocationFile = revocationFile
+        let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
             to: root,
             lockScope: lockScope
         ) {
-            try FileManager.default.createDirectory(
-                at: releasePinDirectory,
-                withIntermediateDirectories: true
-            )
+            try releasePins.ensureCustomerDirectory()
             var state = try Self.load(file)
             let revoked = FileManager.default.fileExists(
                 atPath: revocationFile.path
@@ -502,9 +743,8 @@ struct DeviceLegRunJournal {
                     pin = nil
                 } else if let cached = pinsByDigest[digest] {
                     pin = cached
-                } else if let loaded = try? Self.loadReleasePin(
-                    descriptorSHA256: digest,
-                    directory: releasePinDirectory
+                } else if let loaded = try? releasePins.release(
+                    descriptorSHA256: digest
                 ) {
                     pinsByDigest[digest] = loaded
                     pin = loaded
@@ -515,6 +755,8 @@ struct DeviceLegRunJournal {
                 if revoked || run.park == nil
                     || pin.map({ Self.pin($0, matches: run.reference) }) != true {
                     let eventOutputs = run.outputs.event
+                    let pendingPresentationPublication =
+                        run.pendingPresentationPublication
                     Self.finish(
                         &run,
                         outcome: "abandoned",
@@ -522,14 +764,28 @@ struct DeviceLegRunJournal {
                         eventOutputs: eventOutputs,
                         responseOutputs: run.context.responses
                     )
+                    // The process break terminates execution, but renderer
+                    // events staged before the break remain an ordinary-event
+                    // outbox. Startup publishes them before the terminal
+                    // report removes this run; their stable IDs make retries
+                    // idempotent without replaying the screen action.
+                    run.pendingPresentationPublication =
+                        pendingPresentationPublication
                     state.runs[id] = run
                 }
             }
+            try beforePersist?()
             try Self.persist(state, to: file)
-            try Self.removeUnreferencedReleasePins(
-                from: releasePinDirectory,
-                state: state
-            )
+            do {
+                try releasePins.removeUnreferenced(Self.pinReferences(state))
+            } catch {
+                // The recovered run state is already authoritative. Pin
+                // pruning is maintenance and must not prevent the caller from
+                // reporting newly persisted abandonment completions.
+                LogWarning(
+                    "DeviceLegRunJournal: failed to prune recovered release pins: \(error)"
+                )
+            }
             return state.runs.values.filter {
                 $0.park != nil && $0.completion == nil
             }
@@ -544,6 +800,7 @@ struct DeviceLegRunJournal {
         let root = root
         let file = file
         let revocationFile = revocationFile
+        let beforePersist = beforePersist
         try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
             to: root,
             lockScope: lockScope
@@ -571,6 +828,7 @@ struct DeviceLegRunJournal {
             // delivery of the same arm belongs to a new profile authority and
             // must be able to start when its state is satisfied.
             state.stateArmReceipts = []
+            try beforePersist?()
             try Self.persist(state, to: file)
         }
     }
@@ -598,10 +856,10 @@ struct DeviceLegRunJournal {
     /// The caller must first establish that this wait should wake now.
     func resumeParked(
         _ id: String,
-        profileFence: DeviceLegProfileFence,
-        profileFenceToken: DeviceLegProfileFenceToken
+        admission: DeviceLegCommitAdmission
     ) async throws -> DeviceLegRun? {
         let file = file
+        let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
             to: file,
             lockScope: lockScope
@@ -612,22 +870,24 @@ struct DeviceLegRunJournal {
             }
             run.park = nil
             state.runs[id] = run
-            guard try profileFence.performIfCurrent(
-                profileFenceToken,
-                { try Self.persist(state, to: file) }
-            ) != nil else { return nil }
+            guard try admission.commitJournalIfCurrent({ () -> Void in
+                try beforePersist?()
+                try Self.persist(state, to: file)
+            }) != nil else { return nil }
             return run
         }
     }
 
+    @discardableResult
     func complete(
         _ id: String,
         outcome: String,
         at: Date,
         eventOutputs: ExactJSONObject<ExperienceReleaseJSONValue> = [:],
-        responseOutputs: ExactJSONObject<ExperienceReleaseJSONValue> = [:]
-    ) async throws {
-        try await update { state in
+        responseOutputs: ExactJSONObject<ExperienceReleaseJSONValue> = [:],
+        admission: DeviceLegCommitAdmission? = nil
+    ) async throws -> Bool {
+        let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
             guard var run = state.runs[id] else { throw DeviceLegJournalError.invalidState }
             // A retry cannot rewrite the outcome, outputs, or occurrence time.
             guard run.completion == nil else { return }
@@ -643,6 +903,11 @@ struct DeviceLegRunJournal {
             )
             state.runs[id] = run
         }
+        if let admission {
+            return try await updateIfCurrent(admission, mutation) != nil
+        }
+        try await update(mutation)
+        return true
     }
 
     func markStartedQueued(_ run: DeviceLegRun) async throws {
@@ -695,6 +960,7 @@ struct DeviceLegRunJournal {
         // its selected outputs. Moving rather than copying keeps a
         // maximum-size canonical context within the journal budget.
         run.context = .init(event: [:], responses: [:])
+        run.pendingPresentationPublication = nil
         run.completion = .init(outcome: outcome, at: at)
     }
 
@@ -710,18 +976,48 @@ struct DeviceLegRunJournal {
         _ operation: @escaping @Sendable (inout Snapshot) throws -> Value
     ) async throws -> Value {
         let file = file
-        let releasePinDirectory = releasePinDirectory
+        let releasePins = releasePins
+        let beforePersist = beforePersist
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(to: file, lockScope: lockScope) {
             var state = try Self.load(file)
             let value = try operation(&state)
+            try beforePersist?()
             try Self.persist(state, to: file)
             if cleanupReleasePins {
-                try Self.removeUnreferencedReleasePins(
-                    from: releasePinDirectory,
-                    state: state
-                )
+                do {
+                    try releasePins.removeUnreferenced(
+                        Self.pinReferences(state)
+                    )
+                } catch {
+                    // The journal replacement is the terminal authority. Pin
+                    // pruning is reclaimable maintenance and cannot turn a
+                    // committed run deletion into a failed completion.
+                    LogWarning(
+                        "DeviceLegRunJournal: failed to prune retired release pins: \(error)"
+                    )
+                }
             }
             return value
+        }
+    }
+
+    private func updateIfCurrent<Value: Sendable>(
+        _ admission: DeviceLegCommitAdmission,
+        _ operation: @escaping @Sendable (inout Snapshot) throws -> Value
+    ) async throws -> Value? {
+        let file = file
+        let beforePersist = beforePersist
+        return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
+            to: file,
+            lockScope: lockScope
+        ) {
+            var state = try Self.load(file)
+            let value = try operation(&state)
+            return try admission.commitJournalIfCurrent {
+                try beforePersist?()
+                try Self.persist(state, to: file)
+                return value
+            }
         }
     }
 
@@ -739,175 +1035,15 @@ struct DeviceLegRunJournal {
         )
     }
 
-    private static func releasePinFile(
-        descriptorSHA256: String,
-        directory: URL
-    ) throws -> URL {
-        guard isLowercaseSHA256(descriptorSHA256) else {
-            throw DeviceLegJournalError.invalidState
-        }
-        return directory.appendingPathComponent(
-            "\(descriptorSHA256).json",
-            isDirectory: false
+    private static func pinReferences(
+        _ state: Snapshot
+    ) -> DeviceLegReleasePinReferences {
+        DeviceLegReleasePinReferences(
+            descriptorSHA256s: Set(state.runs.values.map {
+                $0.reference.descriptorSha256
+            }),
+            artifactSHA256s: Set(state.runs.values.flatMap(\.artifactSHA256s))
         )
-    }
-
-    private static func loadReleasePinBytes(_ file: URL) throws -> Data {
-        try BoundedFileIO.read(
-            at: file,
-            maximumBytes: maximumReleasePinBytes
-        ).data
-    }
-
-    private static func loadReleasePin(
-        descriptorSHA256: String,
-        directory: URL
-    ) throws -> DeviceLegReleaseProfileEntry? {
-        let file = try releasePinFile(
-            descriptorSHA256: descriptorSHA256,
-            directory: directory
-        )
-        guard FileManager.default.fileExists(atPath: file.path) else {
-            return nil
-        }
-        return try ExactJSONCodec.decode(
-            DeviceLegReleaseProfileEntry.self,
-            from: loadReleasePinBytes(file)
-        )
-    }
-
-    private static func removeUnreferencedReleasePins(
-        from directory: URL,
-        state: Snapshot
-    ) throws {
-        let fileManager = FileManager.default
-        let referenced = Set(state.runs.values.map {
-            $0.reference.descriptorSha256
-        })
-        for file in try fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        ) {
-            let descriptorSHA256 = file.deletingPathExtension().lastPathComponent
-            let isPin = file.pathExtension == "json"
-                && (try? releasePinFile(
-                descriptorSHA256: descriptorSHA256,
-                directory: directory
-            )) != nil
-            if !isPin || !referenced.contains(descriptorSHA256) {
-                try fileManager.removeItem(at: file)
-            }
-        }
-    }
-
-    private static func removeGlobalOrphanReleasePins(
-        from releasePinRoot: URL,
-        journalRoot: URL,
-        excludingCustomerDirectory: URL
-    ) throws {
-        let fileManager = FileManager.default
-        let excluded = excludingCustomerDirectory.lastPathComponent
-        for customerDirectory in try fileManager.contentsOfDirectory(
-            at: releasePinRoot,
-            includingPropertiesForKeys: nil
-        ) {
-            let customerDigest = customerDirectory.lastPathComponent
-            let attributes = try fileManager.attributesOfItem(
-                atPath: customerDirectory.path
-            )
-            guard isLowercaseSHA256(customerDigest),
-                  attributes[.type] as? FileAttributeType == .typeDirectory else {
-                try fileManager.removeItem(at: customerDirectory)
-                continue
-            }
-            guard customerDigest != excluded else { continue }
-            let journalFile = journalRoot.appendingPathComponent(
-                "\(customerDigest).json",
-                isDirectory: false
-            )
-            guard fileManager.fileExists(atPath: journalFile.path) else {
-                try fileManager.removeItem(at: customerDirectory)
-                continue
-            }
-            guard let state = try? load(journalFile) else {
-                // A transiently unreadable journal may still be recoverable;
-                // count its pins against the global budget without deleting
-                // its only retained execution authority.
-                continue
-            }
-            try removeUnreferencedReleasePins(
-                from: customerDirectory,
-                state: state
-            )
-        }
-    }
-
-    private static func releasePinInventory(
-        in releasePinRoot: URL
-    ) throws -> (count: Int, totalBytes: Int) {
-        let fileManager = FileManager.default
-        var count = 0
-        var totalBytes = 0
-        for customerDirectory in try fileManager.contentsOfDirectory(
-            at: releasePinRoot,
-            includingPropertiesForKeys: nil
-        ) {
-            let customerDigest = customerDirectory.lastPathComponent
-            let directoryAttributes = try fileManager.attributesOfItem(
-                atPath: customerDirectory.path
-            )
-            guard isLowercaseSHA256(customerDigest),
-                  directoryAttributes[.type] as? FileAttributeType
-                    == .typeDirectory else {
-                throw DeviceLegJournalError.invalidState
-            }
-            for file in try fileManager.contentsOfDirectory(
-                at: customerDirectory,
-                includingPropertiesForKeys: nil
-            ) {
-                let descriptorSHA256 = file.deletingPathExtension()
-                    .lastPathComponent
-                guard file.pathExtension == "json",
-                      (try? releasePinFile(
-                        descriptorSHA256: descriptorSHA256,
-                        directory: customerDirectory
-                      )) != nil else {
-                    throw DeviceLegJournalError.invalidState
-                }
-                let bytes = try regularFileSize(file)
-                let (nextTotal, overflowed) = totalBytes
-                    .addingReportingOverflow(bytes)
-                guard !overflowed else {
-                    throw DeviceLegJournalError.storageLimit
-                }
-                totalBytes = nextTotal
-                count += 1
-            }
-        }
-        return (count, totalBytes)
-    }
-
-    private static func regularFileSize(_ file: URL) throws -> Int {
-        let attributes = try FileManager.default.attributesOfItem(
-            atPath: file.path
-        )
-        guard attributes[.type] as? FileAttributeType == .typeRegular,
-              let size = attributes[.size] as? NSNumber else {
-            throw DeviceLegJournalError.invalidState
-        }
-        let value = size.int64Value
-        guard value >= 0,
-              value <= Int64(maximumReleasePinBytes) else {
-            throw DeviceLegJournalError.storageLimit
-        }
-        return Int(value)
-    }
-
-    private static func isLowercaseSHA256(_ value: String) -> Bool {
-        value.utf8.count == 64
-            && value.utf8.allSatisfy { byte in
-                (48...57).contains(byte) || (97...102).contains(byte)
-            }
     }
 
     private static func load(_ file: URL) throws -> Snapshot {
@@ -918,9 +1054,6 @@ struct DeviceLegRunJournal {
         return state
     }
 
-    private static func date(_ milliseconds: Int64) -> Date {
-        Date(timeIntervalSince1970: Double(milliseconds) / 1_000)
-    }
 }
 
 extension DeviceLegRun: Codable, Sendable {
@@ -928,6 +1061,8 @@ extension DeviceLegRun: Codable, Sendable {
         case journeyId
         case generation
         case reference
+        case executionSnapshot
+        case artifactSHA256s
         case reentry
         case startedAt
         case isEnrollment
@@ -939,6 +1074,8 @@ extension DeviceLegRun: Codable, Sendable {
         case context
         case outputs
         case effectReceipts
+        case experimentExposures
+        case pendingPresentationPublication
         case completion
     }
 
@@ -947,6 +1084,21 @@ extension DeviceLegRun: Codable, Sendable {
         journeyId = try container.decode(String.self, forKey: .journeyId)
         generation = try container.decode(Int.self, forKey: .generation)
         reference = try container.decode(ArmedDeviceLeg.Reference.self, forKey: .reference)
+        executionSnapshot = try container.decodeIfPresent(
+            ExecutionSnapshot.self,
+            forKey: .executionSnapshot
+        )
+        artifactSHA256s = try container.decodeIfPresent(
+            [String].self,
+            forKey: .artifactSHA256s
+        ) ?? []
+        guard artifactSHA256s == artifactSHA256s.sorted(),
+              Set(artifactSHA256s).count == artifactSHA256s.count,
+              artifactSHA256s.allSatisfy(
+                DeviceLegReleasePinStore.isLowercaseSHA256
+              ) else {
+            throw DeviceLegJournalError.invalidState
+        }
         reentry = try container.decodeIfPresent(
             DeviceLeg.Reentry.self,
             forKey: .reentry
@@ -967,6 +1119,14 @@ extension DeviceLegRun: Codable, Sendable {
             [String: String].self,
             forKey: .effectReceipts
         ) ?? [:]
+        experimentExposures = try container.decodeIfPresent(
+            [ExperimentExposure].self,
+            forKey: .experimentExposures
+        ) ?? []
+        pendingPresentationPublication = try container.decodeIfPresent(
+            PendingPresentationPublication.self,
+            forKey: .pendingPresentationPublication
+        )
         completion = try container.decodeIfPresent(Completion.self, forKey: .completion)
     }
 
@@ -975,6 +1135,11 @@ extension DeviceLegRun: Codable, Sendable {
         try container.encode(journeyId, forKey: .journeyId)
         try container.encode(generation, forKey: .generation)
         try container.encode(reference, forKey: .reference)
+        try container.encodeIfPresent(
+            executionSnapshot,
+            forKey: .executionSnapshot
+        )
+        try container.encode(artifactSHA256s, forKey: .artifactSHA256s)
         try container.encodeIfPresent(reentry, forKey: .reentry)
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(isEnrollment, forKey: .isEnrollment)
@@ -986,10 +1151,15 @@ extension DeviceLegRun: Codable, Sendable {
         try container.encode(context, forKey: .context)
         try container.encode(outputs, forKey: .outputs)
         try container.encode(effectReceipts, forKey: .effectReceipts)
+        try container.encode(experimentExposures, forKey: .experimentExposures)
+        try container.encodeIfPresent(
+            pendingPresentationPublication,
+            forKey: .pendingPresentationPublication
+        )
         try container.encodeIfPresent(completion, forKey: .completion)
     }
 }
-extension DeviceLegRun.Park: Codable, Sendable {}
+extension DeviceLegRun.Park: Codable, Equatable, Sendable {}
 extension DeviceLegRun.Completion: Codable, Sendable {}
 extension DeviceLegCheckmark: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {

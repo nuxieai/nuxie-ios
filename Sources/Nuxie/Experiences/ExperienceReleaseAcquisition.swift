@@ -84,37 +84,154 @@ struct PreparedExperienceRelease: Sendable {
         resourceMetrics suppliedResourceMetrics: ExperienceReleaseResourceMetrics? = nil,
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil
     ) throws -> AcquiredExperienceArtifact {
-        let acquired = try acquired(initialScreenID: initialScreenID)
-        let assetURLs = Dictionary(uniqueKeysWithValues: acquired.payload.assets.compactMap {
-            asset in acquired.objectURLsByKey[asset.sourceKey].map {
+        try PreparedRuntimeRelease(
+            payloadsByScreenID: payloadsByScreenID,
+            objectURLsByKey: objectURLsByKey,
+            source: source,
+            resourceMetrics: resourceMetrics
+        ).presentationArtifact(
+            identity: identity,
+            provenance: authenticatedDescriptor.descriptorSHA256,
+            initialScreenID: initialScreenID,
+            interactivePreparation: suppliedPreparation,
+            products: products,
+            productsResolvedForScreenID: productsResolvedForScreenID,
+            resourceMetrics: suppliedResourceMetrics,
+            productResolver: productResolver
+        )
+    }
+}
+
+private struct PreparedRuntimeRelease: Sendable {
+    let payloadsByScreenID: [String: AuthenticatedRuntimePayload]
+    let objectURLsByKey: [String: URL]
+    let source: ExperienceArtifactSource
+    let resourceMetrics: ExperienceReleaseResourceMetrics
+
+    func presentationArtifact(
+        identity: AcquiredExperienceArtifact.Identity,
+        provenance: String,
+        initialScreenID: String,
+        interactivePreparation suppliedPreparation: ExperienceInteractivePreparationHandle? = nil,
+        products: [StoreProduct] = [],
+        productsResolvedForScreenID: String? = nil,
+        resourceMetrics suppliedResourceMetrics: ExperienceReleaseResourceMetrics? = nil,
+        productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil
+    ) throws -> AcquiredExperienceArtifact {
+        guard let payload = payloadsByScreenID[initialScreenID] else {
+            throw ExperienceReleaseAcquisitionError.selectedScreenNotDeclared(
+                initialScreenID
+            )
+        }
+        let assetURLs = Dictionary(uniqueKeysWithValues: payload.assets.compactMap {
+            asset in objectURLsByKey[asset.sourceKey].map {
                 (asset.riveUniqueName, $0)
             }
         })
-        guard let sceneURL = acquired.objectURLsByKey[
-            acquired.payload.renderPlan.scene.key
-        ] else {
+        guard let sceneURL = objectURLsByKey[payload.renderPlan.scene.key] else {
             throw ExperienceReleaseAcquisitionError.requiredObjectUnavailable(
-                acquired.payload.renderPlan.scene.key
+                payload.renderPlan.scene.key
             )
         }
         let interactivePreparation = suppliedPreparation
             ?? ExperienceInteractivePreparationHandle(
                 cache: ExperienceInteractivePreparationCache(),
-                provenance: authenticatedDescriptor.descriptorSHA256,
-                payload: acquired.payload
+                provenance: provenance,
+                payload: payload
             )
         return AcquiredExperienceArtifact(
             identity: identity,
             sceneURL: sceneURL,
-            sceneBytes: acquired.payload.sceneBytes,
+            sceneBytes: payload.sceneBytes,
             assetURLsByRiveUniqueName: assetURLs,
-            source: acquired.source,
-            payload: acquired.payload,
+            source: source,
+            payload: payload,
             interactivePreparation: interactivePreparation,
             products: products,
             productsResolvedForScreenID: productsResolvedForScreenID,
             resourceMetrics: suppliedResourceMetrics ?? resourceMetrics,
             productResolver: productResolver
+        )
+    }
+}
+
+struct PreparedDeviceLegPresentation: Sendable {
+    let experience: Experience
+    let artifactLoader: ExperienceArtifactLoader
+}
+
+/// Immutable source metadata used to copy one authenticated release's
+/// renderer objects into the durable run journal before execution begins.
+struct DeviceLegReleaseArtifactSource: Sendable {
+    struct Object: Sendable {
+        let sha256: String
+        let sizeBytes: Int
+        let required: Bool
+    }
+
+    let descriptorSHA256: String
+    let objects: [Object]
+    let cacheRoot: URL
+}
+
+/// Durable renderer objects owned by one live run. Presentation checks these
+/// files before the evictable shared cache or network, so a parked run remains
+/// resumable after profile replacement and process restart.
+struct DeviceLegPinnedReleaseArtifacts: Sendable {
+    let objectURLsBySHA256: [String: URL]
+}
+
+/// Keeps every required object for one authenticated device-profile generation
+/// protected from cache-budget eviction. The marker is installed before
+/// acquisition begins and remains live while ExperienceLoader owns this value.
+final class PreparedDeviceLegArtifacts: @unchecked Sendable {
+    let releaseDescriptorSHA256s: Set<String>
+
+    private let cacheRoot: URL
+    private let objectsByReleaseDescriptorSHA256: [
+        String: [DeviceLegReleaseArtifactSource.Object]
+    ]
+    private let protectionID: UUID?
+
+    fileprivate init(
+        releaseDescriptorSHA256s: Set<String>,
+        objectsByReleaseDescriptorSHA256: [
+            String: [DeviceLegReleaseArtifactSource.Object]
+        ],
+        protectedObjectSHA256s: Set<String>,
+        cacheRoot: URL
+    ) throws {
+        self.releaseDescriptorSHA256s = releaseDescriptorSHA256s
+        self.objectsByReleaseDescriptorSHA256 =
+            objectsByReleaseDescriptorSHA256
+        self.cacheRoot = cacheRoot
+        protectionID = protectedObjectSHA256s.isEmpty
+            ? nil
+            : try ExperienceReleaseCacheProtectionRegistry.shared.register(
+                protectedObjectSHA256s,
+                root: cacheRoot
+            )
+    }
+
+    deinit {
+        if let protectionID {
+            ExperienceReleaseCacheProtectionRegistry.shared.unregister(
+                protectionID,
+                root: cacheRoot
+            )
+        }
+    }
+
+    func source(
+        for descriptorSHA256: String
+    ) -> DeviceLegReleaseArtifactSource? {
+        guard let objects = objectsByReleaseDescriptorSHA256[
+            descriptorSHA256
+        ] else { return nil }
+        return DeviceLegReleaseArtifactSource(
+            descriptorSHA256: descriptorSHA256,
+            objects: objects,
+            cacheRoot: cacheRoot
         )
     }
 }
@@ -455,6 +572,12 @@ protocol ExperienceReleaseAcquiring: Sendable {
         intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease
 
+    /// Acquires and pins every required render object before a canonical
+    /// profile can publish any of its device-owned arms.
+    func prepareDeviceLegArtifacts(
+        for snapshot: DeviceLegProfileCatalog.Snapshot
+    ) async throws -> PreparedDeviceLegArtifacts
+
     /// Returns Product authority from an exact descriptor that was previously
     /// authenticated and retained by digest. This keeps restore and startup
     /// independent of whichever releases happen to be active today.
@@ -465,10 +588,11 @@ protocol ExperienceReleaseAcquiring: Sendable {
 
 enum ExperienceReleasePreparationIntent: Equatable, Sendable {
     case preload
+    case profileAdmission
     case presentation
 
     var allowsConstrainedNetworkAccess: Bool {
-        self == .presentation
+        self != .preload
     }
 }
 
@@ -483,6 +607,13 @@ extension ExperienceReleaseAcquiring {
         descriptorSHA256: String
     ) async -> [ExperienceReleaseProductDocument]? {
         nil
+    }
+
+    func prepareDeviceLegArtifacts(
+        for snapshot: DeviceLegProfileCatalog.Snapshot
+    ) async throws -> PreparedDeviceLegArtifacts {
+        _ = snapshot
+        throw ExperienceReleaseAcquisitionError.invalidProfileEntry
     }
 }
 
@@ -664,6 +795,25 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         let required: Bool
     }
 
+    private struct RuntimeReleaseAuthority {
+        let authenticatedKeyID: String
+        let identity: ExperienceReleaseIdentity
+        let descriptorSHA256: String
+        let render: [String: ExperienceReleaseJSONValue]
+        let screenBehaviors: [[String: ExperienceReleaseJSONValue]]
+        let definition: ExperienceDefinition
+        let journey: JourneyDocument
+    }
+
+    private struct RuntimeReleaseManifest {
+        let render: ExperienceReleaseRenderDocument
+        let requirements: [ArtifactRequirement]
+
+        var protectedDigests: Set<String> {
+            Set(requirements.map(\.artifact.sha256))
+        }
+    }
+
     private let cacheDirectory: URL
     private let cacheLockScope: CacheFilesystemLockScope
     private let maximumCacheBytes: Int
@@ -691,6 +841,59 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         self.authorizationKeys = authorizationKeys
         self.supportedRuntime = supportedRuntime
         self.admission = admission
+    }
+
+    func prepareDeviceLegArtifacts(
+        for snapshot: DeviceLegProfileCatalog.Snapshot
+    ) async throws -> PreparedDeviceLegArtifacts {
+        let releaseDescriptorSHA256s = Set(snapshot.releasesByDigest.keys)
+        var authorities: [RuntimeReleaseAuthority] = []
+        var objectsByReleaseDescriptorSHA256: [
+            String: [DeviceLegReleaseArtifactSource.Object]
+        ] = [:]
+        var protectedObjectSHA256s: Set<String> = []
+
+        for descriptorSHA256 in releaseDescriptorSHA256s.sorted() {
+            guard let release = snapshot.releasesByDigest[descriptorSHA256],
+                  release.descriptorSHA256 == descriptorSHA256 else {
+                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+            }
+            guard let authority = try Self.deviceLegRuntimeAuthority(release) else {
+                objectsByReleaseDescriptorSHA256[descriptorSHA256] = []
+                continue
+            }
+            let manifest = try Self.runtimeReleaseManifest(authority)
+            authorities.append(authority)
+            let objects = manifest.requirements.map {
+                DeviceLegReleaseArtifactSource.Object(
+                    sha256: $0.artifact.sha256,
+                    sizeBytes: $0.artifact.sizeBytes,
+                    required: $0.required
+                )
+            }
+            objectsByReleaseDescriptorSHA256[descriptorSHA256] = objects
+            protectedObjectSHA256s.formUnion(objects.map(\.sha256))
+        }
+
+        // Register the complete profile set before the first object is read or
+        // downloaded. Per-release cache-budget enforcement can then never evict
+        // an earlier leg while a later leg in the same generation is prepared.
+        let prepared = try PreparedDeviceLegArtifacts(
+            releaseDescriptorSHA256s: releaseDescriptorSHA256s,
+            objectsByReleaseDescriptorSHA256:
+                objectsByReleaseDescriptorSHA256,
+            protectedObjectSHA256s: protectedObjectSHA256s,
+            cacheRoot: cacheDirectory
+        )
+        for authority in authorities {
+            try Task.checkCancellation()
+            _ = try await prepareRuntimeRelease(
+                authority,
+                delivery: snapshot.profile.delivery,
+                intent: .profileAdmission
+            )
+        }
+        return prepared
     }
 
     func authenticateProfile(
@@ -1000,6 +1203,73 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         return try prepared.acquired(initialScreenID: selectedScreenID)
     }
 
+    private nonisolated static func deviceLegRuntimeAuthority(
+        _ release: AuthenticatedDeviceLegRelease
+    ) throws -> RuntimeReleaseAuthority? {
+        guard SHA256Provider.hexDigest(release.exactDescriptorBytes)
+                == release.descriptorSHA256 else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
+        guard let render = release.descriptor.render else {
+            guard release.descriptor.leg.screens.isEmpty else {
+                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+            }
+            return nil
+        }
+        let definition = try ExperienceDefinition(
+            deviceLegDescriptor: release.descriptor
+        )
+        return RuntimeReleaseAuthority(
+            authenticatedKeyID: release.authenticatedKeyID,
+            identity: release.descriptor.identity,
+            descriptorSHA256: release.descriptorSHA256,
+            render: render,
+            screenBehaviors: release.descriptor.screenBehaviors,
+            definition: definition,
+            journey: definition.renderShell
+        )
+    }
+
+    private nonisolated static func runtimeReleaseManifest(
+        _ authority: RuntimeReleaseAuthority
+    ) throws -> RuntimeReleaseManifest {
+        let render = try decode(
+            ExperienceReleaseRenderDocument.self,
+            from: authority.render
+        )
+        guard render.renderer == "rive" else {
+            throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(
+                render.renderer
+            )
+        }
+        let journeyArtifacts = try JSONDecoder().decode(
+            [ExperienceReleaseScreenBehaviorArtifactDocument].self,
+            from: JSONEncoder().encode(authority.screenBehaviors)
+        ).compactMap { $0.script?.artifact }
+        guard Set(render.screens.map(\.id))
+                == Set(authority.journey.screens.map(\.id)) else {
+            throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(
+                "screen_catalog"
+            )
+        }
+        let requirements = try uniqueArtifacts(
+            [ArtifactRequirement(artifact: render.riv, required: true)]
+                + render.assets.map {
+                    ArtifactRequirement(
+                        artifact: $0.artifact,
+                        required: $0.required
+                    )
+                }
+                + journeyArtifacts.map {
+                    ArtifactRequirement(artifact: $0, required: true)
+                }
+        )
+        return RuntimeReleaseManifest(
+            render: render,
+            requirements: requirements
+        )
+    }
+
     private nonisolated static func selectedScreenID(
         requested: String?,
         renderScreenIDs: Set<String>,
@@ -1024,42 +1294,43 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         delivery: ExperienceReleaseDelivery,
         intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease {
-        let renderOrigin = try Self.validatedOrigin(delivery.renderBaseUrl)
-        let assetOrigin = try Self.validatedOrigin(delivery.assetBaseUrl)
-
-        let render = try Self.decode(
-            ExperienceReleaseRenderDocument.self,
-            from: authenticated.descriptor.render
-        )
-        guard render.renderer == "rive" else {
-            throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(render.renderer)
-        }
         let definition = try ExperienceDefinition(
             descriptor: authenticated.descriptor
         )
-        let journey = definition.renderShell
-        let journeyArtifacts = try JSONDecoder().decode(
-            [ExperienceReleaseScreenBehaviorArtifactDocument].self,
-            from: JSONEncoder().encode(authenticated.descriptor.screenBehaviors)
-        ).compactMap { $0.script?.artifact }
-        let renderScreenIDs = Set(render.screens.map(\.id))
-        let journeyScreenIDs = Set(journey.screens.map(\.id))
-        guard renderScreenIDs == journeyScreenIDs else {
-            throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(
-                "screen_catalog"
-            )
-        }
+        let prepared = try await prepareRuntimeRelease(
+            RuntimeReleaseAuthority(
+                authenticatedKeyID: authenticated.authenticatedKeyID,
+                identity: authenticated.descriptor.identity,
+                descriptorSHA256: authenticated.descriptorSHA256,
+                render: authenticated.descriptor.render,
+                screenBehaviors: authenticated.descriptor.screenBehaviors,
+                definition: definition,
+                journey: definition.renderShell
+            ),
+            delivery: delivery,
+            intent: intent
+        )
+        return PreparedExperienceRelease(
+            authenticatedDescriptor: authenticated,
+            payloadsByScreenID: prepared.payloadsByScreenID,
+            objectURLsByKey: prepared.objectURLsByKey,
+            source: prepared.source,
+            resourceMetrics: prepared.resourceMetrics
+        )
+    }
 
-        let requirements =
-            [ArtifactRequirement(artifact: render.riv, required: true)]
-            + render.assets.map {
-                ArtifactRequirement(artifact: $0.artifact, required: $0.required)
-            }
-            + journeyArtifacts.map {
-                ArtifactRequirement(artifact: $0, required: true)
-            }
-        let uniqueRequirements = try Self.uniqueArtifacts(requirements)
-        let protectedDigests = Set(uniqueRequirements.map(\.artifact.sha256))
+    private func prepareRuntimeRelease(
+        _ authority: RuntimeReleaseAuthority,
+        delivery: ExperienceReleaseDelivery,
+        intent: ExperienceReleasePreparationIntent,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts? = nil
+    ) async throws -> PreparedRuntimeRelease {
+        let renderOrigin = try Self.validatedOrigin(delivery.renderBaseUrl)
+        let assetOrigin = try Self.validatedOrigin(delivery.assetBaseUrl)
+        let manifest = try Self.runtimeReleaseManifest(authority)
+        let render = manifest.render
+        let uniqueRequirements = manifest.requirements
+        let protectedDigests = manifest.protectedDigests
 
         // Validate every signed object key before optionality is considered.
         // Optional means a safe acquisition failure may omit bytes; it never
@@ -1092,7 +1363,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                     artifact,
                     origin: origin,
                     intent: intent,
-                    protectedDigests: protectedDigests
+                    protectedDigests: protectedDigests,
+                    pinnedArtifacts: pinnedArtifacts
                 )
                 objectsByDigest[artifact.sha256] = result
                 downloadedAny = downloadedAny || result.downloaded
@@ -1127,7 +1399,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             }
         }
         var objectsByKey: [String: ObjectResult] = [:]
-        for requirement in requirements {
+        for requirement in uniqueRequirements {
             let artifact = requirement.artifact
             objectsByKey[artifact.key] = objectsByDigest[artifact.sha256]
         }
@@ -1163,21 +1435,20 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         let payloadsByScreenID = try Dictionary(uniqueKeysWithValues: render.screens.map {
             screen in
             let renderPlan = try Self.runtimePlan(
-                authenticated: authenticated,
+                identity: authority.identity,
                 render: render,
                 initialScreenID: screen.id
             )
             return (screen.id, AuthenticatedRuntimePayload(
-                authenticatedKeyID: authenticated.authenticatedKeyID,
+                authenticatedKeyID: authority.authenticatedKeyID,
                 renderPlan: renderPlan,
-                journey: journey,
-                definition: definition,
+                journey: authority.journey,
+                definition: authority.definition,
                 sceneBytes: scene.bytes,
                 assets: runtimeAssets
             ))
         })
-        return PreparedExperienceRelease(
-            authenticatedDescriptor: authenticated,
+        return PreparedRuntimeRelease(
             payloadsByScreenID: payloadsByScreenID,
             objectURLsByKey: objectsByKey.mapValues(\.url),
             source: downloadedAny ? .download : .cache,
@@ -1225,11 +1496,74 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         )
     }
 
+    /// Prepares a partitioned Journey release without manufacturing a legacy
+    /// full-release descriptor. The authenticated device release remains the
+    /// sole authority for both behavior and renderer bytes.
+    func preparePresentation(
+        release: AuthenticatedDeviceLegRelease,
+        delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts? = nil,
+        productResolver:
+            @escaping @Sendable (String) async throws -> [StoreProduct]
+    ) async throws -> PreparedDeviceLegPresentation {
+        guard let authority = try Self.deviceLegRuntimeAuthority(release) else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
+        let definition = authority.definition
+        let journey = authority.journey
+        let render = try Self.decode(
+            ExperienceReleaseRenderDocument.self,
+            from: authority.render
+        )
+        let renderScreenIDs = Set(render.screens.map(\.id))
+        let journeyScreenIDs = Set(journey.screens.map(\.id))
+        let identity = AcquiredExperienceArtifact.Identity(
+            experienceId: release.descriptor.identity.experienceId,
+            buildId: release.descriptor.identity.buildId
+        )
+        let provenance = release.descriptorSHA256
+        let experience = try Self.deviceLegExperience(
+            release: release,
+            delivery: delivery,
+            definition: definition,
+            journey: journey,
+            render: render
+        )
+        return PreparedDeviceLegPresentation(
+            experience: experience,
+            artifactLoader: { [weak self] _, _, requestedScreenID in
+                guard let self else { throw CancellationError() }
+                let screenID = try Self.selectedScreenID(
+                    requested: requestedScreenID,
+                    renderScreenIDs: renderScreenIDs,
+                    journeyScreenIDs: journeyScreenIDs
+                )
+                // Keep cold network/cache acquisition in the ordinary artifact
+                // loader. The presentation shell is installed before this
+                // closure runs, so slow and failed acquisition retain the
+                // signed loading and recovery surfaces.
+                let prepared = try await self.prepareRuntimeRelease(
+                    authority,
+                    delivery: delivery,
+                    intent: .presentation,
+                    pinnedArtifacts: pinnedArtifacts
+                )
+                return try prepared.presentationArtifact(
+                    identity: identity,
+                    provenance: provenance,
+                    initialScreenID: screenID,
+                    productResolver: productResolver
+                )
+            }
+        )
+    }
+
     private func acquireObject(
         _ artifact: ExperienceReleaseRenderDocument.Artifact,
         origin: URL,
         intent: ExperienceReleasePreparationIntent,
-        protectedDigests: Set<String>
+        protectedDigests: Set<String>,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?
     ) async throws -> ObjectResult {
         let destination = cacheDirectory.appendingPathComponent(artifact.sha256)
         let result = try await SharedCachePathCoordinator.shared.withExclusiveAccess(
@@ -1274,6 +1608,25 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 } catch {
                     try? FileManager.default.removeItem(at: destination)
                 }
+            }
+
+            if let pinnedURL = pinnedArtifacts?.objectURLsBySHA256[
+                artifact.sha256
+            ] {
+                let read = try BoundedFileIO.read(
+                    at: pinnedURL,
+                    maximumBytes: Self.limit(for: artifact)
+                )
+                try Self.verify(read.digest, artifact: artifact)
+                return ObjectResult(
+                    url: pinnedURL,
+                    bytes: read.data,
+                    downloaded: false,
+                    resourceMetrics: Self.objectResourceMetrics(
+                        byteCount: read.data.count,
+                        passCount: 1
+                    )
+                )
             }
 
             var resourceMetrics = rejectedCacheMetrics
@@ -1597,6 +1950,76 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         )
     }
 
+    private nonisolated static func deviceLegExperience(
+        release: AuthenticatedDeviceLegRelease,
+        delivery: ExperienceReleaseDelivery,
+        definition: ExperienceDefinition,
+        journey: JourneyDocument,
+        render: ExperienceReleaseRenderDocument
+    ) throws -> Experience {
+        let descriptor = release.descriptor
+        let metadata = try decode(
+            ExperienceReleaseMetadataDocument.self,
+            from: descriptor.metadata
+        )
+        let presentation = try decode(
+            ExperienceReleasePresentationDocument.self,
+            from: descriptor.presentation
+        )
+        let reentry: ExperienceReentry
+        switch descriptor.leg.reentry.type {
+        case .oneTime:
+            reentry = .oneTime
+        case .everyTime:
+            reentry = .everyTime
+        case .oncePerWindow:
+            guard let seconds = descriptor.leg.reentry.windowSeconds else {
+                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+            }
+            reentry = .oncePerWindow(.init(amount: seconds, unit: .second))
+        }
+        let identity = descriptor.identity
+        let behavior = ExperienceBehaviorDefinition(
+            reference: .init(
+                experienceId: identity.experienceId,
+                versionId: identity.experienceVersionId
+            ),
+            buildId: identity.buildId,
+            artifactContentHash: render.riv.sha256,
+            name: metadata.name,
+            reentry: reentry,
+            publishedAt: identity.publishedAt,
+            trigger: nil,
+            goal: nil,
+            exitPolicy: nil,
+            conversionAnchor: nil,
+            timeLimitSeconds: nil,
+            experienceType: metadata.experienceType,
+            presentation: try presentation.behaviorPresentation(),
+            presentationScreens: Dictionary(
+                uniqueKeysWithValues: render.screens.map {
+                    (
+                        $0.id,
+                        ExperienceBehaviorScreenGeometry(
+                            width: $0.width,
+                            height: $0.height
+                        )
+                    )
+                }
+            )
+        )
+        return Experience(
+            behavior: behavior,
+            journey: journey,
+            definition: definition,
+            assetBaseURL: try validatedOrigin(delivery.assetBaseUrl),
+            authenticatedReleaseID: .init(
+                identity: identity,
+                descriptorSHA256: release.descriptorSHA256
+            )
+        )
+    }
+
     private nonisolated static func definition(
         entry: ExperienceReleaseProfileEntry,
         delivery: ExperienceReleaseDelivery,
@@ -1853,11 +2276,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func runtimePlan(
-        authenticated: AuthenticatedExperienceReleaseDescriptor,
+        identity: ExperienceReleaseIdentity,
         render: ExperienceReleaseRenderDocument,
         initialScreenID: String
     ) throws -> NativeExperienceRenderPlan {
-        let descriptor = authenticated.descriptor
         let images = try render.assets.filter { $0.kind == "image" }.map {
             guard let id = $0.riveAssetId, let name = $0.riveUniqueName else {
                 throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding($0.key)
@@ -1897,10 +2319,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         }
         return NativeExperienceRenderPlan(
             identity: .init(
-                experienceId: descriptor.identity.experienceId,
-                buildId: descriptor.identity.buildId,
-                appId: descriptor.identity.appId,
-                environment: descriptor.identity.environment
+                experienceId: identity.experienceId,
+                buildId: identity.buildId,
+                appId: identity.appId,
+                environment: identity.environment
             ),
             scene: .init(
                 key: render.riv.key,

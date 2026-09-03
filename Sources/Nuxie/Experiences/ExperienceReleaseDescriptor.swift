@@ -253,7 +253,7 @@ struct ExperienceReleaseProfile: Codable, Equatable, Sendable {
     }
 }
 
-enum ExperienceReleaseJSONValue: Codable, Sendable {
+enum ExperienceReleaseJSONValue: Codable, Equatable, Sendable {
     case null
     case bool(Bool)
     case number(Double)

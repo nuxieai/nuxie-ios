@@ -3,7 +3,10 @@ import UIKit
 
 @MainActor
 final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentationControllerDelegate {
-    typealias Completion = (_ didNavigate: Bool, _ screenId: String) -> Void
+    typealias Completion = (
+        _ result: ExperienceScreenNavigationResult,
+        _ screenId: String
+    ) -> Void
 
     private enum Lifecycle {
         case idle
@@ -233,7 +236,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         navigationAdmissionRevoked = true
         let queuedRequests = navigationRequests
         navigationRequests.removeAll()
-        queuedRequests.forEach { $0.completion(false, $0.screenId) }
+        queuedRequests.forEach { $0.completion(.failed, $0.screenId) }
         if let navigationTask {
             navigationTask.cancel()
             // Awaiting our own task would deadlock when dismissal is driven
@@ -283,7 +286,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
         let queuedRequests = navigationRequests
         navigationRequests.removeAll()
-        queuedRequests.forEach { $0.completion(false, $0.screenId) }
+        queuedRequests.forEach { $0.completion(.failed, $0.screenId) }
 
         if let installationTask {
             _ = await installationTask.result
@@ -436,14 +439,14 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
 
         if terminalScreenIds.contains(screenId) {
-            completion(false, screenId)
+            completion(.failed, screenId)
             return false
         }
 
         if activeScreenId == screenId,
            navigationTask == nil,
            navigationRequests.isEmpty {
-            completion(true, screenId)
+            completion(.alreadyActive, screenId)
             return true
         }
 
@@ -481,23 +484,24 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 _ = try await ensureScreenController(for: request.screenId)
                 guard lifecycle == .installed, !Task.isCancelled,
                       !navigationAdmissionRevoked else {
-                    request.completion(false, request.screenId)
+                    request.completion(.failed, request.screenId)
                     break
                 }
                 let didNavigate = try await performMountedNavigation(
                     to: request.screenId,
                     transition: request.rawTransition
                 )
+                let completed = lifecycle == .installed && !Task.isCancelled
+                    && !navigationAdmissionRevoked && didNavigate
                 request.completion(
-                    lifecycle == .installed && !Task.isCancelled
-                        && !navigationAdmissionRevoked && didNavigate,
+                    completed ? .navigated : .failed,
                     request.screenId
                 )
             } catch {
                 if case ExperienceError.productsUnavailable = error {
-                    request.completion(false, request.screenId)
+                    request.completion(.productsUnavailable, request.screenId)
                     for queued in navigationRequests {
-                        queued.completion(false, queued.screenId)
+                        queued.completion(.failed, queued.screenId)
                     }
                     navigationRequests.removeAll()
                     await onProductsUnavailable(request.screenId)
@@ -506,7 +510,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 LogWarning(
                     "ExperienceScreenTransitionCoordinator: failed to navigate to screen \(request.screenId): \(error)"
                 )
-                request.completion(false, request.screenId)
+                request.completion(.failed, request.screenId)
             }
         }
         navigationTask = nil
@@ -573,8 +577,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                             to: screenId,
                             transition: rawTransition,
                             reduceMotion: reduceMotion
-                        ) { didNavigate, _ in
-                            continuation.resume(returning: didNavigate)
+                        ) { result, _ in
+                            continuation.resume(returning: result.reachedTarget)
                         }
                     } catch {
                         continuation.resume(throwing: error)
@@ -695,8 +699,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 }
                 self.finalizeLiveReplacementSurface(surface, controller: targetController)
                 return await withCheckedContinuation { continuation in
-                    self.completeNavigation(to: targetController.screenId) { didNavigate, _ in
-                        continuation.resume(returning: didNavigate)
+                    self.completeNavigation(to: targetController.screenId) { result, _ in
+                        continuation.resume(returning: result.reachedTarget)
                     }
                 }
             }
@@ -812,7 +816,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         navigationController?.view.layoutIfNeeded()
         controller.setContentHidden(contentHidden)
         controller.advance(delta: 0)
-        completion(true, screenId)
+        completion(.navigated, screenId)
     }
 
     private func pushOrPop(
@@ -842,7 +846,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                         to screen \(screenId) after modal dismiss: \(error)
                         """
                     )
-                    completion(false, screenId)
+                    completion(.failed, screenId)
                 }
             }
             return
@@ -902,7 +906,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         presenter.present(controller, animated: animated) { [weak self] in
             self?.activePresentedController = controller
             controller.advance(delta: 0)
-            completion(true, screenId)
+            completion(.navigated, screenId)
         }
     }
 
@@ -1095,7 +1099,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         } completion: { [weak self, weak nextController] _ in
             guard let self,
                   let nextController else {
-                completion(false, screenId)
+                completion(.failed, screenId)
                 return
             }
             currentView.transform = .identity
@@ -1128,7 +1132,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             ?? activePresentedController
             ?? navigationController?.topViewController as? ExperienceScreenViewController)?
             .advance(delta: 0)
-        completion(true, screenId)
+        completion(.navigated, screenId)
     }
 
     private func dismissActivePresentedControllerIfNeeded(

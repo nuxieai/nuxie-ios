@@ -29,6 +29,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private let eventLog: EventQueueLifecycle
   private let profileService: ProfileServiceProtocol
   private let experiencePresentationService: ExperiencePresentationServiceProtocol
+  private let deviceLegPresentationService: any DeviceLegPresenting
   private let experienceService: ExperienceServiceProtocol
   private let featureService: FeatureServiceProtocol
 
@@ -40,6 +41,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     profile: ProfileServiceProtocol,
     experiences: ExperienceServiceProtocol,
     experiencePresentation: ExperiencePresentationServiceProtocol,
+    deviceLegPresentation: any DeviceLegPresenting,
     features: FeatureServiceProtocol
   ) {
     (self.transitions, self.transitionContinuation) = AsyncStream.makeStream()
@@ -50,6 +52,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     self.profileService = profile
     self.experienceService = experiences
     self.experiencePresentationService = experiencePresentation
+    self.deviceLegPresentationService = deviceLegPresentation
     self.featureService = features
   }
 
@@ -128,6 +131,10 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       await experienceService.onAppBecameActive()
       // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
       await featureService.syncFeatureInfo()
+      // Presentation actions resumed by either runtime may await this gate.
+      // Re-open it after profile authority is current, before invoking those
+      // runtimes, so the serialized lifecycle worker cannot wait on itself.
+      await deviceLegPresentationService.deviceLegProfileRefreshDidComplete()
       await deviceLegService?.onAppBecameActive()
       await journeyService.onAppBecameActive()
     }

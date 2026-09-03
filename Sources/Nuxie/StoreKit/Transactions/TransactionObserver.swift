@@ -93,6 +93,19 @@ struct ExternalPurchaseDeclaration: Sendable {
     let operationId: String
     let distinctId: String
     let kind: Kind
+    let outcomeEventId: String?
+
+    init(
+        operationId: String,
+        distinctId: String,
+        kind: Kind,
+        outcomeEventId: String? = nil
+    ) {
+        self.operationId = operationId
+        self.distinctId = distinctId
+        self.kind = kind
+        self.outcomeEventId = outcomeEventId
+    }
 }
 
 enum PurchaseOutcome: Sendable {
@@ -260,6 +273,10 @@ protocol TransactionObserverProtocol: Actor {
     func syncCurrentEntitlements(distinctId: String) async
     func retryStoredEvidence() async
     func retryAfterProfileReady() async
+    /// Returns the current App Store account's verified, active product IDs.
+    /// Enumeration completion is the readiness barrier for an offline Journey
+    /// entitlement gate; no profile or backend response is required.
+    func currentEntitledStoreProductIds() async -> Set<String>
     /// Atomically reconciles a matching unsynchronized StoreKit purchase and
     /// the caller's first authoritative Feature use. Returns `nil` when no
     /// protected purchase evidence applies, so the ordinary usage command can
@@ -284,6 +301,7 @@ extension TransactionObserverProtocol {
     }
     func retryStoredEvidence() async {}
     func retryAfterProfileReady() async { await retryStoredEvidence() }
+    func currentEntitledStoreProductIds() async -> Set<String> { [] }
     func useFeatureWithPendingPurchase(
         distinctId: String,
         featureId: String,
@@ -1086,9 +1104,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         _ declaration: ExternalPurchaseDeclaration,
         source: PurchaseOutcomeSource
     ) async -> PurchaseCommitResult {
-        let eventId = (["purchase-outcome", source.rawValue]
-            + purchaseStorageScope.storageComponents
-            + [declaration.operationId]).joined(separator: ":")
+        let eventId = declaration.outcomeEventId
+            ?? (["purchase-outcome", source.rawValue]
+                + purchaseStorageScope.storageComponents
+                + [declaration.operationId]).joined(separator: ":")
         let routeToJourneys = declaration.distinctId
             == identityService.getDistinctId()
         var captured = false
@@ -1112,14 +1131,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ensureDurableCarrier: true
                 )
             case .restored(let testStore):
-                captured = await eventSink.captureStableSystemEvent(
-                    SystemEventNames.restoreCompleted,
+                captured = await eventSink.captureStableSystemEvent(.init(
+                    name: SystemEventNames.restoreCompleted,
                     properties: [
                         "source": source.rawValue,
                         "test_store": testStore,
                     ],
                     eventId: eventId,
-                    distinctId: declaration.distinctId,
+                    distinctId: declaration.distinctId
+                ),
                     routeToJourneys: routeToJourneys,
                     ensureDurableCarrier: true
                 )
@@ -1554,11 +1574,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         routeToJourneys: Bool,
         ensureDurableCarrier: Bool = false
     ) async -> Bool {
-        await eventSink.captureStableSystemEvent(
-            SystemEventNames.purchaseCompleted,
+        await eventSink.captureStableSystemEvent(.init(
+            name: SystemEventNames.purchaseCompleted,
             properties: properties,
             eventId: eventId,
-            distinctId: distinctId,
+            distinctId: distinctId
+        ),
             routeToJourneys: routeToJourneys,
             ensureDurableCarrier: ensureDurableCarrier
         )
@@ -1908,6 +1929,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
     }
 
+    func currentEntitledStoreProductIds() async -> Set<String> {
+        Set(await currentEntitlementRecoveryTransactions().compactMap { item in
+            let update = item.update
+            return !update.isRevoked && !update.isUpgraded
+                ? update.productId
+                : nil
+        })
+    }
+
     func recordVerifiedPurchase(
         evidence: StoreTransactionEvidence,
         product: StoreProduct,
@@ -2054,12 +2084,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         context.release.identity.experienceVersionId
                     purchaseSyncedProperties["placement_id"] = context.placementId
                 }
-                let purchaseSynced = await eventSink.capture(
-                    SystemEventNames.purchaseSynced,
+                let purchaseSynced = await eventSink.capture(.init(
+                    name: SystemEventNames.purchaseSynced,
                     properties: purchaseSyncedProperties,
                     eventId: purchaseSyncedEventId(evidence: evidence),
                     distinctId: distinctId
-                )
+                ))
                 guard purchaseSynced else {
                     releasePurchaseUsageClaim(transactionId: evidence.transactionId)
                     throw NuxieNetworkError.invalidResponse

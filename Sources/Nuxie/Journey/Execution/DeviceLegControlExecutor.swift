@@ -22,8 +22,25 @@ struct DeviceLegControlExecutor {
         }
     }
 
+    struct ExperimentSelection: Equatable, Sendable {
+        enum Source: Equatable, Sendable {
+            case profile
+            case noAssignment
+            case invalidAssignment(variantId: String)
+        }
+
+        let experimentId: String
+        let variantId: String
+        let isHoldout: Bool
+        let source: Source
+    }
+
     enum Result {
-        case advance(stepId: String, context: ArmedDeviceLeg.Context)
+        case advance(
+            stepId: String,
+            context: ArmedDeviceLeg.Context,
+            experimentSelection: ExperimentSelection?
+        )
         case park(stepId: String, checkpoint: Checkpoint)
         case complete(outcome: String)
         case dispatch(stepId: String, action: [String: ExperienceReleaseJSONValue])
@@ -52,6 +69,35 @@ struct DeviceLegControlExecutor {
         return advance(outlets, outlet: outlet, context: context)
     }
 
+    /// Determines whether a committed event satisfies the exact parked wait
+    /// without consuming its durable checkpoint. Rendered runs use this while
+    /// backgrounded so the event can be retained until presentation reopens.
+    func parkedWaitAccepts(
+        _ event: Event,
+        step: DeviceLeg.Step,
+        context: ArmedDeviceLeg.Context,
+        assignments: ExactJSONObject<DeviceLegFactTable.Assignment?>,
+        checkpoint: Checkpoint
+    ) -> Bool {
+        guard let action = step.action,
+              DeviceLegActionType(action: action) == .waitUntil else {
+            return false
+        }
+        switch evaluate(
+            step: step,
+            context: context,
+            assignments: assignments,
+            nowMillis: checkpoint.anchorAtMillis,
+            checkpoint: checkpoint,
+            signal: .init(event: event)
+        ) {
+        case .advance:
+            return true
+        case .park, .complete, .dispatch, .invalid:
+            return false
+        }
+    }
+
     private func evaluateChecked(
         _ step: DeviceLeg.Step,
         context: ArmedDeviceLeg.Context,
@@ -65,36 +111,68 @@ struct DeviceLegControlExecutor {
             return .complete(outcome: outcome)
         }
         guard let action = step.action, let outlets = step.outlets,
-              case .string(let type)? = action["type"] else { return .invalid }
+              let rawType = DeviceLegActionType.rawValue(in: action) else {
+            return .invalid
+        }
+        guard let type = DeviceLegActionType(rawValue: rawType) else {
+            // A release already admitted under an older SDK must remain
+            // resumable when a future operation reaches this executor.
+            return .dispatch(stepId: step.id, action: action)
+        }
         switch type {
-        case "condition":
+        case .condition:
             let control = try decode(CompiledCondition.self, action)
             let selected = control.branches.first {
                 DeviceLegValues.evaluate($0.condition, context: context) == true
             }?.id ?? "default"
             return advance(outlets, outlet: selected, context: context)
-        case "experiment":
+        case .experiment:
             let control = try decode(CompiledExperiment.self, action)
             guard let first = control.variants.first?.id else { return .invalid }
-            let assigned: String?
-            if let stored = assignments[control.experimentId], let assignment = stored { assigned = assignment.variantId }
-            else { assigned = nil }
-            let selected = control.variants.contains { $0.id == assigned } ? assigned! : first
-            return advance(outlets, outlet: selected, context: context)
-        case "time_window":
+            let assignment: DeviceLegFactTable.Assignment?
+            if let stored = assignments[control.experimentId], let stored {
+                assignment = stored
+            } else {
+                assignment = nil
+            }
+            let assignedVariantId = assignment?.variantId
+            let hasAssignedVariant = control.variants.contains {
+                $0.id == assignedVariantId
+            }
+            let selected = hasAssignedVariant ? assignedVariantId! : first
+            let source: ExperimentSelection.Source
+            if hasAssignedVariant {
+                source = .profile
+            } else if let assignedVariantId {
+                source = .invalidAssignment(variantId: assignedVariantId)
+            } else {
+                source = .noAssignment
+            }
+            return advance(
+                outlets,
+                outlet: selected,
+                context: context,
+                experimentSelection: .init(
+                    experimentId: control.experimentId,
+                    variantId: selected,
+                    isHoldout: assignment?.isHoldout ?? false,
+                    source: source
+                )
+            )
+        case .timeWindow:
             let control = try decode(CompiledTimeWindow.self, action)
             guard let timezone = TimeWindowMath.resolveTimezone(control.timezone, current: currentDeviceTimezone,
                                                                  appDefault: appDefaultTimezone, bundle: timezones) else { return .invalid }
-            switch TimeWindowMath.evaluate(now: date(nowMillis), startTime: control.startTime, endTime: control.endTime,
+            switch TimeWindowMath.evaluate(now: DeviceLegTime.date(nowMillis), startTime: control.startTime, endTime: control.endTime,
                                            daysOfWeek: control.daysOfWeek, timezone: timezone) {
             case .inWindow: return advance(outlets, outlet: "inside", context: context)
             case .pause(let until):
-                guard let wake = milliseconds(until) else { return .invalid }
+                guard let wake = DeviceLegTime.milliseconds(until) else { return .invalid }
                 return .park(stepId: step.id, checkpoint: .init(anchorAtMillis: checkpoint?.anchorAtMillis ?? nowMillis,
                                                                 wakeAtMillis: wake))
             case .malformed, .unavailable: return .invalid
             }
-        case "delay":
+        case .delay:
             let control = try decode(CompiledDelay.self, action)
             let current: Checkpoint
             if let checkpoint { current = checkpoint }
@@ -105,7 +183,7 @@ struct DeviceLegControlExecutor {
             }
             return nowMillis < current.wakeAtMillis ? .park(stepId: step.id, checkpoint: current)
                 : advance(outlets, outlet: "next", context: context)
-        case "wait_until":
+        case .waitUntil:
             let control = try decode(CompiledWait.self, action)
             let current: Checkpoint
             if let checkpoint { current = checkpoint }
@@ -132,26 +210,35 @@ struct DeviceLegControlExecutor {
             }
             if nowMillis >= current.wakeAtMillis { return advance(outlets, outlet: "timeout", context: context) }
             return .park(stepId: step.id, checkpoint: current)
+        case .connectorAction, .grantEntitlement, .deviceAvailable:
+            return .invalid
         default:
             return .dispatch(stepId: step.id, action: action)
         }
     }
 
-    private func advance(_ outlets: [String: String], outlet: String, context: ArmedDeviceLeg.Context) -> Result {
-        outlets[outlet].map { .advance(stepId: $0, context: context) } ?? .invalid
+    private func advance(
+        _ outlets: [String: String],
+        outlet: String,
+        context: ArmedDeviceLeg.Context,
+        experimentSelection: ExperimentSelection? = nil
+    ) -> Result {
+        outlets[outlet].map {
+            .advance(
+                stepId: $0,
+                context: context,
+                experimentSelection: experimentSelection
+            )
+        } ?? .invalid
     }
 
     private func decode<T: Decodable>(_ type: T.Type, _ action: [String: ExperienceReleaseJSONValue]) throws -> T {
         try ExactJSONCodec.decode(type, from: ExactJSONCodec.encode(ExperienceReleaseJSONValue.object(.init(action))))
     }
 
-    private func date(_ milliseconds: Int64) -> Date { Date(timeIntervalSince1970: Double(milliseconds) / 1_000) }
-    private func milliseconds(_ date: Date) -> Int64? {
-        let value = date.timeIntervalSince1970 * 1_000
-        guard value.isFinite, value >= Double(Int64.min), value <= Double(Int64.max) else { return nil }
-        return Int64(value.rounded(.towardZero))
-    }
 }
+
+extension DeviceLegControlExecutor.Event: Codable, Equatable {}
 
 private struct CompiledDelay: Decodable { let durationMs: Int }
 private struct CompiledCondition: Decodable {

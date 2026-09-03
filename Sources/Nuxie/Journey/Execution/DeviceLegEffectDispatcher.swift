@@ -79,15 +79,56 @@ struct DeviceLegDispatchRequest: Sendable {
 /// authenticated execution snapshot and customer identity remain current.
 /// The lock order matches the other device-leg publications: execution first,
 /// then identity.
-private struct DeviceLegEventCommitAdmission: StableEventCaptureCommitAdmission {
+struct DeviceLegCommitAdmission {
     let identity: IdentityServiceProtocol
-    let identityFenceToken: IdentityFenceToken
+    let identityFenceToken: IdentityFenceToken?
     let executionFence: DeviceLegProfileFence
     let executionFenceToken: DeviceLegProfileFenceToken
+
+    static func executionOnly(
+        identity: IdentityServiceProtocol,
+        executionFence: DeviceLegProfileFence,
+        executionFenceToken: DeviceLegProfileFenceToken
+    ) -> Self {
+        Self(
+            identity: identity,
+            identityFenceToken: nil,
+            executionFence: executionFence,
+            executionFenceToken: executionFenceToken
+        )
+    }
 
     func commitIfCurrent(
         _ commit: () throws -> StableEventCaptureCommit
     ) rethrows -> StableEventCaptureCommit? {
+        try commitWhileCurrent(commit)
+    }
+
+    func commitBatchIfCurrent(
+        _ commit: () throws -> [StableEventCaptureCommit]
+    ) rethrows -> [StableEventCaptureCommit]? {
+        try commitWhileCurrent(commit)
+    }
+
+    /// Journal state and its corresponding event publication share the same
+    /// execution and identity authority. The journal calls this around its
+    /// final synchronous file replacement so revocation cannot land between an
+    /// async preflight read and the durable mutation.
+    func commitJournalIfCurrent<Value>(
+        _ commit: () throws -> Value
+    ) rethrows -> Value? {
+        try commitWhileCurrent(commit)
+    }
+
+    private func commitWhileCurrent<Value>(
+        _ commit: () throws -> Value
+    ) rethrows -> Value? {
+        guard let identityFenceToken else {
+            return try executionFence.performIfCurrent(
+                executionFenceToken,
+                commit
+            )
+        }
         guard let identityAdmission = try executionFence.performIfCurrent(
             executionFenceToken,
             {
@@ -103,6 +144,9 @@ private struct DeviceLegEventCommitAdmission: StableEventCaptureCommitAdmission 
     }
 }
 
+extension DeviceLegCommitAdmission: StableEventCaptureCommitAdmission {}
+extension DeviceLegCommitAdmission: StableEventCaptureBatchCommitAdmission {}
+
 enum DeviceLegDispatchResult: Equatable, Sendable {
     case outlet(String)
     case complete(String)
@@ -115,9 +159,9 @@ protocol DeviceLegDispatching: Sendable {
 }
 
 /// Executes authenticated local effects after DeviceLegRunJournal has made
-/// their stable identity durable. Presentation and commerce remain parked at
-/// this seam until their artifact-backed adapters are installed.
-struct DeviceLegEffectDispatcher: DeviceLegDispatching {
+/// their stable identity durable. Presentation and commerce are handled by
+/// the renderer-backed presentation owner before this seam.
+struct DeviceLegEffectDispatcher {
     private let identity: IdentityServiceProtocol
     private let events: any RoutedStableSystemEventCapturing
     private let appActionHandler: @MainActor @Sendable (AppAction) -> Void
@@ -134,21 +178,26 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
 
     func dispatch(_ request: DeviceLegDispatchRequest) async -> DeviceLegDispatchResult {
         guard await requestIsCurrent(request),
-              case .string(let type)? = request.action["type"] else {
+              let rawType = DeviceLegActionType.rawValue(
+                in: request.action
+              ) else {
             return .failed
         }
+        guard let type = DeviceLegActionType(rawValue: rawType) else {
+            return .unsupported
+        }
         switch type {
-        case "send_event":
+        case .sendEvent:
             return await sendEvent(request)
-        case "update_customer":
+        case .updateCustomer:
             return await updateCustomer(request)
-        case "milestone":
+        case .milestone:
             return await milestone(request)
-        case "submit_response":
+        case .submitResponse:
             return .outlet("next")
-        case "app_action":
+        case .appAction:
             return await appAction(request)
-        case "exit":
+        case .exit:
             guard let action = decode(Exit.self, request.action) else { return .failed }
             if let reason = action.reason, !reason.isEmpty {
                 return .complete(reason)
@@ -173,10 +222,12 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         properties["leg_id"] = request.reference.legId
         properties["leg_generation"] = request.generation
         guard let _ = await events.captureAndRouteSystemEvent(
-                action.eventName,
-                properties: properties,
-                eventId: request.effectId,
-                distinctId: request.distinctId,
+                .init(
+                    name: action.eventName,
+                    properties: properties,
+                    eventId: request.effectId,
+                    distinctId: request.distinctId
+                ),
                 admission: eventCommitAdmission(request)
               ),
               await requestIsCurrent(request) else {
@@ -227,10 +278,12 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         var properties = legAttribution(request)
         properties["milestone_id"] = action.milestoneId
         guard let _ = await events.captureAndRouteSystemEvent(
-                JourneyEvents.journeyMilestone,
-                properties: properties,
-                eventId: request.effectId,
-                distinctId: request.distinctId,
+                .init(
+                    name: JourneyEvents.journeyMilestone,
+                    properties: properties,
+                    eventId: request.effectId,
+                    distinctId: request.distinctId
+                ),
                 admission: eventCommitAdmission(request)
               ),
               await requestIsCurrent(request) else {
@@ -294,10 +347,12 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         request: DeviceLegDispatchRequest
     ) async -> Bool {
         guard let _ = await events.captureAndRouteSystemEvent(
-            event,
-            properties: properties,
-            eventId: request.effectId,
-            distinctId: request.distinctId,
+            .init(
+                name: event,
+                properties: properties,
+                eventId: request.effectId,
+                distinctId: request.distinctId
+            ),
             admission: eventCommitAdmission(request)
         ), await requestIsCurrent(request) else { return false }
         return await requestIsCurrent(request)
@@ -305,8 +360,8 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
 
     private func eventCommitAdmission(
         _ request: DeviceLegDispatchRequest
-    ) -> DeviceLegEventCommitAdmission {
-        DeviceLegEventCommitAdmission(
+    ) -> DeviceLegCommitAdmission {
+        DeviceLegCommitAdmission(
             identity: identity,
             identityFenceToken: request.identityFence,
             executionFence: request.executionFence,
@@ -402,6 +457,8 @@ struct DeviceLegEffectDispatcher: DeviceLegDispatching {
         }
     }
 }
+
+extension DeviceLegEffectDispatcher: DeviceLegDispatching {}
 
 private struct SendEvent: Decodable {
     let eventName: String

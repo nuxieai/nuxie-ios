@@ -148,6 +148,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         async let left = first.admit(
             arm: candidate,
             release: retainedRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: policy,
             entryStepId: "step",
             at: date(100),
@@ -156,6 +157,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         async let right = second.admit(
             arm: candidate,
             release: retainedRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: policy,
             entryStepId: "step",
             at: date(100),
@@ -168,6 +170,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let readmittedAfterLatchReset = try await first.admit(
             arm: candidate,
             release: retainedRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: policy,
             entryStepId: "step",
             at: date(200),
@@ -179,6 +182,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let readmittedAfterArmRetirement = try await first.admit(
             arm: candidate,
             release: retainedRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: policy,
             entryStepId: "step",
             at: date(300),
@@ -348,8 +352,11 @@ final class DeviceLegRunJournalTests: XCTestCase {
                 let fence = DeviceLegProfileFence()
                 _ = try await reopened.resumeParked(
                     run.id,
-                    profileFence: fence,
-                    profileFenceToken: fence.token()
+                    admission: .executionOnly(
+                        identity: MockIdentityService(),
+                        executionFence: fence,
+                        executionFenceToken: fence.token()
+                    )
                 )
                 // Consuming a park point is durable before the next action.
                 // Death after consumption must never replay that action.
@@ -531,7 +538,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         XCTAssertNil(retiredWindowCheckmark)
     }
 
-    func testProfileReplacementCannotConsumeAParkWithAStaleToken() async throws {
+    func testExecutionRevocationCannotConsumeAParkWithAStaleToken() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -554,8 +561,11 @@ final class DeviceLegRunJournalTests: XCTestCase {
 
         let resumed = try await journal.resumeParked(
             run.id,
-            profileFence: fence,
-            profileFenceToken: stale
+            admission: .executionOnly(
+                identity: MockIdentityService(),
+                executionFence: fence,
+                executionFenceToken: stale
+            )
         )
 
         XCTAssertNil(resumed)
@@ -582,6 +592,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             try await journal.admit(
                 arm: candidate,
                 release: release(for: candidate.reference),
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "wait",
                 at: date(100),
@@ -625,6 +636,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let admittedFirst = try await journal.admit(
             arm: enrollmentArm,
             release: pin,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "step",
             at: date(100)
@@ -653,6 +665,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             _ = try await journal.admit(
                 arm: continuationArm,
                 release: conflictingPin,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "step",
                 at: date(105)
@@ -665,6 +678,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let admittedSecond = try await journal.admit(
             arm: continuationArm,
             release: pin,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "step",
             at: date(110)
@@ -691,6 +705,202 @@ final class DeviceLegRunJournalTests: XCTestCase {
             descriptorSHA256: enrollmentArm.reference.descriptorSha256
         )
         XCTAssertNil(retainedAfterSecond)
+    }
+
+    func testAdmissionPinsArtifactsUntilTheLastReferencingRunRetires() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheDirectory = directory.appendingPathComponent(
+            "release-cache",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: cacheDirectory,
+            withIntermediateDirectories: true
+        )
+        let artifactBytes = Data("durable-render-artifact".utf8)
+        let artifactSHA256 = SHA256Provider.hexDigest(artifactBytes)
+        try artifactBytes.write(
+            to: cacheDirectory.appendingPathComponent(artifactSHA256)
+        )
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let enrollmentArm = arm()
+        let source = DeviceLegReleaseArtifactSource(
+            descriptorSHA256: enrollmentArm.reference.descriptorSha256,
+            objects: [.init(
+                sha256: artifactSHA256,
+                sizeBytes: artifactBytes.count,
+                required: true
+            )],
+            cacheRoot: cacheDirectory
+        )
+        let admittedFirst = try await journal.admit(
+            arm: enrollmentArm,
+            release: release(for: enrollmentArm.reference),
+            artifactSource: source,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "step",
+            at: date(100)
+        )
+        let first = try XCTUnwrap(admittedFirst)
+        let firstPins = try await journal.pinnedArtifacts(forRunId: first.id)
+        let artifactPin = try XCTUnwrap(
+            firstPins?.objectURLsBySHA256[artifactSHA256]
+        )
+        try FileManager.default.removeItem(
+            at: cacheDirectory.appendingPathComponent(artifactSHA256)
+        )
+        XCTAssertEqual(try Data(contentsOf: artifactPin), artifactBytes)
+
+        let continuationArm = arm(binding: .init(
+            type: .continuation,
+            journeyId: first.journeyId,
+            generation: 1
+        ))
+        let admittedSecond = try await journal.admit(
+            arm: continuationArm,
+            release: release(for: continuationArm.reference),
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "step",
+            at: date(110)
+        )
+        let second = try XCTUnwrap(admittedSecond)
+        let secondPins = try await journal.pinnedArtifacts(forRunId: second.id)
+        XCTAssertEqual(
+            secondPins?.objectURLsBySHA256[artifactSHA256],
+            artifactPin
+        )
+
+        try await finish(journal, run: first, at: 120)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactPin.path))
+
+        try await finish(journal, run: second, at: 130)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artifactPin.path))
+    }
+
+    func testRequiredArtifactPinFailureRollsBackAdmission() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheDirectory = directory.appendingPathComponent(
+            "empty-release-cache",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: cacheDirectory,
+            withIntermediateDirectories: true
+        )
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let candidate = arm()
+        let source = DeviceLegReleaseArtifactSource(
+            descriptorSHA256: candidate.reference.descriptorSha256,
+            objects: [.init(
+                sha256: String(repeating: "c", count: 64),
+                sizeBytes: 16,
+                required: true
+            )],
+            cacheRoot: cacheDirectory
+        )
+
+        do {
+            _ = try await journal.admit(
+                arm: candidate,
+                release: release(for: candidate.reference),
+                artifactSource: source,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
+                reentry: .init(type: .everyTime, windowSeconds: nil),
+                entryStepId: "step",
+                at: date(100)
+            )
+            XCTFail("Expected missing required artifact rejection")
+        } catch DeviceLegJournalError.invalidState {
+        } catch {
+            XCTFail("Unexpected artifact pin error: \(error)")
+        }
+
+        let runs = try await journal.runs()
+        let retainedRelease = try await journal.releasePin(
+            descriptorSHA256: candidate.reference.descriptorSha256
+        )
+        XCTAssertTrue(runs.isEmpty)
+        XCTAssertNil(retainedRelease)
+        let pinDirectory = directory
+            .appendingPathComponent("device-leg-journal-v1/release-pins")
+            .appendingPathComponent(
+                DeviceLegStorageScope.testFixture.customerDigest(
+                    distinctId: "customer"
+                )
+            )
+        XCTAssertTrue(
+            try FileManager.default.contentsOfDirectory(
+                at: pinDirectory,
+                includingPropertiesForKeys: nil
+            ).isEmpty
+        )
+    }
+
+    func testArtifactManifestAggregateLimitRollsBackAdmission() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let candidate = arm()
+        let source = DeviceLegReleaseArtifactSource(
+            descriptorSHA256: candidate.reference.descriptorSha256,
+            objects: [
+                .init(
+                    sha256: String(repeating: "c", count: 64),
+                    sizeBytes: 64 * 1_024 * 1_024,
+                    required: false
+                ),
+                .init(
+                    sha256: String(repeating: "d", count: 64),
+                    sizeBytes: 64 * 1_024 * 1_024,
+                    required: false
+                ),
+                .init(
+                    sha256: String(repeating: "e", count: 64),
+                    sizeBytes: 1,
+                    required: false
+                ),
+            ],
+            cacheRoot: directory
+        )
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+
+        do {
+            _ = try await journal.admit(
+                arm: candidate,
+                release: release(for: candidate.reference),
+                artifactSource: source,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
+                reentry: .init(type: .everyTime, windowSeconds: nil),
+                entryStepId: "step",
+                at: date(100)
+            )
+            XCTFail("Expected artifact aggregate limit rejection")
+        } catch DeviceLegJournalError.storageLimit {
+        } catch {
+            XCTFail("Unexpected artifact aggregate error: \(error)")
+        }
+
+        let runs = try await journal.runs()
+        let retainedRelease = try await journal.releasePin(
+            descriptorSHA256: candidate.reference.descriptorSha256
+        )
+        XCTAssertTrue(runs.isEmpty)
+        XCTAssertNil(retainedRelease)
     }
 
     func testAdmissionRetainsTheMaximumProfileDescriptorBudget() async throws {
@@ -742,6 +952,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             let admitted = try await journal.admit(
                 arm: candidate,
                 release: retainedRelease,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "wait",
                 at: date(Double(100 + index))
@@ -1041,6 +1252,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let first = try await firstJournal.admit(
             arm: firstArm,
             release: firstRelease,
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "wait",
             at: date(100)
@@ -1050,6 +1262,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
             _ = try await secondJournal.admit(
                 arm: secondArm,
                 release: secondRelease,
+                executionSnapshot: testDeviceLegExecutionSnapshot(),
                 reentry: .init(type: .everyTime, windowSeconds: nil),
                 entryStepId: "wait",
                 at: date(101)
@@ -1077,6 +1290,7 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let admitted = try await journal.admit(
             arm: candidate,
             release: release(for: candidate.reference),
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: .init(type: .everyTime, windowSeconds: nil),
             entryStepId: "wait",
             at: date(100)
@@ -1139,6 +1353,158 @@ final class DeviceLegRunJournalTests: XCTestCase {
         let advanced = try XCTUnwrap(advancedRuns.first)
         XCTAssertEqual(advanced.stepId, "present")
         XCTAssertNil(advanced.park)
+    }
+
+    func testParkedEventPersistsWithItsCheckpointAcrossRelaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "wait",
+            at: date(1)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        let checkpoint = DeviceLegControlExecutor.Checkpoint(
+            anchorAtMillis: 2_000,
+            wakeAtMillis: 12_000
+        )
+        try await journal.transition(
+            run.id,
+            stepId: "wait",
+            context: run.context,
+            checkpoint: checkpoint
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(
+            identity.performWithCurrentIdentityFence("customer", { _ in () })
+        )
+        let executionFence = DeviceLegProfileFence()
+        let admission = DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFence.token,
+            executionFence: executionFence,
+            executionFenceToken: executionFence.token()
+        )
+        let event = DeviceLegControlExecutor.Event(
+            name: "unlock",
+            occurredAtMillis: 3_000,
+            properties: ["allowed": .bool(true)]
+        )
+
+        let staged = try await journal.stageParkedEvent(
+            run.id,
+            expectedStepId: "wait",
+            expectedCheckpoint: checkpoint,
+            event: event,
+            admission: admission
+        )
+        XCTAssertTrue(staged)
+
+        let reopened = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let reopenedRuns = try await reopened.runs()
+        let persisted = try XCTUnwrap(reopenedRuns.first?.park)
+        XCTAssertEqual(persisted.anchorAt, date(2))
+        XCTAssertEqual(persisted.wakeAt, date(12))
+        XCTAssertEqual(persisted.pendingEvent, event)
+    }
+
+    func testTransitionAdmissionRejectsRevokedExecutionAuthority() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "present",
+            at: date(1)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(
+            identity.performWithCurrentIdentityFence("customer", { _ in () })
+        )
+        let executionFence = DeviceLegProfileFence()
+        let executionToken = executionFence.token()
+        let admission = DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFence.token,
+            executionFence: executionFence,
+            executionFenceToken: executionToken
+        )
+        _ = executionFence.advance()
+
+        let committed = try await journal.transition(
+            run.id,
+            stepId: "late-route",
+            context: .init(event: ["late": .bool(true)], responses: [:]),
+            admission: admission
+        )
+
+        XCTAssertFalse(committed)
+        let retainedRuns = try await journal.runs()
+        let retained = try XCTUnwrap(retainedRuns.first)
+        XCTAssertEqual(retained.stepId, "present")
+        XCTAssertTrue(retained.context.event.dictionary.isEmpty)
+    }
+
+    func testCompletionAdmissionRejectsRevokedIdentityAuthority() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "present",
+            at: date(1)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(
+            identity.performWithCurrentIdentityFence("customer", { _ in () })
+        )
+        let executionFence = DeviceLegProfileFence()
+        let admission = DeviceLegCommitAdmission(
+            identity: identity,
+            identityFenceToken: identityFence.token,
+            executionFence: executionFence,
+            executionFenceToken: executionFence.token()
+        )
+        identity.setDistinctId("replacement-customer")
+
+        let committed = try await journal.complete(
+            run.id,
+            outcome: "host_dismissed",
+            at: date(2),
+            admission: admission
+        )
+
+        XCTAssertFalse(committed)
+        let retainedRuns = try await journal.runs()
+        let retained = try XCTUnwrap(retainedRuns.first)
+        XCTAssertNil(retained.completion)
     }
 
     func testEffectClaimMigratesOldSnapshotAndBecomesAnAbandonmentBoundary() async throws {
@@ -1302,10 +1668,12 @@ final class DeviceLegRunJournalTests: XCTestCase {
         // Simulate termination after the stable event reached subscribers but
         // before the journal acknowledged that capture.
         let startedAttempt = await log.captureAndRouteSystemEvent(
-            JourneyEvents.journeyLegStarted,
-            properties: ["journey_id": run.journeyId],
-            eventId: run.startedEventId,
-            distinctId: "customer"
+            .init(
+                name: JourneyEvents.journeyLegStarted,
+                properties: ["journey_id": run.journeyId],
+                eventId: run.startedEventId,
+                distinctId: "customer"
+            )
         )
         _ = try XCTUnwrap(startedAttempt)
         await log.drain()
@@ -1317,10 +1685,12 @@ final class DeviceLegRunJournalTests: XCTestCase {
 
         try await journal.complete(run.id, outcome: "done", at: date(200))
         let completedAttempt = await log.captureAndRouteSystemEvent(
-            JourneyEvents.journeyLegCompleted,
-            properties: ["journey_id": run.journeyId],
-            eventId: run.completedEventId,
-            distinctId: "customer"
+            .init(
+                name: JourneyEvents.journeyLegCompleted,
+                properties: ["journey_id": run.journeyId],
+                eventId: run.completedEventId,
+                distinctId: "customer"
+            )
         )
         _ = try XCTUnwrap(completedAttempt)
         await log.drain()
@@ -1376,6 +1746,97 @@ final class DeviceLegRunJournalTests: XCTestCase {
         await log.close()
     }
 
+    func testCommittedCompletionSurvivesReleasePinCleanupFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .oneTime, windowSeconds: nil),
+            entryStepId: "screen",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.complete(
+            run.id,
+            outcome: "closed",
+            at: date(200)
+        )
+
+        let customerDigest = DeviceLegStorageScope.testFixture.customerDigest(
+            distinctId: "customer"
+        )
+        let customerPins = directory
+            .appendingPathComponent("device-leg-journal-v1", isDirectory: true)
+            .appendingPathComponent("release-pins", isDirectory: true)
+            .appendingPathComponent(customerDigest, isDirectory: true)
+        try FileManager.default.removeItem(at: customerPins)
+        try Data("blocks-directory-enumeration".utf8).write(to: customerPins)
+
+        try await journal.markCompletionQueued(run)
+
+        let remainingRuns = try await journal.runs()
+        XCTAssertTrue(remainingRuns.isEmpty)
+        let checklist = try await journal.checkmark(experienceId: "experience")
+        XCTAssertEqual(checklist?.outcome, "closed")
+    }
+
+    func testRecoveryReturnsPersistedAbandonmentWhenReleasePinCleanupFails() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer"
+        )
+        let admitted = try await journal.admit(
+            arm: arm(),
+            reentry: .init(type: .oneTime, windowSeconds: nil),
+            entryStepId: "screen",
+            at: date(100)
+        )
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+
+        let customerDigest = DeviceLegStorageScope.testFixture.customerDigest(
+            distinctId: "customer"
+        )
+        let customerPins = directory
+            .appendingPathComponent("device-leg-journal-v1", isDirectory: true)
+            .appendingPathComponent("release-pins", isDirectory: true)
+            .appendingPathComponent(customerDigest, isDirectory: true)
+        let recoveryJournal = try DeviceLegRunJournal(
+            directory: directory,
+            distinctId: "customer",
+            beforePersist: {
+                try FileManager.default.removeItem(at: customerPins)
+                try Data("blocks-directory-enumeration".utf8).write(
+                    to: customerPins
+                )
+            }
+        )
+
+        let resumable = try await recoveryJournal.recover(at: date(200))
+
+        try FileManager.default.removeItem(at: customerPins)
+        try FileManager.default.createDirectory(
+            at: customerPins,
+            withIntermediateDirectories: true
+        )
+
+        XCTAssertTrue(resumable.isEmpty)
+        let recoveredRuns = try await recoveryJournal.runs()
+        let recovered = try XCTUnwrap(recoveredRuns.first)
+        XCTAssertEqual(recovered.completion?.outcome, "abandoned")
+        XCTAssertEqual(recovered.completion?.at, date(200))
+        XCTAssertTrue(recovered.startedQueued)
+    }
+
     private func eventLog(directory: URL, store: SQLiteEventStore, api: MockNuxieApiForQueue, dropEvents: Bool = false) async throws -> EventLog {
         let log = EventLog(identity: MockIdentityService(), dateProvider: MockDateProvider(initialDate: date(1000)),
                            apiClient: api, store: store)
@@ -1414,11 +1875,22 @@ private extension DeviceLegRunJournal {
         try await admit(
             arm: arm,
             release: testDeviceLegRelease(for: arm.reference),
+            executionSnapshot: testDeviceLegExecutionSnapshot(),
             reentry: reentry,
             entryStepId: entryStepId,
             at: at
         )
     }
+}
+
+private func testDeviceLegExecutionSnapshot() -> DeviceLegRun.ExecutionSnapshot {
+    .init(
+        delivery: .init(
+            renderBaseUrl: "https://render.example.test/",
+            assetBaseUrl: "https://assets.example.test/"
+        ),
+        assignments: [:]
+    )
 }
 
 private func testDeviceLegRelease(
@@ -1477,35 +1949,31 @@ private actor LostCompletionAcknowledgement: RoutedStableSystemEventCapturing {
     }
 
     func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String
+        _ request: StableSystemEventCaptureRequest
     ) async -> DurableTriggerCapture? {
-        let captured = await events.captureAndRouteSystemEvent(
-            event,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId
-        )
-        return event == JourneyEvents.journeyLegCompleted ? nil : captured
+        let captured = await events.captureAndRouteSystemEvent(request)
+        return request.name == JourneyEvents.journeyLegCompleted ? nil : captured
     }
 
     func captureAndRouteSystemEvent(
-        _ event: String,
-        properties: sending [String: Any]?,
-        eventId: String,
-        distinctId: String,
+        _ request: StableSystemEventCaptureRequest,
         admission: any StableEventCaptureCommitAdmission
     ) async -> DurableTriggerCapture? {
         let captured = await events.captureAndRouteSystemEvent(
-            event,
-            properties: properties,
-            eventId: eventId,
-            distinctId: distinctId,
+            request,
             admission: admission
         )
-        return event == JourneyEvents.journeyLegCompleted ? nil : captured
+        return request.name == JourneyEvents.journeyLegCompleted ? nil : captured
+    }
+
+    func captureAndRouteSystemEventBatch(
+        _ items: [RoutedStableSystemEventBatchItem],
+        admission: any StableEventCaptureBatchCommitAdmission
+    ) async -> [String: DurableTriggerCapture]? {
+        await events.captureAndRouteSystemEventBatch(
+            items,
+            admission: admission
+        )
     }
 }
 

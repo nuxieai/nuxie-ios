@@ -10,9 +10,11 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     private var _fetchedExperienceVersionIds: [String] = []
     private var _releaseProfiles: [ExperienceReleaseProfile?] = []
     private var _committedReleaseProfiles: [ExperienceReleaseProfile?] = []
+    private var _committedDeviceLegReleaseCounts: [Int?] = []
     private var _latestProfileGeneration: UInt64 = 0
     private var _authenticatedReleaseReferences: [ExperienceReference]?
     private var _releaseProfileFailuresRemaining = 0
+    private var _deviceLegArtifactPreparationFailuresRemaining = 0
     private var _releaseProfileAuthenticationGate: ReleaseProfileAuthenticationGate?
     
     // Error testing properties
@@ -64,6 +66,10 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
         withLock { _committedReleaseProfiles }
     }
 
+    var committedDeviceLegReleaseCounts: [Int?] {
+        withLock { _committedDeviceLegReleaseCounts }
+    }
+
     var authenticatedReleaseReferences: [ExperienceReference]? {
         get { withLock { _authenticatedReleaseReferences } }
         set { withLock { _authenticatedReleaseReferences = newValue } }
@@ -72,6 +78,11 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     var releaseProfileFailuresRemaining: Int {
         get { withLock { _releaseProfileFailuresRemaining } }
         set { withLock { _releaseProfileFailuresRemaining = newValue } }
+    }
+
+    var deviceLegArtifactPreparationFailuresRemaining: Int {
+        get { withLock { _deviceLegArtifactPreparationFailuresRemaining } }
+        set { withLock { _deviceLegArtifactPreparationFailuresRemaining = newValue } }
     }
 
     var releaseProfileAuthenticationGate: ReleaseProfileAuthenticationGate? {
@@ -241,9 +252,22 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     }
     
     public func prepareReleaseProfile(
-        _ profile: ExperienceReleaseProfile?
+        _ profile: ExperienceReleaseProfile?,
+        deviceLegSnapshot: DeviceLegProfileCatalog.Snapshot?
     ) async throws -> PreparedExperienceReleaseProfile {
         withLock { _releaseProfiles.append(profile) }
+        if deviceLegSnapshot != nil {
+            let shouldFail = withLock { () -> Bool in
+                guard _deviceLegArtifactPreparationFailuresRemaining > 0 else {
+                    return false
+                }
+                _deviceLegArtifactPreparationFailuresRemaining -= 1
+                return true
+            }
+            if shouldFail {
+                throw URLError(.notConnectedToInternet)
+            }
+        }
         if profile != nil {
             let shouldFail = withLock { () -> Bool in
                 guard _releaseProfileFailuresRemaining > 0 else { return false }
@@ -259,13 +283,18 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             }
         }
         guard let profile else {
-            return PreparedExperienceReleaseProfile(profile: nil, catalog: nil)
+            return PreparedExperienceReleaseProfile(
+                profile: nil,
+                catalog: nil,
+                deviceLegSnapshot: deviceLegSnapshot
+            )
         }
         if let configured = withLock({ _authenticatedReleaseReferences }) {
             return PreparedExperienceReleaseProfile(
                 profile: profile,
                 catalog: nil,
-                references: configured
+                references: configured,
+                deviceLegSnapshot: deviceLegSnapshot
             )
         }
         let references = (profile.active + profile.pinned).map {
@@ -277,7 +306,8 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
         return PreparedExperienceReleaseProfile(
             profile: profile,
             catalog: nil,
-            references: references
+            references: references,
+            deviceLegSnapshot: deviceLegSnapshot
         )
     }
 
@@ -293,6 +323,9 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             guard generation >= _latestProfileGeneration else { return nil }
             _latestProfileGeneration = generation
             _committedReleaseProfiles.append(prepared.profile)
+            _committedDeviceLegReleaseCounts.append(
+                prepared.deviceLegSnapshot?.releasesByDigest.count
+            )
             return (
                 prepared.references ?? [],
                 _mockExperiences,
@@ -437,6 +470,23 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
         )
         controller.runtimeDelegate = runtimeDelegate
         return controller
+    }
+
+    @MainActor
+    func viewController(
+        forDeviceLeg release: AuthenticatedDeviceLegRelease,
+        delivery: ExperienceReleaseDelivery,
+        pinnedArtifacts: DeviceLegPinnedReleaseArtifacts?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode
+    ) async throws -> ExperienceViewController {
+        _ = delivery
+        _ = pinnedArtifacts
+        return try await viewController(
+            for: release.descriptor.identity.experienceVersionId,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode
+        )
     }
     
     public func clearCache() async {
