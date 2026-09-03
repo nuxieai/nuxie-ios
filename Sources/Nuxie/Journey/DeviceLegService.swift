@@ -2099,22 +2099,6 @@ private extension DeviceLegService {
                     LogWarning("DeviceLegService: failed to persist control transition: \(error)")
                     return
                 }
-                if command.experimentExposure?.kind == .invalidAssignment,
-                   let admission = journalCommitAdmission(
-                       journal: journal,
-                       executionFenceToken: executionFenceToken
-                   ) {
-                    do {
-                        _ = try await experimentExposures.flushPending(
-                            in: journal,
-                            admission: admission
-                        )
-                    } catch {
-                        LogWarning(
-                            "DeviceLegService: invalid assignment report remains pending: \(error)"
-                        )
-                    }
-                }
 
             case .park(let command):
                 do {

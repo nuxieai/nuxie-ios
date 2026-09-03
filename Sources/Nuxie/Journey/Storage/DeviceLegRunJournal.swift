@@ -40,8 +40,7 @@ struct DeviceLegRun {
         }
 
         let experimentId: String
-        /// Nil only for an invalid assignment that skipped every variant.
-        let variantId: String?
+        let variantId: String
         let assignedVariantId: String?
         let isHoldout: Bool
         let kind: Kind
@@ -588,7 +587,6 @@ struct DeviceLegRunJournal {
             }
             for index in run.experimentExposures.indices
             where !run.experimentExposures[index].queued
-                && run.experimentExposures[index].kind != .invalidAssignment
                 && run.experimentExposures[index].shownAt == nil
                 && run.experimentExposures[index].presentationScreenId == nil {
                 run.experimentExposures[index].presentationScreenId = screenId
@@ -629,10 +627,7 @@ struct DeviceLegRunJournal {
             guard var run = state.runs[id],
                   let index = run.experimentExposures.firstIndex(where: {
                       $0.eventId == eventId
-                  }), (
-                      run.experimentExposures[index].shownAt != nil
-                        || run.experimentExposures[index].kind == .invalidAssignment
-                  ) else {
+                  }), run.experimentExposures[index].shownAt != nil else {
                 throw DeviceLegJournalError.invalidState
             }
             run.experimentExposures[index].queued = true
