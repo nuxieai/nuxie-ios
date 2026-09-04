@@ -35,31 +35,10 @@ func activeProductEvidenceAuthority(
     products: [JourneyReleaseProductDocument],
     storeProductId: String
 ) -> ActiveProductEvidenceAuthorityResolution {
-    let authorities = Set(products
-        .filter {
-            $0.store.platform == "apple_app_store"
-                && $0.store.productId == storeProductId
-        }
-        .map {
-            $0.providerFeatureAccess == nil
-                ? PurchaseEvidenceAuthority.nativeStoreKit
-                : .providerConnector
-        })
-    switch authorities.count {
-    case 0:
-        return .readyNoMatch
-    case 1:
-        switch authorities.first {
-        case .nativeStoreKit:
-            return .nativeStoreKit
-        case .providerConnector:
-            return .providerConnector
-        default:
-            return .ambiguous
-        }
-    default:
-        return .ambiguous
-    }
+    products.contains {
+        $0.store.platform == "apple_app_store"
+            && $0.store.productId == storeProductId
+    } ? .nativeStoreKit : .readyNoMatch
 }
 
 struct PreparedJourneyProfileArtifacts: Sendable {
@@ -882,8 +861,6 @@ actor JourneyReleaseCatalog {
             displayPrice: product.price,
             price: price
         )
-        product.providerFeatureAccess =
-            binding.product.providerFeatureAccess?.provider
     }
 
     private static func testStoreTrialTerms(

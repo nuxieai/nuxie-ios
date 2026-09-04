@@ -52,7 +52,7 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertEqual(release.descriptor.leg.id, String(repeating: "a", count: 64))
         XCTAssertEqual(release.descriptor.leg.steps.first?.outcome, "continue")
         XCTAssertNil(release.descriptor.render)
-        XCTAssertEqual(release.releaseSequenceToPromote, fixture.identity.releaseSequence)
+        XCTAssertEqual(release.publishedAtSeqToPromote, fixture.identity.publishedAtSeq)
     }
 
     func testAuthenticatesRenderedLegWithExactScreenClosure() throws {
@@ -75,7 +75,7 @@ final class JourneyReleaseTests: XCTestCase {
         let authenticated = try JourneyReleaseVerifier().authenticateJourney(
             envelopeBytes: JSONEncoder().encode(fixture.envelope), authorizationKeys: [key(fixture.publicKey)],
             expectedIdentity: fixture.identity, expectedLegId: String(repeating: "a", count: 64),
-            supportedRuntime: supported, replayPolicy: .active(minimumReleaseSequence: 0)
+            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0)
         )
         XCTAssertFalse(authenticated.descriptor.leg.screens.isEmpty)
         XCTAssertNotNil(authenticated.descriptor.render)
@@ -203,7 +203,7 @@ final class JourneyReleaseTests: XCTestCase {
                 fixture.envelope,
                 key: fixture.publicKey,
                 identity: fixture.identity,
-                minimum: fixture.identity.releaseSequence + 1
+                minimum: fixture.identity.publishedAtSeq + 1
             )
         )
         let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
@@ -217,7 +217,7 @@ final class JourneyReleaseTests: XCTestCase {
             supportedRuntime: runtime, replayPolicy: .pinned(experienceVersionId: fixture.identity.experienceVersionId,
                 buildId: fixture.identity.buildId, descriptorSHA256: fixture.envelope.descriptorSha256)
         )
-        XCTAssertNil(pinned.releaseSequenceToPromote)
+        XCTAssertNil(pinned.publishedAtSeqToPromote)
     }
 
     func testRejectsAuthenticatedCrossLegCursorsServerActionsAndChainFields() throws {
@@ -247,7 +247,7 @@ final class JourneyReleaseTests: XCTestCase {
         try JourneyReleaseVerifier().authenticateJourney(
             envelopeBytes: JSONEncoder().encode(envelope), authorizationKeys: [key(publicKey)],
             expectedIdentity: identity, expectedLegId: legId, supportedRuntime: runtime,
-            replayPolicy: .active(minimumReleaseSequence: minimum)
+            replayPolicy: .active(minimumPublishedAtSeq: minimum)
         )
     }
 

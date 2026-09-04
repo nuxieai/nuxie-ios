@@ -720,6 +720,220 @@
         }
       },
       "descriptor": {}
+    },
+    {
+      "name": "Google Play product identity and placement offer",
+      "valid": true,
+      "entry": "entry",
+      "leg": {},
+      "descriptor": {
+        "products": [
+          {
+            "id": "google-monthly",
+            "type": "subscription",
+            "store": {
+              "platform": "google_play",
+              "productId": "premium",
+              "productType": "subscription",
+              "basePlanId": "monthly",
+              "purchaseOptionId": null
+            },
+            "preview": {
+              "name": "Google monthly",
+              "description": "Monthly premium access",
+              "price": "$9.99",
+              "period": "month",
+              "periodCount": 1,
+              "periodLabel": "month",
+              "hasTrial": false,
+              "trialLabel": "No trial",
+              "introOfferLabel": "No introductory offer",
+              "renewalLabel": "$9.99/month"
+            },
+            "entitlements": []
+          }
+        ],
+        "placements": [
+          {
+            "id": "google:monthly",
+            "productId": "google-monthly",
+            "googlePlay": {
+              "offerId": "trial"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "retired provider feature access marker",
+      "valid": false,
+      "entry": "entry",
+      "leg": {},
+      "descriptor": {
+        "products": [
+          {
+            "id": "google-monthly",
+            "type": "subscription",
+            "store": {
+              "platform": "google_play",
+              "productId": "premium",
+              "productType": "subscription",
+              "basePlanId": "monthly",
+              "purchaseOptionId": null
+            },
+            "preview": {
+              "name": "Google monthly",
+              "description": "Monthly premium access",
+              "price": "$9.99",
+              "period": "month",
+              "periodCount": 1,
+              "periodLabel": "month",
+              "hasTrial": false,
+              "trialLabel": "No trial",
+              "introOfferLabel": "No introductory offer",
+              "renewalLabel": "$9.99/month"
+            },
+            "entitlements": [],
+            "providerFeatureAccess": null
+          }
+        ],
+        "placements": [
+          {
+            "id": "google:monthly",
+            "productId": "google-monthly",
+            "googlePlay": {
+              "offerId": "trial"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Google Play subscription without base plan",
+      "valid": false,
+      "entry": "entry",
+      "leg": {},
+      "descriptor": {
+        "products": [
+          {
+            "id": "google-monthly",
+            "type": "subscription",
+            "store": {
+              "platform": "google_play",
+              "productId": "premium",
+              "productType": "subscription",
+              "basePlanId": null,
+              "purchaseOptionId": null
+            },
+            "preview": {
+              "name": "Google monthly",
+              "description": "Monthly premium access",
+              "price": "$9.99",
+              "period": "month",
+              "periodCount": 1,
+              "periodLabel": "month",
+              "hasTrial": false,
+              "trialLabel": "No trial",
+              "introOfferLabel": "No introductory offer",
+              "renewalLabel": "$9.99/month"
+            },
+            "entitlements": []
+          }
+        ],
+        "placements": [
+          {
+            "id": "google:monthly",
+            "productId": "google-monthly",
+            "googlePlay": {
+              "offerId": "trial"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Google Play subscription with purchase option",
+      "valid": false,
+      "entry": "entry",
+      "leg": {},
+      "descriptor": {
+        "products": [
+          {
+            "id": "google-monthly",
+            "type": "subscription",
+            "store": {
+              "platform": "google_play",
+              "productId": "premium",
+              "productType": "subscription",
+              "basePlanId": "monthly",
+              "purchaseOptionId": "prepaid"
+            },
+            "preview": {
+              "name": "Google monthly",
+              "description": "Monthly premium access",
+              "price": "$9.99",
+              "period": "month",
+              "periodCount": 1,
+              "periodLabel": "month",
+              "hasTrial": false,
+              "trialLabel": "No trial",
+              "introOfferLabel": "No introductory offer",
+              "renewalLabel": "$9.99/month"
+            },
+            "entitlements": []
+          }
+        ],
+        "placements": [
+          {
+            "id": "google:monthly",
+            "productId": "google-monthly",
+            "googlePlay": {
+              "offerId": "trial"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Google Play offer on App Store product",
+      "valid": false,
+      "entry": "entry",
+      "leg": {},
+      "descriptor": {
+        "products": [
+          {
+            "id": "apple-monthly",
+            "type": "subscription",
+            "store": {
+              "platform": "apple_app_store",
+              "productId": "premium",
+              "productType": "autoRenewable"
+            },
+            "preview": {
+              "name": "Google monthly",
+              "description": "Monthly premium access",
+              "price": "$9.99",
+              "period": "month",
+              "periodCount": 1,
+              "periodLabel": "month",
+              "hasTrial": false,
+              "trialLabel": "No trial",
+              "introOfferLabel": "No introductory offer",
+              "renewalLabel": "$9.99/month"
+            },
+            "entitlements": []
+          }
+        ],
+        "placements": [
+          {
+            "id": "apple:monthly",
+            "productId": "apple-monthly",
+            "googlePlay": {
+              "offerId": "trial"
+            }
+          }
+        ]
+      }
     }
   ]
 }
