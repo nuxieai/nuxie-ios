@@ -454,7 +454,7 @@ protocol ExperiencePresentationScopedTraceDelegate: ExperienceRuntimeDelegate {
     func experienceViewControllerDidReveal(
         _ controller: ExperienceViewController,
         traceToken: ExperiencePresentationTraceToken?
-    )
+    ) async
 
     func experienceViewController(
         _ controller: ExperienceViewController,

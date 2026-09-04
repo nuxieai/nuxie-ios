@@ -69,9 +69,9 @@ struct JourneyRun {
     let journeyId: String
     let generation: Int
     let reference: ArmedJourney.Reference
-    let executionSnapshot: ExecutionSnapshot?
+    let executionSnapshot: ExecutionSnapshot
     let artifactSHA256s: [String]
-    let reentry: Journey.Reentry?
+    let reentry: Journey.Reentry
     let startedAt: Date
     let isEnrollment: Bool
     let startedEventId: String
@@ -117,9 +117,8 @@ struct JourneyCheckmark {
     let completedAt: Date
     /// Reentry counts new journeys, not completion time or continuation legs.
     let lastEnrollmentAt: Date?
-    /// Optional for journals written before retention metadata was added.
-    let reentry: Journey.Reentry?
-    let lastSeenLiveAt: Date?
+    let reentry: Journey.Reentry
+    let lastSeenLiveAt: Date
 
     init(
         journeyId: String,
@@ -127,8 +126,8 @@ struct JourneyCheckmark {
         outcome: String,
         completedAt: Date,
         lastEnrollmentAt: Date?,
-        reentry: Journey.Reentry? = nil,
-        lastSeenLiveAt: Date? = nil
+        reentry: Journey.Reentry,
+        lastSeenLiveAt: Date
     ) {
         self.journeyId = journeyId
         self.generation = generation
@@ -152,8 +151,7 @@ struct JourneyRunJournal {
         var schemaVersion = "nuxie.journey-journal.v1"
         var runs: [String: JourneyRun] = [:]
         var checklist: [String: JourneyCheckmark] = [:]
-        /// Optional preserves decoding of existing v1 snapshots.
-        var stateArmReceipts: Set<JourneyStateArmReceipt>? = nil
+        var stateArmReceipts: Set<JourneyStateArmReceipt> = []
     }
 
     let distinctId: String
@@ -240,7 +238,7 @@ struct JourneyRunJournal {
             }
             var state = try Self.load(file)
             if let stateArmReceipt,
-               state.stateArmReceipts?.contains(stateArmReceipt) == true {
+               state.stateArmReceipts.contains(stateArmReceipt) {
                 return nil
             }
             try releasePins.removeUnreferenced(Self.pinReferences(state))
@@ -304,12 +302,10 @@ struct JourneyRunJournal {
             )
             state.runs[run.id] = run
             if let stateArmReceipt {
-                var receipts = state.stateArmReceipts ?? []
-                guard receipts.insert(stateArmReceipt).inserted else {
+                guard state.stateArmReceipts.insert(stateArmReceipt).inserted else {
                     preparedPins.rollback()
                     return nil
                 }
-                state.stateArmReceipts = receipts
             }
             do {
                 if let profileFence, let profileFenceToken {
@@ -388,7 +384,7 @@ struct JourneyRunJournal {
     ) async throws {
         try await update { state in
             state.stateArmReceipts = Set(
-                (state.stateArmReceipts ?? []).filter(allowed.contains)
+                state.stateArmReceipts.filter(allowed.contains)
             )
         }
     }
@@ -401,7 +397,7 @@ struct JourneyRunJournal {
     ) async throws {
         try await update { state in
             state.stateArmReceipts = Set(
-                (state.stateArmReceipts ?? []).filter {
+                state.stateArmReceipts.filter {
                     $0.entryKind != entryKind
                 }
             )
@@ -409,8 +405,7 @@ struct JourneyRunJournal {
     }
 
     /// Keep checkmarks while an experience is delivered, then for its authored
-    /// reentry window. Older checkmarks without retention metadata remain
-    /// conservative until the coordinated hard cut discards them.
+    /// reentry window.
     func retainCheckmarks(
         liveExperiences: [String: Journey.Reentry],
         at: Date
@@ -430,17 +425,15 @@ struct JourneyRunJournal {
                     state.checklist[experienceId] = checkmark
                     continue
                 }
-                guard let reentry = checkmark.reentry,
-                      let lastSeenLiveAt = checkmark.lastSeenLiveAt else {
-                    continue
-                }
-                switch reentry.type {
+                switch checkmark.reentry.type {
                 case .oncePerWindow:
-                    guard let window = reentry.windowSeconds, window > 0 else {
+                    guard let window = checkmark.reentry.windowSeconds,
+                          window > 0 else {
                         state.checklist.removeValue(forKey: experienceId)
                         continue
                     }
-                    if at.timeIntervalSince(lastSeenLiveAt) >= Double(window) {
+                    if at.timeIntervalSince(checkmark.lastSeenLiveAt)
+                        >= Double(window) {
                         state.checklist.removeValue(forKey: experienceId)
                     }
                 case .oneTime, .everyTime:
@@ -1082,14 +1075,14 @@ extension JourneyRun: Codable, Sendable {
         journeyId = try container.decode(String.self, forKey: .journeyId)
         generation = try container.decode(Int.self, forKey: .generation)
         reference = try container.decode(ArmedJourney.Reference.self, forKey: .reference)
-        executionSnapshot = try container.decodeIfPresent(
+        executionSnapshot = try container.decode(
             ExecutionSnapshot.self,
             forKey: .executionSnapshot
         )
-        artifactSHA256s = try container.decodeIfPresent(
+        artifactSHA256s = try container.decode(
             [String].self,
             forKey: .artifactSHA256s
-        ) ?? []
+        )
         guard artifactSHA256s == artifactSHA256s.sorted(),
               Set(artifactSHA256s).count == artifactSHA256s.count,
               artifactSHA256s.allSatisfy(
@@ -1097,7 +1090,7 @@ extension JourneyRun: Codable, Sendable {
               ) else {
             throw JourneyJournalError.invalidState
         }
-        reentry = try container.decodeIfPresent(
+        reentry = try container.decode(
             Journey.Reentry.self,
             forKey: .reentry
         )
@@ -1105,22 +1098,22 @@ extension JourneyRun: Codable, Sendable {
         isEnrollment = try container.decode(Bool.self, forKey: .isEnrollment)
         startedEventId = try container.decode(String.self, forKey: .startedEventId)
         completedEventId = try container.decode(String.self, forKey: .completedEventId)
-        startedQueued = try container.decodeIfPresent(Bool.self, forKey: .startedQueued) ?? false
+        startedQueued = try container.decode(Bool.self, forKey: .startedQueued)
         stepId = try container.decode(String.self, forKey: .stepId)
         park = try container.decodeIfPresent(Park.self, forKey: .park)
         context = try container.decode(ArmedJourney.Context.self, forKey: .context)
-        outputs = try container.decodeIfPresent(
+        outputs = try container.decode(
             ArmedJourney.Context.self,
             forKey: .outputs
-        ) ?? .init(event: [:], responses: [:])
-        effectReceipts = try container.decodeIfPresent(
+        )
+        effectReceipts = try container.decode(
             [String: String].self,
             forKey: .effectReceipts
-        ) ?? [:]
-        experimentExposures = try container.decodeIfPresent(
+        )
+        experimentExposures = try container.decode(
             [ExperimentExposure].self,
             forKey: .experimentExposures
-        ) ?? []
+        )
         pendingPresentationPublication = try container.decodeIfPresent(
             PendingPresentationPublication.self,
             forKey: .pendingPresentationPublication
@@ -1133,12 +1126,12 @@ extension JourneyRun: Codable, Sendable {
         try container.encode(journeyId, forKey: .journeyId)
         try container.encode(generation, forKey: .generation)
         try container.encode(reference, forKey: .reference)
-        try container.encodeIfPresent(
+        try container.encode(
             executionSnapshot,
             forKey: .executionSnapshot
         )
         try container.encode(artifactSHA256s, forKey: .artifactSHA256s)
-        try container.encodeIfPresent(reentry, forKey: .reentry)
+        try container.encode(reentry, forKey: .reentry)
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(isEnrollment, forKey: .isEnrollment)
         try container.encode(startedEventId, forKey: .startedEventId)
@@ -1181,11 +1174,11 @@ extension JourneyCheckmark: Codable, Sendable {
                 Date.self,
                 forKey: .lastEnrollmentAt
             ),
-            reentry: try container.decodeIfPresent(
+            reentry: try container.decode(
                 Journey.Reentry.self,
                 forKey: .reentry
             ),
-            lastSeenLiveAt: try container.decodeIfPresent(
+            lastSeenLiveAt: try container.decode(
                 Date.self,
                 forKey: .lastSeenLiveAt
             )

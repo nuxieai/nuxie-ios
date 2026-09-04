@@ -54,6 +54,7 @@ private final class CloseFlag: @unchecked Sendable {
 // @unchecked Sendable: immutable snapshot; the [String: Any] payload is
 // write-once at the call site and never mutated afterwards.
 private struct TrackPayload: @unchecked Sendable {
+  let eventId: String?
   let name: String
   let properties: [String: Any]
   let forcedDistinctId: String  // snapshot at call site
@@ -224,6 +225,17 @@ protocol EventCapturing: AnyObject, Sendable {
     userPropertiesSetOnce: [String: Any]?
   )
 
+  /// Capture an ordinary event with a caller-owned identity. The identity is
+  /// only process-local correlation metadata until the ordinary capture worker
+  /// durably commits the event.
+  func track(
+    _ event: String,
+    properties: [String: Any]?,
+    userProperties: [String: Any]?,
+    userPropertiesSetOnce: [String: Any]?,
+    eventId: String
+  )
+
   /// Capture and deliver an internal mirrored event without feeding it back
   /// through the ordinary journey-routing subscriber.
   func trackWithoutRouting(
@@ -238,6 +250,23 @@ protocol EventCapturing: AnyObject, Sendable {
     userPropertiesSetOnce: [String: Any]?,
     distinctIdOverride: String
   )
+}
+
+extension EventCapturing {
+  func track(
+    _ event: String,
+    properties: [String: Any]?,
+    userProperties: [String: Any]?,
+    userPropertiesSetOnce: [String: Any]?,
+    eventId: String
+  ) {
+    track(
+      event,
+      properties: properties,
+      userProperties: userProperties,
+      userPropertiesSetOnce: userPropertiesSetOnce
+    )
+  }
 }
 
 protocol StableSystemEventCapturing: AnyObject, Sendable {
@@ -811,7 +840,25 @@ actor EventLog: EventLogProtocol {
       properties: properties,
       userProperties: userProperties,
       userPropertiesSetOnce: userPropertiesSetOnce,
-      distinctIdOverride: identityService.getDistinctId()
+      distinctIdOverride: identityService.getDistinctId(),
+      eventId: nil
+    )
+  }
+
+  public nonisolated func track(
+    _ event: String,
+    properties: [String: Any]? = nil,
+    userProperties: [String: Any]? = nil,
+    userPropertiesSetOnce: [String: Any]? = nil,
+    eventId: String
+  ) {
+    track(
+      event,
+      properties: properties,
+      userProperties: userProperties,
+      userPropertiesSetOnce: userPropertiesSetOnce,
+      distinctIdOverride: identityService.getDistinctId(),
+      eventId: eventId
     )
   }
 
@@ -821,6 +868,24 @@ actor EventLog: EventLogProtocol {
     userProperties: [String: Any]? = nil,
     userPropertiesSetOnce: [String: Any]? = nil,
     distinctIdOverride: String
+  ) {
+    track(
+      event,
+      properties: properties,
+      userProperties: userProperties,
+      userPropertiesSetOnce: userPropertiesSetOnce,
+      distinctIdOverride: distinctIdOverride,
+      eventId: nil
+    )
+  }
+
+  private nonisolated func track(
+    _ event: String,
+    properties: [String: Any]?,
+    userProperties: [String: Any]?,
+    userPropertiesSetOnce: [String: Any]?,
+    distinctIdOverride: String,
+    eventId: String?
   ) {
     guard !closeFlag.isClosed else { return }
 
@@ -835,6 +900,7 @@ actor EventLog: EventLogProtocol {
     if let userPropertiesSetOnce { custom["$set_once"] = userPropertiesSetOnce }
 
     let payload = TrackPayload(
+      eventId: eventId,
       name: event,
       properties: custom,
       forcedDistinctId: distinctIdOverride,
@@ -852,6 +918,7 @@ actor EventLog: EventLogProtocol {
   ) {
     guard !closeFlag.isClosed, !event.isEmpty else { return }
     captureContinuation.yield(.track(TrackPayload(
+      eventId: nil,
       name: event,
       properties: properties ?? [:],
       forcedDistinctId: distinctIdOverride,
@@ -1509,6 +1576,7 @@ actor EventLog: EventLogProtocol {
     finalProperties["$distinct_id"] = p.forcedDistinctId
 
     let nuxieEvent = NuxieEvent(
+      id: p.eventId ?? UUID.v7().uuidString,
       name: p.name,
       distinctId: p.forcedDistinctId,
       properties: finalProperties
@@ -1523,7 +1591,7 @@ actor EventLog: EventLogProtocol {
       var transformedProperties = transformedEvent.properties
       transformedProperties["$distinct_id"] = p.forcedDistinctId
       return NuxieEvent(
-        id: transformedEvent.id,
+        id: p.eventId ?? transformedEvent.id,
         name: transformedEvent.name,
         forwardingName: nuxieEvent.forwardingName,
         distinctId: p.forcedDistinctId,

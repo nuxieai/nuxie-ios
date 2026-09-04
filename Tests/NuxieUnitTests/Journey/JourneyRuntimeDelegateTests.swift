@@ -4,6 +4,107 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyRuntimeDelegateTests: JourneyTestCase {
+    func testRuntimeDelegateForwardsScopedPresentationTraceMilestones() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = try await authenticatedRenderedSnapshot(fixture)
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[
+            arm.reference.descriptorSha256
+        ])
+        let recorder = InMemoryExperiencePresentationTrace()
+        let attempt = ExperiencePresentationAttempt(
+            id: "journey-presentation",
+            triggerEvent: "upgrade_tapped",
+            startedAt: Date(timeIntervalSince1970: 10),
+            startedAtMonotonicTime: 100
+        )
+        let request = JourneyPresentationRequest(
+            release: release,
+            delivery: snapshot.profile.delivery,
+            screenId: "screen_welcome",
+            owner: .init(
+                journeyId: "journey-trace",
+                distinctId: "customer-trace"
+            ),
+            reservation: nil,
+            presentationTraceContext: .init(
+                attempt: attempt,
+                recorder: recorder
+            ),
+            onEmissionBatch: { _ in true },
+            onOutcome: { _, _ in true }
+        )
+        let delegate = await MainActor.run {
+            JourneyRuntimeDelegate(request: request)
+        }
+        let controller = await MainActor.run {
+            MockExperienceViewController(mockExperienceVersionId: "version_golden")
+        }
+        let token = try await MainActor.run {
+            try XCTUnwrap(delegate.activePresentationTraceToken)
+        }
+
+        await MainActor.run {
+            delegate.experienceViewControllerDidBecomeReady(
+                controller,
+                traceToken: .init(id: UUID())
+            )
+            delegate.experienceViewControllerDidBecomeReady(
+                controller,
+                traceToken: token
+            )
+            delegate.experienceViewControllerDidPresentShell(
+                controller,
+                traceToken: token
+            )
+        }
+        await delegate.experienceViewControllerDidReveal(
+            controller,
+            traceToken: token
+        )
+        await MainActor.run {
+            delegate.experienceViewController(
+                controller,
+                didPresentDrawable: .init(
+                    presentedTime: 101,
+                    frameNumber: 7,
+                    pixelWidth: 20,
+                    pixelHeight: 30,
+                    drawCalls: 4,
+                    provenance: .injectedTestObserver
+                ),
+                screenId: "screen_welcome",
+                frameNumber: 7,
+                traceToken: token
+            )
+            delegate.experienceViewController(
+                controller,
+                didAcceptPointerInput: .init(eventCount: 2),
+                screenId: "screen_welcome",
+                traceToken: token
+            )
+            delegate.experienceViewControllerDidFinishPresentation(
+                controller,
+                traceToken: token
+            )
+        }
+
+        XCTAssertEqual(recorder.events(for: attempt.id).map(\.stage), [
+            .runtimeReady,
+            .shellPresented,
+            .revealed,
+            .firstPresentedDrawable(
+                screenId: "screen_welcome",
+                frameNumber: 7,
+                pixels: 600,
+                drawCalls: 4,
+                provenance: .injectedTestObserver
+            ),
+            .firstAcceptedInput(screenId: "screen_welcome", eventCount: 2),
+            .presentationCleanupCompleted,
+        ])
+    }
+
     func testRuntimeDelegateProvidesIntroEligibilityAuthorizationForItsOwner() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = try await authenticatedRenderedSnapshot(fixture)

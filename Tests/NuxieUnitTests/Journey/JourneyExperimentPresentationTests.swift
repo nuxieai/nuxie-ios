@@ -82,7 +82,9 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             exposures.first?.properties["assignment_source"] as? String,
             "profile"
         )
-        XCTAssertEqual(exposures.first?.properties["is_holdout"] as? Bool, true)
+        // Exposure metadata comes from the authenticated variant definition,
+        // not the untrusted assignment hint supplied above.
+        XCTAssertEqual(exposures.first?.properties["is_holdout"] as? Bool, false)
         let shownRuns = try await journal.runs()
         let shownRun = try XCTUnwrap(shownRuns.first)
         let shownExposure = try XCTUnwrap(shownRun.experimentExposures.first)
