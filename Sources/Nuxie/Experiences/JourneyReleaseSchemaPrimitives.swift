@@ -8,7 +8,7 @@ enum JourneyReleaseSchemaPrimitives {
             root["identity"],
             required: [
                 "appId", "environment", "experienceId", "experienceVersionId",
-                "versionNumber", "buildId", "releaseCreatedAt", "releaseSequence",
+                "versionNumber", "buildId", "publishedAt", "publishedAtSeq",
             ],
             path: "identity"
         )
@@ -41,35 +41,27 @@ enum JourneyReleaseSchemaPrimitives {
                 values: ["subscription", "consumable", "nonConsumable"],
                 path: "\(path).type"
             )
-            let storeValue = try dictionary(product["store"], path: "\(path).store")
-            guard let platform = storeValue["platform"] as? String else {
+            let rawStore = try dictionary(product["store"], path: "\(path).store")
+            guard let platform = rawStore["platform"] as? String else {
                 try invalid("\(path).store.platform")
             }
             let store: [String: Any]
             switch platform {
             case "apple_app_store":
                 store = try object(
-                    storeValue,
+                    rawStore,
                     required: ["platform", "productId", "productType"],
                     path: "\(path).store"
                 )
             case "google_play":
                 store = try object(
-                    storeValue,
-                    required: ["platform", "productId", "productType"],
-                    optional: ["basePlanId", "purchaseOptionId"],
+                    rawStore,
+                    required: [
+                        "platform", "productId", "productType", "basePlanId",
+                        "purchaseOptionId",
+                    ],
                     path: "\(path).store"
                 )
-                for field in ["basePlanId", "purchaseOptionId"] {
-                    if let value = store[field], !(value is NSNull) {
-                        try boundedString(
-                            value,
-                            minimum: 1,
-                            maximumUTF16: 256,
-                            path: "\(path).store.\(field)"
-                        )
-                    }
-                }
             default:
                 try invalid("\(path).store.platform")
             }
@@ -98,16 +90,35 @@ enum JourneyReleaseSchemaPrimitives {
                 guard productType == storeProductType else {
                     try invalid("\(path).store.productType")
                 }
-                let basePlanID = store["basePlanId"] as? String
-                let purchaseOptionID = store["purchaseOptionId"] as? String
+                let basePlanId = store["basePlanId"]
+                let purchaseOptionId = store["purchaseOptionId"]
+                if !(basePlanId is NSNull) {
+                    try boundedString(
+                        basePlanId,
+                        minimum: 1,
+                        maximumUTF16: 256,
+                        path: "\(path).store.basePlanId"
+                    )
+                }
+                if !(purchaseOptionId is NSNull) {
+                    try boundedString(
+                        purchaseOptionId,
+                        minimum: 1,
+                        maximumUTF16: 256,
+                        path: "\(path).store.purchaseOptionId"
+                    )
+                }
                 if productType == "subscription" {
-                    guard basePlanID != nil, purchaseOptionID == nil else {
+                    guard !(basePlanId is NSNull), purchaseOptionId is NSNull else {
                         try invalid("\(path).store.basePlanId")
                     }
-                } else if basePlanID != nil {
-                    try invalid("\(path).store.basePlanId")
+                } else {
+                    guard basePlanId is NSNull else {
+                        try invalid("\(path).store.basePlanId")
+                    }
                 }
-            default: break
+            default:
+                break
             }
             let preview = try object(
                 product["preview"],
@@ -245,7 +256,9 @@ enum JourneyReleaseSchemaPrimitives {
             return (
                 id: product["id"] as! String,
                 platform: platform,
-                storeKey: "\(platform)\u{0}\(store["productId"] as! String)"
+                storeKey: platform == "google_play"
+                    ? "\(platform)\u{0}\(store["productId"] as! String)\u{0}\((store["basePlanId"] as? String) ?? "")\u{0}\((store["purchaseOptionId"] as? String) ?? "")"
+                    : "\(platform)\u{0}\(store["productId"] as! String)"
             )
         }
         guard products.count <= JourneyReleaseLimits.productCount,

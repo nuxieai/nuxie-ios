@@ -89,7 +89,7 @@ final class JourneyPlaneProfileTests: XCTestCase {
     }
 
     func testRejectsInvalidReleaseValuesBeforeReplacingDelivery() throws {
-        for variant in ["version", "sequence", "environment", "releaseCreatedAt", "algorithm", "size", "base64"] {
+        for variant in ["version", "sequence", "environment", "publishedAt", "algorithm", "size", "base64"] {
             var root = try fixture()
             var entries = try XCTUnwrap(root["releases"] as? [[String: Any]])
             var entry = entries[0]
@@ -97,9 +97,9 @@ final class JourneyPlaneProfileTests: XCTestCase {
             var envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
             switch variant {
             case "version": locator["versionNumber"] = 0
-            case "sequence": locator["releaseSequence"] = -1
+            case "sequence": locator["publishedAtSeq"] = -1
             case "environment": locator["environment"] = "unknown"
-            case "releaseCreatedAt": locator["releaseCreatedAt"] = "2026-02-31T00:00:00Z"
+            case "publishedAt": locator["publishedAt"] = "2026-02-31T00:00:00Z"
             case "size": envelope["descriptorSizeBytes"] = -1
             case "base64": envelope["descriptorBytesBase64"] = "???"
             default:

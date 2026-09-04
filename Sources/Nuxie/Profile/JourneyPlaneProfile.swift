@@ -31,15 +31,14 @@ struct JourneyReleaseProfileEntry {
         let experienceVersionId: String
         let versionNumber: Int
         let buildId: String
-        let releaseCreatedAt: String
-        let releaseSequence: Int
+        let publishedAt: String
+        let publishedAtSeq: Int
         let legId: String
 
         var identity: JourneyReleaseIdentity {
             .init(appId: appId, environment: environment, experienceId: experienceId,
                   experienceVersionId: experienceVersionId, buildId: buildId,
-                  versionNumber: versionNumber, releaseCreatedAt: releaseCreatedAt,
-                  releaseSequence: releaseSequence)
+                  versionNumber: versionNumber, publishedAt: publishedAt, publishedAtSeq: publishedAtSeq)
         }
     }
     let locator: Locator
@@ -98,13 +97,7 @@ struct JourneyPlaneProfile {
         }
         for value in try list(root["releases"]) {
             let release = try exact(value, ["locator", "envelope"])
-            let locator = try exact(
-                release["locator"],
-                [
-                    "appId", "environment", "experienceId", "experienceVersionId",
-                    "versionNumber", "buildId", "releaseCreatedAt", "releaseSequence", "legId",
-                ]
-            )
+            let locator = try exact(release["locator"], ["appId", "environment", "experienceId", "experienceVersionId", "versionNumber", "buildId", "publishedAt", "publishedAtSeq", "legId"])
             try digest(locator["legId"])
             let envelope = try exact(release["envelope"], ["mediaType", "encoding", "descriptorSha256", "descriptorSizeBytes", "descriptorBytesBase64", "signature"])
             try digest(envelope["descriptorSha256"])

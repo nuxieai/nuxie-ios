@@ -68,8 +68,8 @@ final class NativeStoreKitServiceFixture: @unchecked Sendable {
                     experienceVersionId: "storekit-test-version",
                     buildId: "storekit-test-build",
                     versionNumber: 1,
-                    releaseCreatedAt: "2026-08-23T00:00:00Z",
-                    releaseSequence: 1
+                    publishedAt: "2026-08-23T00:00:00Z",
+                    publishedAtSeq: 1
                 ),
                 descriptorSHA256: String(repeating: "a", count: 64)
             ),

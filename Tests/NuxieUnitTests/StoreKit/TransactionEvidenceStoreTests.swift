@@ -1072,8 +1072,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
                     experienceVersionId: "projection-version",
                     buildId: "projection-build",
                     versionNumber: 1,
-                    releaseCreatedAt: "2026-08-30T00:00:00Z",
-                    releaseSequence: 1
+                    publishedAt: "2026-08-30T00:00:00Z",
+                    publishedAtSeq: 1
                 ),
                 descriptorSHA256: String(repeating: "d", count: 64)
             ),

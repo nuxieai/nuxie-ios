@@ -218,7 +218,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
         nonisolated(unsafe) var mockExperienceService: MockExperienceService!
         nonisolated(unsafe) var mockEventLog: MockEventLog!
         nonisolated(unsafe) var mockWindowProvider: MockWindowProvider!
-        
+
         beforeEach { @MainActor in
             // Setup mock flow service
             mockExperienceService = MockExperienceService()
@@ -320,12 +320,12 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 assetBaseUrl: "https://assets.nuxie.test/assets/"
             )
         }
-        
+
         afterEach { @MainActor in
             // Clean up
             mockWindowProvider.reset()
         }
-        
+
         describe("Journey presentation") {
             context("when presenting for a journey") {
             }
@@ -1078,7 +1078,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 }
 
             }
-            
+
             context("when window scene is not available") {
                 beforeEach { @MainActor in
                     mockWindowProvider.simulateNoScene()
@@ -1089,13 +1089,13 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         ownerDistinctId: "user-1"
                     )).to(beNil())
                 }
-                
+
             }
-            
+
             context("when flow service fails") {
             }
         }
-        
+
         describe("dismissCurrentExperience") {
             it("treats host dismissal as a no-op when no experience is presented") { @MainActor in
                 expect(service.isExperiencePresented).to(beFalse())
@@ -1109,22 +1109,22 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             it("should handle dismissal when no flow is presented") { @MainActor in
                 // No flow presented
                 expect(service.isExperiencePresented).to(beFalse())
-                
+
                 // Should not crash
                 await service.dismissCurrentExperience()
-                
+
                 // Still no flow
                 expect(service.isExperiencePresented).to(beFalse())
             }
 
         }
-        
+
         describe("isExperiencePresented") {
         }
-        
+
         describe("journey integration") {
         }
-        
+
         describe("window management") {
         }
     }
