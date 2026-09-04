@@ -229,7 +229,7 @@ final class JourneyReleaseTests: XCTestCase {
             var leg = try XCTUnwrap(root["leg"] as? [String: Any])
             switch variant {
             case "cursor": leg["steps"] = [["kind": "action", "id": "report", "action": ["type": "send_event", "eventName": "hello"], "outlets": ["next": "another-leg"]]]
-            case "server": leg["steps"] = [["kind": "action", "id": "report", "action": ["type": "grant_entitlement", "featureId": "paid", "unlimited": true], "outlets": [:]]]
+            case "server": leg["steps"] = [["kind": "action", "id": "report", "action": ["type": "connector_action", "accountRef": "account", "toolKey": "send", "payload": [:], "timeoutMs": 1_000], "outlets": [:]]]
             case "chain": root["serverLegs"] = []
             case "fact": leg["entryCondition"] = ["type": "segment", "segmentId": "opaque", "member": false]
             case "schema": leg["schemaVersion"] = "future"

@@ -55,7 +55,7 @@
       "descriptor": {}
     },
     {
-      "name": "server action grant_entitlement",
+      "name": "server action connector_action",
       "valid": false,
       "entry": "entry",
       "leg": {
@@ -64,9 +64,11 @@
             "kind": "action",
             "id": "report",
             "action": {
-              "type": "grant_entitlement",
-              "featureId": "paid",
-              "unlimited": true
+              "type": "connector_action",
+              "accountRef": "account",
+              "toolKey": "send",
+              "payload": {},
+              "timeoutMs": 1000
             },
             "outlets": {}
           }
