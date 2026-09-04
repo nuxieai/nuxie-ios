@@ -123,7 +123,7 @@ struct JourneyControlExecutor {
             return advance(outlets, outlet: selected, context: context)
         case .experiment:
             let control = try decode(CompiledExperiment.self, action)
-            guard control.variants.contains(where: {
+            guard let fallbackVariant = control.variants.first(where: {
                 $0.id == control.fallbackVariantId
             }) else { return .invalid }
             let assignment: JourneyFactTable.Assignment?
@@ -136,9 +136,10 @@ struct JourneyControlExecutor {
             let hasAssignedVariant = control.variants.contains {
                 $0.id == assignedVariantId
             }
-            let selected = hasAssignedVariant
-                ? assignedVariantId!
-                : control.fallbackVariantId
+            let selectedVariant = hasAssignedVariant
+                ? control.variants.first { $0.id == assignedVariantId }!
+                : fallbackVariant
+            let selected = selectedVariant.id
             let source: ExperimentSelection.Source = hasAssignedVariant
                 ? .profile
                 : .fallback
@@ -149,9 +150,7 @@ struct JourneyControlExecutor {
                 experimentSelection: .init(
                     experimentId: control.experimentId,
                     variantId: selected,
-                    isHoldout: hasAssignedVariant
-                        ? assignment?.isHoldout ?? false
-                        : false,
+                    isHoldout: selectedVariant.isHoldout,
                     source: source
                 )
             )
@@ -242,7 +241,7 @@ private struct CompiledCondition: Decodable {
     let branches: [Branch]
 }
 private struct CompiledExperiment: Decodable {
-    struct Variant: Decodable { let id: String }
+    struct Variant: Decodable { let id: String; let isHoldout: Bool }
     let experimentId: String
     let fallbackVariantId: String
     let variants: [Variant]

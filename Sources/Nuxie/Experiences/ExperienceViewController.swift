@@ -1554,7 +1554,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         presentationRevealTask = Task { @MainActor [weak self] in
             guard let self else { return }
             if let scopedDelegate = delegate as? any ExperiencePresentationScopedTraceDelegate {
-                scopedDelegate.experienceViewControllerDidReveal(
+                await scopedDelegate.experienceViewControllerDidReveal(
                     self,
                     traceToken: traceToken
                 )

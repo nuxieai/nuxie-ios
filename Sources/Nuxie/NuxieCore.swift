@@ -30,10 +30,10 @@ struct NuxieCoreOverrides {
   var journeyPresentation: (any JourneyPresenting)?
   /// Explicit test-host control for presentation diagnostics.
   var presentationDiagnosticsEnabled: Bool?
-  /// Qualification-only correlation installed before lifecycle restoration
-  /// begins so a relaunched presentation remains attributable to the current
-  /// user-observed retry attempt.
-  var restoredPresentationAttempt: ExperiencePresentationAttempt?
+  /// Qualification-only correlation installed before lifecycle restoration.
+  /// The ordinary event and Journey lanes remain the execution authority.
+  var qualificationPresentationAttempt: ExperiencePresentationAttempt?
+  var restoredJourneyPresentationAttempt: ExperiencePresentationAttempt?
 
   init(presentationDiagnosticsEnabled: Bool? = nil) {
     self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
@@ -70,6 +70,7 @@ final class NuxieCore: @unchecked Sendable {
   let userTransitions: UserTransitionCoordinator
   let systemEvents: SystemEventSink
   let presentationTrace: ExperiencePresentationTraceRecording
+  let journeyPresentationTrace: JourneyPresentationTraceCoordinator
 
   init(
     configuration: NuxieSetupConfiguration,
@@ -85,6 +86,11 @@ final class NuxieCore: @unchecked Sendable {
     let sleepProvider = overrides.sleepProvider ?? SystemSleepProvider()
     let presentationTrace = overrides.presentationTrace
       ?? DisabledExperiencePresentationTrace()
+    let journeyPresentationTrace = JourneyPresentationTraceCoordinator(
+      recorder: presentationTrace,
+      qualificationAttempt: overrides.qualificationPresentationAttempt,
+      restoredAttempt: overrides.restoredJourneyPresentationAttempt
+    )
     let api = overrides.api ?? NuxieApi(
       apiKey: configuration.apiKey,
       baseURL: configuration.apiEndpoint,
@@ -213,6 +219,7 @@ final class NuxieCore: @unchecked Sendable {
           appActionHandler: appActionHandler
         ),
         presenter: journeyPresentation,
+        presentationTrace: journeyPresentationTrace,
         pinnedReleaseAuthenticator: { entry, reference in
           try await journeyProfiles.authenticatePinnedRelease(
             entry,
@@ -383,6 +390,7 @@ final class NuxieCore: @unchecked Sendable {
     self.userTransitions = userTransitions
     self.systemEvents = systemEvents
     self.presentationTrace = presentationTrace
+    self.journeyPresentationTrace = journeyPresentationTrace
   }
 
   convenience init(

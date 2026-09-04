@@ -73,6 +73,59 @@ final class JourneyControlExecutorTests: XCTestCase {
         if case .invalid = executor.selectOutlet(purchase, outlet: "failed", context: context) {} else { XCTFail() }
     }
 
+    func testExperimentUsesAuthenticatedVariantHoldoutMetadata() throws {
+        let executor = JourneyControlExecutor(
+            timezones: try SignedTimezoneBundle.load(),
+            currentDeviceTimezone: TimeZone(identifier: "Etc/UTC")!,
+            appDefaultTimezone: "Etc/UTC"
+        )
+        let step = Journey.Step(
+            kind: .action,
+            id: "experiment",
+            action: [
+                "type": .string("experiment"),
+                "experimentId": .string("experiment_new"),
+                "fallbackVariantId": .string("fallback"),
+                "variants": .array([
+                    .object(["id": .string("assigned"), "isHoldout": .bool(false)]),
+                    .object(["id": .string("fallback"), "isHoldout": .bool(true)]),
+                ]),
+            ],
+            outlets: ["assigned": "a", "fallback": "b"],
+            outcome: nil
+        )
+        let context = ArmedJourney.Context(event: [:], responses: [:])
+
+        var assignments: ExactJSONObject<JourneyFactTable.Assignment?> = [:]
+        assignments["experiment_new"] = .init(
+            variantId: "assigned",
+            isHoldout: true
+        )
+        guard case .advance(_, _, let assigned?) = executor.evaluate(
+            step: step,
+            context: context,
+            assignments: assignments,
+            nowMillis: 0
+        ) else { return XCTFail("expected assigned experiment selection") }
+        XCTAssertEqual(assigned.variantId, "assigned")
+        XCTAssertFalse(assigned.isHoldout)
+        XCTAssertEqual(assigned.source, .profile)
+
+        assignments["experiment_new"] = .init(
+            variantId: "removed",
+            isHoldout: false
+        )
+        guard case .advance(_, _, let fallback?) = executor.evaluate(
+            step: step,
+            context: context,
+            assignments: assignments,
+            nowMillis: 0
+        ) else { return XCTFail("expected fallback experiment selection") }
+        XCTAssertEqual(fallback.variantId, "fallback")
+        XCTAssertTrue(fallback.isHoldout)
+        XCTAssertEqual(fallback.source, .fallback)
+    }
+
     private func fixture(_ name: String) -> URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/\(name)")

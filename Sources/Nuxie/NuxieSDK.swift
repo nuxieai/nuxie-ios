@@ -354,12 +354,29 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   ) {
     guard let operation = runningOperation() else { return }
     defer { operation.finish() }
-    operation.graph.core.eventLog.track(
-      event,
-      properties: properties,
-      userProperties: nil,
-      userPropertiesSetOnce: nil
+    let core = operation.graph.core
+    let timestamp = ExperiencePresentationTimestamp.now(
+      wallClock: core.dateProvider.now()
     )
+    if let correlation = core.journeyPresentationTrace.beginTrigger(
+      event: event,
+      at: timestamp
+    ) {
+      core.eventLog.track(
+        event,
+        properties: properties,
+        userProperties: nil,
+        userPropertiesSetOnce: nil,
+        eventId: correlation.eventId
+      )
+    } else {
+      core.eventLog.track(
+        event,
+        properties: properties,
+        userProperties: nil,
+        userPropertiesSetOnce: nil
+      )
+    }
   }
 
   // MARK: - User Management

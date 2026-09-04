@@ -56,6 +56,7 @@ struct JourneyPresentationRequest: Sendable {
     let screenId: String
     let owner: JourneyPresentationOwner
     let reservation: (any JourneyPresentationReservation)?
+    let presentationTraceContext: ExperiencePresentationTraceContext?
     let onScreenChanged:
         @MainActor @Sendable (String) async -> Bool
     let onScreenDismissed:
@@ -84,6 +85,7 @@ struct JourneyPresentationRequest: Sendable {
         screenId: String,
         owner: JourneyPresentationOwner,
         reservation: (any JourneyPresentationReservation)?,
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil,
         onScreenChanged:
             @escaping @MainActor @Sendable (String) async -> Bool = { _ in true },
         onScreenDismissed:
@@ -115,6 +117,7 @@ struct JourneyPresentationRequest: Sendable {
         self.screenId = screenId
         self.owner = owner
         self.reservation = reservation
+        self.presentationTraceContext = presentationTraceContext
         self.onScreenChanged = onScreenChanged
         self.onScreenDismissed = onScreenDismissed
         self.onProductsUnavailable = onProductsUnavailable
@@ -221,6 +224,9 @@ final class JourneyRuntimeDelegate {
     nonisolated let introEligibilityAuthorizationContext:
         IntroEligibilityAuthorizationContext
     nonisolated private let journeyId: String
+    private(set) var presentationTraceContext:
+        ExperiencePresentationTraceContext?
+    private let presentationTraceToken: ExperiencePresentationTraceToken?
     private let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch) async -> Bool
     nonisolated private let onPermissionEvent:
@@ -263,6 +269,10 @@ final class JourneyRuntimeDelegate {
             descriptorSha256: request.release.descriptorSHA256
         )
         journeyId = request.owner.journeyId
+        presentationTraceContext = request.presentationTraceContext
+        presentationTraceToken = request.presentationTraceContext.map { _ in
+            ExperiencePresentationTraceToken(id: UUID())
+        }
         initialScreenId = request.screenId
         onScreenChanged = request.onScreenChanged
         onScreenDismissed = request.onScreenDismissed
@@ -648,6 +658,96 @@ final class JourneyRuntimeDelegate {
 }
 
 extension JourneyRuntimeDelegate: ExperienceRuntimeDelegate {}
+
+extension JourneyRuntimeDelegate: ExperiencePresentationTraceContextProviding {}
+
+extension JourneyRuntimeDelegate: ExperiencePresentationScopedTraceDelegate {
+    var activePresentationTraceToken: ExperiencePresentationTraceToken? {
+        presentationTraceToken
+    }
+
+    func experienceViewControllerDidBecomeReady(
+        _ controller: ExperienceViewController,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {
+        guard acceptsPresentationTraceToken(traceToken) else { return }
+        presentationTraceContext?.record(.runtimeReady)
+    }
+
+    func experienceViewControllerDidPresentShell(
+        _ controller: ExperienceViewController,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {
+        guard acceptsPresentationTraceToken(traceToken) else { return }
+        presentationTraceContext?.record(.shellPresented)
+    }
+
+    func experienceViewControllerDidReveal(
+        _ controller: ExperienceViewController,
+        traceToken: ExperiencePresentationTraceToken?
+    ) async {
+        if acceptsPresentationTraceToken(traceToken) {
+            presentationTraceContext?.record(.revealed)
+        }
+        await experienceViewControllerDidReveal(controller)
+    }
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didPresentDrawable drawable: ExperienceRuntimePresentedDrawable,
+        screenId: String,
+        frameNumber: UInt64,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {
+        guard acceptsPresentationTraceToken(traceToken),
+              let context = presentationTraceContext else { return }
+        let observedAt = ExperiencePresentationTimestamp.now()
+        context.recorder.record(
+            attempt: context.attempt,
+            stage: .firstPresentedDrawable(
+                screenId: screenId,
+                frameNumber: frameNumber,
+                pixels: UInt64(drawable.pixelWidth) * UInt64(drawable.pixelHeight),
+                drawCalls: drawable.drawCalls,
+                provenance: drawable.provenance
+            ),
+            timestamp: .anchored(
+                monotonicTime: drawable.presentedTime,
+                observedAt: observedAt
+            )
+        )
+    }
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput,
+        screenId: String,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {
+        guard acceptsPresentationTraceToken(traceToken) else { return }
+        presentationTraceContext?.record(.firstAcceptedInput(
+            screenId: screenId,
+            eventCount: input.eventCount
+        ))
+    }
+
+    func experienceViewControllerDidFinishPresentation(
+        _ controller: ExperienceViewController,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {
+        if acceptsPresentationTraceToken(traceToken) {
+            presentationTraceContext?.record(.presentationCleanupCompleted)
+        }
+        experienceViewControllerDidFinishPresentation(controller)
+    }
+
+    private func acceptsPresentationTraceToken(
+        _ traceToken: ExperiencePresentationTraceToken?
+    ) -> Bool {
+        guard let presentationTraceToken else { return false }
+        return traceToken == presentationTraceToken
+    }
+}
 
 extension JourneyRuntimeDelegate:
     IntroEligibilityAuthorizationContextProviding {}

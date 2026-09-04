@@ -126,6 +126,7 @@ actor JourneyService {
     private let storeEntitlements: StoreEntitlementLookup
     private let dispatcher: any JourneyDispatching
     private let presenter: (any JourneyPresenting)?
+    private let presentationTrace: JourneyPresentationTraceCoordinator
     private let pinnedReleaseAuthenticator: PinnedReleaseAuthenticator
     private let timezones: SignedTimezoneBundle
     private let currentDeviceTimezone: TimeZone
@@ -186,6 +187,9 @@ actor JourneyService {
         storeEntitlements: @escaping StoreEntitlementLookup = { [] },
         dispatcher: any JourneyDispatching,
         presenter: (any JourneyPresenting)? = nil,
+        presentationTrace: JourneyPresentationTraceCoordinator = .init(
+            recorder: DisabledExperiencePresentationTrace()
+        ),
         pinnedReleaseAuthenticator: @escaping PinnedReleaseAuthenticator,
         timezones: SignedTimezoneBundle,
         currentDeviceTimezone: TimeZone = .current,
@@ -214,6 +218,7 @@ actor JourneyService {
         self.storeEntitlements = storeEntitlements
         self.dispatcher = dispatcher
         self.presenter = presenter
+        self.presentationTrace = presentationTrace
         self.pinnedReleaseAuthenticator = pinnedReleaseAuthenticator
         self.timezones = timezones
         self.currentDeviceTimezone = currentDeviceTimezone
@@ -562,6 +567,21 @@ extension JourneyService {
         _ event: NuxieEvent,
         admittedProfileGeneration: UInt64?
     ) async {
+        let traceTimestamp = ExperiencePresentationTimestamp.now(
+            wallClock: dateProvider.now()
+        )
+        let presentationAttempt = presentationTrace.consumeEvent(
+            id: event.id,
+            at: traceTimestamp
+        )
+        defer {
+            if let presentationAttempt {
+                presentationTrace.completeRouting(
+                    presentationAttempt,
+                    at: .now(wallClock: dateProvider.now())
+                )
+            }
+        }
         let directlyRoutedRunId = await presentationPublications
             .consumeDirectRoute(eventId: event.id)
         guard initialized,
@@ -589,7 +609,12 @@ extension JourneyService {
         for arm in state.snapshot.profile.armedLegs
         where arm.entryCondition.type == .event
             && arm.entryCondition.eventName == event.name {
-            await attemptStart(arm, state: state, event: event)
+            await attemptStart(
+                arm,
+                state: state,
+                event: event,
+                presentationAttempt: presentationAttempt
+            )
         }
         await scheduleNextWake()
     }
@@ -964,7 +989,8 @@ private extension JourneyService {
     private func attemptStart(
         _ arm: ArmedJourney,
         state: ProfileState,
-        event: NuxieEvent?
+        event: NuxieEvent?,
+        presentationAttempt: ExperiencePresentationAttempt? = nil
     ) async {
         let stateKey = StateArmKey(arm)
         guard arm.entryCondition.type == .event
@@ -1079,6 +1105,14 @@ private extension JourneyService {
                         executionFenceToken: executionFenceToken
                     )
                     return
+                }
+                if let presentationAttempt {
+                    presentationTrace.bind(
+                        presentationAttempt,
+                        toRunId: run.id,
+                        journeyId: run.journeyId,
+                        at: .now(wallClock: dateProvider.now())
+                    )
                 }
                 let reporter = JourneyReporter(journal: journal, events: events)
                 try await reporter.flushPending()
@@ -1221,10 +1255,7 @@ private extension JourneyService {
                     journal: journal,
                     executionFenceToken: executionFenceToken
                 ) else { continue }
-                guard let executionSnapshot = parked.executionSnapshot else {
-                    await abandon(parked, journal: journal)
-                    continue
-                }
+                let executionSnapshot = parked.executionSnapshot
                 guard executionFence.isCurrent(executionFenceToken),
                       isCurrentIdentity(journal: journal) else {
                     return
@@ -2056,17 +2087,7 @@ private extension JourneyService {
             (any JourneyPresentationReservation)? = nil
     ) async {
         let leg = release.descriptor.leg
-        guard let executionSnapshot = initial.executionSnapshot else {
-            await finish(
-                initial,
-                outcome: "abandoned",
-                leg: leg,
-                journal: journal,
-                dismissPresentation: dismissPresentationOnCompletion,
-                executionFenceToken: executionFenceToken
-            )
-            return
-        }
+        let executionSnapshot = initial.executionSnapshot
         var coordinator = JourneyRunExecutionCoordinator(
             run: initial,
             assignments: executionSnapshot.assignments,
@@ -2266,6 +2287,14 @@ private extension JourneyService {
                     }
                     let presentedRun = run
                     let presentationIdentityFenceToken = identityFence.token
+                    let presentationTraceContext = presentationTrace
+                        .beginPresentation(
+                            runId: presentedRun.id,
+                            journeyId: presentedRun.journeyId,
+                            experienceVersionId: release.descriptor.identity
+                                .experienceVersionId,
+                            at: .now(wallClock: dateProvider.now())
+                        )
                     let result = await presenter.presentJourney(.init(
                         release: release,
                         delivery: executionSnapshot.delivery,
@@ -2276,6 +2305,7 @@ private extension JourneyService {
                             distinctId: journal.distinctId
                         ),
                         reservation: reserved,
+                        presentationTraceContext: presentationTraceContext,
                         onScreenChanged: { [weak self] changedScreenId in
                             guard let self else { return false }
                             return await self.handlePresentationScreenChanged(

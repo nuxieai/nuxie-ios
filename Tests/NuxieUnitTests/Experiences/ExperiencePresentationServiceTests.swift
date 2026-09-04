@@ -79,7 +79,7 @@ extension ExperiencePresentationLifecycleRecorder: ExperiencePresentationScopedT
     func experienceViewControllerDidReveal(
         _ controller: ExperienceViewController,
         traceToken: ExperiencePresentationTraceToken?
-    ) {}
+    ) async {}
 
     func experienceViewController(
         _ controller: ExperienceViewController,
