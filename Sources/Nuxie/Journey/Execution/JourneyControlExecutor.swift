@@ -113,11 +113,7 @@ struct JourneyControlExecutor {
               let rawType = JourneyActionType.rawValue(in: action) else {
             return .invalid
         }
-        guard let type = JourneyActionType(rawValue: rawType) else {
-            // A release already admitted under an older SDK must remain
-            // resumable when a future operation reaches this executor.
-            return .dispatch(stepId: step.id, action: action)
-        }
+        guard let type = JourneyActionType(rawValue: rawType) else { return .invalid }
         switch type {
         case .condition:
             let control = try decode(CompiledCondition.self, action)
@@ -210,7 +206,7 @@ struct JourneyControlExecutor {
             }
             if nowMillis >= current.wakeAtMillis { return advance(outlets, outlet: "timeout", context: context) }
             return .park(stepId: step.id, checkpoint: current)
-        case .connectorAction, .grantEntitlement:
+        case .connectorAction:
             return .invalid
         default:
             return .dispatch(stepId: step.id, action: action)

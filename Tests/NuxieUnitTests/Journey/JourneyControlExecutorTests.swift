@@ -59,6 +59,12 @@ final class JourneyControlExecutorTests: XCTestCase {
         let delay = Journey.Step(kind: .action, id: "delay",
                                    action: ["type": .string("delay"), "durationMs": .number(1)], outlets: [:], outcome: nil)
         if case .invalid = executor.evaluate(step: delay, context: context, assignments: [:], nowMillis: .max) {} else { XCTFail() }
+        for type in ["future_action", "connector_action"] {
+            let step = Journey.Step(kind: .action, id: type,
+                                    action: ["type": .string(type)], outlets: [:], outcome: nil)
+            if case .invalid = executor.evaluate(step: step, context: context, assignments: [:], nowMillis: 0) {}
+            else { XCTFail(type) }
+        }
         let purchase = Journey.Step(kind: .action, id: "purchase", action: ["type": .string("purchase")],
                                       outlets: ["completed": "done"], outcome: nil)
         if case .advance(let step, _, _) = executor.selectOutlet(purchase, outlet: "completed", context: context) {

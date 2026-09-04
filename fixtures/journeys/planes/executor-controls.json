@@ -84,7 +84,7 @@
       "expected": { "kind": "advance", "stepId": "b" }
     },
     {
-      "id": "unassigned-experiment-uses-first-variant",
+      "id": "unassigned-experiment-uses-authored-fallback",
       "step": {
         "kind": "action",
         "id": "experiment",
@@ -93,8 +93,8 @@
           "experimentId": "experiment_new",
           "fallbackVariantId": "default",
           "variants": [
-            { "id": "default", "isHoldout": true },
-            { "id": "other", "isHoldout": false }
+            { "id": "other", "isHoldout": false },
+            { "id": "default", "isHoldout": true }
           ]
         },
         "outlets": { "default": "a", "other": "b" }
