@@ -9,6 +9,16 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    func testStateContractFailureRetainsItsReasonForArtifactTelemetry() {
+        let error = ExperienceInteractiveScreenError.stateContract(
+            "view model 'Experiment' does not resolve exactly once"
+        )
+        XCTAssertEqual(
+            error.localizedDescription,
+            "Experience state contract: view model 'Experiment' does not resolve exactly once"
+        )
+    }
+
     @MainActor
 
     func testPreparedAuthenticatedRIVOpensTwoRendererBoundScreensWithFreshState() async throws {
