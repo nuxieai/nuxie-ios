@@ -324,7 +324,7 @@ struct ExperienceInteractiveRenderOutcome: Equatable, Sendable {
     let drawCalls: UInt64
 }
 
-enum ExperienceInteractiveScreenError: Error, Equatable, Sendable {
+enum ExperienceInteractiveScreenError: LocalizedError, Equatable, Sendable {
     case screenNotFound(String)
     case journeyScreenNotFound(String)
     case invalidScreen(String)
@@ -332,6 +332,18 @@ enum ExperienceInteractiveScreenError: Error, Equatable, Sendable {
     case stateContract(String)
     case textInputNotFound(String)
     case textInputNotEditable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .screenNotFound(let id): "Experience screen not found: \(id)"
+        case .journeyScreenNotFound(let id): "Journey screen not found: \(id)"
+        case .invalidScreen(let reason): "Invalid experience screen: \(reason)"
+        case .assetContract(let reason): "Experience asset contract: \(reason)"
+        case .stateContract(let reason): "Experience state contract: \(reason)"
+        case .textInputNotFound(let id): "Experience text input not found: \(id)"
+        case .textInputNotEditable(let id): "Experience text input is not editable: \(id)"
+        }
+    }
 }
 
 /// The product policy half of the module. It consumes generic native trees and
