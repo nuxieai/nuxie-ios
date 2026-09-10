@@ -1081,7 +1081,8 @@ private extension JourneyService {
                     ),
                     executionSnapshot: .init(
                         delivery: state.snapshot.profile.delivery,
-                        assignments: state.snapshot.profile.facts.assignments
+                        assignments: state.snapshot.profile.facts.assignments,
+                        customer: try state.snapshot.profile.facts.customerValues()
                     ),
                     reentry: release.descriptor.leg.reentry,
                     entryStepId: release.descriptor.leg.entryStepId,
@@ -1284,6 +1285,7 @@ private extension JourneyService {
                            step: step,
                            context: parked.context,
                            assignments: executionSnapshot.assignments,
+                           customer: executionSnapshot.customer ?? [:],
                            checkpoint: checkpoint
                        ), let admission = journalCommitAdmission(
                            journal: journal,
@@ -2551,7 +2553,8 @@ private extension JourneyService {
                         distinctId: journal.distinctId,
                         identityFence: identityFence.token,
                         executionFence: executionFence,
-                        executionFenceToken: executionFenceToken
+                        executionFenceToken: executionFenceToken,
+                        customer: run.executionSnapshot.customer ?? [:]
                     ))
                 }
                 guard executionFence.isCurrent(executionFenceToken),

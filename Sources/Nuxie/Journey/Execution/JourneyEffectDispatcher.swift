@@ -73,6 +73,7 @@ struct JourneyDispatchRequest: Sendable {
     let identityFence: IdentityFenceToken
     let executionFence: JourneyProfileFence
     let executionFenceToken: JourneyProfileFenceToken
+    var customer: ExactJSONObject<JourneyReleaseJSONValue> = [:]
 }
 
 /// Admits the event store's final synchronous mutation only while both the
@@ -212,7 +213,7 @@ struct JourneyEffectDispatcher {
         _ request: JourneyDispatchRequest
     ) async -> JourneyDispatchResult {
         guard let action = decode(SendEvent.self, request.action),
-              let payload = resolve(action.payload ?? [:], context: request.context) else {
+              let payload = resolve(action.payload ?? [:], context: request.context, customer: request.customer) else {
             return .failed
         }
         var properties = payload
@@ -240,7 +241,7 @@ struct JourneyEffectDispatcher {
         _ request: JourneyDispatchRequest
     ) async -> JourneyDispatchResult {
         guard let action = decode(UpdateCustomer.self, request.action),
-              let attributes = resolve(action.attributes, context: request.context) else {
+              let attributes = resolve(action.attributes, context: request.context, customer: request.customer) else {
             return .failed
         }
         let attributeKeys = attributes.keys.sorted {
@@ -296,7 +297,7 @@ struct JourneyEffectDispatcher {
         _ request: JourneyDispatchRequest
     ) async -> JourneyDispatchResult {
         guard let action = decode(AppActionEffect.self, request.action),
-              let payload = action.payload.flatMap({ resolve($0, context: request.context) })
+              let payload = action.payload.flatMap({ resolve($0, context: request.context, customer: request.customer) })
                 ?? (action.payload == nil ? [:] : nil) else {
             return .failed
         }
@@ -409,11 +410,12 @@ struct JourneyEffectDispatcher {
 
     private func resolve(
         _ values: ExactJSONObject<JourneyValue>,
-        context: ArmedJourney.Context
+        context: ArmedJourney.Context,
+        customer: ExactJSONObject<JourneyReleaseJSONValue>
     ) -> [String: Any]? {
         var result: [String: Any] = [:]
         for (key, value) in values {
-            guard let resolved = JourneyValues.resolve(value, context: context),
+            guard let resolved = JourneyValues.resolve(value, context: context, customer: customer),
                   let foundation = foundationValue(resolved) else {
                 return nil
             }

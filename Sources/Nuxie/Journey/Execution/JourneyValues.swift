@@ -4,7 +4,7 @@ import Foundation
 /// absent field is unknown; explicit JSON null stays a known value. In
 /// particular, negation cannot turn an unavailable input into permission.
 enum JourneyValues {
-    static func resolve(_ value: JourneyValue, context: ArmedJourney.Context) -> JourneyReleaseJSONValue? {
+    static func resolve(_ value: JourneyValue, context: ArmedJourney.Context, customer: ExactJSONObject<JourneyReleaseJSONValue> = [:]) -> JourneyReleaseJSONValue? {
         switch value {
         case .null: return .null
         case .bool(let value): return .bool(value)
@@ -12,40 +12,41 @@ enum JourneyValues {
         case .string(let value): return .string(value)
         case .eventField(let key): return exactField(key, in: context.event)
         case .responseField(let key): return exactField(key, in: context.responses)
+        case .customerField(let key): return exactField(key, in: customer)
         case .array(let items):
             var result: [JourneyReleaseJSONValue] = []
             for item in items {
-                guard let resolved = resolve(item, context: context) else { return nil }
+                guard let resolved = resolve(item, context: context, customer: customer) else { return nil }
                 result.append(resolved)
             }
             return .array(result)
         case .object(let fields):
             var result: ExactJSONObject<JourneyReleaseJSONValue> = [:]
             for (key, value) in fields {
-                guard let resolved = resolve(value, context: context) else { return nil }
+                guard let resolved = resolve(value, context: context, customer: customer) else { return nil }
                 result[key] = resolved
             }
             return .object(result)
         }
     }
 
-    static func evaluate(_ condition: JourneyCondition, context: ArmedJourney.Context) -> Bool? {
+    static func evaluate(_ condition: JourneyCondition, context: ArmedJourney.Context, customer: ExactJSONObject<JourneyReleaseJSONValue> = [:]) -> Bool? {
         switch condition {
         case .truthy(let expression):
-            return resolve(expression, context: context).map(truthy)
+            return resolve(expression, context: context, customer: customer).map(truthy)
         case .not(let child):
-            return evaluate(child, context: context).map { !$0 }
+            return evaluate(child, context: context, customer: customer).map { !$0 }
         case .all(let children):
-            let results = children.map { evaluate($0, context: context) }
+            let results = children.map { evaluate($0, context: context, customer: customer) }
             if results.contains(false) { return false }
             return results.contains(nil) ? nil : true
         case .any(let children):
-            let results = children.map { evaluate($0, context: context) }
+            let results = children.map { evaluate($0, context: context, customer: customer) }
             if results.contains(true) { return true }
             return results.contains(nil) ? nil : false
         case .contains(let collection, let value):
-            guard let collection = resolve(collection, context: context),
-                  let value = resolve(value, context: context) else { return nil }
+            guard let collection = resolve(collection, context: context, customer: customer),
+                  let value = resolve(value, context: context, customer: customer) else { return nil }
             switch (collection, value) {
             case (.array(let items), _): return items.contains { equal($0, value) }
             case (.string(let text), .string(let needle)):
@@ -53,8 +54,8 @@ enum JourneyValues {
             default: return false
             }
         case .compare(let op, let left, let right):
-            guard let left = resolve(left, context: context),
-                  let right = resolve(right, context: context) else { return nil }
+            guard let left = resolve(left, context: context, customer: customer),
+                  let right = resolve(right, context: context, customer: customer) else { return nil }
             if op == "==" { return equal(left, right) }
             if op == "!=" { return !equal(left, right) }
             let less: Bool, same: Bool

@@ -1,4 +1,5 @@
 {
+  "customer": { "plan": "pro", "nullable": null },
   "context": {
     "event": {
       "null": null,
@@ -30,6 +31,9 @@
     }
   },
   "values": [
+    { "id": "customer-plan", "expression": { "type": "Customer.Field", "key": "plan" }, "known": true, "expected": "pro" },
+    { "id": "customer-missing", "expression": { "type": "Customer.Field", "key": "missing" }, "known": false, "expected": null },
+    { "id": "customer-null", "expression": { "type": "Customer.Field", "key": "nullable" }, "known": true, "expected": null },
     {
       "id": "missing_event",
       "expression": {
@@ -171,6 +175,8 @@
     }
   ],
   "conditions": [
+    { "id": "customer-pro", "expression": { "type": "Compare", "op": "==", "left": { "type": "Customer.Field", "key": "plan" }, "right": { "type": "String", "value": "pro" } }, "expected": true },
+    { "id": "customer-missing-not-pro", "expression": { "type": "Not", "condition": { "type": "Compare", "op": "==", "left": { "type": "Customer.Field", "key": "missing" }, "right": { "type": "String", "value": "pro" } } }, "expected": null },
     {
       "id": "unknown_negation",
       "expression": {

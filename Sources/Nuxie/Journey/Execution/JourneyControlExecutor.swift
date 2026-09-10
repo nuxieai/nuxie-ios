@@ -55,11 +55,12 @@ struct JourneyControlExecutor {
         context: ArmedJourney.Context,
         assignments: ExactJSONObject<JourneyFactTable.Assignment?>,
         nowMillis: Int64,
+        customer: ExactJSONObject<JourneyReleaseJSONValue> = [:],
         checkpoint: Checkpoint? = nil,
         signal: Signal = .init()
     ) -> Result {
         do { return try evaluateChecked(step, context: context, assignments: assignments,
-                                        nowMillis: nowMillis, checkpoint: checkpoint, signal: signal) }
+                                        nowMillis: nowMillis, customer: customer, checkpoint: checkpoint, signal: signal) }
         catch { return .invalid }
     }
 
@@ -76,6 +77,7 @@ struct JourneyControlExecutor {
         step: Journey.Step,
         context: ArmedJourney.Context,
         assignments: ExactJSONObject<JourneyFactTable.Assignment?>,
+        customer: ExactJSONObject<JourneyReleaseJSONValue> = [:],
         checkpoint: Checkpoint
     ) -> Bool {
         guard let action = step.action,
@@ -87,6 +89,7 @@ struct JourneyControlExecutor {
             context: context,
             assignments: assignments,
             nowMillis: checkpoint.anchorAtMillis,
+            customer: customer,
             checkpoint: checkpoint,
             signal: .init(event: event)
         ) {
@@ -102,6 +105,7 @@ struct JourneyControlExecutor {
         context: ArmedJourney.Context,
         assignments: ExactJSONObject<JourneyFactTable.Assignment?>,
         nowMillis: Int64,
+        customer: ExactJSONObject<JourneyReleaseJSONValue>,
         checkpoint: Checkpoint?,
         signal: Signal
     ) throws -> Result {
@@ -118,7 +122,7 @@ struct JourneyControlExecutor {
         case .condition:
             let control = try decode(CompiledCondition.self, action)
             let selected = control.branches.first {
-                JourneyValues.evaluate($0.condition, context: context) == true
+                JourneyValues.evaluate($0.condition, context: context, customer: customer) == true
             }?.id ?? "default"
             return advance(outlets, outlet: selected, context: context)
         case .experiment:
@@ -200,7 +204,7 @@ struct JourneyControlExecutor {
             } == true
             let responseMatches = acceptsResponse && signal.responsesChanged
             let evaluated = eventMatches ? ArmedJourney.Context(event: signal.event!.properties, responses: context.responses) : context
-            if (eventMatches || responseMatches), JourneyValues.evaluate(control.condition, context: evaluated) == true {
+            if (eventMatches || responseMatches), JourneyValues.evaluate(control.condition, context: evaluated, customer: customer) == true {
                 return advance(outlets, outlet: "satisfied", context: evaluated)
             }
             if nowMillis >= current.wakeAtMillis { return advance(outlets, outlet: "timeout", context: context) }
