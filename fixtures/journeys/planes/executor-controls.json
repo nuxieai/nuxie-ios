@@ -1,5 +1,6 @@
 {
   "suite": "journey-control-executor-v1",
+  "customer": { "plan": "pro" },
   "context": {
     "event": {},
     "responses": {
@@ -13,6 +14,29 @@
     }
   },
   "cases": [
+    {
+      "id": "customer-property-selects-pro-branch",
+      "nowMillis": 0,
+      "step": { "kind": "action", "id": "customer-gate", "action": {
+        "type": "condition", "branches": [{ "id": "pro", "condition": {
+          "type": "Compare", "op": "==", "left": { "type": "Customer.Field", "key": "plan" },
+          "right": { "type": "String", "value": "pro" }
+        } }]
+      }, "outlets": { "pro": "subscriber", "default": "offer" } },
+      "expected": { "kind": "advance", "stepId": "subscriber" }
+    },
+    {
+      "id": "unknown-customer-property-stays-unknown-under-negation",
+      "nowMillis": 0,
+      "step": { "kind": "action", "id": "customer-gate", "action": {
+        "type": "condition", "branches": [{ "id": "pro", "condition": {
+          "type": "Not", "condition": { "type": "Compare", "op": "==",
+            "left": { "type": "Customer.Field", "key": "unknown" }, "right": { "type": "String", "value": "pro" }
+          }
+        } }]
+      }, "outlets": { "pro": "subscriber", "default": "offer" } },
+      "expected": { "kind": "advance", "stepId": "offer" }
+    },
     {
       "id": "condition-selects-first-true-branch",
       "step": {

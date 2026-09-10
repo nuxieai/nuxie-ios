@@ -17,6 +17,7 @@ final class JourneyControlExecutorTests: XCTestCase {
             }
             let context: ArmedJourney.Context
             let assignments: ExactJSONObject<JourneyFactTable.Assignment?>
+            let customer: ExactJSONObject<JourneyReleaseJSONValue>
             let cases: [Vector]
         }
         let suite = try ExactJSONCodec.decode(Suite.self, from: Data(contentsOf: fixture("executor-controls.json")))
@@ -30,7 +31,7 @@ final class JourneyControlExecutorTests: XCTestCase {
                 }, responsesChanged: value.responsesChanged == true)
             } ?? .init()
             let result = executor.evaluate(step: vector.step, context: suite.context, assignments: suite.assignments,
-                                           nowMillis: vector.nowMillis, checkpoint: vector.checkpoint, signal: signal)
+                                           nowMillis: vector.nowMillis, customer: suite.customer, checkpoint: vector.checkpoint, signal: signal)
             switch (vector.expected.kind, result) {
             case ("advance", .advance(let stepId, let context, _)):
                 XCTAssertEqual(stepId, vector.expected.stepId, vector.id)
