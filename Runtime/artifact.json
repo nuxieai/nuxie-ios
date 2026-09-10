@@ -1,5 +1,5 @@
 {
-  "release": "apple-runtime-v0.9.7",
-  "url": "https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.9.7/NuxieRuntime.xcframework.zip",
-  "checksum": "7f27ae156484dcc15b4ef7593fcde3bd2b2c59d5769e4084934591f365951cca"
+  "release": "apple-runtime-v0.9.8",
+  "url": "https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.9.8/NuxieRuntime.xcframework.zip",
+  "checksum": "4c53bfc59136efc4816d23c017bf40d79e9e62d135062d27ceaea06da7fc6263"
 }
