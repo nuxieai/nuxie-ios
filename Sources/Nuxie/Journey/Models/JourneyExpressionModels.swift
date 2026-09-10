@@ -16,6 +16,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
     case object(ExactJSONObject<JourneyValue>)
     case eventField(String)
     case responseField(String)
+    case customerField(String)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -37,6 +38,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case "Object": self = .object(try container.decode(ExactJSONObject<JourneyValue>.self, forKey: .fields))
         case "Event.Field": self = .eventField(try container.decode(String.self, forKey: .key))
         case "Response.Field": self = .responseField(try container.decode(String.self, forKey: .key))
+        case "Customer.Field": self = .customerField(try container.decode(String.self, forKey: .key))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type,
@@ -71,6 +73,9 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case .responseField(let key):
             try container.encode("Response.Field", forKey: .type)
             try container.encode(key, forKey: .key)
+        case .customerField(let key):
+            try container.encode("Customer.Field", forKey: .type)
+            try container.encode(key, forKey: .key)
         }
     }
 
@@ -84,6 +89,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case .object(let values): values.mapValues(\.foundationValue).dictionary
         case .eventField(let key): ["type": "Event.Field", "key": key]
         case .responseField(let key): ["type": "Response.Field", "key": key]
+        case .customerField(let key): ["type": "Customer.Field", "key": key]
         }
     }
 

@@ -8,6 +8,7 @@ struct JourneyRun {
     struct ExecutionSnapshot: Codable, Sendable {
         let delivery: JourneyReleaseDelivery
         let assignments: ExactJSONObject<JourneyFactTable.Assignment?>
+        var customer: ExactJSONObject<JourneyReleaseJSONValue>? = nil
     }
 
     struct Park {

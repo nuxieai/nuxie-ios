@@ -740,7 +740,7 @@ enum JourneyReleaseSchemaPrimitives {
         case "String": _ = try object(raw, required: ["type", "value"], path: path); try boundedString(raw["value"], minimum: 0, maximumUTF16: 65_535, path: "\(path).value")
         case "Array": _ = try object(raw, required: ["type", "items"], path: path); for (index, item) in try array(raw["items"], path: "\(path).items").enumerated() { try validateJourneyValue(item, path: "\(path).items[\(index)]") }
         case "Object": _ = try object(raw, required: ["type", "fields"], path: path); try validateJourneyValueRecord(raw["fields"], path: "\(path).fields")
-        case "Event.Field", "Response.Field": _ = try object(raw, required: ["type", "key"], path: path); try identifier(raw["key"], path: "\(path).key")
+        case "Event.Field", "Response.Field", "Customer.Field": _ = try object(raw, required: ["type", "key"], path: path); try identifier(raw["key"], path: "\(path).key")
         default: try invalid("\(path).type")
         }
     }

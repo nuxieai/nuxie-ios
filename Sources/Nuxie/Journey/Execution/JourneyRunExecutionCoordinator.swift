@@ -77,6 +77,7 @@ struct JourneyRunExecutionCoordinator {
             context: run.context,
             assignments: assignments,
             nowMillis: nowMillis,
+            customer: run.executionSnapshot.customer ?? [:],
             checkpoint: checkpoint,
             signal: signal
         ) {

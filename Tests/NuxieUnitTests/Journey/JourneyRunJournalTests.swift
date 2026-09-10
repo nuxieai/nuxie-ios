@@ -6,6 +6,23 @@ import XCTest
 #endif
 
 final class JourneyRunJournalTests: XCTestCase {
+    func testCustomerPropertiesSurviveJournalReopening() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        var snapshot = testJourneyExecutionSnapshot()
+        snapshot.customer = ["plan": .string("pro"), "nullable": .null]
+        let admitted = try await journal.admit(arm: candidate,
+            release: release(for: candidate.reference), executionSnapshot: snapshot,
+            reentry: .init(type: .everyTime, windowSeconds: nil), entryStepId: "step", at: date(100))
+        XCTAssertNotNil(admitted)
+        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let retained = try await reopened.runs().first
+        XCTAssertEqual(retained?.executionSnapshot.customer?["plan"], .string("pro"))
+        XCTAssertEqual(retained?.executionSnapshot.customer?["nullable"], .null)
+    }
+
     func testStorageScopeSurvivesCredentialRotationAndIsolatesAppAuthority() {
         let authority = ProfileDeliveryAuthority(
             appId: "app-a",

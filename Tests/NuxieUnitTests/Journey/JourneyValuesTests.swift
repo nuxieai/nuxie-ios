@@ -26,6 +26,7 @@ final class JourneyValuesTests: XCTestCase {
                 let expected: Bool?
             }
             let context: ArmedJourney.Context
+            let customer: ExactJSONObject<JourneyReleaseJSONValue>
             let values: [Value]
             let conditions: [Condition]
         }
@@ -33,14 +34,14 @@ final class JourneyValuesTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
         let vectors = try ExactJSONCodec.decode(Vectors.self, from: Data(contentsOf: root.appendingPathComponent("fixtures/journeys/planes/values.json")))
         for vector in vectors.values {
-            let actual = JourneyValues.resolve(vector.expression, context: vectors.context)
+            let actual = JourneyValues.resolve(vector.expression, context: vectors.context, customer: vectors.customer)
             XCTAssertEqual(actual != nil, vector.known, vector.id)
             if let actual {
                 XCTAssertEqual(try ExactJSONCodec.encode(actual), try ExactJSONCodec.encode(vector.expected), vector.id)
             }
         }
         for vector in vectors.conditions {
-            XCTAssertEqual(JourneyValues.evaluate(vector.expression, context: vectors.context), vector.expected, vector.id)
+            XCTAssertEqual(JourneyValues.evaluate(vector.expression, context: vectors.context, customer: vectors.customer), vector.expected, vector.id)
         }
     }
 }

@@ -229,7 +229,7 @@ enum JourneyReleaseSchemaValidator {
         func walk(_ value: Any) throws {
             if let values = value as? [Any] { for value in values { try walk(value) }; return }
             guard let node = value as? [String: Any] else { return }
-            if node["type"] as? String == "User", let key = node["key"] as? String { properties[key] = true }
+            if let type = node["type"] as? String, ["User", "Customer.Field"].contains(type), let key = node["key"] as? String { properties[key] = true }
             if node["type"] as? String == "Segment" {
                 guard node["op"] as? String != "entered_within" else { throw invalid }
                 if let id = node["id"] as? String { segments[id] = true }

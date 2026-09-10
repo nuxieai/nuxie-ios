@@ -23,6 +23,17 @@ struct JourneyFactTable {
     let properties: ExactJSONObject<Property>
     let memberships: ExactJSONObject<Bool>
     let assignments: ExactJSONObject<Assignment?>
+
+    func customerValues() throws -> ExactJSONObject<JourneyReleaseJSONValue> {
+        var result: ExactJSONObject<JourneyReleaseJSONValue> = [:]
+        for (key, property) in properties where property.present {
+            if let value = property.value {
+                result[key] = try ExactJSONCodec.decode(JourneyReleaseJSONValue.self,
+                    from: ExactJSONCodec.encode(value))
+            }
+        }
+        return result
+    }
 }
 
 struct JourneyEntryCondition {
