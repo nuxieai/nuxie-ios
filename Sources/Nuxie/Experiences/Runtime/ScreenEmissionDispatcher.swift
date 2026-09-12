@@ -100,7 +100,24 @@ enum DeclarativeScreenAction: Equatable, Sendable {
 
 enum ScreenControlActionBinding: Equatable, Sendable {
     case declarative([DeclarativeScreenAction])
-    case script
+    /// A script control names the customer events it may emit. The runtime
+    /// rejects any other event name from that control, so the signed
+    /// declaration is the whole truth about what a control can fire.
+    case script(emits: [String])
+
+    /// The customer events this control may emit: a declarative program's
+    /// own emit steps, or a script control's declaration.
+    var declaredEmits: Set<String> {
+        switch self {
+        case .declarative(let actions):
+            return Set(actions.compactMap { action in
+                if case .emit(let eventName, _) = action { return eventName }
+                return nil
+            })
+        case .script(let emits):
+            return Set(emits)
+        }
+    }
 }
 
 struct ScreenControlActionDefinition: Equatable, Sendable {
@@ -169,6 +186,7 @@ enum ScreenEmissionDispatchError: Error, Equatable, Sendable {
     case declarativeSourceMissing(source: String)
     case invalidEventName(eventName: String)
     case reservedEventName(eventName: String)
+    case undeclaredEventName(actionId: String, eventName: String)
     case scriptActionMissing(actionId: String)
     case scriptExecutionFailed(message: String)
 }
@@ -319,7 +337,7 @@ private actor ScreenEmissionDispatcherState {
                 ))
             }
             drafts = actionDrafts + additionalDrafts
-            try validate(drafts)
+            try validate(drafts, declaredBy: definition)
         } catch let error as ScreenEmissionDispatchError {
             return .failure(error)
         } catch {
@@ -467,7 +485,11 @@ private actor ScreenEmissionDispatcherState {
         }
     }
 
-    private func validate(_ drafts: [ScreenEmissionDraft]) throws {
+    private func validate(
+        _ drafts: [ScreenEmissionDraft],
+        declaredBy definition: ScreenControlActionDefinition? = nil
+    ) throws {
+        let declared = definition?.binding.declaredEmits
         for draft in drafts {
             if case .event(let name, _) = draft {
                 if name.isEmpty {
@@ -475,6 +497,12 @@ private actor ScreenEmissionDispatcherState {
                 }
                 if name.hasPrefix("$") {
                     throw ScreenEmissionDispatchError.reservedEventName(eventName: name)
+                }
+                if let declared, let definition, !declared.contains(name) {
+                    throw ScreenEmissionDispatchError.undeclaredEventName(
+                        actionId: definition.actionId,
+                        eventName: name
+                    )
                 }
             }
         }

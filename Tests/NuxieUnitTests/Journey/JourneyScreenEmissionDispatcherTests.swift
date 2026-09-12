@@ -184,7 +184,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
             screenId: "survey",
             definition: ScreenControlActionDefinition(
                 actionId: "choose_plan",
-                binding: .script
+                binding: .script(emits: ["plan_chosen"])
             ),
             invocation: invocation
         )
@@ -217,7 +217,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
             screenId: "survey",
             definition: ScreenControlActionDefinition(
                 actionId: "submit",
-                binding: .script
+                binding: .script(emits: [])
             ),
             invocation: ScreenActionInvocation(actionId: "submit")
         )
@@ -389,7 +389,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
             screenId: "survey",
             definition: ScreenControlActionDefinition(
                 actionId: "emit",
-                binding: .script
+                binding: .script(emits: [])
             ),
             invocation: ScreenActionInvocation(actionId: "emit")
         )
@@ -399,6 +399,52 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
             .invalidEventName(eventName: "")
         )
         XCTAssertEqual(scriptResult.failure, .invalidEventName(eventName: ""))
+    }
+
+    func testAScriptControlMayOnlyEmitWhatItDeclared() async throws {
+        let dispatcher = ScreenEmissionDispatcher(
+            createId: incrementingID(),
+            now: { "2026-08-17T22:00:00.000Z" },
+            executeScriptAction: { input in
+                [.event(name: input.actionId == "skip" ? "skipped" : "continued", payload: [:])]
+            }
+        )
+        let run = ScreenEmissionRun(
+            journeyId: "journey_1",
+            executionOwnershipEpoch: 0,
+            lifecycleGeneration: 0,
+            presentationEpoch: 0
+        )
+
+        let undeclared = await dispatcher.dispatch(
+            run: run,
+            screenId: "survey",
+            definition: ScreenControlActionDefinition(
+                actionId: "skip",
+                binding: .script(emits: ["continued"])
+            ),
+            invocation: ScreenActionInvocation(actionId: "skip")
+        )
+        XCTAssertEqual(
+            undeclared.failure,
+            .undeclaredEventName(actionId: "skip", eventName: "skipped")
+        )
+
+        let declared = await dispatcher.dispatch(
+            run: run,
+            screenId: "survey",
+            definition: ScreenControlActionDefinition(
+                actionId: "continue",
+                binding: .script(emits: ["continued"])
+            ),
+            invocation: ScreenActionInvocation(actionId: "continue")
+        )
+        let batch = try XCTUnwrap(declared.success)
+        XCTAssertEqual(batch.emissions.map(\.name), ["continued"])
+        XCTAssertEqual(
+            batch.batchSequence, 1,
+            "the rejected invocation consumed its batch position without publishing"
+        )
     }
 
     private func incrementingID() -> @Sendable () -> String {

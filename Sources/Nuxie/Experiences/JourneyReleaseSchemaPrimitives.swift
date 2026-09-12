@@ -818,7 +818,12 @@ enum JourneyReleaseSchemaPrimitives {
                     _ = try object(binding, required: ["kind", "program"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior")
                     try validateDeclarativeScreenProgram(binding["program"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior.program")
                 case "script":
-                    _ = try object(binding, required: ["kind"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior")
+                    _ = try object(binding, required: ["kind", "emits"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior")
+                    let emits = try array(binding["emits"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior.emits")
+                    try validateSortedIdentifiers(emits, maximum: 64, path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior.emits")
+                    guard (emits as! [String]).allSatisfy({ !$0.hasPrefix("$") }) else {
+                        try invalid("screenBehaviors[\(index)].controls[\(controlIndex)].behavior.emits")
+                    }
                     scriptedActionIDs.append(actionID)
                 default: try invalid("screenBehaviors[\(index)].controls[\(controlIndex)].behavior.kind")
                 }

@@ -96,15 +96,35 @@ struct ExperienceDefinition: Sendable {
                       case .string(let actionId) = control["actionId"],
                       case .object(let binding) = control["behavior"],
                       case .string(let kind) = binding["kind"],
-                      kind == "declarative",
-                      case .array(let actions) = binding["program"],
                       table[actionId] == nil else {
                     throw JourneyReleaseAuthenticationError.invalidDescriptor
                 }
-                table[actionId] = ScreenControlActionDefinition(
-                    actionId: actionId,
-                    binding: .declarative(try actions.map(declarativeAction))
-                )
+                switch kind {
+                case "declarative":
+                    guard case .array(let actions) = binding["program"] else {
+                        throw JourneyReleaseAuthenticationError.invalidDescriptor
+                    }
+                    table[actionId] = ScreenControlActionDefinition(
+                        actionId: actionId,
+                        binding: .declarative(try actions.map(declarativeAction))
+                    )
+                case "script":
+                    guard case .array(let emits) = binding["emits"] else {
+                        throw JourneyReleaseAuthenticationError.invalidDescriptor
+                    }
+                    let names = try emits.map { value -> String in
+                        guard case .string(let name) = value else {
+                            throw JourneyReleaseAuthenticationError.invalidDescriptor
+                        }
+                        return name
+                    }
+                    table[actionId] = ScreenControlActionDefinition(
+                        actionId: actionId,
+                        binding: .script(emits: names)
+                    )
+                default:
+                    throw JourneyReleaseAuthenticationError.invalidDescriptor
+                }
             }
             guard result[screenId] == nil else {
                 throw JourneyReleaseAuthenticationError.invalidDescriptor
