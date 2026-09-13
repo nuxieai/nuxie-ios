@@ -40,10 +40,13 @@ private actor SuspendedReceiptCheck: FeatureChecking {
 }
 
 private actor ControlledFeatureRetrySleep: SleepProviderProtocol {
+    private var delays: [TimeInterval] = []
+    func requestedDelays() -> [TimeInterval] { delays }
     private var continuation: CheckedContinuation<Void, Never>?
     private var started: [CheckedContinuation<Void, Never>] = []
 
     func sleep(for duration: TimeInterval) async throws {
+        delays.append(duration)
         await withCheckedContinuation { continuation in
             self.continuation = continuation
             started.forEach { $0.resume() }
@@ -393,6 +396,48 @@ final class FeatureCommandReceiptTests: XCTestCase {
         let remaining = try await queue.pendingCount()
         XCTAssertEqual(remaining, 0)
         XCTAssertEqual(events.routedEvents.count, 2)
+        await queue.close()
+    }
+
+    func testActiveRetryHonorsServerCooldown() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = FeatureUseCommandStore(customStoragePath: directory, appIdentifier: "receipt-tests", environment: .production)
+        let events = MockEventLog()
+        let sleep = ControlledFeatureRetrySleep()
+        let date = MockDateProvider()
+        let session = TestURLSessionProvider.createNuxieTestSession()
+        defer { session.invalidateAndCancel() }
+        let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
+        let queue = FeatureUseCommandQueue(api: api, identity: identity, eventLog: events, featureInfo: FeatureInfo(),
+            dateProvider: date, store: store, retrySleep: sleep)
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: ["Retry-After": "120"])!, Data())
+        })
+        do {
+            _ = try await queue.use(distinctId: "customer", featureId: "credits", amount: 1,
+                entityId: nil, setUsage: false, metadata: nil)
+            XCTFail("The transient error must reach the caller")
+        } catch { XCTAssertEqual((error as? NuxieNetworkError)?.httpStatusCode, 503) }
+        await sleep.waitUntilStarted()
+        let delays = await sleep.requestedDelays()
+        XCTAssertEqual(delays, [120])
+        XCTAssertNotNil(try store.load().first?.nextRetryAt)
+        registerReceipt()
+        await queue.recover()
+        XCTAssertTrue(events.routedEvents.isEmpty, "Manual recovery must also respect the cooldown")
+        date.advance(by: 120)
+        await sleep.release()
+        for _ in 0..<100 {
+            if try await queue.pendingCount() == 0 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let remaining = try await queue.pendingCount()
+        XCTAssertEqual(remaining, 0)
+        XCTAssertEqual(events.routedEvents.count, 1)
         await queue.close()
     }
 

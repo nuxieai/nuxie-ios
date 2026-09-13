@@ -130,6 +130,7 @@ struct FeatureUseCommand: Codable, Sendable {
   /// response instead of treating the retry receipt time as fresh authority.
   var firstDeliveryAttemptAt: Date? = nil
   var firstDeliveryBalanceAuthority: FeatureBalanceAuthority? = nil
+  var nextRetryAt: Date? = nil
   var result: DurableResult?
 
   init(
@@ -448,7 +449,8 @@ actor FeatureUseCommandQueue {
     retryTask = Task { [weak self] in
       var delay: TimeInterval = 1
       while !Task.isCancelled {
-        do { try await retrySleep.sleep(for: delay) } catch { break }
+        let wait = await self?.nextRecoveryDelay(backoff: delay) ?? delay
+        do { try await retrySleep.sleep(for: wait) } catch { break }
         guard !Task.isCancelled, let self else { break }
         await self.recover()
         guard await self.hasPendingCommands() else { break }
@@ -456,6 +458,13 @@ actor FeatureUseCommandQueue {
       }
       await self?.finishRecoveryRetry()
     }
+  }
+
+  private func nextRecoveryDelay(backoff: TimeInterval) -> TimeInterval {
+    let earliest = (commands ?? []).map { command in
+      max(0, command.nextRetryAt?.timeIntervalSince(dateProvider.now()) ?? 0)
+    }.min() ?? 0
+    return max(backoff, earliest)
   }
 
   private func hasPendingCommands() -> Bool { !isClosed && commands?.isEmpty == false }
@@ -473,6 +482,8 @@ actor FeatureUseCommandQueue {
 
     for operationId in (commands ?? []).map(\.journalKey) {
       guard !Task.isCancelled, !cancellation.isCancelled, !isClosed else { return }
+      if let deadline = commands?.first(where: { $0.journalKey == operationId })?.nextRetryAt,
+         deadline > dateProvider.now() { continue }
       guard let admission = cancellation.claim() else { return }
       recoveryOwnedOperationIds.insert(operationId)
       defer {
@@ -573,6 +584,10 @@ actor FeatureUseCommandQueue {
       throw CancellationError()
     }
     let featureId = command.featureId
+    if let deadline = command.nextRetryAt, deadline > dateProvider.now(), command.result == nil {
+      throw NuxieNetworkError.httpError(statusCode: 429, message: "Feature command retry is deferred",
+        retryAfter: String(deadline.timeIntervalSince(dateProvider.now())))
+    }
 
     if command.result == nil {
       let isFirstDeliveryAttempt = command.firstDeliveryAttemptAt == nil
@@ -601,6 +616,13 @@ actor FeatureUseCommandQueue {
           operationId: command.operationId, quantity: command.amount, entityId: command.entityId
         ))
       } catch {
+        if let network = error as? NuxieNetworkError,
+           let delay = EventDeliveryPolicy.parseRetryAfter(network.retryAfter) {
+          command.nextRetryAt = dateProvider.now().addingTimeInterval(delay)
+          try performRecoveryDurableWrite(operationId: operationId, admission: recoveryAdmission) {
+            try replaceAndPersist(command)
+          }
+        }
         let disposition = deliveryDisposition(for: error)
         let retiredApplicationKey = applicationKey(for: command)
         try performRecoveryDurableWrite(
