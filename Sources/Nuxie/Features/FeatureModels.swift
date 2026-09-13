@@ -436,14 +436,19 @@ struct FeatureConsumeResponse: Codable, Sendable {
     var journalResponse: EventResponse {
         EventResponse(status: accepted ? "ok" : "denied", eventId: operationId,
                       customerId: customerId, message: code, deduped: idempotentReplay,
-                      consumption: self,
-                      usage: .init(current: quantity, limit: nil, remaining: balance))
+                      consumption: self)
     }
 }
 
 
 /// The committed decision for one stable Feature consumption operation.
 public struct FeatureConsumptionResult: Sendable {
+    /// The customer identity submitted with the command.
+    public let customerId: String
+    /// The Feature identifier submitted with the command.
+    public let featureId: String
+    /// The original server decision time, when supplied by the receipt.
+    public let occurredAtMs: Double?
     public let operationId: String
     public let accepted: Bool
     public let code: String
@@ -454,6 +459,9 @@ public struct FeatureConsumptionResult: Sendable {
     public let idempotentReplay: Bool
 
     internal init(_ receipt: FeatureConsumeResponse) {
+        customerId = receipt.customerId
+        featureId = receipt.featureId
+        occurredAtMs = receipt.occurredAtMs
         operationId = receipt.operationId
         accepted = receipt.accepted
         code = receipt.code

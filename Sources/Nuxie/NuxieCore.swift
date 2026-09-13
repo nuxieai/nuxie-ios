@@ -261,18 +261,6 @@ final class NuxieCore: @unchecked Sendable {
       }
     }
     let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
-    let featureUseCommands = FeatureUseCommandQueue(
-      api: api,
-      identity: identity,
-      eventLog: eventLog,
-      featureInfo: featureInfo,
-      dateProvider: dateProvider,
-      store: overrides.featureUseCommandStore ?? FeatureUseCommandStore(
-        customStoragePath: internalConfiguration.customStoragePath,
-        appIdentifier: appIdentifier,
-        environment: configuration.environment
-      )
-    )
     let purchaseStorageScope = PurchaseStorageScope(
       appIdentifier: appIdentifier,
       environment: configuration.environment,
@@ -285,6 +273,19 @@ final class NuxieCore: @unchecked Sendable {
       dateProvider: dateProvider,
       featureInfo: featureInfo,
       cacheTTL: internalConfiguration.featureCacheTTL
+    )
+    let featureUseCommands = FeatureUseCommandQueue(
+      api: api,
+      identity: identity,
+      eventLog: eventLog,
+      featureInfo: featureInfo,
+      dateProvider: dateProvider,
+      store: overrides.featureUseCommandStore ?? FeatureUseCommandStore(
+        customStoragePath: internalConfiguration.customStoragePath,
+        appIdentifier: appIdentifier,
+        environment: configuration.environment
+      ),
+      features: features
     )
     builtFeatureService.set(features)
 
