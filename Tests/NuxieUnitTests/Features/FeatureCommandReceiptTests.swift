@@ -399,46 +399,67 @@ final class FeatureCommandReceiptTests: XCTestCase {
         await queue.close()
     }
 
-    func testActiveRetryHonorsServerCooldown() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let store = FeatureUseCommandStore(customStoragePath: directory, appIdentifier: "receipt-tests", environment: .production)
-        let events = MockEventLog()
-        let sleep = ControlledFeatureRetrySleep()
-        let date = MockDateProvider()
-        let session = TestURLSessionProvider.createNuxieTestSession()
-        defer { session.invalidateAndCancel() }
-        let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
-        let queue = FeatureUseCommandQueue(api: api, identity: identity, eventLog: events, featureInfo: FeatureInfo(),
-            dateProvider: date, store: store, retrySleep: sleep)
-        StubURLProtocol.reset()
-        StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
-            (HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: ["Retry-After": "120"])!, Data())
-        })
-        do {
-            _ = try await queue.use(distinctId: "customer", featureId: "credits", amount: 1,
-                entityId: nil, setUsage: false, metadata: nil)
-            XCTFail("The transient error must reach the caller")
-        } catch { XCTAssertEqual((error as? NuxieNetworkError)?.httpStatusCode, 503) }
-        await sleep.waitUntilStarted()
-        let delays = await sleep.requestedDelays()
-        XCTAssertEqual(delays, [120])
-        XCTAssertNotNil(try store.load().first?.nextRetryAt)
-        registerReceipt()
-        await queue.recover()
-        XCTAssertTrue(events.routedEvents.isEmpty, "Manual recovery must also respect the cooldown")
-        date.advance(by: 120)
-        await sleep.release()
-        for _ in 0..<100 {
-            if try await queue.pendingCount() == 0 { break }
-            try await Task.sleep(nanoseconds: 10_000_000)
+    func testActiveRetryHonorsSharedServerCooldowns() async throws {
+        struct Suite: Decodable { let vectors: [Vector] }
+        struct Vector: Decodable {
+            let statusCode: Int
+            let retryAfter: String
+            let retryAfterMillis: Int
+            let firstRetryDelayMillis: Int
         }
-        let remaining = try await queue.pendingCount()
-        XCTAssertEqual(remaining, 0)
-        XCTAssertEqual(events.routedEvents.count, 1)
-        await queue.close()
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let suite = try JSONDecoder().decode(Suite.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/features/command-recovery.json")))
+        XCTAssertEqual(suite.vectors.count, 3)
+        for vector in suite.vectors {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer")
+            let store = FeatureUseCommandStore(customStoragePath: directory, appIdentifier: "receipt-tests", environment: .production)
+            let events = MockEventLog()
+            let sleep = ControlledFeatureRetrySleep()
+            let date = MockDateProvider()
+            let session = TestURLSessionProvider.createNuxieTestSession()
+            defer { session.invalidateAndCancel() }
+            let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
+            let queue = FeatureUseCommandQueue(api: api, identity: identity, eventLog: events, featureInfo: FeatureInfo(),
+                dateProvider: date, store: store, retrySleep: sleep)
+            StubURLProtocol.reset()
+            StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
+                (HTTPURLResponse(url: request.url!, statusCode: vector.statusCode, httpVersion: nil, headerFields: ["Retry-After": vector.retryAfter])!, Data())
+            })
+            do {
+                _ = try await queue.use(distinctId: "customer", featureId: "credits", amount: 1,
+                    entityId: nil, setUsage: false, metadata: nil)
+                XCTFail("The transient error must reach the caller")
+            } catch { XCTAssertEqual((error as? NuxieNetworkError)?.httpStatusCode, vector.statusCode) }
+            await sleep.waitUntilStarted()
+            let delays = await sleep.requestedDelays()
+            XCTAssertEqual(delays, [Double(vector.firstRetryDelayMillis) / 1000])
+            let deadline = try XCTUnwrap(store.load().first?.nextRetryAt)
+            XCTAssertEqual(deadline.timeIntervalSince(date.now()), Double(vector.retryAfterMillis) / 1000,
+                accuracy: 0.001)
+            registerReceipt()
+            await queue.recover()
+            let reopened = FeatureUseCommandQueue(api: api, identity: identity, eventLog: events, featureInfo: FeatureInfo(),
+                dateProvider: date, store: store)
+            await reopened.recover()
+            await reopened.close()
+            XCTAssertTrue(events.routedEvents.isEmpty, "Manual recovery must also respect the cooldown")
+            date.advance(by: Double(vector.firstRetryDelayMillis) / 1000)
+            await sleep.release()
+            for _ in 0..<100 {
+                if try await queue.pendingCount() == 0 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let remaining = try await queue.pendingCount()
+            XCTAssertEqual(remaining, 0)
+            XCTAssertEqual(events.routedEvents.count, 1)
+            await queue.close()
+        }
     }
 
 }

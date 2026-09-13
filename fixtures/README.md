@@ -30,5 +30,6 @@ The signed release fixture is the only release wire shape. Tests consume it dire
 
 - `encodings/app-action.json`, `encodings/feature-usage.json`, and `encodings/forwarded-activity.json`: public Codable and forwarding contracts.
 - `features/optimistic-entitlement-projection.json`: authoritative feature state combined with retained purchase evidence.
+- `features/command-recovery.json`: persisted server cooldowns and active-session retry eligibility for durable Feature commands.
 - `purchases/outcome-commit.json`: one purchase outcome committer across StoreKit and host-delegate sources.
 - `ir/eval-vectors.json` and `ir/response-field-conformance.json`: expression and buffered-response evaluation used by Journey controls.
