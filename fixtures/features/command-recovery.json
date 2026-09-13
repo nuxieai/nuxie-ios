@@ -1,0 +1,14 @@
+{
+  "suite": "features/command-recovery",
+  "version": 1,
+  "notes": [
+    "A transient rejection retains the exact durable consumption command and persists the server deadline.",
+    "Manual recovery and explicit replay cannot send the pending command before its deadline, including after reopening the store.",
+    "The active retry worker uses an initial one-second backoff and never retries before the server deadline. A successful receipt retires the command and records usage once."
+  ],
+  "vectors": [
+    { "name": "rate limited", "statusCode": 429, "retryAfter": "120", "retryAfterMillis": 120000, "firstRetryDelayMillis": 120000 },
+    { "name": "service unavailable", "statusCode": 503, "retryAfter": "120", "retryAfterMillis": 120000, "firstRetryDelayMillis": 120000 },
+    { "name": "fractional server delay", "statusCode": 503, "retryAfter": "0.5", "retryAfterMillis": 500, "firstRetryDelayMillis": 1000 }
+  ]
+}
