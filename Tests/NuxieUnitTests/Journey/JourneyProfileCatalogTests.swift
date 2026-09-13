@@ -4,6 +4,74 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 final class JourneyProfileCatalogTests: XCTestCase {
+    func testSharedPublicationAdmissionVectors() async throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/publication-admission.json")
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        func mark(_ value: [String: Any]) throws -> JourneyReleaseHighWaterMark {
+            JourneyReleaseHighWaterMark(
+                publishedAtSeq: try XCTUnwrap(value["publishedAtSeq"] as? Int),
+                experienceVersionId: try XCTUnwrap(value["experienceVersionId"] as? String),
+                buildId: try XCTUnwrap(value["buildId"] as? String),
+                versionNumber: try XCTUnwrap(value["versionNumber"] as? Int),
+                publishedAt: try XCTUnwrap(value["publishedAt"] as? String),
+                descriptorSHA256: SHA256Provider.hexDigest(try JSONSerialization.data(withJSONObject: value, options: .sortedKeys))
+            )
+        }
+        for vector in try XCTUnwrap(root["vectors"] as? [[String: Any]]) {
+            let current = try XCTUnwrap(vector["current"] as? [String: Any])
+            let candidate = try mark(XCTUnwrap(vector["candidate"] as? [String: Any]))
+            let key = JourneyReleaseHighWaterKey(appId: try XCTUnwrap(current["appId"] as? String),
+                environment: try XCTUnwrap(current["environment"] as? String),
+                experienceId: try XCTUnwrap(current["experienceId"] as? String))
+            let store = InMemoryJourneyReleaseHighWaterStore()
+            let original = try mark(current)
+            try await store.admitActiveBatch([key: original])
+            if try XCTUnwrap(vector["valid"] as? Bool) {
+                try await store.admitActiveBatch([key: candidate])
+                let actual = await store.highWater(for: key)
+                XCTAssertEqual(actual, candidate)
+            } else {
+                do {
+                    try await store.admitActiveBatch([key: candidate])
+                    XCTFail("Accepted conflicting publication: \(vector["name"] ?? "unnamed")")
+                } catch {
+                    XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .replayRejected)
+                }
+                let actual = await store.highWater(for: key)
+                XCTAssertEqual(actual, original)
+            }
+        }
+    }
+
+    func testSharedFactAdmissionProfiles() async throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/profile-fact-admission.json")
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let vectors = try XCTUnwrap(root["vectors"] as? [[String: Any]])
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        for vector in vectors {
+            let profile = try JourneyPlaneProfile.decode(JSONSerialization.data(withJSONObject: XCTUnwrap(vector["profile"])))
+            let catalog = try makeCatalog(fixture, store: InMemoryJourneyReleaseHighWaterStore())
+            if try XCTUnwrap(vector["valid"] as? Bool) {
+                let prepared = try await catalog.prepare(profile, authority: fixture.deliveryAuthority)
+                let committed = try await catalog.commit(prepared, distinctId: "customer")
+                XCTAssertTrue(committed, "\(vector["name"] ?? "unnamed")")
+            } else {
+                do {
+                    _ = try await catalog.prepare(profile, authority: fixture.deliveryAuthority)
+                    XCTFail("Accepted invalid shared profile: \(vector["name"] ?? "unnamed")")
+                } catch {
+                    XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .invalidDescriptor)
+                }
+            }
+        }
+    }
+
     private let signingKey = try! Curve25519.Signing.PrivateKey(
         rawRepresentation: Data(repeating: 0x42, count: 32)
     )

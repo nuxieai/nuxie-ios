@@ -1,0 +1,174 @@
+{
+  "suite": "journeys/planes/publication-admission",
+  "version": 1,
+  "vectors": [
+    {
+      "name": "identical publication replay",
+      "current": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "candidate": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "valid": true
+    },
+    {
+      "name": "reject changed experienceVersionId",
+      "current": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "candidate": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "different-version",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "valid": false
+    },
+    {
+      "name": "reject changed buildId",
+      "current": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "candidate": {
+        "appId": "app_golden",
+        "buildId": "different-build",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "valid": false
+    },
+    {
+      "name": "reject changed versionNumber",
+      "current": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "candidate": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 8
+      },
+      "valid": false
+    },
+    {
+      "name": "reject changed publishedAt",
+      "current": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "candidate": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-09-13T00:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "valid": false
+    },
+    {
+      "name": "reject changed publishedAtSeq",
+      "current": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "candidate": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 41,
+        "versionNumber": 7
+      },
+      "valid": false
+    },
+    {
+      "name": "newer publication",
+      "current": {
+        "appId": "app_golden",
+        "buildId": "build_golden",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 42,
+        "versionNumber": 7
+      },
+      "candidate": {
+        "appId": "app_golden",
+        "buildId": "new-build",
+        "environment": "live",
+        "experienceId": "experience_golden",
+        "experienceVersionId": "version_golden",
+        "publishedAt": "2026-08-12T12:00:00.000Z",
+        "publishedAtSeq": 43,
+        "versionNumber": 7
+      },
+      "valid": true
+    }
+  ]
+}
