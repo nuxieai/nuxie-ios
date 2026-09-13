@@ -244,4 +244,36 @@ final class FeatureCommandReceiptTests: XCTestCase {
         XCTAssertTrue(history.allSatisfy { $0.timestamp == Date(timeIntervalSince1970: 1.234) })
     }
 
+    func testPendingCustomerCannotBlockAnotherCustomersOperationId() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = FeatureUseCommandStore(customStoragePath: directory, appIdentifier: "receipt-tests", environment: .production)
+        let session = TestURLSessionProvider.createNuxieTestSession()
+        defer { session.invalidateAndCancel() }
+        let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
+        let queue = FeatureUseCommandQueue(api: api, identity: identity, eventLog: MockEventLog(), featureInfo: FeatureInfo(),
+            dateProvider: MockDateProvider(), store: store)
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!, Data())
+        })
+        do {
+            _ = try await queue.use(distinctId: "customer-a", featureId: "credits", amount: 1,
+                entityId: nil, setUsage: false, metadata: nil, operationId: "use-1")
+            XCTFail("A should remain pending")
+        } catch { XCTAssertEqual((error as? NuxieNetworkError)?.httpStatusCode, 503) }
+        identity.setDistinctId("customer-b")
+        registerReceipt()
+        let result = try await queue.use(distinctId: "customer-b", featureId: "credits", amount: 2,
+            entityId: nil, setUsage: false, metadata: nil, operationId: "use-1")
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(result.consumptionReceipt?.operationId, "use-1")
+        XCTAssertEqual(try store.load().map(\.distinctId), ["customer-a"])
+        identity.setDistinctId("customer-a")
+        await queue.recover()
+        XCTAssertTrue(try store.load().isEmpty)
+    }
+
 }
