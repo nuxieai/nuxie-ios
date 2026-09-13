@@ -122,6 +122,8 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     )
 
                     expect(result.success).to(beTrue())
+                    await expect { mocks.sleepProvider.pendingSleepDurations }.toEventually(contain(1))
+                    mocks.sleepProvider.completeSleeps(withDuration: 1)
                     await expect {
                         mocks.eventLog.routedEvents.filter { $0.name == SystemEventNames.featureUsed }.count
                     }.toEventually(equal(2), timeout: .seconds(3))
