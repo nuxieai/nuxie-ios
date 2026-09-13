@@ -1117,7 +1117,7 @@ final class NuxieApiTests: AsyncSpec {
                     do {
                         _ = try await api.sendBatch(events: events)
                         fail("Expected HTTP error")
-                    } catch NuxieNetworkError.httpError(let statusCode, let message, _) {
+                    } catch NuxieNetworkError.httpError(let statusCode, let message, _, _) {
                         expect(statusCode).to(equal(422))
                         expect(message).to(equal("invalid batch"))
                     } catch {
@@ -1148,7 +1148,8 @@ final class NuxieApiTests: AsyncSpec {
                     } catch NuxieNetworkError.httpError(
                         let statusCode,
                         _,
-                        let retryAfter
+                        let retryAfter,
+                        _
                     ) {
                         expect(statusCode).to(equal(429))
                         expect(retryAfter).to(equal("45"))

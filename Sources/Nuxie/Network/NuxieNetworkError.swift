@@ -2,7 +2,7 @@ import Foundation
 
 enum NuxieNetworkError: LocalizedError, Sendable {
     case invalidResponse
-    case httpError(statusCode: Int, message: String, retryAfter: String? = nil)
+    case httpError(statusCode: Int, message: String, retryAfter: String? = nil, code: String? = nil)
     case decodingError(Error)
     case timeout
     
@@ -10,7 +10,7 @@ enum NuxieNetworkError: LocalizedError, Sendable {
         switch self {
         case .invalidResponse:
             return "Invalid response received"
-        case .httpError(let statusCode, let message, _):
+        case .httpError(let statusCode, let message, _, _):
             return "HTTP \(statusCode): \(message)"
         case .decodingError(let error):
             return "Failed to decode response: \(error.localizedDescription)"
@@ -20,12 +20,17 @@ enum NuxieNetworkError: LocalizedError, Sendable {
     }
 
     var httpStatusCode: Int? {
-        guard case .httpError(let statusCode, _, _) = self else { return nil }
+        guard case .httpError(let statusCode, _, _, _) = self else { return nil }
         return statusCode
     }
 
+    var code: String? {
+        guard case .httpError(_, _, _, let code) = self else { return nil }
+        return code
+    }
+
     var retryAfter: String? {
-        guard case .httpError(_, _, let retryAfter) = self else { return nil }
+        guard case .httpError(_, _, let retryAfter, _) = self else { return nil }
         return retryAfter
     }
 }

@@ -269,6 +269,7 @@ actor FeatureUseCommandQueue {
   private let identity: IdentityServiceProtocol
   private let eventLog: EventLogProtocol
   private let featureInfo: FeatureInfo
+  private let features: FeatureServiceProtocol?
   private let dateProvider: DateProviderProtocol
   private let store: FeatureUseCommandStoring
   private let recoveryTaskGate: FeatureRecoveryTaskGating?
@@ -288,12 +289,14 @@ actor FeatureUseCommandQueue {
     featureInfo: FeatureInfo,
     dateProvider: DateProviderProtocol,
     store: FeatureUseCommandStoring,
-    recoveryTaskGate: FeatureRecoveryTaskGating? = nil
+    recoveryTaskGate: FeatureRecoveryTaskGating? = nil,
+    features: FeatureServiceProtocol? = nil
   ) {
     self.api = api
     self.identity = identity
     self.eventLog = eventLog
     self.featureInfo = featureInfo
+    self.features = features
     self.dateProvider = dateProvider
     self.store = store
     self.recoveryTaskGate = recoveryTaskGate
@@ -651,7 +654,7 @@ actor FeatureUseCommandQueue {
     recoveryAdmission: FeatureRecoveryAdmission?
   ) async throws {
     guard durableResult.response.consumption?.idempotentReplay != true, command.entityId == nil, identity.getDistinctId() == command.distinctId,
-          let remaining = durableResult.response.usage?.remaining else { return }
+          let remaining = durableResult.response.consumption?.balance ?? durableResult.response.usage?.remaining else { return }
     try admitRecoverySideEffect(
       operationId: command.operationId,
       admission: recoveryAdmission
@@ -706,6 +709,10 @@ actor FeatureUseCommandQueue {
     durableResult: FeatureUseCommand.DurableResult,
     recoveryAdmission: FeatureRecoveryAdmission?
   ) async throws {
+    try admitRecoverySideEffect(operationId: command.operationId, admission: recoveryAdmission)
+    await features?.invalidateAccess(
+      featureId: command.featureId, entityId: command.entityId, distinctId: command.distinctId
+    )
     if isAccepted(durableResult.response) {
       try await applyBalanceIfFresh(
         command: command,
@@ -749,9 +756,12 @@ actor FeatureUseCommandQueue {
   }
 
   private func deliveryDisposition(for error: Error) -> EventDeliveryDisposition {
+    if let networkError = error as? NuxieNetworkError,
+       networkError.httpStatusCode == 409, networkError.code == "operation_conflict" {
+      return .terminalPoison
+    }
     if (error as? NuxieNetworkError)?.httpStatusCode == 404 {
-      // `/feature/consume` uses 404 specifically for a missing Feature. The command has
-      // no authority to apply and must not become valid through later replay.
+      // A missing command endpoint has no authority to apply.
       return .terminalPoison
     }
     return EventDeliveryPolicy.disposition(for: error)

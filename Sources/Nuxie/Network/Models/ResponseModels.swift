@@ -154,7 +154,7 @@ struct EventResponse: Codable, Sendable {
 // MARK: - Error Response
 
 struct APIErrorResponse: Codable, Sendable {
-    let message: String
+    let message: String?
     let code: String?
     let details: [String: AnyCodable]?
 }
