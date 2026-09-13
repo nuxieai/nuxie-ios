@@ -163,13 +163,13 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         ) { [weak self] durable in
           await self?.deliverForwardedActivity(durable)
         }
-        // Recovery can durably emit leg lifecycle events. Install both local
-        // routing and customer forwarding subscribers before it opens the
-        // journal so those events follow the same observable lane as live
-        // execution.
-        await journeyService?.initialize()
+        // Prepare the journal before buffered captures can route, then open
+        // EventLog before recovery replays or emits durable lifecycle events.
+        // Waiting for recovery before configure would deadlock a warm start.
+        await journeyService?.prepareForEvents()
         do {
           try await eventLog.configure(configuration: setupConfiguration)
+          await journeyService?.initialize()
           LogDebug("Event system setup complete")
         } catch {
           LogError("Event system setup failed: \(error)")
