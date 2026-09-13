@@ -64,6 +64,66 @@ private actor LifecycleBarrier {
 }
 
 final class SerializedSDKLifecycleTests: XCTestCase {
+    func testSharedShutdownVectorsDrainEveryAcceptedOperationBeforeDisposal() async throws {
+        struct Vector: Decodable {
+            let name: String
+            let admittedOperations: Int
+        }
+        struct Expected: Decodable {
+            let admitAfterShutdown: Bool
+            let setupWhileStopping: Bool
+            let disposeBeforeDrain: Bool
+            let setupAfterCompletion: Bool
+            let teardownCount: Int
+        }
+        struct Suite: Decodable {
+            let suite: String
+            let version: Int
+            let vectors: [Vector]
+            let expected: Expected
+        }
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let suite = try JSONDecoder().decode(Suite.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/sdk/shutdown.json")))
+        XCTAssertEqual(suite.suite, "sdk/shutdown")
+        XCTAssertEqual(suite.version, 1)
+        for vector in suite.vectors {
+            let lifecycle = SerializedSDKLifecycle<LifecycleTestGraph>()
+            let preparation = LifecycleBarrier()
+            let probe = LifecycleTeardownProbe()
+            XCTAssertTrue(lifecycle.install { LifecycleTestGraph(id: 1) }, vector.name)
+            let operations = try (0..<vector.admittedOperations).map { _ in
+                try XCTUnwrap(lifecycle.beginOperation())
+            }
+            let shutdown = Task {
+                await lifecycle.shutdown(beforeDraining: { _ in
+                    await preparation.pause()
+                }) { graph in
+                    await probe.tearDown(graph)
+                }
+            }
+            await preparation.waitUntilEntered()
+            XCTAssertEqual(lifecycle.beginOperation() != nil, suite.expected.admitAfterShutdown, vector.name)
+            XCTAssertEqual(lifecycle.install { LifecycleTestGraph(id: 2) }, suite.expected.setupWhileStopping, vector.name)
+            operations.dropLast().forEach { $0.finish() }
+            await preparation.release()
+            if !operations.isEmpty {
+                let calls = await probe.recordedCalls()
+                XCTAssertEqual(!calls.isEmpty, suite.expected.disposeBeforeDrain, vector.name)
+                operations.last?.finish()
+            }
+            await probe.waitUntilStarted()
+            await probe.release()
+            await shutdown.value
+            let calls = await probe.recordedCalls()
+            XCTAssertEqual(calls.count, suite.expected.teardownCount, vector.name)
+            XCTAssertEqual(lifecycle.install { LifecycleTestGraph(id: 2) }, suite.expected.setupAfterCompletion, vector.name)
+            await lifecycle.shutdown { _ in }
+        }
+    }
+
     func testConcurrentInstallBuildsAndPublishesExactlyOneGraph() async {
         let lifecycle = SerializedSDKLifecycle<LifecycleTestGraph>()
         let buildStarted = expectation(description: "first graph construction started")
