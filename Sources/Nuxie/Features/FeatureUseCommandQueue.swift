@@ -721,13 +721,12 @@ actor FeatureUseCommandQueue {
     await features?.invalidateAccess(
       featureId: command.featureId, entityId: command.entityId, distinctId: command.distinctId
     )
+    try await applyBalanceIfFresh(
+      command: command,
+      durableResult: durableResult,
+      recoveryAdmission: recoveryAdmission
+    )
     if isAccepted(durableResult.response) {
-      try await applyBalanceIfFresh(
-        command: command,
-        durableResult: durableResult,
-        recoveryAdmission: recoveryAdmission
-      )
-
       if let mirror = durableResult.reconciliation?.mirror {
         try admitRecoverySideEffect(
           operationId: command.journalKey,
