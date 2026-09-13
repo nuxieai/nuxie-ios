@@ -167,6 +167,11 @@ struct FeatureUseCommand: Codable, Sendable {
     self.result = result
   }
 
+  /// Local execution identity; the wire operation ID is scoped to its customer.
+  var journalKey: String {
+    "\(distinctId.utf8.count):\(distinctId)\(operationId.utf8.count):\(operationId)"
+  }
+
   func matches(
     distinctId: String,
     featureId: String,
@@ -326,7 +331,7 @@ actor FeatureUseCommandQueue {
             requestedOperationId == requestedOperationId.trimmingCharacters(in: .whitespacesAndNewlines) else {
         throw StoreKitError.apiMisuse(reason: "A stable operation ID is required")
       }
-      if let existing = commands?.first(where: { $0.operationId == requestedOperationId }),
+      if let existing = commands?.first(where: { $0.distinctId == distinctId && $0.operationId == requestedOperationId }),
          !existing.matches(distinctId: distinctId, featureId: featureId, amount: amount,
                            entityId: entityId, setUsage: setUsage, metadata: metadata?.mapValues(AnyCodable.init)) {
         throw StoreKitError.apiMisuse(reason: "Operation ID conflicts with a pending command")
@@ -342,9 +347,9 @@ actor FeatureUseCommandQueue {
       // relaunch recovery is in flight.
       (requestedOperationId == nil || candidate.operationId == requestedOperationId)
         && (requestedOperationId != nil || candidate.result == nil)
-        && (requestedOperationId != nil || !inFlight.keys.contains(candidate.operationId)
-        || (recoveryOwnedOperationIds.contains(candidate.operationId)
-          && !foregroundJoinedRecoveryIds.contains(candidate.operationId)))
+        && (requestedOperationId != nil || !inFlight.keys.contains(candidate.journalKey)
+        || (recoveryOwnedOperationIds.contains(candidate.journalKey)
+          && !foregroundJoinedRecoveryIds.contains(candidate.journalKey)))
         && candidate.matches(
         distinctId: distinctId,
         featureId: featureId,
@@ -407,19 +412,19 @@ actor FeatureUseCommandQueue {
       }
     }
 
-    if recoveryOwnedOperationIds.contains(command.operationId),
-       inFlight[command.operationId] != nil {
-      foregroundJoinedRecoveryIds.insert(command.operationId)
+    if recoveryOwnedOperationIds.contains(command.journalKey),
+       inFlight[command.journalKey] != nil {
+      foregroundJoinedRecoveryIds.insert(command.journalKey)
     }
     do {
-      let result = try await execute(operationId: command.operationId)
+      let result = try await execute(operationId: command.journalKey)
       if shouldDecrementVisibleBalance, !result.success || result.consumptionReceipt?.idempotentReplay == true {
         await MainActor.run { featureInfo.restoreVisibleProjection() }
       }
       return result
     } catch {
       if shouldDecrementVisibleBalance,
-         commands?.contains(where: { $0.operationId == command.operationId }) == false {
+         commands?.contains(where: { $0.journalKey == command.journalKey }) == false {
         await MainActor.run { featureInfo.restoreVisibleProjection() }
       }
       throw error
@@ -446,7 +451,7 @@ actor FeatureUseCommandQueue {
       return
     }
 
-    for operationId in (commands ?? []).map(\.operationId) {
+    for operationId in (commands ?? []).map(\.journalKey) {
       guard !Task.isCancelled, !cancellation.isCancelled, !isClosed else { return }
       guard let admission = cancellation.claim() else { return }
       recoveryOwnedOperationIds.insert(operationId)
@@ -542,7 +547,7 @@ actor FeatureUseCommandQueue {
       operationId: operationId,
       admission: recoveryAdmission
     )
-    guard var command = commands?.first(where: { $0.operationId == operationId }) else {
+    guard var command = commands?.first(where: { $0.journalKey == operationId }) else {
       throw CancellationError()
     }
     let featureId = command.featureId
@@ -663,7 +668,7 @@ actor FeatureUseCommandQueue {
       receipt.type.map { FeatureAccess(allowed: receipt.active, unlimited: receipt.unlimited, balance: receipt.balance, type: $0) }
     }
     try admitRecoverySideEffect(
-      operationId: command.operationId,
+      operationId: command.journalKey,
       admission: recoveryAdmission
     )
     let featureId = command.featureId
@@ -703,9 +708,9 @@ actor FeatureUseCommandQueue {
           recoveryAdmission: recoveryAdmission
         )
       } catch {
-        if command.operationId == operationId { throw error }
+        if command.journalKey == operationId { throw error }
         LogWarning(
-          "Feature command \(command.operationId) remains pending reconciliation: \(error)"
+          "Feature command \(command.journalKey) remains pending reconciliation: \(error)"
         )
         return
       }
@@ -717,7 +722,7 @@ actor FeatureUseCommandQueue {
     durableResult: FeatureUseCommand.DurableResult,
     recoveryAdmission: FeatureRecoveryAdmission?
   ) async throws {
-    try admitRecoverySideEffect(operationId: command.operationId, admission: recoveryAdmission)
+    try admitRecoverySideEffect(operationId: command.journalKey, admission: recoveryAdmission)
     await features?.invalidateAccess(
       featureId: command.featureId, entityId: command.entityId, distinctId: command.distinctId
     )
@@ -730,7 +735,7 @@ actor FeatureUseCommandQueue {
 
       if let mirror = durableResult.reconciliation?.mirror {
         try admitRecoverySideEffect(
-          operationId: command.operationId,
+          operationId: command.journalKey,
           admission: recoveryAdmission
         )
         let isDurable = await eventLog.storePreparedEventInHistory(
@@ -738,7 +743,7 @@ actor FeatureUseCommandQueue {
         )
         // This prepared mirror is the local-history copy of SystemEventNames.featureUsed.
         try admitRecoverySideEffect(
-          operationId: command.operationId,
+          operationId: command.journalKey,
           admission: recoveryAdmission
         )
         guard isDurable else {
@@ -748,10 +753,10 @@ actor FeatureUseCommandQueue {
     }
 
     try performRecoveryDurableWrite(
-      operationId: command.operationId,
+      operationId: command.journalKey,
       admission: recoveryAdmission
     ) {
-      try removeAndPersist(operationId: command.operationId)
+      try removeAndPersist(operationId: command.journalKey)
     }
   }
 
@@ -854,7 +859,7 @@ actor FeatureUseCommandQueue {
 
   private func replaceAndPersist(_ command: FeatureUseCommand) throws {
     guard var updated = commands,
-          let index = updated.firstIndex(where: { $0.operationId == command.operationId })
+          let index = updated.firstIndex(where: { $0.journalKey == command.journalKey })
     else { throw CancellationError() }
     updated[index] = command
     try store.save(updated)
@@ -863,7 +868,7 @@ actor FeatureUseCommandQueue {
 
   private func removeAndPersist(operationId: String) throws {
     guard var updated = commands else { throw CancellationError() }
-    updated.removeAll { $0.operationId == operationId }
+    updated.removeAll { $0.journalKey == operationId }
     try store.save(updated)
     commands = updated
   }
