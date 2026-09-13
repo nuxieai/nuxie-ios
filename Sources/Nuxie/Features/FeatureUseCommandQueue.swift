@@ -94,6 +94,7 @@ struct FeatureUseCommand: Codable, Sendable {
   }
 
   struct Mirror: Codable, Sendable {
+    var historyEventId: String? = nil
     let name: String
     let forwardingName: String
     let distinctId: String
@@ -102,7 +103,7 @@ struct FeatureUseCommand: Codable, Sendable {
 
     func event(operationId: String) -> NuxieEvent {
       NuxieEvent(
-        id: operationId,
+        id: historyEventId ?? operationId,
         name: name,
         forwardingName: forwardingName,
         distinctId: distinctId,
@@ -270,6 +271,7 @@ actor FeatureUseCommandQueue {
   private let eventLog: EventLogProtocol
   private let featureInfo: FeatureInfo
   private let features: FeatureServiceProtocol?
+  private let historyScope: String
   private let dateProvider: DateProviderProtocol
   private let store: FeatureUseCommandStoring
   private let recoveryTaskGate: FeatureRecoveryTaskGating?
@@ -290,13 +292,15 @@ actor FeatureUseCommandQueue {
     dateProvider: DateProviderProtocol,
     store: FeatureUseCommandStoring,
     recoveryTaskGate: FeatureRecoveryTaskGating? = nil,
-    features: FeatureServiceProtocol? = nil
+    features: FeatureServiceProtocol? = nil,
+    historyScope: String = ""
   ) {
     self.api = api
     self.identity = identity
     self.eventLog = eventLog
     self.featureInfo = featureInfo
     self.features = features
+    self.historyScope = historyScope
     self.dateProvider = dateProvider
     self.store = store
     self.recoveryTaskGate = recoveryTaskGate
@@ -808,23 +812,27 @@ actor FeatureUseCommandQueue {
     }
     let enriched = await eventLog.prepareEventProperties(properties)
     let pinnedProperties = applying(command.identity, to: enriched)
+    let receipt = response.consumption
+    let historyEventId = receipt?.historyEventId(scope: historyScope)
+    let occurredAt = receipt?.occurredAt ?? command.createdAt
     let original = NuxieEvent(
-      id: command.operationId,
+      id: historyEventId ?? command.operationId,
       name: SystemEventNames.featureUsed,
       distinctId: command.identity.distinctId,
       properties: pinnedProperties,
-      timestamp: command.createdAt
+      timestamp: occurredAt
     )
     guard let transformed = await eventLog.applyBeforeSend(to: original) else {
       return nil
     }
     let transformedProperties = applying(command.identity, to: transformed.properties)
     return FeatureUseCommand.Mirror(
+      historyEventId: historyEventId,
       name: transformed.name,
       forwardingName: SystemEventNames.featureUsed,
       distinctId: command.identity.distinctId,
       properties: transformedProperties.mapValues(AnyCodable.init),
-      timestamp: command.createdAt
+      timestamp: occurredAt
     )
   }
 

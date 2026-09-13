@@ -285,7 +285,8 @@ final class NuxieCore: @unchecked Sendable {
         appIdentifier: appIdentifier,
         environment: configuration.environment
       ),
-      features: features
+      features: features,
+      historyScope: ProfileStorageScope(apiKey: configuration.apiKey, environment: configuration.environment).cacheSubdirectory
     )
     builtFeatureService.set(features)
 

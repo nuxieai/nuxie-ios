@@ -54,6 +54,8 @@ final class FeatureConsumptionApiTests: XCTestCase {
             purchase: .init(transactionJwt: "signed-jws", eventId: "purchase-use")))
         XCTAssertEqual(response.idempotentReplay, true)
         XCTAssertEqual(response.balance, 3)
+        XCTAssertEqual(response.consumptionReceipt?.operationId, "purchase-use")
+        XCTAssertEqual(response.consumptionReceipt?.occurredAtMs, 1234)
     }
 
 }
