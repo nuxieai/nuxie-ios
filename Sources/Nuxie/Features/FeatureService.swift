@@ -525,11 +525,17 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Sync FeatureInfo from profile cache (call after profile refresh)
     func syncFeatureInfo() async {
+        let identity = identityService
+        let distinctId = identity.getDistinctId()
+        guard let token = identity.performWithCurrentIdentityFence(distinctId, { _ in () })?.token,
+              await profileService.getCachedProfile(distinctId: distinctId) != nil else { return }
         let allFeatures = await getAllCached()
         let admittedAt = dateProvider.now()
         let info = featureInfo
         await MainActor.run {
-            info.admitProfileSnapshot(allFeatures, admittedAt: admittedAt)
+            identity.publishIfCurrentIdentityFenceToken(token) {
+                info.admitProfileSnapshot(allFeatures, admittedAt: admittedAt)
+            }
         }
     }
 

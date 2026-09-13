@@ -100,8 +100,6 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         if transition.kind == .reset {
             await profileService.clearCache(distinctId: transition.from)
         }
-        await profileService.handleUserChange(from: transition.from, to: transition.to)
-
         switch transition.kind {
         case .identify:
             await featureService.handleUserChange(from: transition.from, to: transition.to)
@@ -109,5 +107,16 @@ final class UserTransitionCoordinator: @unchecked Sendable {
             await featureService.clearCache()
             await experienceService.clearCache()
         }
+        // Clear the departing customer's projections before admitting the new
+        // profile. A remote Feature check cannot establish profile readiness.
+        await profileService.handleUserChange(from: transition.from, to: transition.to)
+        do {
+            _ = try await profileService.refetchProfile(distinctId: transition.to)
+        } catch {
+            LogDebug("Identity profile refresh failed: \(error)")
+        }
+        // A valid offline profile can still restore readiness. FeatureService
+        // requires an admitted profile and fences publication to its identity.
+        await featureService.syncFeatureInfo()
     }
 }
