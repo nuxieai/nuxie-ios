@@ -619,6 +619,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     }
 
     func invalidateAccess(featureId: String, entityId: String?, distinctId: String) async {
+        guard identityService.getDistinctId() == distinctId else { return }
         await synchronizeCustomerScopeIfNeeded()
         guard identityService.getDistinctId() == distinctId else { return }
         featureMutationRevisions[featureId, default: 0] &+= 1

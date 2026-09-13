@@ -96,7 +96,7 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     expect(lastCall?.value).to(equal(1.0))
                 }
 
-                it("reuses a pending operation id after an accepted response times out") {
+                it("keeps a later use independent while recovering the timed-out operation") {
                     await mockApi.configureTrackEventResponse(
                         status: "ok",
                         usage: .init(current: 1, limit: 5, remaining: 4)
@@ -122,16 +122,20 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     )
 
                     expect(result.success).to(beTrue())
+                    await expect {
+                        mocks.eventLog.routedEvents.filter { $0.name == SystemEventNames.featureUsed }.count
+                    }.toEventually(equal(2), timeout: .seconds(3))
                     let ids = await mockApi.sentEvents
                         .filter { $0.name == SystemEventNames.featureUsed }
                         .map(\.id)
-                    expect(ids).to(equal([firstId, firstId]))
+                    expect(ids.count).to(equal(3))
+                    expect(ids.filter { $0 == firstId }.count).to(equal(2))
                     let uniqueAcceptedCount = await mockApi.uniqueAcceptedTrackEventCount
-                    expect(uniqueAcceptedCount).to(equal(1))
+                    expect(uniqueAcceptedCount).to(equal(2))
                     let mirrors = mocks.eventLog.routedEvents.filter {
                         $0.name == SystemEventNames.featureUsed
                     }
-                    expect(mirrors.map(\.id)).to(equal([firstId]))
+                    expect(Set(mirrors.map(\.id)).count).to(equal(2))
                 }
 
                 it("keeps overlapping identical uses as distinct operations") {
