@@ -65,7 +65,7 @@ enum EventDeliveryPolicy {
         }
     }
 
-    private static func parseRetryAfter(_ value: String?) -> TimeInterval? {
+    static func parseRetryAfter(_ value: String?) -> TimeInterval? {
         guard let value else { return nil }
         if let seconds = TimeInterval(value), seconds.isFinite, seconds >= 0 {
             return seconds
