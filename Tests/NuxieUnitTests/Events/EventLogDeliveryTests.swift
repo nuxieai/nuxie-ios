@@ -9,6 +9,13 @@ import Nimble
 // MARK: - Mock API Client
 
 actor MockNuxieApiForQueue: NuxieApiProtocol {
+    func consumeFeature(_ request: FeatureConsumeRequest) async throws -> EventResponse {
+        var properties: [String: Any] = ["feature_extId": request.featureId, "value": request.quantity]
+        if let entityId = request.entityId { properties["entityId"] = entityId }
+        return try await trackEvent(NuxieEvent(id: request.operationId, name: SystemEventNames.featureUsed,
+            distinctId: request.customerId, properties: properties))
+    }
+
 
     // Tracking properties
     private(set) var sendBatchCalled = false

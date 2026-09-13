@@ -96,6 +96,7 @@ struct Feature: Codable, Sendable {
 // MARK: - Event Response
 
 struct EventResponse: Codable, Sendable {
+    let consumption: FeatureConsumeResponse?
     public let status: String
     public let payload: [String: AnyCodable]?
     public let customer: Customer?
@@ -124,8 +125,10 @@ struct EventResponse: Codable, Sendable {
         deduped: Bool? = nil,
         merged: Bool? = nil,
         migratedDistinctIds: [String]? = nil,
+        consumption: FeatureConsumeResponse? = nil,
         usage: Usage? = nil
     ) {
+        self.consumption = consumption
         self.status = status
         self.payload = payload
         self.customer = customer

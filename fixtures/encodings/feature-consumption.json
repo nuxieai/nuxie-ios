@@ -1,0 +1,107 @@
+{
+  "suite": "encodings/feature-consumption",
+  "version": 1,
+  "description": "Dedicated authoritative Feature consumption command and receipt. Acceptance is independent of remaining access.",
+  "vectors": [
+    {
+      "name": "last unit",
+      "request": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "use-last",
+        "quantity": 2,
+        "entityId": "project-a"
+      },
+      "response": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "use-last",
+        "quantity": 2,
+        "entityId": "project-a",
+        "accepted": true,
+        "code": "consumed",
+        "balance": 0,
+        "unlimited": false,
+        "active": false,
+        "type": "metered",
+        "occurredAtMs": 1789285000000,
+        "idempotentReplay": false
+      }
+    },
+    {
+      "name": "last unit retry",
+      "request": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "use-last",
+        "quantity": 2,
+        "entityId": "project-a"
+      },
+      "response": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "use-last",
+        "quantity": 2,
+        "entityId": "project-a",
+        "accepted": true,
+        "code": "consumed",
+        "balance": 0,
+        "unlimited": false,
+        "active": false,
+        "type": "metered",
+        "occurredAtMs": 1789285000000,
+        "idempotentReplay": true
+      }
+    },
+    {
+      "name": "denied",
+      "request": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "denied",
+        "quantity": 1,
+        "entityId": "project-a"
+      },
+      "response": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "denied",
+        "quantity": 1,
+        "entityId": "project-a",
+        "accepted": false,
+        "code": "insufficient",
+        "balance": 0,
+        "unlimited": false,
+        "active": false,
+        "type": "metered",
+        "occurredAtMs": 1789285000000,
+        "idempotentReplay": false
+      }
+    },
+    {
+      "name": "unlimited",
+      "request": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "unlimited",
+        "quantity": 5,
+        "entityId": "project-a"
+      },
+      "response": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "unlimited",
+        "quantity": 5,
+        "entityId": "project-a",
+        "accepted": true,
+        "code": "consumed",
+        "balance": null,
+        "unlimited": true,
+        "active": true,
+        "type": "metered",
+        "occurredAtMs": 1789285000000,
+        "idempotentReplay": false
+      }
+    }
+  ]
+}

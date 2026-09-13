@@ -553,6 +553,17 @@ extension NuxieApi {
         )
     }
 
+    func consumeFeature(_ input: FeatureConsumeRequest) async throws -> EventResponse {
+        let response: FeatureConsumeResponse = try await request(
+            endpoint: .consumeFeature, body: input, responseType: FeatureConsumeResponse.self
+        )
+        guard response.operationId == input.operationId, response.customerId == input.customerId,
+              response.featureId == input.featureId, response.quantity == input.quantity else {
+            throw NuxieNetworkError.invalidResponse
+        }
+        return response.journalResponse
+    }
+
     // MARK: - Feature Check
 
     /// Check if a customer has access to a feature (real-time server check)
@@ -599,18 +610,30 @@ extension NuxieApi {
     func useFeatureWithPurchase(
         _ request: PurchaseBackedFeatureUseRequest
     ) async throws -> PurchaseBackedFeatureUseResponse {
-        try await self.request(
-            endpoint: .checkFeature(
-                FeatureCheckRequest(
-                    customerId: request.customerId,
-                    featureId: request.featureId,
-                    requiredBalance: nil,
-                    entityId: request.entityId
-                )
-            ),
-            body: request,
-            responseType: PurchaseBackedFeatureUseResponse.self
-        )
+        struct Evidence: Encodable {
+            let type = "appstore"
+            let signedTransaction: String
+        }
+        struct Command: Encodable {
+            let customerId: String
+            let featureId: String
+            let operationId: String
+            let quantity: Double
+            let entityId: String?
+            let purchase: Evidence
+        }
+        let input = Command(customerId: request.customerId, featureId: request.featureId,
+            operationId: request.purchase.eventId, quantity: request.eventData.value, entityId: request.entityId,
+            purchase: Evidence(signedTransaction: request.purchase.transactionJwt))
+        let response: FeatureConsumeResponse = try await self.request(endpoint: .consumeFeature,
+            body: input, responseType: FeatureConsumeResponse.self)
+        guard response.accepted, response.operationId == input.operationId,
+              response.customerId == input.customerId, response.featureId == input.featureId,
+              response.quantity == input.quantity, let type = response.type else {
+            throw NuxieNetworkError.invalidResponse
+        }
+        return PurchaseBackedFeatureUseResponse(customerId: response.customerId, featureId: response.featureId,
+            code: response.code, allowed: response.active, unlimited: response.unlimited, balance: response.balance, type: type)
     }
 
     func appStoreIntroEligibilityToken(
