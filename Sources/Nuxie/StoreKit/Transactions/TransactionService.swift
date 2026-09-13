@@ -886,9 +886,10 @@ actor TransactionService {
     /// - Parameter outcomeCorrelation: Stable Journey event ownership for the
     ///   resulting restore outcome, when restore began in a Journey.
     /// - Throws: StoreKitError when restore fails.
+    @discardableResult
     public func restore(
         outcomeCorrelation: CommerceOutcomeCorrelation? = nil
-    ) async throws {
+    ) async throws -> RestoreResult {
         LogDebug("TransactionService: Starting restore purchases")
 
         let initiatingDistinctId = outcomeCorrelation?.distinctId
@@ -913,7 +914,7 @@ actor TransactionService {
                     throw StoreKitError.restoreFailed(nil)
                 }
                 LogInfo("TransactionService: External restore declared successfully")
-                return
+                return .restored
             case .failed(let error):
                 LogError("TransactionService: Restore failed, error: \(error)")
                 if outcomeCorrelation != nil || isActiveCustomer(initiatingDistinctId) {
@@ -936,7 +937,7 @@ actor TransactionService {
                         correlation: outcomeCorrelation
                     )
                 }
-                return
+                return .noPurchases
             }
         }
 
@@ -985,7 +986,7 @@ actor TransactionService {
                     correlation: outcomeCorrelation
                 )
             }
-            
+            return .restored
         case .failed(let error):
             LogError("TransactionService: Restore failed, error: \(error)")
             // Track failed restore event
@@ -1011,6 +1012,7 @@ actor TransactionService {
                     correlation: outcomeCorrelation
                 )
             }
+            return .noPurchases
         }
     }
 

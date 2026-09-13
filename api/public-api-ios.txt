@@ -38,6 +38,7 @@ s:5Nuxie0A3SDKC12isIdentifiedSbvg	Accessor	Get()
 s:5Nuxie0A3SDKC12isIdentifiedSbvp	Var	isIdentified
 s:5Nuxie0A3SDKC13getDistinctIdSSyF	Function	getDistinctId()
 s:5Nuxie0A3SDKC14getAnonymousIdSSyF	Function	getAnonymousId()
+s:5Nuxie0A3SDKC16restorePurchasesAA13RestoreResultOyYaF	Function	restorePurchases()
 s:5Nuxie0A3SDKC17useFeatureAndWait_6amount8entityId8setUsage8metadataAA0dK6ResultVSS_SdSSSgSbSDySSypGSgtYaKF	Function	useFeatureAndWait(_:amount:entityId:setUsage:metadata:)
 s:5Nuxie0A3SDKC18FeatureCheckPolicyO	TypeDecl	FeatureCheckPolicy
 s:5Nuxie0A3SDKC18FeatureCheckPolicyO10cacheFirstyA2EmF	Var	cacheFirst
@@ -117,6 +118,12 @@ s:5Nuxie11FeatureInfoC5StateO7unknownyA2EmF	Var	unknown
 s:5Nuxie11FeatureInfoC5stateAC5StateOvp	Var	state
 s:5Nuxie11FeatureInfoC7balanceySdSgSSF	Function	balance(_:)
 s:5Nuxie11FeatureInfoC7featureyAA0B6AccessVSgSSF	Function	feature(_:)
+s:5Nuxie11FeatureInfoC8SnapshotV	TypeDecl	Snapshot
+s:5Nuxie11FeatureInfoC8SnapshotV18identityGenerations6UInt64Vvp	Var	identityGeneration
+s:5Nuxie11FeatureInfoC8SnapshotV3allSDySSAA0B6AccessVGvp	Var	all
+s:5Nuxie11FeatureInfoC8SnapshotV5stateAC5StateOvp	Var	state
+s:5Nuxie11FeatureInfoC8SnapshotV8revisions6UInt64Vvp	Var	revision
+s:5Nuxie11FeatureInfoC8snapshotAC8SnapshotVvp	Var	snapshot
 s:5Nuxie11FeatureInfoC9isAllowedySbSSF	Function	isAllowed(_:)
 s:5Nuxie11FeatureInfoCACycfc	Constructor	init()
 s:5Nuxie11FeatureTypeO	TypeDecl	FeatureType

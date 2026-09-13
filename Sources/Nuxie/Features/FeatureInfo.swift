@@ -56,6 +56,27 @@ public final class FeatureInfo: ObservableObject {
     /// Readiness of `all` for the current customer.
     @Published public private(set) var state: State = .unknown
 
+    /// A coherent customer-scoped publication for wrappers and reactive clients.
+    public struct Snapshot {
+        public let all: [String: FeatureAccess]
+        public let state: State
+        public let identityGeneration: UInt64
+        public let revision: UInt64
+    }
+
+    /// Readiness and access from the same native publication.
+    @Published public private(set) var snapshot = Snapshot(
+        all: [:], state: .unknown, identityGeneration: 0, revision: 0
+    )
+
+    private func publishSnapshot(_ publication: VisiblePublicationToken) {
+        _ = publishObservableStep(publication, staleAfterEmission: .repairCommittedStorage) {
+            snapshot = Snapshot(all: all, state: state,
+                identityGeneration: projectionIdentityGeneration,
+                revision: publication.generation)
+        }
+    }
+
     // MARK: - Internal Properties
 
     /// Callback for delegate notifications (set by NuxieSDK)
@@ -175,6 +196,7 @@ public final class FeatureInfo: ObservableObject {
             { self.all = features }
         ) else { return }
 
+        publishSnapshot(publication)
         guard let capturedOnFeatureChange else { return }
         for (featureId, oldAccess, newAccess) in delegateEmissions {
             guard publishObservableStep(
@@ -381,6 +403,7 @@ public final class FeatureInfo: ObservableObject {
             staleAfterEmission: .repairCommittedStorage,
             { all = visible }
         )
+        publishSnapshot(publication)
     }
 
     internal func decrementBalance(_ featureId: String, amount: Double) {
@@ -459,6 +482,7 @@ public final class FeatureInfo: ObservableObject {
             staleAfterEmission: .repairCommittedStorage,
             { all = projection.features }
         )
+        publishSnapshot(publication)
     }
 
     private func visibleProjection() -> (

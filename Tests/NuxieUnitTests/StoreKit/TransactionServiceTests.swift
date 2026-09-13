@@ -2002,9 +2002,11 @@ final class TransactionServiceTests: AsyncSpec {
                     it("should handle no purchases to restore") {
                         mockPurchaseDelegate.configureForNoPurchases()
                         
-                        await expect {
-                            try await transactionService.restore()
-                        }.toNot(throwError())
+                        let result = try await transactionService.restore()
+                        guard case .noPurchases = result else {
+                            fail("Expected the public no-purchases outcome")
+                            return
+                        }
                         
                         expect(mockPurchaseDelegate.restoreCalled).to(beTrue())
                         expect(eventSink.events.map(\.name).filter {
