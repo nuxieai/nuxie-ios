@@ -224,6 +224,7 @@ struct PurchaseBackedFeatureUseResponse: Codable, Sendable {
     let unlimited: Bool
     let balance: Double?
     let type: FeatureType
+    var idempotentReplay: Bool? = nil
 
     func featureCheckResult(requiredBalance: Double) -> FeatureCheckResult {
         FeatureCheckResult(

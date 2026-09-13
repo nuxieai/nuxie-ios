@@ -15,6 +15,30 @@ private actor ReceiptFeatureChecks: FeatureChecking {
     }
 }
 
+private actor SuspendedReceiptCheck: FeatureChecking {
+    private var response: CheckedContinuation<FeatureCheckResult, Error>?
+    private var started: [CheckedContinuation<Void, Never>] = []
+
+    func waitUntilStarted() async {
+        if response != nil { return }
+        await withCheckedContinuation { started.append($0) }
+    }
+
+    func release() {
+        response?.resume(returning: FeatureCheckResult(customerId: "customer", featureId: "credits", requiredBalance: 1,
+            code: "ok", allowed: true, unlimited: false, balance: 1, type: .metered, preview: nil))
+        response = nil
+    }
+
+    func checkFeature(customerId: String, featureId: String, requiredBalance: Double?, entityId: String?) async throws -> FeatureCheckResult {
+        try await withCheckedThrowingContinuation { continuation in
+            response = continuation
+            started.forEach { $0.resume() }
+            started.removeAll()
+        }
+    }
+}
+
 @MainActor
 final class FeatureCommandReceiptTests: XCTestCase {
     private func registerReceipt() {
@@ -106,4 +130,68 @@ final class FeatureCommandReceiptTests: XCTestCase {
         XCTAssertEqual(info.balance("credits"), entityId == nil ? 0 : 100)
         }
     }
+    func testInvalidationRejectsInFlightCheckResults() async throws {
+        for cached in [false, true] {
+            let api = SuspendedReceiptCheck()
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer")
+            let service = FeatureService(api: api, identity: identity, profile: MockProfileService(),
+                dateProvider: MockDateProvider(), featureInfo: FeatureInfo(), cacheTTL: 300)
+            let check = Task {
+                if cached {
+                    _ = try await service.checkWithCache(featureId: "credits", requiredBalance: 1, entityId: "project-a", forceRefresh: false)
+                } else {
+                    _ = try await service.check(featureId: "credits", requiredBalance: 1, entityId: "project-a")
+                }
+            }
+            await api.waitUntilStarted()
+            await service.invalidateAccess(featureId: "credits", entityId: "project-a", distinctId: "customer")
+            await api.release()
+            do { try await check.value; XCTFail("The check predates consumption") }
+            catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        }
+    }
+
+    func testAggregateCacheCannotRepublishAnInvalidatedProfileBalance() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let profile = MockProfileService()
+        profile.setProfileResponse(TestJourneyProfile.response(features: [
+            Feature(id: "credits", type: .metered, balance: 5, unlimited: false,
+                nextResetAt: nil, interval: nil, entities: nil)
+        ]))
+        _ = try await profile.refetchProfile(distinctId: "customer")
+        let info = FeatureInfo()
+        let service = FeatureService(api: ReceiptFeatureChecks(), identity: identity, profile: profile,
+            dateProvider: MockDateProvider(), featureInfo: info, cacheTTL: 300)
+        await service.syncFeatureInfo()
+        XCTAssertEqual(info.balance("credits"), 5)
+        await service.invalidateAccess(featureId: "credits", entityId: nil, distinctId: "customer")
+        let all = await service.getAllCached()
+        XCTAssertNil(all["credits"])
+        await service.syncFeatureInfo()
+        XCTAssertNil(info.balance("credits"))
+    }
+
+    func testConsumptionInvalidatesEveryScopeOfTheFeature() async throws {
+        for spentEntity: String? in [nil, "project-a"] {
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer")
+            let profile = MockProfileService()
+            profile.setProfileResponse(TestJourneyProfile.response(features: [
+                Feature(id: "credits", type: .metered, balance: 5, unlimited: false,
+                    nextResetAt: nil, interval: nil, entities: ["project-b": EntityBalance(balance: 2)])
+            ]))
+            _ = try await profile.refetchProfile(distinctId: "customer")
+            let service = FeatureService(api: ReceiptFeatureChecks(), identity: identity, profile: profile,
+                dateProvider: MockDateProvider(), featureInfo: FeatureInfo(), cacheTTL: 300)
+            _ = try await service.check(featureId: "credits", requiredBalance: 1, entityId: "project-a")
+            await service.invalidateAccess(featureId: "credits", entityId: spentEntity, distinctId: "customer")
+            for queriedEntity: String? in [nil, "project-a", "project-b"] {
+                let cached = await service.getCached(featureId: "credits", entityId: queriedEntity)
+                XCTAssertNil(cached)
+            }
+        }
+    }
+
 }

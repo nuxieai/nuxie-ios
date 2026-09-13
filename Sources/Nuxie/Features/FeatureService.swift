@@ -23,7 +23,7 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
         forceRefresh: Bool
     ) async throws -> FeatureAccess
 
-    /// Discard cached authority after a command; the next check reads the server.
+    /// Discard all cached scopes for the Feature after a command; the next check reads the server.
     func invalidateAccess(featureId: String, entityId: String?, distinctId: String) async
 
     /// Clear all feature cache
@@ -196,7 +196,7 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     // In-memory cache for fresh feature access overrides from real-time checks and purchase syncs.
     // These values are newer than the profile snapshot and should win until they expire.
-    private var invalidatedCacheKeys: Set<FeatureCacheKey> = []
+    private var invalidatedCacheRevisions: [String: UInt64] = [:]
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
     /// Monotonic per-feature mutation revision. A feature check captures this
     /// before suspending so an older response cannot erase a purchase grant or
@@ -264,13 +264,13 @@ internal actor FeatureService: FeatureServiceProtocol {
                 return cached.override.access(requiredBalance: requiredBalance)
             }
         }
-        guard !invalidatedCacheKeys.contains(cacheKey) else { return nil }
+        guard invalidatedCacheRevisions[featureId] == nil else { return nil }
         let distinctId = identityService.getDistinctId()
 
         // Fall back to the profile cache (features from profile response)
         if let profile = await profileService.getCachedProfile(distinctId: distinctId),
            let feature = profile.planeProfile.features.first(where: { $0.id == featureId }) {
-            guard !invalidatedCacheKeys.contains(cacheKey) else { return nil }
+            guard invalidatedCacheRevisions[featureId] == nil else { return nil }
             // For entity-based features, check entity balance
             if let entityId = entityId {
                 // Aggregate unlimited access says nothing about this entity.
@@ -341,6 +341,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         if let profile = await profileService.getCachedProfile(distinctId: distinctId) {
             let features = profile.planeProfile.features
             for feature in features {
+                guard invalidatedCacheRevisions[feature.id] == nil else { continue }
                 result[feature.id] = FeatureAccess(from: feature)
             }
         }
@@ -400,6 +401,10 @@ internal actor FeatureService: FeatureServiceProtocol {
         // customer B even if the shared cache correctly rejected the write.
         guard identityService.getDistinctId() == customerId,
               stateGeneration == requestGeneration else {
+            throw CancellationError()
+        }
+
+        if let invalidatedAt = invalidatedCacheRevisions[featureId], invalidatedAt > requestRevision {
             throw CancellationError()
         }
 
@@ -611,12 +616,11 @@ internal actor FeatureService: FeatureServiceProtocol {
     func invalidateAccess(featureId: String, entityId: String?, distinctId: String) async {
         await synchronizeCustomerScopeIfNeeded()
         guard identityService.getDistinctId() == distinctId else { return }
-        let key = makeCacheKey(featureId: featureId, entityId: entityId)
         featureMutationRevisions[featureId, default: 0] &+= 1
-        realTimeCache.removeValue(forKey: key)
-        committedCacheRevisions.removeValue(forKey: key)
+        realTimeCache = realTimeCache.filter { $0.key.featureId != featureId }
+        committedCacheRevisions = committedCacheRevisions.filter { $0.key.featureId != featureId }
         // A profile may predate the spend even after a real-time override expires.
-        invalidatedCacheKeys.insert(key)
+        invalidatedCacheRevisions[featureId] = featureMutationRevisions[featureId]
     }
 
     func applyAuthoritativeUse(
@@ -684,7 +688,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     private func clearCustomerScopedState(for distinctId: String) {
         stateGeneration &+= 1
         realTimeCache.removeAll()
-        invalidatedCacheKeys.removeAll()
+        invalidatedCacheRevisions.removeAll()
         featureMutationRevisions.removeAll()
         committedCacheRevisions.removeAll()
         cacheDistinctId = distinctId
