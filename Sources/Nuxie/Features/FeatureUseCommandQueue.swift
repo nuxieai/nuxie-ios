@@ -277,6 +277,8 @@ actor FeatureUseCommandQueue {
   private let featureInfo: FeatureInfo
   private let features: FeatureServiceProtocol?
   private let historyScope: String
+  private let retrySleep: SleepProviderProtocol?
+  private var retryTask: Task<Void, Never>?
   private let dateProvider: DateProviderProtocol
   private let store: FeatureUseCommandStoring
   private let recoveryTaskGate: FeatureRecoveryTaskGating?
@@ -298,7 +300,8 @@ actor FeatureUseCommandQueue {
     store: FeatureUseCommandStoring,
     recoveryTaskGate: FeatureRecoveryTaskGating? = nil,
     features: FeatureServiceProtocol? = nil,
-    historyScope: String = ""
+    historyScope: String = "",
+    retrySleep: SleepProviderProtocol? = nil
   ) {
     self.api = api
     self.identity = identity
@@ -306,6 +309,7 @@ actor FeatureUseCommandQueue {
     self.featureInfo = featureInfo
     self.features = features
     self.historyScope = historyScope
+    self.retrySleep = retrySleep
     self.dateProvider = dateProvider
     self.store = store
     self.recoveryTaskGate = recoveryTaskGate
@@ -418,6 +422,7 @@ actor FeatureUseCommandQueue {
       }
       return result
     } catch {
+      scheduleRecoveryRetry()
       if shouldDecrementVisibleBalance,
          commands?.contains(where: { $0.journalKey == command.journalKey }) == false {
         await MainActor.run { featureInfo.restoreVisibleProjection() }
@@ -435,7 +440,27 @@ actor FeatureUseCommandQueue {
     } onCancel: {
       cancellation.cancel()
     }
+    scheduleRecoveryRetry()
   }
+
+  private func scheduleRecoveryRetry() {
+    guard !isClosed, retryTask == nil, let retrySleep, commands?.isEmpty == false else { return }
+    retryTask = Task { [weak self] in
+      var delay: TimeInterval = 1
+      while !Task.isCancelled {
+        do { try await retrySleep.sleep(for: delay) } catch { break }
+        guard !Task.isCancelled, let self else { break }
+        await self.recover()
+        guard await self.hasPendingCommands() else { break }
+        delay = min(delay * 2, 60)
+      }
+      await self?.finishRecoveryRetry()
+    }
+  }
+
+  private func hasPendingCommands() -> Bool { !isClosed && commands?.isEmpty == false }
+
+  private func finishRecoveryRetry() { retryTask = nil }
 
   private func recover(cancellation: FeatureRecoveryCancellation) async {
     guard !Task.isCancelled, !cancellation.isCancelled, !isClosed else { return }
@@ -483,6 +508,8 @@ actor FeatureUseCommandQueue {
 
   func close() {
     isClosed = true
+    retryTask?.cancel()
+    retryTask = nil
     let tasks = Array(inFlight.values)
     inFlight.removeAll()
     tasks.forEach { $0.cancel() }
