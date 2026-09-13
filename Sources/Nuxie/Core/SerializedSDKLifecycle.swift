@@ -160,6 +160,7 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
     /// cannot install until teardown has completed.
     func shutdown(
         beforeDraining: @escaping @Sendable (Graph) async -> Void = { _ in },
+        beforeWaitingForStart: @escaping @Sendable () -> Void = {},
         afterWaitingForStart: @escaping @Sendable () async -> Void = {},
         _ tearDown: @escaping @Sendable (Graph) async -> Void
     ) async {
@@ -194,10 +195,12 @@ final class SerializedSDKLifecycle<Graph: AnyObject & Sendable>: @unchecked Send
         case .wait(let shutdown):
             await waitForCompletion(of: shutdown)
         case .waitForStart(let starting):
+            beforeWaitingForStart()
             await waitForStart(starting)
             await afterWaitingForStart()
             await shutdown(
                 beforeDraining: beforeDraining,
+                beforeWaitingForStart: beforeWaitingForStart,
                 afterWaitingForStart: afterWaitingForStart,
                 tearDown
             )

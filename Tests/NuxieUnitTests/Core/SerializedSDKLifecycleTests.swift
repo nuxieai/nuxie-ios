@@ -144,6 +144,7 @@ final class SerializedSDKLifecycleTests: XCTestCase {
         let lifecycle = SerializedSDKLifecycle<LifecycleTestGraph>()
         let probe = LifecycleTeardownProbe()
         let postStartBarrier = LifecycleBarrier()
+        let stopReserved = expectation(description: "shutdown reserved the starting graph")
         let buildStarted = expectation(description: "graph construction started")
         let releaseBuild = DispatchSemaphore(value: 0)
 
@@ -157,7 +158,9 @@ final class SerializedSDKLifecycleTests: XCTestCase {
         await fulfillment(of: [buildStarted])
 
         let shutdown = Task {
-            await lifecycle.shutdown(afterWaitingForStart: {
+            await lifecycle.shutdown(beforeWaitingForStart: {
+                stopReserved.fulfill()
+            }, afterWaitingForStart: {
                 await postStartBarrier.pause()
             }) { graph in
                 await probe.tearDown(graph)
@@ -165,6 +168,7 @@ final class SerializedSDKLifecycleTests: XCTestCase {
         }
         XCTAssertFalse(lifecycle.isRunning)
 
+        await fulfillment(of: [stopReserved], timeout: 2)
         releaseBuild.signal()
         await postStartBarrier.waitUntilEntered()
         XCTAssertFalse(lifecycle.isRunning)
