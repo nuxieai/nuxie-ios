@@ -4,6 +4,49 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyEffectExecutionTests: JourneyTestCase {
+    func testBufferedStartupEventExecutesAfterJournalPreparation() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshot = replacing(
+            try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load()),
+            entry: .init(type: .event, eventName: "startup_trigger", segmentId: nil, member: nil, condition: nil),
+            reentry: .init(type: .everyTime, windowSeconds: nil)
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = MockEventStore()
+        let events = EventLog(identity: identity, dateProvider: MockDateProvider(),
+                              apiClient: MockNuxieApi(), store: store)
+        let service = JourneyService(
+            identity: identity, events: events,
+            dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
+            journalDirectory: directory, featureAccess: { _ in nil },
+            dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
+        )
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        await events.subscribeCommitted { event in await service.handleEvent(event) }
+        events.track("startup_trigger")
+        await service.prepareForEvents()
+        let configuration = NuxieConfiguration(apiKey: "startup-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await events.configure(configuration: configuration)
+        // Force the earliest legal delivery, before recovery finishes. A
+        // configure-before-initialize reorder alone drops this event.
+        await events.drain()
+        XCTAssertEqual(store.storedEvents.filter {
+            $0.name == JourneyEvents.journeyStarted
+        }.count, 1)
+        await service.initialize()
+        await events.drain()
+        XCTAssertEqual(store.storedEvents.filter {
+            $0.name == JourneyEvents.journeyStarted
+        }.count, 1)
+        await service.shutdown()
+        await events.close()
+    }
+
     func testSendEventRoutesTheDurableCaptureToCommittedSubscribers() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let snapshot = try await authenticatedSnapshot(fixture)

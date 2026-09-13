@@ -467,6 +467,53 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         ))
     }
 
+    func testWarmJourneyRecoveryDoesNotWaitForItsOwnEventLogStartup() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        let identity = MockIdentityService()
+        identity.setDistinctId("returning-customer")
+        let log = EventLog(
+            identity: identity,
+            dateProvider: MockDateProvider(),
+            apiClient: MockNuxieApi(),
+            store: SQLiteEventStore()
+        )
+        // A cached authenticated profile establishes this scope before SDK
+        // startup. Keep the real journal and EventLog readiness gate.
+        let journeys = JourneyService(
+            identity: identity, events: log,
+            dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
+            journalDirectory: directory.appendingPathComponent("journeys"),
+            storageScope: .testFixture, featureAccess: { _ in nil },
+            dispatcher: JourneyEffectDispatcher(identity: identity, events: log),
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
+        )
+        var overrides = mocks.unitTestOverrides()
+        overrides.identity = identity
+        overrides.eventLog = log
+        overrides.journeys = journeys
+        let configuration = NuxieConfiguration(apiKey: "warm-start-test")
+        configuration.testingOverrides.customStoragePath = directory
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try sdk.setup(with: configuration, overrides: overrides)
+        let completed = expectation(description: "warm startup completes")
+        let startup = Task {
+            await sdk.waitForStartupTasks()
+            completed.fulfill()
+        }
+        await fulfillment(of: [completed], timeout: 2)
+        // Unwedge RED so the suite reports failure instead of hanging.
+        try await log.configure(configuration: configuration)
+        await startup.value
+        await sdk.shutdown()
+    }
+
     func testSetupAcceptsZeroRetryDelayAndExistingDefaults() async throws {
         let sdk = NuxieSDK.shared
         await sdk.shutdown()

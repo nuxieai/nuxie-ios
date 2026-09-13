@@ -21,6 +21,7 @@ protocol JourneyProfileConsuming: AnyObject, Sendable {
 }
 
 protocol JourneyServiceProtocol: JourneyProfileConsuming {
+    func prepareForEvents() async
     func initialize() async
     func handleEvent(_ event: NuxieEvent) async
     func handleEvent(
@@ -36,6 +37,7 @@ protocol JourneyServiceProtocol: JourneyProfileConsuming {
 }
 
 extension JourneyServiceProtocol {
+    func prepareForEvents() async {}
     func shutdown() async {}
 }
 
@@ -132,6 +134,7 @@ actor JourneyService {
     private let currentDeviceTimezone: TimeZone
 
     private var initialized = false
+    private var startupRecoveryStarted = false
     /// Setup occurs while the host app is in its launch foreground session.
     /// Lifecycle notifications close and reopen this latch thereafter.
     private var foreground = true
@@ -232,15 +235,26 @@ actor JourneyService {
 // MARK: - Runtime lifecycle and profile publication
 
 extension JourneyService {
-    func initialize() async {
+    /// Install and repair durable state before EventLog releases buffered
+    /// captures. This phase must never capture, query or replay EventLog events.
+    func prepareForEvents() async {
         guard !initialized else { return }
+        if storageScope != nil {
+            await prepareJournal(for: identity.getDistinctId())
+        }
         initialized = true
         await presenter?.setJourneyPresentationAvailabilityHandler {
             [weak self] in
             Task { await self?.presentationDidBecomeAvailable() }
         }
-        if storageScope != nil {
-            await openJournal(for: identity.getDistinctId())
+    }
+
+    func initialize() async {
+        guard !startupRecoveryStarted else { return }
+        startupRecoveryStarted = true
+        await prepareForEvents()
+        if let journal {
+            await recoverJournal(journal)
         }
         await resetForegroundStateArmReceiptsIfNeeded()
         await resumeParkedRuns(event: nil)
@@ -254,6 +268,7 @@ extension JourneyService {
         // surface. Renderer callbacks emitted by teardown then fail every
         // profile and execution-fence check.
         initialized = false
+        startupRecoveryStarted = false
         foreground = false
         cancelWake()
         await presenter?.setJourneyPresentationAvailabilityHandler(nil)
@@ -832,6 +847,13 @@ private extension JourneyService {
     }
 
     private func openJournal(for distinctId: String) async {
+        await prepareJournal(for: distinctId)
+        if let journal, journal.distinctId == distinctId {
+            await recoverJournal(journal)
+        }
+    }
+
+    private func prepareJournal(for distinctId: String) async {
         guard let storageScope else {
             journal = nil
             return
@@ -854,8 +876,16 @@ private extension JourneyService {
             // retained renderer route can advance it. Parked runs remain
             // eligible for publication recovery and current-fact wakeup.
             _ = try await opened.recover(at: dateProvider.now())
+        } catch {
+            LogError("JourneyService: durable journal preparation failed: \(error)")
+            journal = nil
+        }
+    }
+
+    private func recoverJournal(_ opened: JourneyRunJournal) async {
+        do {
             guard await events.replayPendingStableRoutes(
-                distinctId: distinctId
+                distinctId: opened.distinctId
             ) else {
                 throw JourneyJournalError.invalidState
             }
