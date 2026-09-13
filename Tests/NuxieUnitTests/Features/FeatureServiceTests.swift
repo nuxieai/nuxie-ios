@@ -131,6 +131,27 @@ final class FeatureServiceTests: AsyncSpec {
                 storageURLs.removeAll()
             }
 
+            for aggregateUnlimited in [false, true] {
+                it("queries entity authority when only aggregate profile authority is available (unlimited=\(aggregateUnlimited))") {
+                    mockProfileService.setProfileResponse(TestJourneyProfile.response(features: [
+                        Feature(id: "credits", type: .metered, balance: 100, unlimited: aggregateUnlimited,
+                            nextResetAt: nil, interval: nil,
+                            entities: aggregateUnlimited ? ["project-a": EntityBalance(balance: 0)] : nil)
+                    ]))
+                    _ = try await mockProfileService.refetchProfile(distinctId: "customer-123")
+                    await featureCheck.setResponse(FeatureCheckResult(
+                        customerId: "customer-123", featureId: "credits", requiredBalance: 1,
+                        code: "feature_found", allowed: true, unlimited: false, balance: 2,
+                        type: .metered, preview: nil))
+                    let access = try await featureService.checkWithCache(featureId: "credits",
+                        requiredBalance: 1, entityId: "project-a", forceRefresh: false)
+                    expect(access.balance).to(equal(2))
+                    expect(access.unlimited).to(beFalse())
+                    let count = await featureCheck.recordedRequestCount()
+                    expect(count).to(equal(1))
+                }
+            }
+
             it("keeps transitive credit units separate from requested feature access") {
                 await featureService.applyAuthoritativeUse(
                     FeatureCheckResult(

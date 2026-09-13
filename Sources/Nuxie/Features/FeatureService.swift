@@ -265,6 +265,8 @@ internal actor FeatureService: FeatureServiceProtocol {
            let feature = profile.planeProfile.features.first(where: { $0.id == featureId }) {
             // For entity-based features, check entity balance
             if let entityId = entityId {
+                // Aggregate unlimited access says nothing about this entity.
+                guard !feature.unlimited else { return nil }
                 if let entityBalance = feature.entities?[entityId] {
                     return FeatureAccess(
                         from: Feature(
@@ -278,10 +280,9 @@ internal actor FeatureService: FeatureServiceProtocol {
                         )
                     )
                 }
-                // Entity not in cache - return denied instead of nil
-                // This allows callers to distinguish "feature exists but entity denied"
-                // from "not cached at all"
-                return FeatureAccess.notFound
+                // Profiles may contain only aggregate access. Missing entity
+                // data requires a scoped query; it is not an authoritative denial.
+                return nil
             }
             return FeatureAccess(from: feature)
         }
@@ -533,7 +534,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         let admittedAt = dateProvider.now()
         let info = featureInfo
         await MainActor.run {
-            identity.publishIfCurrentIdentityFenceToken(token) {
+            _ = identity.publishIfCurrentIdentityFenceToken(token) {
                 info.admitProfileSnapshot(allFeatures, admittedAt: admittedAt)
             }
         }
