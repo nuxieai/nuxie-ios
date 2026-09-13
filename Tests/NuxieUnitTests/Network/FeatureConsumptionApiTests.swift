@@ -40,4 +40,20 @@ final class FeatureConsumptionApiTests: XCTestCase {
             session.invalidateAndCancel()
         }
     }
+    func testPurchaseReceiptPreservesReplayStatus() async throws {
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+             Data(#"{"customerId":"customer","featureId":"credits","operationId":"purchase-use","quantity":1,"accepted":true,"code":"consumed","balance":3,"unlimited":false,"active":true,"type":"metered","occurredAtMs":1234,"idempotentReplay":true}"#.utf8))
+        })
+        let session = TestURLSessionProvider.createNuxieTestSession()
+        defer { session.invalidateAndCancel() }
+        let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
+        let response = try await api.useFeatureWithPurchase(.init(customerId: "customer", featureId: "credits",
+            requiredBalance: 1, eventData: .init(value: 1, properties: nil), entityId: nil,
+            purchase: .init(transactionJwt: "signed-jws", eventId: "purchase-use")))
+        XCTAssertEqual(response.idempotentReplay, true)
+        XCTAssertEqual(response.balance, 3)
+    }
+
 }

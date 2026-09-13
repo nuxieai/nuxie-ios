@@ -634,7 +634,8 @@ extension NuxieApi {
             throw NuxieNetworkError.invalidResponse
         }
         return PurchaseBackedFeatureUseResponse(customerId: response.customerId, featureId: response.featureId,
-            code: response.code, allowed: response.active, unlimited: response.unlimited, balance: response.balance, type: type)
+            code: response.code, allowed: response.active, unlimited: response.unlimited, balance: response.balance,
+            type: type, idempotentReplay: response.idempotentReplay)
     }
 
     func appStoreIntroEligibilityToken(

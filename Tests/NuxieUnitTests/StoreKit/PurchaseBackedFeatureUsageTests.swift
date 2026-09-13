@@ -144,6 +144,10 @@ private final class UnreadablePendingPurchaseStore: PendingPurchaseStoreProtocol
 private actor PurchaseBackedFeatureRecorder: FeatureServiceProtocol {
     private var updates: [(FeatureCheckResult, String, String, String?)] = []
     private var purchaseUpdateCount = 0
+    private var invalidations = 0
+
+    func invalidateAccess(featureId: String, entityId: String?, distinctId: String) async { invalidations += 1 }
+    func invalidationCount() -> Int { invalidations }
 
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess? { nil }
     func getAllCached() async -> [String: FeatureAccess] { [:] }
@@ -442,58 +446,62 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
     }
 
     func testMatchingPurchaseEvidenceIsAppliedAndConsumedAtomically() async throws {
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer-a")
-        let store = InMemoryTransactionEvidenceStore()
-        XCTAssertTrue(store.save([
-            "transaction-1": evidence(
-                transactionId: "transaction-1",
+        for replay in [false, true] {
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer-a")
+            let store = InMemoryTransactionEvidenceStore()
+            XCTAssertTrue(store.save([
+                "transaction-1": evidence(
+                    transactionId: "transaction-1",
+                    distinctId: "customer-a",
+                    featureIds: ["credits"]
+                ),
+            ]))
+            let response = PurchaseBackedFeatureUseResponse(
+                customerId: "customer-a",
+                featureId: "credits",
+                code: "entitled",
+                allowed: true,
+                unlimited: false,
+                balance: 3,
+                type: .creditSystem, idempotentReplay: replay
+            )
+            let api = PurchaseBackedUsageAPI(results: [.success(response)])
+            let features = PurchaseBackedFeatureRecorder()
+            let observer = makeObserver(
+                api: api,
+                features: features,
+                identity: identity,
+                store: store
+            )
+
+            let result = try await observer.useFeatureWithPendingPurchase(
                 distinctId: "customer-a",
-                featureIds: ["credits"]
-            ),
-        ]))
-        let response = PurchaseBackedFeatureUseResponse(
-            customerId: "customer-a",
-            featureId: "credits",
-            code: "entitled",
-            allowed: true,
-            unlimited: false,
-            balance: 3,
-            type: .creditSystem
-        )
-        let api = PurchaseBackedUsageAPI(results: [.success(response)])
-        let features = PurchaseBackedFeatureRecorder()
-        let observer = makeObserver(
-            api: api,
-            features: features,
-            identity: identity,
-            store: store
-        )
+                featureId: "credits",
+                amount: 2,
+                entityId: "workspace-1",
+                metadata: ["source": AnyCodable("export")]
+            )
 
-        let result = try await observer.useFeatureWithPendingPurchase(
-            distinctId: "customer-a",
-            featureId: "credits",
-            amount: 2,
-            entityId: "workspace-1",
-            metadata: ["source": AnyCodable("export")]
-        )
-
-        XCTAssertNil(result?.usage)
-        XCTAssertEqual(result?.authoritativeAccess?.balance, 3)
-        let recordedRequests = await api.recordedRequests()
-        let request = try XCTUnwrap(recordedRequests.first)
-        XCTAssertEqual(request.customerId, "customer-a")
-        XCTAssertEqual(request.featureId, "credits")
-        XCTAssertEqual(request.requiredBalance, 2)
-        XCTAssertEqual(request.entityId, "workspace-1")
-        XCTAssertEqual(request.purchase.transactionJwt, "signed-transaction-1")
-        XCTAssertEqual(request.eventData.value, 2)
-        XCTAssertEqual(request.eventData.properties?["source"], AnyCodable("export"))
-        XCTAssertFalse(request.purchase.eventId.isEmpty)
-        XCTAssertEqual(request.idempotencyKey, request.purchase.eventId)
-        let updateCount = await features.recordedUpdates().count
-        XCTAssertEqual(updateCount, 1)
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+            XCTAssertNil(result?.usage)
+            XCTAssertEqual(result?.authoritativeAccess?.balance, 3)
+            let recordedRequests = await api.recordedRequests()
+            let request = try XCTUnwrap(recordedRequests.first)
+            XCTAssertEqual(request.customerId, "customer-a")
+            XCTAssertEqual(request.featureId, "credits")
+            XCTAssertEqual(request.requiredBalance, 2)
+            XCTAssertEqual(request.entityId, "workspace-1")
+            XCTAssertEqual(request.purchase.transactionJwt, "signed-transaction-1")
+            XCTAssertEqual(request.eventData.value, 2)
+            XCTAssertEqual(request.eventData.properties?["source"], AnyCodable("export"))
+            XCTAssertFalse(request.purchase.eventId.isEmpty)
+            XCTAssertEqual(request.idempotencyKey, request.purchase.eventId)
+            let updateCount = await features.recordedUpdates().count
+            XCTAssertEqual(updateCount, replay ? 0 : 1)
+            let invalidationCount = await features.invalidationCount()
+            XCTAssertEqual(invalidationCount, replay ? 1 : 0)
+            XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+        }
     }
 
     func testProjectionRefreshRoutesConcurrentSpendAwayFromAtomicShortcut() async throws {
