@@ -390,7 +390,8 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         amount: 1,
                         entityId: nil,
                         setUsage: false,
-                        metadata: nil
+                        metadata: nil,
+                        operationId: "stable-retry"
                     )
                 }.to(throwError(NuxieNetworkError.timeout))
                 let capturedIdentity = try unwrap(try store.load().first?.identity)
@@ -423,7 +424,8 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                     amount: 1,
                     entityId: nil,
                     setUsage: false,
-                    metadata: nil
+                    metadata: nil,
+                        operationId: "stable-retry"
                 )
 
                 expect(result.success).to(beTrue())
@@ -484,7 +486,8 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         amount: 1,
                         entityId: nil,
                         setUsage: false,
-                        metadata: nil
+                        metadata: nil,
+                        operationId: "stable-retry"
                     )
                 }.to(throwError(NuxieNetworkError.timeout))
 
@@ -512,7 +515,8 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                     amount: 1,
                     entityId: nil,
                     setUsage: false,
-                    metadata: nil
+                    metadata: nil,
+                        operationId: "stable-retry"
                 )
 
                 expect(result.success).to(beTrue())
@@ -718,7 +722,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 expect(try store.load()).to(beEmpty())
             }
 
-            it("allows exactly one identical foreground call to join recovery") {
+            it("allows an explicit retry to join recovery while a convenience call spends separately") {
                 let operationId = UUID.v7().uuidString
                 let createdAt = Date(timeIntervalSince1970: 1_788_000_050)
                 let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
@@ -770,7 +774,8 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         amount: 1,
                         entityId: nil,
                         setUsage: false,
-                        metadata: ["model": "study-review"]
+                        metadata: ["model": "study-review"],
+                        operationId: operationId
                     )
                 }
                 await identity.waitForSuspendedDistinctIdRead()
