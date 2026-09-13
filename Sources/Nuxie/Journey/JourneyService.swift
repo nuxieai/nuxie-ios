@@ -1684,7 +1684,10 @@ private extension JourneyService {
             return false
         }
         guard var run = runs.first(where: { $0.id == runId }) else {
-            return false
+            // This callback belongs to an admitted presentation. Its run may
+            // already have completed and retired while the host hid the
+            // surface; there is no remaining Journey transition to await.
+            return true
         }
         if run.completion != nil {
             do {
