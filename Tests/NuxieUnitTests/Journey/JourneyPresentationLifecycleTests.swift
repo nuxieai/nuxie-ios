@@ -4,6 +4,39 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyPresentationLifecycleTests: JourneyTestCase {
+    func testHostDismissalAcknowledgesAnAlreadyRetiredJourney() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let base = try await authenticatedRenderedSnapshot(fixture)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let presenter = await MainActor.run { RecordingJourneyPresenter() }
+        let service = makeService(
+            identity: identity, events: events, directory: directory,
+            presenter: presenter
+        )
+        await service.initialize()
+        await service.profileDidCommit(
+            renderedDismissalCompletionSnapshot(base), distinctId: "customer"
+        )
+        let presentedRequest = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presentedRequest)
+        let completed = await request.onScreenDismissed("screen_welcome", nil, "user")
+        XCTAssertEqual(completed, .completed)
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let runs = try await journal.runs()
+        XCTAssertTrue(runs.isEmpty)
+
+        let acknowledged = await request.onOutcome(.dismissed, "screen_welcome")
+        XCTAssertTrue(acknowledged, "Host teardown must settle after the Journey has retired")
+        XCTAssertEqual(events.routedEvents.filter {
+            $0.name == JourneyEvents.journeyCompleted
+        }.count, 1)
+    }
+
     func testRenderedScreenLifecycleEventsAreDurablyRoutedWithJourneyAttribution() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
