@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // MARK: - Feature Access
@@ -225,6 +226,7 @@ struct PurchaseBackedFeatureUseResponse: Codable, Sendable {
     let balance: Double?
     let type: FeatureType
     var idempotentReplay: Bool? = nil
+    var consumptionReceipt: FeatureConsumeResponse? = nil
 
     func featureCheckResult(requiredBalance: Double) -> FeatureCheckResult {
         FeatureCheckResult(
@@ -433,6 +435,17 @@ struct FeatureConsumeResponse: Codable, Sendable {
     let active: Bool
     let occurredAtMs: Double?
     let idempotentReplay: Bool
+
+    func historyEventId(scope: String) -> String {
+        let components = [scope, customerId, operationId]
+        let value = components.map { "\($0.utf8.count):\($0)" }.joined()
+        let digest = SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "nuxie-feature-consumption:\(digest)"
+    }
+
+    var occurredAt: Date? {
+        occurredAtMs.flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0 / 1000) : nil }
+    }
 
     var journalResponse: EventResponse {
         EventResponse(status: accepted ? "ok" : "denied", eventId: operationId,

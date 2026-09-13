@@ -219,4 +219,29 @@ final class FeatureCommandReceiptTests: XCTestCase {
         XCTAssertNil(info.balance("credits"))
     }
 
+    func testHistoryScopesCallerIdsAndKeepsOriginalReceiptTime() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let identity = MockIdentityService()
+        let events = MockEventLog()
+        let session = TestURLSessionProvider.createNuxieTestSession()
+        defer { session.invalidateAndCancel() }
+        let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
+        registerReceipt()
+        let queue = FeatureUseCommandQueue(api: api, identity: identity, eventLog: events, featureInfo: FeatureInfo(),
+            dateProvider: MockDateProvider(), store: FeatureUseCommandStore(customStoragePath: directory,
+                appIdentifier: "receipt-tests", environment: .production), historyScope: "app-test")
+        for customer in ["customer-a", "customer-b", "customer-a"] {
+            identity.setDistinctId(customer)
+            let result = try await queue.use(distinctId: customer, featureId: "credits", amount: 1,
+                entityId: nil, setUsage: false, metadata: nil, operationId: "use-1")
+            XCTAssertEqual(result.consumptionReceipt?.operationId, "use-1")
+        }
+        let history = events.routedEvents
+        XCTAssertEqual(history.count, 3)
+        XCTAssertNotEqual(history[0].id, history[1].id)
+        XCTAssertEqual(history[0].id, history[2].id, "Completed command retries must reuse the history identity")
+        XCTAssertTrue(history.allSatisfy { $0.timestamp == Date(timeIntervalSince1970: 1.234) })
+    }
+
 }

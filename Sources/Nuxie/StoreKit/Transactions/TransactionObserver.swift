@@ -2143,7 +2143,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     authoritative: check,
                     requestedFeatureId: featureId
                 )
-                return FeatureUsageResult(
+                var result = FeatureUsageResult(
                     success: true,
                     featureId: featureId,
                     amountUsed: amount,
@@ -2151,6 +2151,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     usage: nil,
                     authoritativeAccess: access
                 )
+                result.consumptionReceipt = response.consumptionReceipt
+                return result
             } catch {
                 releasePurchaseUsageClaim(transactionId: evidence.transactionId)
                 throw error

@@ -635,7 +635,7 @@ extension NuxieApi {
         }
         return PurchaseBackedFeatureUseResponse(customerId: response.customerId, featureId: response.featureId,
             code: response.code, allowed: response.active, unlimited: response.unlimited, balance: response.balance,
-            type: type, idempotentReplay: response.idempotentReplay)
+            type: type, idempotentReplay: response.idempotentReplay, consumptionReceipt: response)
     }
 
     func appStoreIntroEligibilityToken(

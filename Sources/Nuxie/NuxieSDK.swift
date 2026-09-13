@@ -893,9 +893,12 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
           amount: amount,
           entityId: entityId,
           metadata: metadata,
-          eventId: nil,
+          eventId: purchaseBackedResult.consumptionReceipt?.historyEventId(scope: ProfileStorageScope(
+            apiKey: core.configuration.apiKey, environment: core.configuration.environment
+          ).cacheSubdirectory),
           distinctId: distinctId,
-          eventLog: core.eventLog
+          eventLog: core.eventLog,
+          timestamp: purchaseBackedResult.consumptionReceipt?.occurredAt
         )
       }
       return purchaseBackedResult
@@ -968,7 +971,8 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     metadata: [String: Any]?,
     eventId: String?,
     distinctId: String,
-    eventLog: EventLogProtocol
+    eventLog: EventLogProtocol,
+    timestamp: Date? = nil
   ) async {
     var captureProperties: [String: Any] = [
       "feature_id": featureId,
@@ -982,7 +986,8 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       id: eventId ?? UUID.v7().uuidString,
       name: SystemEventNames.featureUsed,
       distinctId: distinctId,
-      properties: enriched
+      properties: enriched,
+      timestamp: timestamp ?? Date()
     )
     if let prepared = await eventLog.applyBeforeSend(to: exactEvent) {
       await eventLog.storePreparedEventInHistory(prepared)
