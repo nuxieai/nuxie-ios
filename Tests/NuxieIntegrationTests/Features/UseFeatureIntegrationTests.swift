@@ -273,15 +273,12 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     expect(lastCall?.value).to(equal(10.0))
                 }
 
-                it("should handle fractional amounts") {
-                    await mockApi.configureTrackEventResponse(status: "ok")
-
-                    let result = try await NuxieSDK.shared.useFeatureAndWait("tokens", amount: 2.5)
-
-                    expect(result.amountUsed).to(equal(2.5))
-
-                    let lastCall = await mockApi.lastTrackEventCall
-                    expect(lastCall?.value).to(equal(2.5))
+                it("rejects fractional consumption before delivery") {
+                    await expect {
+                        try await NuxieSDK.shared.useFeatureAndWait("tokens", amount: 2.5)
+                    }.to(throwError())
+                    let calls = await mockApi.trackEventCalls.filter { $0.event == SystemEventNames.featureUsed }
+                    expect(calls).to(beEmpty())
                 }
             }
 
@@ -341,7 +338,7 @@ final class UseFeatureIntegrationTests: AsyncSpec {
             // MARK: - Metadata Tests
 
             describe("metadata") {
-                it("should include metadata when provided") {
+                it("retains metadata in delivered history") {
                     await mockApi.configureTrackEventResponse(status: "ok")
 
                     _ = try await NuxieSDK.shared.useFeatureAndWait(
@@ -354,7 +351,7 @@ final class UseFeatureIntegrationTests: AsyncSpec {
 
                     let lastCall = await mockApi.lastTrackEventCall
                     let props = lastCall?.properties
-                    let metadata = props?["metadata"] as? [String: Any]
+                    let metadata = mocks.eventLog.routedEvents.last { $0.name == SystemEventNames.featureUsed }?.properties["metadata"] as? [String: Any]
                     expect(metadata?["format"] as? String).to(equal("pdf"))
                     expect(metadata?["pages"] as? Int).to(equal(10))
                 }
@@ -505,7 +502,7 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     let props = lastCall?.properties
                     expect(props?["feature_extId"] as? String).to(equal("premium_feature"))
 
-                    let metadata = props?["metadata"] as? [String: Any]
+                    let metadata = mocks.eventLog.routedEvents.last { $0.name == SystemEventNames.featureUsed }?.properties["metadata"] as? [String: Any]
                     expect(metadata?["reason"] as? String).to(equal("test"))
                     expect(metadata?["count"] as? Int).to(equal(42))
                 }
@@ -526,21 +523,18 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     expect(props?["feature_extId"] as? String).to(equal(""))
                 }
 
-                it("should handle zero amount") {
-                    await mockApi.configureTrackEventResponse(status: "ok")
-
-                    let result = try await NuxieSDK.shared.useFeatureAndWait("feature", amount: 0)
-
-                    expect(result.amountUsed).to(equal(0))
-
-                    let lastCall = await mockApi.lastTrackEventCall
-                    expect(lastCall?.value).to(equal(0))
+                it("rejects zero consumption before delivery") {
+                    await expect {
+                        try await NuxieSDK.shared.useFeatureAndWait("tokens", amount: 0)
+                    }.to(throwError())
+                    let calls = await mockApi.trackEventCalls.filter { $0.event == SystemEventNames.featureUsed }
+                    expect(calls).to(beEmpty())
                 }
 
                 it("should handle very large amounts") {
                     await mockApi.configureTrackEventResponse(status: "ok")
 
-                    let largeAmount = 999999999.99
+                    let largeAmount = 999999999.0
                     let result = try await NuxieSDK.shared.useFeatureAndWait("feature", amount: largeAmount)
 
                     expect(result.amountUsed).to(beCloseTo(largeAmount, within: 0.01))
@@ -563,7 +557,7 @@ final class UseFeatureIntegrationTests: AsyncSpec {
                     expect(props?["feature_extId"] as? String).to(equal("feature-with_special.chars:v2"))
                     expect(lastCall?.entityId).to(equal("org:123/project:456"))
 
-                    let metadata = props?["metadata"] as? [String: Any]
+                    let metadata = mocks.eventLog.routedEvents.last { $0.name == SystemEventNames.featureUsed }?.properties["metadata"] as? [String: Any]
                     expect(metadata?["key with spaces"] as? String).to(equal("value/with/slashes"))
                 }
             }
