@@ -1,0 +1,23 @@
+{
+  "suite": "sdk/shutdown",
+  "version": 1,
+  "notes": [
+    "Shutdown closes public operation admission before stopping external intake and background producers.",
+    "Final consumer disposal waits for every previously admitted operation to finish or settle cancellation.",
+    "Setup cannot publish another graph during construction or teardown. After shutdown completes, a fresh setup is allowed.",
+    "Concurrent shutdown waiters join one teardown; cancelling a waiter does not cancel teardown.",
+    "Platform APIs may expose separate initiation and completion methods. Android shutdown initiates without blocking; shutdownAndAwait awaits completion."
+  ],
+  "vectors": [
+    { "name": "no admitted operations", "admittedOperations": 0 },
+    { "name": "one admitted operation", "admittedOperations": 1 },
+    { "name": "several admitted operations", "admittedOperations": 3 }
+  ],
+  "expected": {
+    "admitAfterShutdown": false,
+    "setupWhileStopping": false,
+    "disposeBeforeDrain": false,
+    "setupAfterCompletion": true,
+    "teardownCount": 1
+  }
+}
