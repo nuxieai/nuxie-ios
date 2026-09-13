@@ -39,6 +39,27 @@ private actor SuspendedReceiptCheck: FeatureChecking {
     }
 }
 
+private actor ControlledFeatureRetrySleep: SleepProviderProtocol {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var started: [CheckedContinuation<Void, Never>] = []
+
+    func sleep(for duration: TimeInterval) async throws {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            started.forEach { $0.resume() }
+            started.removeAll()
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitUntilStarted() async {
+        if continuation != nil { return }
+        await withCheckedContinuation { started.append($0) }
+    }
+
+    func release() { continuation?.resume(); continuation = nil }
+}
+
 @MainActor
 final class FeatureCommandReceiptTests: XCTestCase {
     private func registerReceipt(unlimited: Bool = false, accepted: Bool = true) {
@@ -333,6 +354,46 @@ final class FeatureCommandReceiptTests: XCTestCase {
             await reopened.recover()
             XCTAssertTrue(try store.load().isEmpty)
         }
+    }
+
+    func testActiveSessionRetryDrainsPendingHeadAndSuccessfulTail() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = FeatureUseCommandStore(customStoragePath: directory, appIdentifier: "receipt-tests", environment: .production)
+        let events = MockEventLog()
+        let sleep = ControlledFeatureRetrySleep()
+        let session = TestURLSessionProvider.createNuxieTestSession()
+        defer { session.invalidateAndCancel() }
+        let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
+        let queue = FeatureUseCommandQueue(api: api, identity: identity, eventLog: events, featureInfo: FeatureInfo(),
+            dateProvider: MockDateProvider(), store: store, retrySleep: sleep)
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!, Data())
+        })
+        do {
+            _ = try await queue.use(distinctId: "customer", featureId: "credits", amount: 1,
+                entityId: nil, setUsage: false, metadata: nil)
+            XCTFail("The transient error must reach the caller")
+        } catch { XCTAssertEqual((error as? NuxieNetworkError)?.httpStatusCode, 503) }
+        await sleep.waitUntilStarted()
+        let originalId = try XCTUnwrap(store.load().first?.operationId)
+        registerReceipt()
+        let tail = try await queue.use(distinctId: "customer", featureId: "credits", amount: 1,
+            entityId: nil, setUsage: false, metadata: nil)
+        XCTAssertNotEqual(tail.consumptionReceipt?.operationId, originalId)
+        XCTAssertEqual(try store.load().count, 2)
+        await sleep.release()
+        for _ in 0..<100 {
+            if try await queue.pendingCount() == 0 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let remaining = try await queue.pendingCount()
+        XCTAssertEqual(remaining, 0)
+        XCTAssertEqual(events.routedEvents.count, 2)
+        await queue.close()
     }
 
 }
