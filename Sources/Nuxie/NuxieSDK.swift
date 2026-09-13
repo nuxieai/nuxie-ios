@@ -634,6 +634,13 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     await core.profile.localeDidChange()
   }
 
+  /// Restore purchases using the configured native or external purchase owner.
+  public func restorePurchases() async -> RestoreResult {
+    guard let core else { return .failed(NuxieError.notConfigured) }
+    do { return try await core.transactionService.restore() }
+    catch { return .failed(error) }
+  }
+
   /// Replace the purchase delegate used by future purchase and restore calls.
   public func setPurchaseDelegate(_ purchaseDelegate: NuxiePurchaseDelegate?) throws {
     guard let operation = runningOperation() else { throw NuxieError.notConfigured }
