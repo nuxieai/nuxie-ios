@@ -12,6 +12,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
 
     public init() {}
 
+    public func latestRequestRevision() async -> UInt64 { lock.withLock { UInt64(fetchCallCount) } }
+
     public func refetchProfile(
         distinctId: String?
     ) async throws -> ProfileResponse {
@@ -25,8 +27,10 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
                 )
             }
             let distinctId = distinctId ?? "mock-user"
-            cache[distinctId] = profileResponse
-            return profileResponse
+            var response = profileResponse
+            response.requestRevision = UInt64(fetchCallCount)
+            cache[distinctId] = response
+            return response
         }
     }
 

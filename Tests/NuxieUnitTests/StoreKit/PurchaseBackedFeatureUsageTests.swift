@@ -499,7 +499,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             let updateCount = await features.recordedUpdates().count
             XCTAssertEqual(updateCount, replay ? 0 : 1)
             let invalidationCount = await features.invalidationCount()
-            XCTAssertEqual(invalidationCount, replay ? 1 : 0)
+            XCTAssertEqual(invalidationCount, 1)
             XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
         }
     }

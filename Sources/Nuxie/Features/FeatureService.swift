@@ -196,6 +196,7 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     // In-memory cache for fresh feature access overrides from real-time checks and purchase syncs.
     // These values are newer than the profile snapshot and should win until they expire.
+    private var invalidatedProfileRevisions: [String: UInt64] = [:]
     private var invalidatedCacheRevisions: [String: UInt64] = [:]
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
     /// Monotonic per-feature mutation revision. A feature check captures this
@@ -264,13 +265,12 @@ internal actor FeatureService: FeatureServiceProtocol {
                 return cached.override.access(requiredBalance: requiredBalance)
             }
         }
-        guard invalidatedCacheRevisions[featureId] == nil else { return nil }
         let distinctId = identityService.getDistinctId()
 
         // Fall back to the profile cache (features from profile response)
         if let profile = await profileService.getCachedProfile(distinctId: distinctId),
            let feature = profile.planeProfile.features.first(where: { $0.id == featureId }) {
-            guard invalidatedCacheRevisions[featureId] == nil else { return nil }
+            guard profileIsCurrent(profile, featureId: featureId) else { return nil }
             // For entity-based features, check entity balance
             if let entityId = entityId {
                 // Aggregate unlimited access says nothing about this entity.
@@ -341,7 +341,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         if let profile = await profileService.getCachedProfile(distinctId: distinctId) {
             let features = profile.planeProfile.features
             for feature in features {
-                guard invalidatedCacheRevisions[feature.id] == nil else { continue }
+                guard profileIsCurrent(profile, featureId: feature.id) else { continue }
                 result[feature.id] = FeatureAccess(from: feature)
             }
         }
@@ -613,6 +613,11 @@ internal actor FeatureService: FeatureServiceProtocol {
         LogInfo("Feature cache updated from purchase")
     }
 
+    private func profileIsCurrent(_ profile: ProfileResponse, featureId: String) -> Bool {
+        guard let invalidatedAt = invalidatedProfileRevisions[featureId] else { return true }
+        return (profile.requestRevision ?? 0) > invalidatedAt
+    }
+
     func invalidateAccess(featureId: String, entityId: String?, distinctId: String) async {
         await synchronizeCustomerScopeIfNeeded()
         guard identityService.getDistinctId() == distinctId else { return }
@@ -621,6 +626,11 @@ internal actor FeatureService: FeatureServiceProtocol {
         committedCacheRevisions = committedCacheRevisions.filter { $0.key.featureId != featureId }
         // A profile may predate the spend even after a real-time override expires.
         invalidatedCacheRevisions[featureId] = featureMutationRevisions[featureId]
+        invalidatedProfileRevisions[featureId] = UInt64.max
+        let generation = stateGeneration
+        let revision = await profileService.latestRequestRevision()
+        guard identityService.getDistinctId() == distinctId, stateGeneration == generation else { return }
+        invalidatedProfileRevisions[featureId] = revision
     }
 
     func applyAuthoritativeUse(
@@ -689,6 +699,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         stateGeneration &+= 1
         realTimeCache.removeAll()
         invalidatedCacheRevisions.removeAll()
+        invalidatedProfileRevisions.removeAll()
         featureMutationRevisions.removeAll()
         committedCacheRevisions.removeAll()
         cacheDistinctId = distinctId

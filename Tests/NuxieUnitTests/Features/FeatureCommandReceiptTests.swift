@@ -41,12 +41,12 @@ private actor SuspendedReceiptCheck: FeatureChecking {
 
 @MainActor
 final class FeatureCommandReceiptTests: XCTestCase {
-    private func registerReceipt() {
+    private func registerReceipt(unlimited: Bool = false) {
         StubURLProtocol.reset()
         StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
             var receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
             receipt.removeValue(forKey: "apiKey")
-            receipt.merge(["accepted": true, "active": false, "balance": 0, "unlimited": false,
+            receipt.merge(["accepted": true, "active": unlimited, "balance": unlimited ? NSNull() : 0, "unlimited": unlimited,
                 "type": "metered", "code": "consumed", "occurredAtMs": 1234, "idempotentReplay": false]) { _, new in new }
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                 try JSONSerialization.data(withJSONObject: receipt))
@@ -171,6 +171,9 @@ final class FeatureCommandReceiptTests: XCTestCase {
         XCTAssertNil(all["credits"])
         await service.syncFeatureInfo()
         XCTAssertNil(info.balance("credits"))
+        _ = try await profile.refetchProfile(distinctId: "customer")
+        await service.syncFeatureInfo()
+        XCTAssertEqual(info.balance("credits"), 5, "A request begun after invalidation restores profile authority")
     }
 
     func testConsumptionInvalidatesEveryScopeOfTheFeature() async throws {
@@ -192,6 +195,28 @@ final class FeatureCommandReceiptTests: XCTestCase {
                 XCTAssertNil(cached)
             }
         }
+    }
+
+    func testUnlimitedReceiptReplacesFiniteVisibleAuthority() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let info = FeatureInfo()
+        info.admitProfileSnapshot(["credits": .withBalance(2, unlimited: false, type: .metered)], admittedAt: Date())
+        let session = TestURLSessionProvider.createNuxieTestSession()
+        defer { session.invalidateAndCancel() }
+        let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
+        registerReceipt(unlimited: true)
+        let queue = FeatureUseCommandQueue(api: api, identity: identity, eventLog: MockEventLog(), featureInfo: info,
+            dateProvider: MockDateProvider(), store: FeatureUseCommandStore(customStoragePath: directory,
+                appIdentifier: "receipt-tests", environment: .production))
+        let result = try await queue.use(distinctId: "customer", featureId: "credits", amount: 1,
+            entityId: nil, setUsage: false, metadata: nil, operationId: "unlimited")
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(info.all["credits"]?.unlimited, true)
+        XCTAssertEqual(info.all["credits"]?.allowed, true)
+        XCTAssertNil(info.balance("credits"))
     }
 
 }
