@@ -342,14 +342,9 @@ actor FeatureUseCommandQueue {
     let command: FeatureUseCommand
     let shouldDecrementVisibleBalance: Bool
     if let existing = commands?.first(where: { candidate in
-      // An overlapping identical public call is a new consumption. A durable
-      // command recovered from an earlier attempt remains joinable while its
-      // relaunch recovery is in flight.
-      (requestedOperationId == nil || candidate.operationId == requestedOperationId)
-        && (requestedOperationId != nil || candidate.result == nil)
-        && (requestedOperationId != nil || !inFlight.keys.contains(candidate.journalKey)
-        || (recoveryOwnedOperationIds.contains(candidate.journalKey)
-          && !foregroundJoinedRecoveryIds.contains(candidate.journalKey)))
+      // Only an explicitly named operation joins pending work. Each convenience
+      // invocation is a new logical consumption; recovery owns its retries.
+      requestedOperationId != nil && candidate.operationId == requestedOperationId
         && candidate.matches(
         distinctId: distinctId,
         featureId: featureId,
