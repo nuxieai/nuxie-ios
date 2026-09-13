@@ -44,6 +44,8 @@ struct ProfileResponse: Codable, Sendable {
     /// The sole SDK delivery contract. The network endpoint returns this body
     /// directly; the wrapper exists only for the SDK cache protocol.
     let planeProfile: JourneyPlaneProfile
+    /// Process-local generation of the network request that admitted this profile.
+    var requestRevision: UInt64? = nil
 
     init(planeProfile: JourneyPlaneProfile) {
         self.planeProfile = planeProfile

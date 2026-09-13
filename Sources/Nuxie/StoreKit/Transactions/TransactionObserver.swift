@@ -2127,9 +2127,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 let check = response.featureCheckResult(
                     requiredBalance: amount
                 )
-                if response.idempotentReplay == true {
-                    await featureService.invalidateAccess(featureId: featureId, entityId: entityId, distinctId: distinctId)
-                } else {
+                await featureService.invalidateAccess(featureId: featureId, entityId: entityId, distinctId: distinctId)
+                if response.featureId != featureId {
+                    await featureService.invalidateAccess(featureId: response.featureId, entityId: entityId, distinctId: distinctId)
+                }
+                if response.idempotentReplay != true {
                     await featureService.applyAuthoritativeUse(
                         check,
                         requestedFeatureId: featureId,

@@ -653,8 +653,11 @@ actor FeatureUseCommandQueue {
     durableResult: FeatureUseCommand.DurableResult,
     recoveryAdmission: FeatureRecoveryAdmission?
   ) async throws {
-    guard durableResult.response.consumption?.idempotentReplay != true, command.entityId == nil, identity.getDistinctId() == command.distinctId,
-          let remaining = durableResult.response.consumption?.balance ?? durableResult.response.usage?.remaining else { return }
+    guard durableResult.response.consumption?.idempotentReplay != true, command.entityId == nil, identity.getDistinctId() == command.distinctId else { return }
+    let receipt = durableResult.response.consumption
+    let access = receipt.flatMap { receipt in
+      receipt.type.map { FeatureAccess(allowed: receipt.active, unlimited: receipt.unlimited, balance: receipt.balance, type: $0) }
+    }
     try admitRecoverySideEffect(
       operationId: command.operationId,
       admission: recoveryAdmission
@@ -664,7 +667,8 @@ actor FeatureUseCommandQueue {
       let emission = identity.performIfCurrentDistinctIdMatches(command.distinctId) { _ in
         featureInfo.commitCommandBalanceIfFresh(
           featureId,
-          balance: remaining,
+          balance: durableResult.response.usage?.remaining,
+          access: access,
           responseAuthority: durableResult.balanceAuthority
         )
       }.flatMap { $0 }

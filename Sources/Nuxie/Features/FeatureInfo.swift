@@ -225,7 +225,8 @@ public final class FeatureInfo: ObservableObject {
 
     internal func commitCommandBalanceIfFresh(
         _ featureId: String,
-        balance: Double,
+        balance: Double? = nil,
+        access: FeatureAccess? = nil,
         responseAuthority: FeatureBalanceAuthority
     ) -> CommandBalanceEmission? {
         let currentGeneration = balanceAuthorityGenerations[featureId] ?? 0
@@ -249,11 +250,11 @@ public final class FeatureInfo: ObservableObject {
         }
         let authoritativeAccess = authoritative[featureId]
 
-        let newAccess = FeatureAccess.withBalance(
-            balance,
+        guard let newAccess = access ?? balance.map({ FeatureAccess.withBalance(
+            $0,
             unlimited: authoritativeAccess?.unlimited ?? false,
             type: authoritativeAccess?.type ?? oldAccess.type
-        )
+        ) }) else { return nil }
         return CommandBalanceEmission(
             featureId: featureId,
             oldAccess: oldAccess,

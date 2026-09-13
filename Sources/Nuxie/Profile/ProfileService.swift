@@ -9,6 +9,7 @@ struct ProfileRefreshCancellationError: LocalizedError, Sendable {
 }
 
 protocol ProfileServiceProtocol: AnyObject, Sendable {
+    func latestRequestRevision() async -> UInt64
     func getCachedProfile(distinctId: String) async -> ProfileResponse?
     func localeDidChange() async
     func clearCache(distinctId: String) async
@@ -21,6 +22,7 @@ protocol ProfileServiceProtocol: AnyObject, Sendable {
 }
 
 extension ProfileServiceProtocol {
+    func latestRequestRevision() async -> UInt64 { 0 }
     @discardableResult
     func refetchProfile() async throws -> ProfileResponse {
         try await refetchProfile(distinctId: nil)
@@ -148,6 +150,9 @@ internal actor ProfileService: ProfileServiceProtocol {
         let generation: UInt64
         let locale: String
     }
+
+    private var requestRevision: UInt64 = 0
+    func latestRequestRevision() async -> UInt64 { requestRevision }
 
     private var cachedProfile: CachedProfile?
     private let diskCache: any CachedProfileStore
@@ -325,6 +330,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         await awaitInitialDiskLoad()
         let distinctId = requestedId ?? identity.getDistinctId()
         let admission = beginAdmission(distinctId: distinctId)
+        requestRevision &+= 1
+        let admittedRequestRevision = requestRevision
         let previous = cachedProfile?.distinctId == distinctId
             && cachedProfile?.locale == admission.locale
             ? cachedProfile
@@ -339,7 +346,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         }
 
         switch result {
-        case .modified(let response, let validator):
+        case .modified(var response, let validator):
+            response.requestRevision = admittedRequestRevision
             guard let validator, validator.authority != nil else {
                 throw NuxieNetworkError.invalidResponse
             }
@@ -364,8 +372,10 @@ internal actor ProfileService: ProfileServiceProtocol {
             guard let previous, previous.validator != nil else {
                 throw NuxieNetworkError.invalidResponse
             }
+            var response = previous.response
+            response.requestRevision = admittedRequestRevision
             let refreshed = CachedProfile(
-                response: previous.response,
+                response: response,
                 distinctId: previous.distinctId,
                 cachedAt: dateProvider.now(),
                 validator: previous.validator,
