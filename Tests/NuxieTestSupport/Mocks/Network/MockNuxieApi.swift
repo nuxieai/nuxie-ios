@@ -3,6 +3,14 @@ import Foundation
 
 /// Mock implementation of NuxieApi for testing
 public actor MockNuxieApi: NuxieApiProtocol {
+    public func consumeFeature(_ request: FeatureConsumeRequest) async throws -> EventResponse {
+        var properties: [String: Any] = ["feature_extId": request.featureId, "value": request.quantity]
+        if request.mode == "set_usage" { properties["setUsage"] = true }
+        if let entityId = request.entityId { properties["entityId"] = entityId }
+        return try await trackEvent(NuxieEvent(id: request.operationId, name: SystemEventNames.featureUsed,
+            distinctId: request.customerId, properties: properties))
+    }
+
     // Response configuration
     public var shouldFailProfile = false
     public var shouldFailBatch = false

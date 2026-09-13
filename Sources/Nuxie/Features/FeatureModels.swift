@@ -289,6 +289,7 @@ struct PurchaseFeature: Codable, Sendable {
 
 /// Result of a feature usage report
 public struct FeatureUsageResult: Sendable {
+    internal var consumptionReceipt: FeatureConsumeResponse? = nil
     /// Whether the usage was recorded successfully
     public let success: Bool
 
@@ -405,5 +406,61 @@ public struct FeatureUsageResult: Sendable {
             "usage": AnyCodable(usageValue),
             "authoritativeAccess": AnyCodable(authoritativeAccessValue),
         ]
+    }
+}
+
+
+struct FeatureConsumeRequest: Codable, Sendable {
+    var mode: String? = nil
+    let customerId: String
+    let featureId: String
+    let operationId: String
+    let quantity: Double
+    let entityId: String?
+}
+
+struct FeatureConsumeResponse: Codable, Sendable {
+    let type: FeatureType?
+    let operationId: String
+    let customerId: String
+    let featureId: String
+    let accepted: Bool
+    let code: String
+    let quantity: Double
+    let balance: Double?
+    let unlimited: Bool
+    let active: Bool
+    let occurredAtMs: Double?
+    let idempotentReplay: Bool
+
+    var journalResponse: EventResponse {
+        EventResponse(status: accepted ? "ok" : "denied", eventId: operationId,
+                      customerId: customerId, message: code, deduped: idempotentReplay,
+                      consumption: self,
+                      usage: .init(current: quantity, limit: nil, remaining: balance))
+    }
+}
+
+
+/// The committed decision for one stable Feature consumption operation.
+public struct FeatureConsumptionResult: Sendable {
+    public let operationId: String
+    public let accepted: Bool
+    public let code: String
+    public let quantity: Double
+    public let balance: Double?
+    public let unlimited: Bool
+    public let active: Bool
+    public let idempotentReplay: Bool
+
+    internal init(_ receipt: FeatureConsumeResponse) {
+        operationId = receipt.operationId
+        accepted = receipt.accepted
+        code = receipt.code
+        quantity = receipt.quantity
+        balance = receipt.balance
+        unlimited = receipt.unlimited
+        active = receipt.active
+        idempotentReplay = receipt.idempotentReplay
     }
 }

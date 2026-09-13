@@ -152,6 +152,43 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                 expect(reconciled) == 14
             }
 
+            it("keeps entity consumption separate from the global visible balance") {
+                let store = FeatureUseCommandStore(
+                    customStoragePath: storageURL,
+                    appIdentifier: Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app",
+                    environment: .production
+                )
+                let api = MockNuxieApi()
+                await api.configureTrackEventResponse(status: "ok", usage: .init(current: 1, limit: 1, remaining: 0))
+                await api.suspendNextFeatureTrackEvent()
+                let identity = MockIdentityService()
+                identity.setDistinctId("feature-customer")
+                let featureInfo = FeatureInfo()
+                await MainActor.run {
+                    featureInfo.admitProfileSnapshot(
+                        ["credits": .withBalance(8, unlimited: false, type: .metered)],
+                        admittedAt: Date()
+                    )
+                }
+                let queue = FeatureUseCommandQueue(
+                    api: api, identity: identity, eventLog: MockEventLog(),
+                    featureInfo: featureInfo, dateProvider: MockDateProvider(), store: store
+                )
+                let usage = Task {
+                    try await queue.use(distinctId: "feature-customer", featureId: "credits", amount: 1,
+                        entityId: "project-a", setUsage: false, metadata: nil)
+                }
+                await api.waitForSuspendedFeatureTrackEvent()
+                let pending = await MainActor.run { featureInfo.balance("credits") }
+                expect(pending) == 8
+                await api.resumeSuspendedFeatureTrackEvent()
+                let result = try await usage.value
+                expect(result.success).to(beTrue())
+                expect(result.usage?.remaining) == 0
+                let reconciled = await MainActor.run { featureInfo.balance("credits") }
+                expect(reconciled) == 8
+            }
+
             it("publishes visual balance feedback outside the identity fence") {
                 let store = FeatureUseCommandStore(
                     customStoragePath: storageURL,
@@ -298,7 +335,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer-a",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-identity-race",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil
                     )
@@ -351,7 +388,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-freshness",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil
                     )
@@ -384,7 +421,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                     distinctId: "feature-customer",
                     featureId: "ai_generations",
                     amount: 1,
-                    entityId: "project-freshness",
+                    entityId: nil,
                     setUsage: false,
                     metadata: nil
                 )
@@ -519,7 +556,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-first-response",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil
                     )
@@ -595,7 +632,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "old-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-identity-hop",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil
                     )
@@ -664,7 +701,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-delegate-identify",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil
                     )
@@ -696,7 +733,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-recovery-race",
+                        entityId: nil,
                         setUsage: false,
                         metadata: ["model": AnyCodable("study-review")],
                         createdAt: createdAt,
@@ -731,7 +768,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-recovery-race",
+                        entityId: nil,
                         setUsage: false,
                         metadata: ["model": "study-review"]
                     )
@@ -750,7 +787,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-recovery-race",
+                        entityId: nil,
                         setUsage: false,
                         metadata: ["model": "study-review"]
                     )
@@ -797,7 +834,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 7,
-                        entityId: "project-ordered",
+                        entityId: nil,
                         setUsage: true,
                         metadata: nil,
                         createdAt: createdAt,
@@ -833,7 +870,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-ordered",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil
                     )
@@ -882,7 +919,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 7,
-                        entityId: "project-retired-head",
+                        entityId: nil,
                         setUsage: true,
                         metadata: nil,
                         createdAt: createdAt,
@@ -926,7 +963,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                     distinctId: "feature-customer",
                     featureId: "ai_generations",
                     amount: 1,
-                    entityId: "project-retired-head",
+                    entityId: nil,
                     setUsage: false,
                     metadata: nil
                 )
@@ -1029,7 +1066,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 7,
-                        entityId: "project-ordered",
+                        entityId: nil,
                         setUsage: true,
                         metadata: nil,
                         createdAt: createdAt,
@@ -1041,7 +1078,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-ordered",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil,
                         createdAt: createdAt.addingTimeInterval(1),
@@ -1053,7 +1090,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "video_exports",
                         amount: 1,
-                        entityId: "project-ordered",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil,
                         createdAt: createdAt.addingTimeInterval(2),
@@ -1105,7 +1142,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                     distinctId: "feature-customer",
                     featureId: "ai_generations",
                     amount: 1,
-                    entityId: "project-cancel-admission",
+                    entityId: nil,
                     setUsage: false,
                     metadata: nil,
                     createdAt: createdAt,
@@ -1160,7 +1197,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-cancel-first",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil,
                         createdAt: createdAt,
@@ -1172,7 +1209,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 2,
-                        entityId: "project-cancel-tail",
+                        entityId: nil,
                         setUsage: false,
                         metadata: nil,
                         createdAt: createdAt.addingTimeInterval(1),
@@ -1246,7 +1283,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                             distinctId: "feature-customer",
                             featureId: "ai_generations_\(index)",
                             amount: 1,
-                            entityId: "project-poison-\(index)",
+                            entityId: nil,
                             setUsage: false,
                             metadata: nil
                         )
@@ -1367,7 +1404,7 @@ final class FeatureUseCommandQueueTests: AsyncSpec {
                         distinctId: "feature-customer",
                         featureId: "ai_generations",
                         amount: 1,
-                        entityId: "project-oversized",
+                        entityId: nil,
                         setUsage: false,
                         metadata: ["payload": "oversized"]
                     )

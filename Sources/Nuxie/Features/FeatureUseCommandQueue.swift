@@ -260,7 +260,7 @@ enum FeatureUseCommandError: Error, Equatable {
 
 /// Durable command queue for ordinary authoritative Feature usage.
 ///
-/// The queue persists the full command before its first `/i/event` send. Its
+/// The queue persists the full command before its first `/feature/consume` send. Its
 /// UUIDv7 is both the operation ID and wire idempotency key. A decoded result
 /// is persisted before local balance/history reconciliation, whose sinks are
 /// idempotent under crash replay.
@@ -305,12 +305,25 @@ actor FeatureUseCommandQueue {
     amount: Double,
     entityId: String?,
     setUsage: Bool,
-    metadata: sending [String: Any]?
+    metadata: sending [String: Any]?,
+    operationId requestedOperationId: String? = nil
   ) async throws -> FeatureUsageResult {
     guard !isClosed else { throw CancellationError() }
+    guard amount.isFinite, amount > 0, amount.rounded() == amount, amount <= 9_007_199_254_740_991 else { throw NuxieNetworkError.invalidResponse }
     try loadIfNeeded()
     guard identity.getDistinctId() == distinctId else {
       throw CancellationError()
+    }
+    if let requestedOperationId {
+      guard !requestedOperationId.isEmpty, requestedOperationId.count <= 256,
+            requestedOperationId == requestedOperationId.trimmingCharacters(in: .whitespacesAndNewlines) else {
+        throw StoreKitError.apiMisuse(reason: "A stable operation ID is required")
+      }
+      if let existing = commands?.first(where: { $0.operationId == requestedOperationId }),
+         !existing.matches(distinctId: distinctId, featureId: featureId, amount: amount,
+                           entityId: entityId, setUsage: setUsage, metadata: metadata?.mapValues(AnyCodable.init)) {
+        throw StoreKitError.apiMisuse(reason: "Operation ID conflicts with a pending command")
+      }
     }
     let encodedMetadata = metadata?.mapValues(AnyCodable.init)
 
@@ -320,8 +333,9 @@ actor FeatureUseCommandQueue {
       // An overlapping identical public call is a new consumption. A durable
       // command recovered from an earlier attempt remains joinable while its
       // relaunch recovery is in flight.
-      candidate.result == nil
-        && (!inFlight.keys.contains(candidate.operationId)
+      (requestedOperationId == nil || candidate.operationId == requestedOperationId)
+        && (requestedOperationId != nil || candidate.result == nil)
+        && (requestedOperationId != nil || !inFlight.keys.contains(candidate.operationId)
         || (recoveryOwnedOperationIds.contains(candidate.operationId)
           && !foregroundJoinedRecoveryIds.contains(candidate.operationId)))
         && candidate.matches(
@@ -341,7 +355,7 @@ actor FeatureUseCommandQueue {
       }
       let admitted = try identity.performIfCurrentDistinctIdMatches(distinctId) { identitySnapshot in
         let command = FeatureUseCommand(
-          operationId: UUID.v7().uuidString,
+          operationId: requestedOperationId ?? UUID.v7().uuidString,
           distinctId: distinctId,
           identity: identitySnapshot,
           featureId: featureId,
@@ -361,7 +375,7 @@ actor FeatureUseCommandQueue {
       guard let admitted else { throw CancellationError() }
       command = admitted.0
       commands = admitted.1
-      shouldDecrementVisibleBalance = !setUsage
+      shouldDecrementVisibleBalance = !setUsage && entityId == nil
       nextAppendSequence = appendSequence < UInt64.max
         ? appendSequence + 1
         : nil
@@ -392,7 +406,7 @@ actor FeatureUseCommandQueue {
     }
     do {
       let result = try await execute(operationId: command.operationId)
-      if shouldDecrementVisibleBalance, !result.success {
+      if shouldDecrementVisibleBalance, !result.success || result.consumptionReceipt?.idempotentReplay == true {
         await MainActor.run { featureInfo.restoreVisibleProjection() }
       }
       return result
@@ -547,9 +561,11 @@ actor FeatureUseCommandQueue {
           operationId: operationId,
           admission: recoveryAdmission
         )
-        response = try await api.trackEvent(
-          transportEvent(for: command, name: SystemEventNames.featureUsed)
-        )
+        response = try await api.consumeFeature(FeatureConsumeRequest(
+          mode: command.setUsage ? "set_usage" : nil,
+          customerId: command.distinctId, featureId: command.featureId,
+          operationId: command.operationId, quantity: command.amount, entityId: command.entityId
+        ))
       } catch {
         let disposition = deliveryDisposition(for: error)
         let retiredApplicationKey = applicationKey(for: command)
@@ -634,7 +650,7 @@ actor FeatureUseCommandQueue {
     durableResult: FeatureUseCommand.DurableResult,
     recoveryAdmission: FeatureRecoveryAdmission?
   ) async throws {
-    guard identity.getDistinctId() == command.distinctId,
+    guard durableResult.response.consumption?.idempotentReplay != true, command.entityId == nil, identity.getDistinctId() == command.distinctId,
           let remaining = durableResult.response.usage?.remaining else { return }
     try admitRecoverySideEffect(
       operationId: command.operationId,
@@ -734,7 +750,7 @@ actor FeatureUseCommandQueue {
 
   private func deliveryDisposition(for error: Error) -> EventDeliveryDisposition {
     if (error as? NuxieNetworkError)?.httpStatusCode == 404 {
-      // `/i/event` uses 404 specifically for a missing Feature. The command has
+      // `/feature/consume` uses 404 specifically for a missing Feature. The command has
       // no authority to apply and must not become valid through later replay.
       return .terminalPoison
     }
@@ -760,28 +776,6 @@ actor FeatureUseCommandQueue {
       return try write()
     }
     return try admission.perform(write)
-  }
-
-  private func transportEvent(
-    for command: FeatureUseCommand,
-    name: String
-  ) -> NuxieEvent {
-    var properties: [String: Any] = [
-      "feature_extId": command.featureId,
-      "value": command.amount,
-    ]
-    if command.setUsage { properties["setUsage"] = true }
-    if let entityId = command.entityId { properties["entityId"] = entityId }
-    if let metadata = command.metadata {
-      properties["metadata"] = metadata.mapValues(\.value)
-    }
-    return NuxieEvent(
-      id: command.operationId,
-      name: name,
-      distinctId: command.distinctId,
-      properties: properties,
-      timestamp: command.createdAt
-    )
   }
 
   private func acceptedMirror(
@@ -860,7 +854,7 @@ actor FeatureUseCommandQueue {
     command: FeatureUseCommand,
     response: EventResponse
   ) -> FeatureUsageResult {
-    FeatureUsageResult(
+    var result = FeatureUsageResult(
       success: isAccepted(response),
       featureId: command.featureId,
       amountUsed: command.amount,
@@ -871,7 +865,12 @@ actor FeatureUseCommandQueue {
           limit: $0.limit,
           remaining: $0.remaining
         )
+      },
+      authoritativeAccess: response.consumption.flatMap { receipt in
+        receipt.type.map { FeatureAccess(allowed: receipt.active, unlimited: receipt.unlimited, balance: receipt.balance, type: $0) }
       }
     )
+    result.consumptionReceipt = response.consumption
+    return result
   }
 }

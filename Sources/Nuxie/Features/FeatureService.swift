@@ -264,8 +264,8 @@ internal actor FeatureService: FeatureServiceProtocol {
         if let profile = await profileService.getCachedProfile(distinctId: distinctId),
            let feature = profile.planeProfile.features.first(where: { $0.id == featureId }) {
             // For entity-based features, check entity balance
-            if let entityId = entityId, let entities = feature.entities {
-                if let entityBalance = entities[entityId] {
+            if let entityId = entityId {
+                if let entityBalance = feature.entities?[entityId] {
                     return FeatureAccess(
                         from: Feature(
                             id: feature.id,
@@ -438,10 +438,12 @@ internal actor FeatureService: FeatureServiceProtocol {
             )
             committedCacheRevisions[cacheKey] =
                 featureMutationRevisions[affectedFeatureId]
-            await notifyFeatureInfoUpdate(
-                featureId: affectedFeatureId,
-                access: featureOverride.publishedAccess()
-            )
+            if entityId == nil {
+                await notifyFeatureInfoUpdate(
+                    featureId: affectedFeatureId,
+                    access: featureOverride.publishedAccess()
+                )
+            }
         }
 
         return (result, requestRevision)
@@ -629,10 +631,12 @@ internal actor FeatureService: FeatureServiceProtocol {
                 cachedAt: cachedAt
             )
             committedCacheRevisions[cacheKey] = featureMutationRevisions[featureId]
-            await notifyFeatureInfoUpdate(
-                featureId: featureId,
-                access: featureOverride.publishedAccess()
-            )
+            if entityId == nil {
+                await notifyFeatureInfoUpdate(
+                    featureId: featureId,
+                    access: featureOverride.publishedAccess()
+                )
+            }
         }
     }
 

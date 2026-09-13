@@ -822,7 +822,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
   ///   - featureId: The feature identifier (external ID configured in Nuxie dashboard)
   ///   - amount: The amount to consume (default: 1)
   ///   - entityId: Optional entity ID for entity-based limits (e.g., per-project usage)
-  ///   - setUsage: If true, sets the usage to the specified amount instead of decrementing (default: false)
+  ///   - setUsage: If true, reports cumulative usage and charges only the increase; lower totals never restore credits (default: false)
   ///   - metadata: Optional additional metadata to record with the usage event
   /// - Returns: FeatureUsageResult with usage confirmation and updated balance
   /// - Throws: `CancellationError` if the active identity changes before the
@@ -870,6 +870,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     metadata: [String: Any]?,
     run: NuxieSDKRun
   ) async throws -> FeatureUsageResult {
+    guard amount.isFinite, amount > 0, amount.rounded() == amount, amount <= 9_007_199_254_740_991 else {
+      throw StoreKitError.apiMisuse(reason: "Feature quantity must be a positive exact integer")
+    }
     let core = run.core
 
     let identityService = core.identity
@@ -911,6 +914,24 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       setUsage: setUsage,
       metadata: metadataBox.value
     )
+  }
+
+  /// Consume an exact quantity using an operation ID retained by the caller across retries.
+  public func consumeFeature(
+    _ featureId: String,
+    quantity: Double = 1,
+    operationId: String,
+    entityId: String? = nil
+  ) async throws -> FeatureConsumptionResult {
+    guard let operation = runningOperation() else { throw NuxieError.notConfigured }
+    defer { operation.finish() }
+    let core = operation.graph.core
+    let result = try await core.featureUseCommands.use(
+      distinctId: core.identity.getDistinctId(), featureId: featureId, amount: quantity,
+      entityId: entityId, setUsage: false, metadata: nil, operationId: operationId
+    )
+    guard let receipt = result.consumptionReceipt else { throw NuxieNetworkError.invalidResponse }
+    return FeatureConsumptionResult(receipt)
   }
 
   /// Runs the identity mutation and its synchronous publication on MainActor.

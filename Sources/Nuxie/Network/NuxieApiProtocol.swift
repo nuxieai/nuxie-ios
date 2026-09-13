@@ -22,6 +22,8 @@ enum ProfileFetchResult: Sendable {
 }
 
 protocol EventTransport: AnyObject, Sendable {
+    func consumeFeature(_ request: FeatureConsumeRequest) async throws -> EventResponse
+
     func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse
 
     func trackEvent(
