@@ -1,0 +1,174 @@
+{
+  "suite": "purchases/test-store",
+  "version": 1,
+  "notes": [
+    "Local outcome model only; checkout routing, environment isolation and telemetry require separate orchestration coverage.",
+    "Each case starts with an empty in-memory store. Restored succeeds even with no products."
+  ],
+  "cases": [
+    {
+      "name": "purchased",
+      "actions": [
+        {
+          "operation": "purchase",
+          "customer": "alice",
+          "product": "credits",
+          "storeProduct": "credits.v1",
+          "choice": "purchased",
+          "expectedOutcome": "purchased",
+          "expectedTransaction": true
+        },
+        {
+          "operation": "restore",
+          "customer": "alice",
+          "choice": "restored",
+          "expectedOutcome": "restored",
+          "expectedProducts": [
+            "credits.v1"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pending",
+      "actions": [
+        {
+          "operation": "purchase",
+          "customer": "alice",
+          "product": "credits",
+          "storeProduct": "credits.v1",
+          "choice": "pending",
+          "expectedOutcome": "pending",
+          "expectedTransaction": false
+        },
+        {
+          "operation": "restore",
+          "customer": "alice",
+          "choice": "restored",
+          "expectedOutcome": "restored",
+          "expectedProducts": []
+        }
+      ]
+    },
+    {
+      "name": "cancelled",
+      "actions": [
+        {
+          "operation": "purchase",
+          "customer": "alice",
+          "product": "credits",
+          "storeProduct": "credits.v1",
+          "choice": "cancelled",
+          "expectedOutcome": "cancelled",
+          "expectedTransaction": false
+        },
+        {
+          "operation": "restore",
+          "customer": "alice",
+          "choice": "restored",
+          "expectedOutcome": "restored",
+          "expectedProducts": []
+        }
+      ]
+    },
+    {
+      "name": "failed",
+      "actions": [
+        {
+          "operation": "purchase",
+          "customer": "alice",
+          "product": "credits",
+          "storeProduct": "credits.v1",
+          "choice": "failed",
+          "expectedOutcome": "failed",
+          "expectedTransaction": false
+        },
+        {
+          "operation": "restore",
+          "customer": "alice",
+          "choice": "restored",
+          "expectedOutcome": "restored",
+          "expectedProducts": []
+        }
+      ]
+    },
+    {
+      "name": "customer-isolation-and-restore-choices",
+      "actions": [
+        {
+          "operation": "restore",
+          "customer": "alice",
+          "choice": "restored",
+          "expectedOutcome": "restored",
+          "expectedProducts": []
+        },
+        {
+          "operation": "purchase",
+          "customer": "alice",
+          "product": "credits",
+          "storeProduct": "old",
+          "choice": "purchased",
+          "expectedOutcome": "purchased",
+          "expectedTransaction": true
+        },
+        {
+          "operation": "purchase",
+          "customer": "alice",
+          "product": "credits",
+          "storeProduct": "new",
+          "choice": "purchased",
+          "expectedOutcome": "purchased",
+          "expectedTransaction": true
+        },
+        {
+          "operation": "purchase",
+          "customer": "bob",
+          "product": "subscription",
+          "storeProduct": "pro",
+          "choice": "purchased",
+          "expectedOutcome": "purchased",
+          "expectedTransaction": true
+        },
+        {
+          "operation": "restore",
+          "customer": "alice",
+          "choice": "no_purchases",
+          "expectedOutcome": "no_purchases",
+          "expectedProducts": []
+        },
+        {
+          "operation": "restore",
+          "customer": "alice",
+          "choice": "failed",
+          "expectedOutcome": "failed",
+          "expectedProducts": []
+        },
+        {
+          "operation": "restore",
+          "customer": "alice",
+          "choice": "restored",
+          "expectedOutcome": "restored",
+          "expectedProducts": [
+            "new"
+          ]
+        },
+        {
+          "operation": "restore",
+          "customer": "bob",
+          "choice": "restored",
+          "expectedOutcome": "restored",
+          "expectedProducts": [
+            "pro"
+          ]
+        },
+        {
+          "operation": "restore",
+          "customer": "carol",
+          "choice": "restored",
+          "expectedOutcome": "restored",
+          "expectedProducts": []
+        }
+      ]
+    }
+  ]
+}
