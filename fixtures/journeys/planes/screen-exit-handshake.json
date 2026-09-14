@@ -1,0 +1,6 @@
+{
+  "contract": "Register the authored completion event before requesting EXITING. Complete on the matching event or duration plus 250 ms. Reduced motion requests EXITING without waiting. Cancellation and screen teardown remove pending waiters; a late event must not satisfy a future exit.",
+  "exit": { "completeEventName": "exit_complete", "durationMs": 400 },
+  "unrelatedEvent": "enter_complete",
+  "watchdogMilliseconds": 650
+}
