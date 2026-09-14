@@ -1,0 +1,61 @@
+{
+  "contract": "Every explicit entry increments appearances; phase, transition and motion preference are independent. Platform stop/start does not request a lifecycle move.",
+  "steps": [
+    {
+      "action": "move",
+      "phase": "entering",
+      "transition": "",
+      "reduceMotion": false,
+      "appearances": 1
+    },
+    {
+      "action": "move",
+      "phase": "active",
+      "transition": "",
+      "reduceMotion": false,
+      "appearances": 1
+    },
+    {
+      "action": "reduceMotion",
+      "phase": "active",
+      "transition": "",
+      "reduceMotion": true,
+      "appearances": 1
+    },
+    {
+      "action": "move",
+      "phase": "exiting",
+      "transition": "checkout",
+      "reduceMotion": true,
+      "appearances": 1
+    },
+    {
+      "action": "move",
+      "phase": "hidden",
+      "transition": "",
+      "reduceMotion": true,
+      "appearances": 1
+    },
+    {
+      "action": "move",
+      "phase": "entering",
+      "transition": "return",
+      "reduceMotion": true,
+      "appearances": 2
+    },
+    {
+      "action": "move",
+      "phase": "active",
+      "transition": "",
+      "reduceMotion": true,
+      "appearances": 2
+    },
+    {
+      "action": "reduceMotion",
+      "phase": "active",
+      "transition": "",
+      "reduceMotion": false,
+      "appearances": 2
+    }
+  ]
+}
