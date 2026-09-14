@@ -6,5 +6,10 @@
     "screen_2",
     "screen_1"
   ],
-  "activityLaunches": 1
+  "activityLaunches": 1,
+  "failedPreparation": {
+    "dismissalCheckpoints": 0,
+    "destinationLeaseReleased": true,
+    "outgoingPixelsChanged": 0
+  }
 }
