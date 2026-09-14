@@ -23,5 +23,11 @@
     "leaseCloseCount": 1,
     "loadingAllowsBack": true,
     "authoredDismissibilityAppliesAfterReveal": true
+  },
+  "rendererRetirement": {
+    "contract": "Retiring a native host releases its reveal-waiting effects as harmless no-ops, rejects effects queued behind an in-flight durable publication, and allows that admitted publication to drain. Replacement hosts retain logical admission and emission sequencing.",
+    "retiredWaiterHandled": true,
+    "batchCountAfterReplacement": 1,
+    "admissionCount": 1
   }
 }
