@@ -1,0 +1,46 @@
+{
+  "platform": "android",
+  "contract": "Before any Activity exists, commerce and artifact preparation are owned by one cancellable attempt. Matching terminal close and caller cancellation drain cancellation-resistant work, release any late acquired lease exactly once, and forbid late launch. Commerce cancellation prevents artifact acquisition. Foreign identity shutdown must not cancel another owner.",
+  "cases": [
+    {
+      "action": "hostClose",
+      "phase": "commerce",
+      "lateLeaseReleased": false
+    },
+    {
+      "action": "hostClose",
+      "phase": "acquisition",
+      "lateLeaseReleased": true
+    },
+    {
+      "action": "identityShutdown",
+      "phase": "commerce",
+      "lateLeaseReleased": false
+    },
+    {
+      "action": "identityShutdown",
+      "phase": "acquisition",
+      "lateLeaseReleased": true
+    },
+    {
+      "action": "journeyShutdown",
+      "phase": "commerce",
+      "lateLeaseReleased": false
+    },
+    {
+      "action": "journeyShutdown",
+      "phase": "acquisition",
+      "lateLeaseReleased": true
+    },
+    {
+      "action": "callerCancel",
+      "phase": "commerce",
+      "lateLeaseReleased": false
+    },
+    {
+      "action": "callerCancel",
+      "phase": "acquisition",
+      "lateLeaseReleased": true
+    }
+  ]
+}
