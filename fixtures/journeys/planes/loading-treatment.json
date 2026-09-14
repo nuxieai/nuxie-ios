@@ -1,0 +1,45 @@
+{
+  "contract": "Signed presentation loading uses a transparent shimmer overlay over the authored background. Reduced motion and inactive hosts leave the background flat; content first frame or close removes the treatment. Dark backgrounds brighten by 0.16, light backgrounds darken by 0.09. Alpha below 0.5 uses the unknown-background light-highlight fallback.",
+  "palette": [
+    {
+      "rgba": "#000000FF",
+      "light": true,
+      "fraction": 0.16
+    },
+    {
+      "rgba": "#0B1220FF",
+      "light": true,
+      "fraction": 0.16
+    },
+    {
+      "rgba": "#FFFFFFFF",
+      "light": false,
+      "fraction": 0.09
+    },
+    {
+      "rgba": "#AAAAAAFF",
+      "light": false,
+      "fraction": 0.09
+    },
+    {
+      "rgba": "#808080FF",
+      "light": false,
+      "fraction": 0.09
+    },
+    {
+      "rgba": "#FFFFFF00",
+      "light": true,
+      "fraction": 0.16
+    },
+    {
+      "rgba": "#FFFFFF7F",
+      "light": true,
+      "fraction": 0.16
+    },
+    {
+      "rgba": "#FFFFFF80",
+      "light": false,
+      "fraction": 0.09
+    }
+  ]
+}

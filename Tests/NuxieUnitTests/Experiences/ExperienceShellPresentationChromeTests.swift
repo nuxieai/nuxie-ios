@@ -14,6 +14,24 @@ import UIKit
 final class ExperienceShellPresentationChromeTests: XCTestCase {
     // MARK: - Palette
 
+    func testSharedLoadingPalette() throws {
+        struct Fixture: Decodable {
+            struct Vector: Decodable { let rgba: String; let light: Bool; let fraction: Double }
+            let palette: [Vector]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/loading-treatment.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        for vector in fixture.palette {
+            let palette = ExperienceShellPalette(backgroundCandidates: [UIColor(nuxieRGBAHex: vector.rgba)])
+            XCTAssertEqual(palette.prefersLightContent, vector.light, vector.rgba)
+            XCTAssertEqual(palette.shimmerHighlight.fraction, vector.fraction, accuracy: 0.00001)
+            XCTAssertEqual(palette.shimmerHighlight.color, vector.light ? .white : .black)
+        }
+    }
+
     func testPaletteReadsLightContentFromADarkAuthoredBackground() {
         let palette = ExperienceShellPalette(
             backgroundCandidates: [UIColor(nuxieRGBAHex: "#0B1220FF")]
