@@ -3,7 +3,7 @@ import Foundation
 import NuxieRuntime
 import UIKit
 
-private struct ExperienceTextInputGeometry {
+struct ExperienceTextInputGeometry {
     let x: Double
     let y: Double
     let width: Double
@@ -15,11 +15,10 @@ private struct ExperienceTextInputGeometry {
 
 /// Resolves signed geometry paths from a generic native snapshot. This is
 /// product policy over plain values.
-private struct ExperienceTextInputGeometryResolver {
+struct ExperienceTextInputGeometryResolver {
     let snapshot: ExperienceInteractiveViewModelSnapshot
 
-    func geometry(for input: NativeExperienceTextInput) -> ExperienceTextInputGeometry? {
-        let geometry = input.geometry
+    func geometry(for geometry: NativeExperienceTextInput.Geometry) -> ExperienceTextInputGeometry? {
         guard let x = number(at: geometry.xPath),
               let y = number(at: geometry.yPath),
               let width = number(at: geometry.widthPath),
@@ -40,7 +39,7 @@ private struct ExperienceTextInputGeometryResolver {
         )
     }
 
-    private func number(at path: String) -> Double? {
+    func number(at path: String) -> Double? {
         let segments = path.split(separator: "/").map(String.init)
         guard !segments.isEmpty else { return nil }
         return number(segments: segments, allowingLeadingLabel: true)
@@ -205,7 +204,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     func update(snapshot: ExperienceInteractiveViewModelSnapshot) {
         let resolver = ExperienceTextInputGeometryResolver(snapshot: snapshot)
         geometriesByInputID = bindingsByInputID.compactMapValues {
-            resolver.geometry(for: $0.input)
+            resolver.geometry(for: $0.input.geometry)
         }
         layout()
     }
