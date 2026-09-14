@@ -1,0 +1,7 @@
+{
+  "contract": "Drawer corner clipping applies to the entire presented content, including native editable controls, in platform logical units.",
+  "cases": [
+    { "name": "square", "cornerRadius": 0, "extentRatio": 0.5, "cornerContainsContent": true },
+    { "name": "rounded", "cornerRadius": 24, "extentRatio": 0.5, "cornerContainsContent": false }
+  ]
+}
