@@ -50,6 +50,12 @@
       }
     ],
     "checkpointCalls": 1,
-    "activityLaunches": 1
+    "activityLaunches": 1,
+    "nativeTeardown": {
+      "contract": "Once native destination preparation owns artifacts, host/identity teardown destroys the Activity without waiting for its checkpoint but completes only after checkpoint, native rollback, and both artifact leases drain.",
+      "activityDestroyedBeforeCheckpoint": true,
+      "sourceLeaseReleasedOnCompletion": true,
+      "destinationLeaseReleasedOnCompletion": true
+    }
   }
 }
