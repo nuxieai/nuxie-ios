@@ -973,12 +973,17 @@ private extension JourneyService {
 
     private func recoverJournal(_ opened: JourneyRunJournal, generation: UInt64) async {
         do {
+            try await recoverPendingPresentationPublications(in: opened)
+            guard try await JourneyExperimentExposureReporter(journal: opened, events: events)
+                .stagePending(),
+                try await JourneyReporter(journal: opened, events: events).stagePending() else {
+                throw JourneyJournalError.invalidState
+            }
             guard await events.replayPendingStableRoutes(
                 distinctId: opened.distinctId
             ) else {
                 throw JourneyJournalError.invalidState
             }
-            try await recoverPendingPresentationPublications(in: opened)
             _ = try await experimentExposures.flushPending(in: opened)
             try await JourneyReporter(journal: opened, events: events)
                 .flushPending()

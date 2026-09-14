@@ -4,7 +4,7 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyEffectExecutionTests: JourneyTestCase {
-    func testBufferedStartupEventExecutesAfterJournalPreparation() async throws {
+    func testBufferedStartupEventWaitsForJournalRecovery() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let snapshot = replacing(
@@ -32,17 +32,67 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         let configuration = NuxieConfiguration(apiKey: "startup-test")
         configuration.testingOverrides.suppressBackgroundWork = true
         try await events.configure(configuration: configuration)
-        // Force the earliest legal delivery, before recovery finishes. A
-        // configure-before-initialize reorder alone drops this event.
-        await events.drain()
+        // Storage can accept the event, but only Journey recovery may release
+        // it: an empty EventLog outbox says nothing about a warm journal.
+        _ = await events.flushEvents()
         XCTAssertEqual(store.storedEvents.filter {
             $0.name == JourneyEvents.journeyStarted
-        }.count, 1)
+        }.count, 0)
         await service.initialize()
         await events.drain()
         XCTAssertEqual(store.storedEvents.filter {
             $0.name == JourneyEvents.journeyStarted
         }.count, 1)
+        await service.shutdown()
+        await events.close()
+    }
+
+    func testWarmJournalOutboxIsStagedBeforeBufferedTriggerEffects() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshot = replacing(
+            try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load()),
+            entry: .init(type: .event, eventName: "startup_trigger", segmentId: nil, member: nil, condition: nil),
+            reentry: .init(type: .everyTime, windowSeconds: nil)
+        )
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let retained = try await journal.admit(
+            arm: XCTUnwrap(snapshot.profile.armedLegs.first),
+            release: XCTUnwrap(snapshot.profile.releases.first),
+            executionSnapshot: .init(delivery: snapshot.profile.delivery,
+                                     assignments: snapshot.profile.facts.assignments),
+            reentry: .init(type: .everyTime, windowSeconds: nil),
+            entryStepId: "entry", at: Date(timeIntervalSince1970: 1_000)
+        )
+        let oldRun = try XCTUnwrap(retained)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = MockEventStore()
+        let events = EventLog(identity: identity, dateProvider: MockDateProvider(),
+                              apiClient: MockNuxieApi(), store: store)
+        let service = JourneyService(
+            identity: identity, events: events,
+            dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
+            journalDirectory: directory, featureAccess: { _ in nil },
+            dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
+        )
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        await events.subscribeCommitted { event in await service.handleEvent(event) }
+        events.track("startup_trigger")
+        await service.prepareForEvents()
+        let configuration = NuxieConfiguration(apiKey: "warm-outbox-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await events.configure(configuration: configuration)
+        await service.initialize()
+        await events.drain()
+        let persisted = store.storedEvents
+        let newerStart = try XCTUnwrap(persisted.firstIndex {
+            $0.name == JourneyEvents.journeyStarted && $0.id != oldRun.startedEventId
+        })
+        XCTAssertLessThan(try XCTUnwrap(persisted.firstIndex { $0.id == oldRun.startedEventId }), newerStart)
+        XCTAssertLessThan(try XCTUnwrap(persisted.firstIndex { $0.id == oldRun.completedEventId }), newerStart)
         await service.shutdown()
         await events.close()
     }

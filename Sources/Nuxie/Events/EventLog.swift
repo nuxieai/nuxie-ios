@@ -543,7 +543,6 @@ actor EventLog: EventLogProtocol {
   private var routeWorker: Task<Void, Never>?
   private var routingDeferred = false
   private var routingDeferralGeneration: UInt64 = 0
-  private var initialRoutingDeferralGeneration: UInt64?
   private var deferredRouteCommands: [RouteCommand] = []
   private var nextRouteSequenceToDeliver: UInt64 = 0
   private var pendingRouteResolutions: [UInt64: RouteResolution] = [:]
@@ -741,24 +740,6 @@ actor EventLog: EventLogProtocol {
     // Tests opt out explicitly; attaching XCTest never changes this default.
     if snapshot?.internalConfiguration.suppressBackgroundWork != true {
       startFlushTimer()
-    }
-
-    if routingDeferred, let initialGeneration = initialRoutingDeferralGeneration {
-      do {
-        // Only the initial startup gate may open without Journey recovery.
-        // A newer profile gate must wait for its journal even on a cold start.
-        // A cold start has no recovered prefix to protect. It must not wait
-        // for a profile just to deliver ordinary committed analytics.
-        if try await store.queryPendingStableRoutes(
-          distinctId: identityService.getDistinctId()
-        ).isEmpty {
-          routeContinuation.yield(.resumeAfterRecovery([], generation: initialGeneration))
-        }
-      } catch {
-        // Storage/capture readiness remains best-effort. Keep uncertain
-        // durable routing deferred until authenticated recovery can retry it.
-        LogWarning("EventLog: could not inspect retained startup routes")
-      }
     }
 
     LogInfo("EventLog configured (subscribers: \(subscribers.count))")
@@ -1370,9 +1351,6 @@ actor EventLog: EventLogProtocol {
   @discardableResult
   func deferCommittedRouting() async -> UInt64 {
     routingDeferralGeneration &+= 1
-    if initialRoutingDeferralGeneration == nil {
-      initialRoutingDeferralGeneration = routingDeferralGeneration
-    }
     routingDeferred = true
     return routingDeferralGeneration
   }
