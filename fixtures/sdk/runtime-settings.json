@@ -1,0 +1,13 @@
+{
+  "suite": "sdk/runtime-settings",
+  "version": 1,
+  "notes": [
+    "Runtime settings require an admitted operation on a running SDK. Calls before setup, during shutdown, or after shutdown fail; they are never queued for a later setup.",
+    "Android reports IllegalStateException; iOS reports NuxieError.notConfigured.",
+    "A null locale follows the device; a null purchase delegate restores the configured native purchase owner.",
+    "Updates affect future work. A new setup captures its own configuration."
+  ],
+  "setters": ["localeIdentifier", "purchaseDelegate", "purchaseHandlingMode"],
+  "unavailableStates": ["beforeSetup", "stopping", "afterShutdown"],
+  "expected": { "rejectUnavailable": true }
+}
