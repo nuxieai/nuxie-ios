@@ -76,7 +76,7 @@ private enum RouteResolution: Sendable {
 }
 
 private enum RouteCommand: Sendable {
-  case resumeAfterRecovery([RoutedCommittedEvent])
+  case resumeAfterRecovery([RoutedCommittedEvent], generation: UInt64)
   case resolved(sequence: UInt64, RouteResolution)
   /// Storage failures have no durable commit sequence to order against.
   case undurable(RoutedCommittedEvent)
@@ -326,7 +326,9 @@ protocol EventLogProtocol:
 {
   /// Configure the log from the immutable setup snapshot. Builds enrichment
   /// and delivery settings and opens storage.
-  func deferCommittedRouting() async
+  @discardableResult
+  func deferCommittedRouting() async -> UInt64
+  func resumeCommittedRouting(ifGeneration: UInt64) async
 
   func configure(configuration: NuxieSetupConfiguration?) async throws
 
@@ -434,7 +436,8 @@ protocol EventLogProtocol:
 }
 
 extension EventLogProtocol {
-  func deferCommittedRouting() async {}
+  func deferCommittedRouting() async -> UInt64 { 0 }
+  func resumeCommittedRouting(ifGeneration: UInt64) async {}
 
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
@@ -539,6 +542,7 @@ actor EventLog: EventLogProtocol {
     CommittedEventAdmissionRegistry()
   private var routeWorker: Task<Void, Never>?
   private var routingDeferred = false
+  private var routingDeferralGeneration: UInt64 = 0
   private var deferredRouteCommands: [RouteCommand] = []
   private var nextRouteSequenceToDeliver: UInt64 = 0
   private var pendingRouteResolutions: [UInt64: RouteResolution] = [:]
@@ -745,7 +749,7 @@ actor EventLog: EventLogProtocol {
         if try await store.queryPendingStableRoutes(
           distinctId: identityService.getDistinctId()
         ).isEmpty {
-          routeContinuation.yield(.resumeAfterRecovery([]))
+          routeContinuation.yield(.resumeAfterRecovery([], generation: routingDeferralGeneration))
         }
       } catch {
         // Storage/capture readiness remains best-effort. Keep uncertain
@@ -1360,13 +1364,27 @@ actor EventLog: EventLogProtocol {
 
   /// Storage/capture remain available while Journey installs authenticated
   /// state. Only replayPendingStableRoutes may release the retained prefix.
-  func deferCommittedRouting() async {
+  @discardableResult
+  func deferCommittedRouting() async -> UInt64 {
+    routingDeferralGeneration &+= 1
     routingDeferred = true
+    return routingDeferralGeneration
+  }
+
+  func resumeCommittedRouting(ifGeneration generation: UInt64) async {
+    guard generation == routingDeferralGeneration else { return }
+    routeContinuation.yield(.resumeAfterRecovery([], generation: generation))
   }
 
   private func processRoute(_ cmd: RouteCommand) async {
     switch cmd {
-    case .resumeAfterRecovery(let recovered):
+    case .resumeAfterRecovery(let recovered, let generation):
+      guard generation == routingDeferralGeneration else {
+        for event in recovered {
+          if let id = event.stableRouteEventId { activeStableRouteIds.remove(id) }
+        }
+        return
+      }
       routingDeferred = false
       for routed in recovered {
         await routeToCommittedSubscribers(routed)
@@ -2816,9 +2834,10 @@ extension EventLog {
     await ready.wait()
     guard !closeFlag.isClosed else { return false }
     do {
+      let generation = routingDeferralGeneration
       let recovered = try await pendingStableRoutes(distinctId: distinctId)
       if routingDeferred {
-        routeContinuation.yield(.resumeAfterRecovery(recovered))
+        routeContinuation.yield(.resumeAfterRecovery(recovered, generation: generation))
       } else {
         for event in recovered { routeContinuation.yield(.undurable(event)) }
       }

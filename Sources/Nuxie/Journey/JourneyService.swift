@@ -22,6 +22,7 @@ protocol JourneyProfileConsuming: AnyObject, Sendable {
 
 protocol JourneyServiceProtocol: JourneyProfileConsuming {
     func prepareForEvents() async
+    func finishStartupRouting() async
     func initialize() async
     func handleEvent(_ event: NuxieEvent) async
     func handleEvent(
@@ -38,6 +39,7 @@ protocol JourneyServiceProtocol: JourneyProfileConsuming {
 
 extension JourneyServiceProtocol {
     func prepareForEvents() async {}
+    func finishStartupRouting() async {}
     func shutdown() async {}
 }
 
@@ -135,6 +137,8 @@ actor JourneyService {
 
     private var initialized = false
     private var startupRecoveryStarted = false
+    private var startupRoutingDeferral: UInt64?
+    private var startupProfileSettled = false
     /// Setup occurs while the host app is in its launch foreground session.
     /// Lifecycle notifications close and reopen this latch thereafter.
     private var foreground = true
@@ -154,7 +158,12 @@ actor JourneyService {
     private let profileFence = JourneyProfileFence()
     /// Advances only when admitted execution authority is explicitly revoked.
     private let executionFence: JourneyProfileFence
-    private var journal: JourneyRunJournal?
+    private var journal: JourneyRunJournal? {
+        didSet { journalGeneration &+= 1 }
+    }
+    private var journalGeneration: UInt64 = 0
+    private var recoveredJournalGeneration: UInt64?
+    private var journalRecoveryOperation: (id: UUID, distinctId: String, task: Task<Void, Never>)?
     private var retainedReleasesByDigest: [String: AuthenticatedJourneyRelease] = [:]
     private var retainedReleaseOrder: [String] = []
     private var retainedReleaseBytes = 0
@@ -239,6 +248,7 @@ extension JourneyService {
     /// captures. This phase must never capture, query or replay EventLog events.
     func prepareForEvents() async {
         guard !initialized else { return }
+        startupRoutingDeferral = await events.deferCommittedRouting()
         if storageScope != nil {
             await prepareJournal(for: identity.getDistinctId())
         }
@@ -249,12 +259,23 @@ extension JourneyService {
         }
     }
 
+    /// Failed/offline profile startup must not retain live analytics forever.
+    /// The generation prevents this fallback from opening a newer authenticated
+    /// recovery gate if profile admission races prefetch completion.
+    func finishStartupRouting() async {
+        startupProfileSettled = true
+        guard initialized, journal == nil, let generation = startupRoutingDeferral else { return }
+        await events.resumeCommittedRouting(ifGeneration: generation)
+    }
+
     func initialize() async {
         guard !startupRecoveryStarted else { return }
         startupRecoveryStarted = true
         await prepareForEvents()
-        if let journal {
-            await recoverJournal(journal)
+        if storageScope != nil {
+            await openJournal(for: identity.getDistinctId())
+        } else if startupProfileSettled {
+            await finishStartupRouting()
         }
         await resetForegroundStateArmReceiptsIfNeeded()
         await resumeParkedRuns(event: nil)
@@ -269,6 +290,8 @@ extension JourneyService {
         // profile and execution-fence check.
         initialized = false
         startupRecoveryStarted = false
+        startupRoutingDeferral = nil
+        startupProfileSettled = false
         foreground = false
         cancelWake()
         await presenter?.setJourneyPresentationAvailabilityHandler(nil)
@@ -397,6 +420,14 @@ private extension JourneyService {
         distinctId: String
     ) async {
         guard identity.getDistinctId() == distinctId else { return }
+        let routingGeneration = initialized && journal == nil
+            ? await events.deferCommittedRouting() : nil
+        guard identity.getDistinctId() == distinctId else {
+            if let routingGeneration {
+                await events.resumeCommittedRouting(ifGeneration: routingGeneration)
+            }
+            return
+        }
         let generation = profileFence.advance()
         profileState = ProfileState(
             distinctId: distinctId,
@@ -407,6 +438,9 @@ private extension JourneyService {
         retainReceipts(for: snapshot)
         guard initialized else { return }
         await ensureJournal(for: distinctId)
+        if journal == nil, let routingGeneration {
+            await events.resumeCommittedRouting(ifGeneration: routingGeneration)
+        }
         await resetForegroundStateArmReceiptsIfNeeded()
         if let journal, journal.distinctId == distinctId {
             do {
@@ -847,9 +881,35 @@ private extension JourneyService {
     }
 
     private func openJournal(for distinctId: String) async {
-        await prepareJournal(for: distinctId)
-        if let journal, journal.distinctId == distinctId {
-            await recoverJournal(journal)
+        if let operation = journalRecoveryOperation {
+            await operation.task.value
+            if operation.distinctId == distinctId { return }
+        }
+        guard initialized, identity.getDistinctId() == distinctId else { return }
+        if journal?.distinctId == distinctId,
+           recoveredJournalGeneration == journalGeneration { return }
+        let operationId = UUID()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.prepareAndRecoverJournal(for: distinctId)
+        }
+        journalRecoveryOperation = (operationId, distinctId, task)
+        await task.value
+        if journalRecoveryOperation?.id == operationId {
+            journalRecoveryOperation = nil
+        }
+    }
+
+    private func prepareAndRecoverJournal(for distinctId: String) async {
+        if journal?.distinctId != distinctId {
+            await prepareJournal(for: distinctId)
+        }
+        guard initialized, identity.getDistinctId() == distinctId,
+              let journal, journal.distinctId == distinctId else { return }
+        let generation = journalGeneration
+        await recoverJournal(journal, generation: generation)
+        if journalGeneration == generation, self.journal != nil {
+            recoveredJournalGeneration = generation
         }
     }
 
@@ -882,7 +942,7 @@ private extension JourneyService {
         }
     }
 
-    private func recoverJournal(_ opened: JourneyRunJournal) async {
+    private func recoverJournal(_ opened: JourneyRunJournal, generation: UInt64) async {
         do {
             guard await events.replayPendingStableRoutes(
                 distinctId: opened.distinctId
@@ -897,7 +957,7 @@ private extension JourneyService {
             await scheduleNextWake()
         } catch {
             LogError("JourneyService: durable journal recovery failed: \(error)")
-            journal = nil
+            if journalGeneration == generation { journal = nil }
         }
     }
 

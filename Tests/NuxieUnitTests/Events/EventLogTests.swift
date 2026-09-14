@@ -54,10 +54,12 @@ final class EventLogTests: AsyncSpec {
             it("keeps capture available after transient storage initialization or query failure") {
                 mockStore.shouldFailInitialize = true
                 mockStore.shouldFailQuery = true
+                let generation = await log.deferCommittedRouting()
                 let received = ReceivedEvents()
                 await log.subscribeCommitted { event in await received.append(event.name) }
                 try await log.configure(configuration: testConfig)
                 log.track("best-effort-capture")
+                await log.resumeCommittedRouting(ifGeneration: generation)
                 await log.drain()
                 await expect { await received.names }.to(equal(["best-effort-capture"]))
             }
@@ -182,7 +184,9 @@ final class EventLogTests: AsyncSpec {
                         eventId: stored.id, event: stored, recordedAt: stored.timestamp,
                         assigningCommitSequence: false, admission: nil
                     )
-                    await log.deferCommittedRouting()
+                    let startupGeneration = await log.deferCommittedRouting()
+                    _ = await log.deferCommittedRouting()
+                    await log.resumeCommittedRouting(ifGeneration: startupGeneration)
                     log.track("newer-buffered")
                     try await log.configure(configuration: testConfig)
                     // Storage is open, but the authenticated Journey journal
