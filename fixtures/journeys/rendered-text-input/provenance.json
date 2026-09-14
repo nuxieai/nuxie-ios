@@ -1,10 +1,7 @@
 {
-  "sourceRepository": "nuxieai/nuxie-dev",
-  "sourceCommit": "912d65ed1ad26913b8e6406ddced780e5f30bd17",
-  "sourceFixture": "tools/rive-compiler/fixtures/publish-path/visual-view-contract.json",
-  "generatorTest": "packages/view-compiler/src/compiler-backends/rive-ios-production-artifact.test.ts",
-  "testName": "materializes the manifest-driven native parity corpus without rebuilding role bytes",
+  "contract": "published-native-text-input-response",
+  "publisherSourceCommit": "912d65ed1ad26913b8e6406ddced780e5f30bd17",
   "descriptorSha256": "3aeaa213f51b8878d51981ebc2393703c1e9b7d76d3abfcb2bbfb2eec486211b",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "qualification": "Generated and hash-verified; native editable-control consumption remains to be qualified."
+  "qualification": "Android API 36: real runtime glyph changes, presentation navigation and durable Journey responses. Additional platform qualification is tracked in the parent repository."
 }
