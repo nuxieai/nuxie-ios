@@ -101,7 +101,13 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         await events.close()
     }
 
-    func testProfileReplacementWaitsForRetainedRouteRecovery() async throws {
+    func testProfileChangesWaitForRetainedRouteRecovery() async throws {
+        for change in ["replace", "withdraw", "clear", "clearAll"] {
+            try await assertProfileChangeWaitsForRetainedRouteRecovery(change)
+        }
+    }
+
+    private func assertProfileChangeWaitsForRetainedRouteRecovery(_ change: String) async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let snapshot = try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load())
@@ -124,7 +130,12 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         let replacementCompleted = expectation(description: "replacement must wait")
         replacementCompleted.isInverted = true
         let replacement = Task {
-            await service.profileDidCommit(snapshot, distinctId: "customer")
+            switch change {
+            case "withdraw": await service.profileDidWithdraw(authority: nil, distinctId: "customer")
+            case "clear": await service.profileDidClear(distinctId: "customer")
+            case "clearAll": await service.profileDidClearAll()
+            default: await service.profileDidCommit(snapshot, distinctId: "customer")
+            }
             replacementCompleted.fulfill()
         }
         await fulfillment(of: [replacementCompleted], timeout: 0.2)
@@ -134,6 +145,27 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         await startup.value
         await replacement.value
         XCTAssertGreaterThan(service.eventAdmissionGeneration(), retainedGeneration)
+        await service.shutdown()
+    }
+
+    func testFailedRecoveryReleasesRoutingAfterPrefetchAlreadySettled() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshot = try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load())
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        let service = makeService(identity: identity, events: events, directory: directory)
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        await service.prepareForEvents()
+        events.replayPendingRoutesHandler = {
+            await service.finishStartupRouting()
+            return false
+        }
+        let routingResumed = expectation(description: "failed recovery releases live routing")
+        events.resumeRoutingHandler = { routingResumed.fulfill() }
+        await service.initialize()
+        await fulfillment(of: [routingResumed], timeout: 0.2)
         await service.shutdown()
     }
 

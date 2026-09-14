@@ -274,7 +274,8 @@ extension JourneyService {
         await prepareForEvents()
         if storageScope != nil {
             await openJournal(for: identity.getDistinctId())
-        } else if startupProfileSettled {
+        }
+        if startupProfileSettled {
             await finishStartupRouting()
         }
         await resetForegroundStateArmReceiptsIfNeeded()
@@ -513,6 +514,11 @@ extension JourneyService {
         admissionGeneration: UInt64
     ) async {
         guard identity.getDistinctId() == distinctId else { return }
+        if let operation = journalRecoveryOperation {
+            await operation.task.value
+        }
+        guard profileDeliveryGenerationsByDistinctId[distinctId] == admissionGeneration,
+              identity.getDistinctId() == distinctId else { return }
         if initialized {
             await ensureJournal(for: distinctId)
         }
@@ -555,6 +561,11 @@ extension JourneyService {
     }
 
     private func clearProfile(distinctId: String) async {
+        let deliveryGeneration = profileDeliveryGenerationsByDistinctId[distinctId]
+        if let operation = journalRecoveryOperation {
+            await operation.task.value
+        }
+        guard profileDeliveryGenerationsByDistinctId[distinctId] == deliveryGeneration else { return }
         guard profileState?.distinctId == distinctId
                 || journal?.distinctId == distinctId else { return }
         cancelWake()
@@ -587,6 +598,11 @@ extension JourneyService {
     }
 
     private func clearAllProfiles() async {
+        let deliveryGeneration = profileDeliveryGeneration
+        if let operation = journalRecoveryOperation {
+            await operation.task.value
+        }
+        guard profileDeliveryGeneration == deliveryGeneration else { return }
         cancelWake()
         let journalToAbandon = journal
         let presentationOwner = journalToAbandon?.distinctId
