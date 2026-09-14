@@ -1,0 +1,37 @@
+{
+  "platform": "android",
+  "contract": "Acquire the authenticated destination before dismissing the outgoing screen. Failed or cancelled acquisition preserves the outgoing screen. Revalidate presentation ownership after acquisition; release unused destination artifacts on withdrawal or checkpoint completion. This contract does not establish continuous Activity ownership or authored transition timing.",
+  "cases": [
+    {
+      "action": "failure",
+      "outgoingRetained": true,
+      "destinationReleased": false
+    },
+    {
+      "action": "cancel",
+      "outgoingRetained": true,
+      "destinationReleased": false
+    },
+    {
+      "action": "withdraw",
+      "outgoingRetained": true,
+      "destinationReleased": true
+    },
+    {
+      "action": "hostClose",
+      "outgoingRetained": false,
+      "destinationReleased": true
+    },
+    {
+      "action": "identityShutdown",
+      "outgoingRetained": false,
+      "destinationReleased": true
+    }
+  ],
+  "completedDismissal": {
+    "destinationAcquired": true,
+    "destinationReleased": true,
+    "launchCount": 1,
+    "reason": "JOURNEY_COMPLETED"
+  }
+}
