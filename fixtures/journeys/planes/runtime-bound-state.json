@@ -1,5 +1,5 @@
 {
-  "contract": "Scalar updates target the default instance already bound to the screen, preserving commerce children and player identity. Missing declarations do not activate a model. Invalid paths, types and non-finite numbers must not mutate state.",
+  "contract": "Scalar updates target the default instance already bound to the screen, preserving commerce children and player identity. Missing declarations do not activate a model. Invalid paths, types and non-finite numbers must not mutate state. Native snapshots preserve string, number and boolean scalar values for readback.",
   "writes": [
     {
       "path": "screen/phase",
