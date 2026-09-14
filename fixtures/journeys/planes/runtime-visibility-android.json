@@ -23,5 +23,40 @@
     { "action": "visible", "value": false },
     { "action": "visible", "value": true },
     { "action": "frame", "nanos": 300000000000, "elapsed": null }
+  ],
+  "pointerCases": [
+    {
+      "name": "unconsumed down is discarded",
+      "steps": [
+        { "action": "down" }, { "action": "reset" },
+        { "action": "take", "expected": [] }
+      ]
+    },
+    {
+      "name": "delivered down is cancelled despite repeated hide",
+      "steps": [
+        { "action": "down" }, { "action": "take", "expected": ["down"] },
+        { "action": "move" }, { "action": "reset" }, { "action": "reset" },
+        { "action": "take", "expected": ["exit"] },
+        { "action": "take", "expected": [] }
+      ]
+    },
+    {
+      "name": "released pointer needs no cancellation",
+      "steps": [
+        { "action": "down" }, { "action": "take", "expected": ["down"] },
+        { "action": "up" }, { "action": "take", "expected": ["up"] },
+        { "action": "reset" }, { "action": "take", "expected": [] }
+      ]
+    },
+    {
+      "name": "cancel precedes a new gesture with the same pointer id",
+      "steps": [
+        { "action": "down" }, { "action": "take", "expected": ["down"] },
+        { "action": "reset" }, { "action": "down" },
+        { "action": "take", "expected": ["exit", "down"] },
+        { "action": "reset" }, { "action": "take", "expected": ["exit"] }
+      ]
+    }
   ]
 }
