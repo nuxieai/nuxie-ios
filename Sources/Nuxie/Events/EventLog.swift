@@ -738,6 +738,22 @@ actor EventLog: EventLogProtocol {
       startFlushTimer()
     }
 
+    if routingDeferred {
+      do {
+        // A cold start has no recovered prefix to protect. It must not wait
+        // for a profile just to deliver ordinary committed analytics.
+        if try await store.queryPendingStableRoutes(
+          distinctId: identityService.getDistinctId()
+        ).isEmpty {
+          routeContinuation.yield(.resumeAfterRecovery([]))
+        }
+      } catch {
+        // Storage/capture readiness remains best-effort. Keep uncertain
+        // durable routing deferred until authenticated recovery can retry it.
+        LogWarning("EventLog: could not inspect retained startup routes")
+      }
+    }
+
     LogInfo("EventLog configured (subscribers: \(subscribers.count))")
     // Signal that storage is initialized and safe to use
     await ready.open()
