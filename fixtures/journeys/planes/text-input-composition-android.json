@@ -1,0 +1,77 @@
+{
+  "description": "Android IME completion normalizes only the composing replacement and preserves unselected prefix/suffix. Marked text remains unrestricted before commit or finish. UTF-16 range offsets. This is the Android adapter contract, not an assertion of UIKit marked-text behavior.",
+  "cases": [
+    {
+      "name": "whole field",
+      "current": "",
+      "start": 0,
+      "end": 0,
+      "replacement": "abc",
+      "maxLength": 2,
+      "expected": "ab"
+    },
+    {
+      "name": "middle selection",
+      "current": "abc",
+      "start": 1,
+      "end": 2,
+      "replacement": "XYZ",
+      "maxLength": 3,
+      "expected": "aXc"
+    },
+    {
+      "name": "full field insertion",
+      "current": "ab",
+      "start": 1,
+      "end": 1,
+      "replacement": "XYZ",
+      "maxLength": 2,
+      "expected": "ab"
+    },
+    {
+      "name": "combining prefix",
+      "current": "ab",
+      "start": 1,
+      "end": 1,
+      "replacement": "́XY",
+      "maxLength": 3,
+      "expected": "áXb"
+    },
+    {
+      "name": "family replacement",
+      "current": "abc",
+      "start": 1,
+      "end": 2,
+      "replacement": "👨‍👩‍👧‍👦Z",
+      "maxLength": 3,
+      "expected": "a👨‍👩‍👧‍👦c"
+    },
+    {
+      "name": "flag replacement",
+      "current": "😀b",
+      "start": 2,
+      "end": 3,
+      "replacement": "🇺🇸Z",
+      "maxLength": 2,
+      "expected": "😀🇺🇸"
+    },
+    {
+      "name": "unlimited",
+      "current": "abc",
+      "start": 1,
+      "end": 2,
+      "replacement": "XYZ",
+      "maxLength": null,
+      "expected": "aXYZc"
+    },
+    {
+      "name": "empty commit",
+      "current": "abc",
+      "start": 1,
+      "end": 2,
+      "replacement": "",
+      "maxLength": 3,
+      "expected": "ac"
+    }
+  ]
+}
