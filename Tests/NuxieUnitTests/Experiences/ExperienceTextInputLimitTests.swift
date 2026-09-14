@@ -38,6 +38,23 @@ final class ExperienceTextInputLimitTests: XCTestCase {
         XCTAssertEqual(cases, 1093)
     }
 
+    func testSharedOrdinaryReplacementAdmission() throws {
+        let bytes = try Data(contentsOf: fixtureRoot.appendingPathComponent("journeys/planes/text-input-edits.json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
+        XCTAssertEqual(cases.count, 9)
+        for item in cases {
+            let current = try XCTUnwrap(item["current"] as? String)
+            let start = try XCTUnwrap(item["start"] as? Int)
+            let end = try XCTUnwrap(item["end"] as? Int)
+            let range = try XCTUnwrap(Range(NSRange(location: start, length: end - start), in: current))
+            let candidate = current.replacingCharacters(in: range, with: try XCTUnwrap(item["replacement"] as? String))
+            let allowed = try XCTUnwrap(item["allowed"] as? Bool)
+            let name = try XCTUnwrap(item["name"] as? String)
+            XCTAssertEqual(ExperienceTextInputLimit.fits(candidate, maximum: item["maxLength"] as? Int), allowed, name)
+        }
+    }
+
     private struct Suite: Decodable { let cases: [Vector] }
     private struct Vector: Decodable {
         let name: String
