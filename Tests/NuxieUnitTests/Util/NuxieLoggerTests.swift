@@ -80,6 +80,45 @@ final class NuxieLoggerTests: QuickSpec {
 }
 
 final class NuxieLoggerPrivacyTests: XCTestCase {
+    func testSharedLoggingPolicy() throws {
+        struct PolicyFixture: Decodable {
+            struct Level: Decodable { let threshold: String; let emitted: [String] }
+            struct Privacy: Decodable { let redactSensitiveData: Bool; let containsSensitiveValue: Bool }
+            let defaultLevel: String
+            let defaultRedactSensitiveData: Bool
+            let levels: [Level]
+            let privacy: [Privacy]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/logging/policy.json")
+        let fixture = try JSONDecoder().decode(PolicyFixture.self, from: Data(contentsOf: url))
+        let levels: [String: LogLevel] = ["NONE": .none, "ERROR": .error, "WARN": .warning,
+                                         "INFO": .info, "DEBUG": .debug, "VERBOSE": .verbose]
+        let configuration = NuxieConfiguration(apiKey: "pk_test_logging")
+        XCTAssertEqual(configuration.logLevel, levels[fixture.defaultLevel])
+        XCTAssertEqual(configuration.redactSensitiveData, fixture.defaultRedactSensitiveData)
+        for vector in fixture.levels {
+            let sink = CapturedLogSink()
+            let logger = NuxieLogger { level, _ in sink.append(level.rawValue) }
+            logger.configure(logLevel: try XCTUnwrap(levels[vector.threshold]), enableConsoleLogging: true,
+                             redactSensitiveData: true)
+            for name in ["ERROR", "WARN", "INFO", "DEBUG", "VERBOSE"] {
+                logger.log(level: try XCTUnwrap(levels[name]), message: "Diagnostic", file: "Test.swift", function: "test", line: 1)
+            }
+            XCTAssertEqual(sink.messages, try vector.emitted.map { try XCTUnwrap(levels[$0]).rawValue }, vector.threshold)
+        }
+        for vector in fixture.privacy {
+            let sink = CapturedLogSink()
+            let logger = NuxieLogger { _, message in sink.append(message) }
+            logger.configure(logLevel: .warning, enableConsoleLogging: true,
+                             redactSensitiveData: vector.redactSensitiveData)
+            logger.warning("Customer \("fixture-customer-secret")")
+            XCTAssertEqual(sink.messages.joined().contains("fixture-customer-secret"), vector.containsSensitiveValue)
+        }
+    }
+
     func testRedactsNetworkStorageIdentityAndCallerInterpolations() {
         let sink = CapturedLogSink()
         let logger = NuxieLogger { _, message in sink.append(message) }
