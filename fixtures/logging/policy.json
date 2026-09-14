@@ -1,0 +1,62 @@
+{
+  "suite": "logging-policy",
+  "version": 1,
+  "defaultLevel": "WARN",
+  "defaultRedactSensitiveData": true,
+  "levels": [
+    {
+      "threshold": "NONE",
+      "emitted": []
+    },
+    {
+      "threshold": "ERROR",
+      "emitted": [
+        "ERROR"
+      ]
+    },
+    {
+      "threshold": "WARN",
+      "emitted": [
+        "ERROR",
+        "WARN"
+      ]
+    },
+    {
+      "threshold": "INFO",
+      "emitted": [
+        "ERROR",
+        "WARN",
+        "INFO"
+      ]
+    },
+    {
+      "threshold": "DEBUG",
+      "emitted": [
+        "ERROR",
+        "WARN",
+        "INFO",
+        "DEBUG"
+      ]
+    },
+    {
+      "threshold": "VERBOSE",
+      "emitted": [
+        "ERROR",
+        "WARN",
+        "INFO",
+        "DEBUG",
+        "VERBOSE"
+      ]
+    }
+  ],
+  "privacy": [
+    {
+      "redactSensitiveData": true,
+      "containsSensitiveValue": false
+    },
+    {
+      "redactSensitiveData": false,
+      "containsSensitiveValue": true
+    }
+  ]
+}
