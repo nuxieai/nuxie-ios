@@ -9,5 +9,19 @@
     "batch"
   ],
   "recreationAdmissionCount": 1,
-  "closedWaitingPublication": false
+  "closedWaitingPublication": false,
+  "unseenClose": {
+    "phases": [
+      "beforeFrame",
+      "admission",
+      "hostAcknowledgment"
+    ],
+    "dismissalCheckpoints": 0,
+    "shownFacts": 0,
+    "closeFacts": 0,
+    "terminalOutcomes": 1,
+    "leaseCloseCount": 1,
+    "loadingAllowsBack": true,
+    "authoredDismissibilityAppliesAfterReveal": true
+  }
 }
