@@ -419,10 +419,19 @@ private extension JourneyService {
         artifacts: PreparedJourneyArtifacts?,
         distinctId: String
     ) async {
-        guard identity.getDistinctId() == distinctId else { return }
+        guard identity.getDistinctId() == distinctId,
+              let deliveryGeneration = profileDeliveryGenerationsByDistinctId[distinctId] else { return }
+        // A retained route carries the profile fence captured at replay admission.
+        // Keep that profile installed until the shared recovery consumes it.
+        if let operation = journalRecoveryOperation {
+            await operation.task.value
+        }
+        guard identity.getDistinctId() == distinctId,
+              profileDeliveryGenerationsByDistinctId[distinctId] == deliveryGeneration else { return }
         let routingGeneration = initialized && journal == nil
             ? await events.deferCommittedRouting() : nil
-        guard identity.getDistinctId() == distinctId else {
+        guard identity.getDistinctId() == distinctId,
+              profileDeliveryGenerationsByDistinctId[distinctId] == deliveryGeneration else {
             if let routingGeneration {
                 await events.resumeCommittedRouting(ifGeneration: routingGeneration)
             }
