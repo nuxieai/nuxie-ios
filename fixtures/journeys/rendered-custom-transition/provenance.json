@@ -1,0 +1,7 @@
+{
+  "contract": "published-custom-transition-completion",
+  "publisherSourceCommit": "ea02df707d2ccadfa003de53abe46184ba302079",
+  "descriptorSha256": "d8c1f57a4a8ef32f9f2df075e5bd8816259394288b876b273d1c17e03aa456d9",
+  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+  "qualification": "Publisher declaration and signing checks passed; native completion event qualification is in progress."
+}
