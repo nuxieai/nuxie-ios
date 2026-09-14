@@ -1,5 +1,5 @@
 {
-  "contract": "Scalar updates target the default instance already bound to the screen, preserving commerce children and player identity. Missing declarations do not activate a model. Invalid paths, types and non-finite numbers must not mutate state. Native snapshots preserve string, number and boolean scalar values for readback.",
+  "contract": "Scalar updates target the default instance already bound to the screen, preserving commerce children and player identity. Missing declarations do not activate a model. Invalid paths, types and non-finite numbers must not mutate state. Native snapshots preserve string, number and boolean scalar values for readback. String inputs targeting enums resolve exact authored labels to ordinals; unknown labels must be rejected before mutation.",
   "writes": [
     {
       "path": "screen/phase",
@@ -21,5 +21,11 @@
       "kind": "number",
       "value": 24.5
     }
+  ],
+  "phaseEnumLabels": [
+    "hidden",
+    "entering",
+    "active",
+    "exiting"
   ]
 }
