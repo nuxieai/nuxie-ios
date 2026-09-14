@@ -22,7 +22,7 @@ for (const action of ['purchase', 'restore']) {
   d.identity = { ...d.identity, appId: `app-test-store-${action}`, experienceId: `test-store-${action}`,
     experienceVersionId: `test-store-${action}-v1`, buildId: `test-store-${action}-build` };
   const product = structuredClone(catalog.products[0]);
-  product.store = { platform: 'google_play', productId: 'test-store-monthly', productType: 'subs', basePlanId: 'monthly' };
+  product.store = { platform: 'google_play', productId: 'test-store-monthly', productType: 'subscription', basePlanId: 'monthly' };
   d.products = [product];
   d.placements = [{ id: 'test-store:monthly', productId: product.id }];
   d.leg.id = createHash('sha256').update(`test-store-${action}-leg`).digest('hex');
