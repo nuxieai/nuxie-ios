@@ -1,0 +1,36 @@
+{
+  "platform": "android",
+  "contract": "Authored reduced motion follows disabled animator duration (zero scale). Nonzero speed changes do not request reduced motion. A presentation publishes its initial preference and then only changed booleans. Closed observers cannot publish queued changes.",
+  "steps": [
+    {
+      "scale": 0,
+      "expected": [
+        false,
+        true
+      ]
+    },
+    {
+      "scale": 0,
+      "expected": [
+        false,
+        true
+      ]
+    },
+    {
+      "scale": 0.5,
+      "expected": [
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "scale": 2,
+      "expected": [
+        false,
+        true,
+        false
+      ]
+    }
+  ]
+}
