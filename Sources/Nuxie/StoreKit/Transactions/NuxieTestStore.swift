@@ -47,6 +47,14 @@ actor NuxieTestStore: NuxieTestStorePurchasing {
         distinctId: String
     ) async -> NuxieTestStorePurchaseResponse {
         let choice = await Self.presentPurchaseSheet(for: product)
+        return purchaseResponse(for: choice, product: product, distinctId: distinctId)
+    }
+
+    func purchaseResponse(
+        for choice: TestStorePurchaseChoice,
+        product: StoreProduct,
+        distinctId: String
+    ) -> NuxieTestStorePurchaseResponse {
         switch choice {
         case .purchased:
             var products = purchasedProductsByDistinctId[distinctId, default: [:]]
@@ -93,7 +101,7 @@ actor NuxieTestStore: NuxieTestStorePurchasing {
     }
 }
 
-private enum TestStorePurchaseChoice: Sendable {
+enum TestStorePurchaseChoice: Sendable {
     case purchased
     case pending
     case cancelled
