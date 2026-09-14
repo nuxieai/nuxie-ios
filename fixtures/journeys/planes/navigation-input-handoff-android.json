@@ -1,0 +1,10 @@
+{
+  "platform": "android",
+  "contract": "Outgoing input remains editable during artifact acquisition. Native preparation freezes outgoing touch, key and IME input before refreshing the destination draft. Abort restores input; accepted response commits remain shared across copies of the same screen. Speculative drafts and lifecycle changes stay isolated. A same-screen visit enters again with one additional appearance.",
+  "initialDraft": "Before",
+  "latestDraft": "Latest",
+  "staleImeDraft": "Stale",
+  "acceptedResponse": "Accepted",
+  "initialAppearances": 1,
+  "destinationAppearances": 2
+}
