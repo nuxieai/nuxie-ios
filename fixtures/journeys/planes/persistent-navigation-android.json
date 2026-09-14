@@ -11,5 +11,6 @@
     "dismissalCheckpoints": 0,
     "destinationLeaseReleased": true,
     "outgoingPixelsChanged": 0
-  }
+  },
+  "pendingCheckpointComposedPixelsChanged": 0
 }
