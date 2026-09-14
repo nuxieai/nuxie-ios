@@ -163,7 +163,7 @@ actor JourneyService {
     }
     private var journalGeneration: UInt64 = 0
     private var recoveredJournalGeneration: UInt64?
-    private var journalRecoveryOperation: (id: UUID, distinctId: String, task: Task<Void, Never>)?
+    private var journalRecoveryOperation: (id: UUID, task: Task<Void, Never>)?
     private var retainedReleasesByDigest: [String: AuthenticatedJourneyRelease] = [:]
     private var retainedReleaseOrder: [String] = []
     private var retainedReleaseBytes = 0
@@ -906,9 +906,13 @@ private extension JourneyService {
     }
 
     private func openJournal(for distinctId: String) async {
-        if let operation = journalRecoveryOperation {
+        while let operation = journalRecoveryOperation {
             await operation.task.value
-            if operation.distinctId == distinctId { return }
+            if journalRecoveryOperation?.id == operation.id {
+                journalRecoveryOperation = nil
+            }
+            if journal?.distinctId == distinctId,
+               recoveredJournalGeneration == journalGeneration { return }
         }
         guard initialized, identity.getDistinctId() == distinctId else { return }
         if journal?.distinctId == distinctId,
@@ -918,7 +922,7 @@ private extension JourneyService {
             guard let self else { return }
             await self.prepareAndRecoverJournal(for: distinctId)
         }
-        journalRecoveryOperation = (operationId, distinctId, task)
+        journalRecoveryOperation = (operationId, task)
         await task.value
         if journalRecoveryOperation?.id == operationId {
             journalRecoveryOperation = nil
