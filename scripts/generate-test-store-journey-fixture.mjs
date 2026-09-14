@@ -25,7 +25,7 @@ for (const action of ['purchase', 'restore']) {
   product.store = { platform: 'google_play', productId: 'test-store-monthly', productType: 'subs', basePlanId: 'monthly' };
   d.products = [product];
   d.placements = [{ id: 'test-store:monthly', productId: product.id }];
-  d.leg.id = `test-store-${action}-leg`;
+  d.leg.id = createHash('sha256').update(`test-store-${action}-leg`).digest('hex');
   d.leg.outputs = [];
   d.leg.reentry = { type: 'one_time' };
   d.leg.steps = [d.leg.steps[0], {
