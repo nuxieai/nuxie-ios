@@ -28,5 +28,28 @@
     "sourceBackgroundArgb": 0,
     "destinationBackgroundArgb": 4278255360,
     "composedPixelsChanged": 0
+  },
+  "terminalCheckpoint": {
+    "contract": "Host dismissal and identity shutdown drain an admitted navigation checkpoint, then their terminal outcome. Cancellation of the navigation waiter does not change this. A later navigation retirement cannot complete an earlier terminal owner. No destination launches after withdrawal.",
+    "cases": [
+      {
+        "identityChange": false,
+        "cancelWaiter": false
+      },
+      {
+        "identityChange": false,
+        "cancelWaiter": true
+      },
+      {
+        "identityChange": true,
+        "cancelWaiter": false
+      },
+      {
+        "identityChange": true,
+        "cancelWaiter": true
+      }
+    ],
+    "checkpointCalls": 1,
+    "activityLaunches": 1
   }
 }
