@@ -752,42 +752,13 @@ actor JourneyReleaseCatalog {
                 ) else {
                     throw ExperienceError.productsUnavailable
                 }
-                let preview = binding.product.preview
-                let period = ProductPeriod(rawValue: preview.period)
-                let trialTerms = Self.testStoreTrialTerms(
-                    label: preview.trialLabel,
-                    fallbackPeriod: period
-                )
-                var product = StoreProduct(
+                var product = Self.makeTestStoreProduct(
                     productId: binding.product.id,
                     storeProductId: binding.product.store.productId,
                     placementId: binding.placement.id,
-                    name: "TEST · \(preview.name)",
-                    description: "TEST STORE — no charge. \(preview.description)",
-                    price: "TEST · \(preview.price)",
-                    period: period,
-                    periodCount: preview.periodCount > 0
-                        ? preview.periodCount
-                        : nil,
-                    periodLabel: preview.periodLabel,
-                    renewalPrice: preview.renewalLabel,
-                    renewalPeriod: "",
-                    productType: productType,
-                    introductoryTerms: preview.hasTrial
-                        ? .init(
-                            price: "TEST · FREE",
-                            period: trialTerms.period,
-                            periodCount: trialTerms.periodCount,
-                            cycles: 1,
-                            paymentMode: .freeTrial,
-                            trialPeriodText: preview.trialLabel
-                        )
-                        : nil
+                    preview: binding.product.preview,
+                    productType: productType
                 )
-                product.isTestStoreProduct = true
-                product.previewIntroOfferLabel = preview.introOfferLabel.isEmpty
-                    ? nil
-                    : preview.introOfferLabel
                 Self.attachCommercialAuthority(
                     to: &product,
                     binding: binding,
@@ -861,6 +832,52 @@ actor JourneyReleaseCatalog {
             displayPrice: product.price,
             price: price
         )
+    }
+
+    /// Display-only construction shared by release loading and conformance checks.
+    static func makeTestStoreProduct(
+        productId: String,
+        storeProductId: String,
+        placementId: String,
+        preview: JourneyReleaseProductDocument.Preview,
+        productType: StoreProductType
+    ) -> StoreProduct {
+        let period = ProductPeriod(rawValue: preview.period)
+        let trialTerms = Self.testStoreTrialTerms(
+            label: preview.trialLabel,
+            fallbackPeriod: period
+        )
+        var product = StoreProduct(
+            productId: productId,
+            storeProductId: storeProductId,
+            placementId: placementId,
+            name: "TEST · \(preview.name)",
+            description: "TEST STORE — no charge. \(preview.description)",
+            price: "TEST · \(preview.price)",
+            period: period,
+            periodCount: preview.periodCount > 0
+                ? preview.periodCount
+                : nil,
+            periodLabel: preview.periodLabel,
+            renewalPrice: preview.renewalLabel,
+            renewalPeriod: "",
+            productType: productType,
+            introductoryTerms: preview.hasTrial
+                ? .init(
+                    price: "TEST · FREE",
+                    period: trialTerms.period,
+                    periodCount: trialTerms.periodCount,
+                    cycles: 1,
+                    paymentMode: .freeTrial,
+                    trialPeriodText: preview.trialLabel
+                )
+                : nil
+        )
+        product.isTestStoreProduct = true
+        product.previewIntroOfferLabel = preview.introOfferLabel.isEmpty
+            ? nil
+            : preview.introOfferLabel
+        return product
     }
 
     private static func testStoreTrialTerms(
