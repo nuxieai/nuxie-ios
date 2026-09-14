@@ -94,6 +94,12 @@ struct NativeExperienceFontAsset: Equatable, Sendable {
     let required: Bool
 }
 
+enum ExperienceTextInputLimit {
+    static func apply(_ text: String, maximum: Int?) -> String {
+        maximum.map { String(text.prefix($0)) } ?? text
+    }
+}
+
 struct NativeExperienceTextInput: Equatable, Sendable {
     struct Geometry: Equatable, Sendable {
         let xPath: String

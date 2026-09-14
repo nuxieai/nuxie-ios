@@ -3302,7 +3302,7 @@ actor ExperienceInteractiveScreen {
         guard input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
-        let limited = input.maxLength.map { String(value.prefix($0)) } ?? value
+        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
         let runtime = runtime
         return try await operationGate.withLock {
             try await runtime.setTextRuns([
