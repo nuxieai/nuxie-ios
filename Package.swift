@@ -71,7 +71,8 @@ let package = Package(
             path: "Sources/Nuxie",
             resources: [
                 .process("PrivacyInfo.xcprivacy"),
-                .process("Resources/timezone-bundle.json")
+                .process("Resources/timezone-bundle.json"),
+                .process("Resources/LICENSE-unicode.txt")
             ],
             swiftSettings: [
                 // Phase 1 guardrail: surface data races as warnings now;

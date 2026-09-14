@@ -414,10 +414,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         guard let maximum = binding(for: control)?.input.maxLength,
               maximum > 0,
               let textRange = Range(range, in: current) else { return true }
-        return current.replacingCharacters(
+        let candidate = current.replacingCharacters(
             in: textRange,
             with: replacement
-        ).count <= maximum
+        )
+        return ExperienceTextInputLimit.apply(candidate, maximum: maximum).utf8.count == candidate.utf8.count
     }
 
     private func propagateTextChange(from control: UIView) {
