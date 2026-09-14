@@ -495,7 +495,7 @@ final class ForwardingPersistenceTests: XCTestCase {
       "pruneHistory": 1,
       "queryEventsForUser": 4,
       "queryPendingDelivery": 1,
-      "queryPendingStableRoutes": 3,
+      "queryPendingStableRoutes": 2,
       "queryRecentEvents": 1,
       "queryStableCapture": 2,
       "readOrInitializeHistoryCoverage": 1,

@@ -7,6 +7,16 @@ struct JourneyReporter {
     let journal: JourneyRunJournal
     let events: any RoutedStableSystemEventCapturing
 
+    /// Persist the complete lifecycle outbox before startup routing can start
+    /// newer runs. Acknowledgement/removal still waits for ordinary recovery.
+    func stagePending() async throws -> Bool {
+        for run in try await journal.runs() {
+            if !run.startedQueued, !(await queue(run, completion: false)) { return false }
+            if run.completion != nil, !(await queue(run, completion: true)) { return false }
+        }
+        return true
+    }
+
     func flushPending() async throws {
         for run in try await journal.runs() {
             if !run.startedQueued {
@@ -74,6 +84,22 @@ struct JourneyExperimentExposureReporter: Sendable {
 
     let journal: JourneyRunJournal
     let events: any RoutedStableSystemEventCapturing
+
+    /// Stage every pending exposure while live routing is held, without
+    /// prematurely marking its subscriber receipt as drained.
+    func stagePending() async throws -> Bool {
+        for run in try await journal.runs() {
+            for exposure in run.experimentExposures
+            where exposure.shownAt != nil && !exposure.queued {
+                let projection = projection(exposure, run: run)
+                guard await captureStableSystemEvent(
+                    projection.eventName, properties: projection.properties,
+                    eventId: exposure.eventId, admission: nil
+                ) != nil else { return false }
+            }
+        }
+        return true
+    }
 
     func flushPending(
         admission: JourneyCommitAdmission? = nil
