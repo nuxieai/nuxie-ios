@@ -1,10 +1,10 @@
 {
   "sourceRepository": "nuxieai/nuxie-dev",
-  "sourceCommit": "9320c0707d3873c6104c36ece236042102310144",
+  "sourceCommit": "0fdb4cad1ee7eadcabf31bea67a6c668adb73c09",
   "sourceFixture": "tools/rive-compiler/fixtures/publish-path/visual-view-contract.json",
   "generatorTest": "packages/view-compiler/src/compiler-backends/rive-ios-production-artifact.test.ts",
   "testName": "materializes the manifest-driven native parity corpus without rebuilding role bytes",
-  "descriptorSha256": "b461c8b520aee25c556fa79fe2b1b81f052dd8a5ff366d256ffb9dfd97dce411",
+  "descriptorSha256": "6d3ca8e2fc2756a62acd9de6bd0c6499418ff96a7b351d513c3999c3af2e3500",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
   "qualification": "Generated and hash-verified; native editable-control consumption remains to be qualified."
 }
