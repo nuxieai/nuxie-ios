@@ -22,5 +22,11 @@
     "launchCountAfterResult": 1,
     "conflictingDestination": "screen_welcome",
     "conflictReason": "SUPERSEDED"
+  },
+  "transparentPreparation": {
+    "contract": "A provisional destination remains invisible through transparent outgoing content until activation. Native preparation completes while the destination is hidden.",
+    "sourceBackgroundArgb": 0,
+    "destinationBackgroundArgb": 4278255360,
+    "composedPixelsChanged": 0
   }
 }
