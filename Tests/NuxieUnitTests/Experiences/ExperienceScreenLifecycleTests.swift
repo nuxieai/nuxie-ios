@@ -2,6 +2,40 @@ import XCTest
 @testable import Nuxie
 
 final class ExperienceScreenLifecycleTests: XCTestCase {
+    func testSharedLifecycleVectors() throws {
+        struct Fixture: Decodable {
+            struct Step: Decodable {
+                let action: String
+                let phase: String
+                let transition: String
+                let reduceMotion: Bool
+                let appearances: UInt64
+            }
+            let steps: [Step]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/runtime-screen-lifecycle.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        var state = ExperienceScreenLifecycleState(reduceMotion: false)
+        XCTAssertEqual(state.snapshot.phase, .hidden)
+        XCTAssertEqual(state.snapshot.appearances, 0)
+        for step in fixture.steps {
+            let snapshot: ExperienceScreenLifecycleSnapshot
+            if step.action == "reduceMotion" {
+                snapshot = state.updateReduceMotion(step.reduceMotion)
+            } else {
+                snapshot = state.move(to: try XCTUnwrap(ExperienceScreenLifecyclePhase(rawValue: step.phase)),
+                                      transition: step.transition)
+            }
+            XCTAssertEqual(snapshot.phase.rawValue, step.phase)
+            XCTAssertEqual(snapshot.appearances, step.appearances)
+            XCTAssertEqual(snapshot.transition, step.transition)
+            XCTAssertEqual(snapshot.reduceMotion, step.reduceMotion)
+        }
+    }
+
     func testLifecycleSnapshotBuildsOneTypedReservedStateBatch() {
         let snapshot = ExperienceScreenLifecycleSnapshot(
             phase: .entering,
