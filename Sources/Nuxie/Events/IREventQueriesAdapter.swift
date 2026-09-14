@@ -294,44 +294,44 @@ enum IREventSequenceMatcher {
             )
         }
 
-        // Try every viable first fact. For a fixed start, choosing the
-        // earliest next fact is optimal because both windows are upper
-        // bounds; a later match can only leave less room for later steps.
-        for startIndex in events.indices
-        where try matches(events[startIndex], step: steps[0]) {
-            let firstTime = events[startIndex].timestamp
-            var previousTime = firstTime
-            var nextIndex = events.index(after: startIndex)
-            var completed = true
-
-            for step in steps.dropFirst() {
-                var matchIndex: Int?
-                while nextIndex < events.endIndex {
-                    let event = events[nextIndex]
-                    if let perStepWithin,
-                       event.timestamp.timeIntervalSince(previousTime) > perStepWithin {
-                        break
+        struct Candidate {
+            let firstTime: Date
+            let lastTime: Date
+        }
+        // Each prefix keeps a sliding maximum of its possible start times.
+        // A later-ending candidate with an equal/later start dominates an older
+        // one under both upper bounds. Other candidates must remain available:
+        // the earliest intermediate event can expire before the final step.
+        var prefixes = Array(repeating: ArraySlice<Candidate>(), count: steps.count - 1)
+        for event in events {
+            // Descending prefixes prevent one event from satisfying two steps.
+            for stepIndex in steps.indices.reversed() {
+                guard try matches(event, step: steps[stepIndex]) else { continue }
+                let firstTime: Date
+                if stepIndex == 0 {
+                    firstTime = event.timestamp
+                } else {
+                    let previous = stepIndex - 1
+                    if let perStepWithin {
+                        while let candidate = prefixes[previous].first,
+                              event.timestamp.timeIntervalSince(candidate.lastTime) > perStepWithin {
+                            prefixes[previous].removeFirst()
+                        }
                     }
+                    guard let candidate = prefixes[previous].first else { continue }
+                    firstTime = candidate.firstTime
                     if let overallWithin,
                        event.timestamp.timeIntervalSince(firstTime) > overallWithin {
-                        break
+                        continue
                     }
-                    if try matches(event, step: step) {
-                        matchIndex = nextIndex
-                        break
-                    }
-                    nextIndex = events.index(after: nextIndex)
                 }
-
-                guard let matchIndex else {
-                    completed = false
-                    break
+                if stepIndex == steps.count - 1 { return true }
+                while let candidate = prefixes[stepIndex].last,
+                      candidate.firstTime <= firstTime {
+                    prefixes[stepIndex].removeLast()
                 }
-                previousTime = events[matchIndex].timestamp
-                nextIndex = events.index(after: matchIndex)
+                prefixes[stepIndex].append(Candidate(firstTime: firstTime, lastTime: event.timestamp))
             }
-
-            if completed { return true }
         }
         return false
     }
