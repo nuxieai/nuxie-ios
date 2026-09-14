@@ -150,7 +150,6 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
       let eventSystemSetupTask = Task {
         guard !Task.isCancelled else { return }
-        await eventLog.deferCommittedRouting()
         await eventLog.subscribeCommitted(
           reservation: journeyAdmission
         ) { [weak journeyService] event, admittedProfileGeneration in
@@ -171,6 +170,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         do {
           try await eventLog.configure(configuration: setupConfiguration)
           await journeyService?.initialize()
+          if setupConfiguration.internalConfiguration.suppressBackgroundWork {
+            await journeyService?.finishStartupRouting()
+          }
           LogDebug("Event system setup complete")
         } catch {
           LogError("Event system setup failed: \(error)")
@@ -199,6 +201,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
             recoverProfileDependentState: {},
             syncFeatures: { await core.features.syncFeatureInfo() }
           )
+          await core.journeys?.finishStartupRouting()
         }
 
         // Start transaction observer to sync StoreKit 2 purchases with backend

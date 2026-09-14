@@ -86,6 +86,11 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         _ = await events.flushEvents()
         XCTAssertTrue(store.pendingStableRouteIds.contains(retained.id))
         XCTAssertFalse(store.storedEvents.contains { $0.name == JourneyEvents.journeyStarted })
+        // Offline prefetch settles without authority: release live routing,
+        // but keep the retained receipt for a later authenticated profile.
+        await service.finishStartupRouting()
+        await events.drain()
+        XCTAssertTrue(store.pendingStableRouteIds.contains(retained.id))
         await service.profileDidCommit(snapshot, artifacts: nil,
                                        authority: fixture.deliveryAuthority,
                                        admissionGeneration: 1, distinctId: "customer")
@@ -94,6 +99,40 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         XCTAssertEqual(store.storedEvents.filter { $0.name == JourneyEvents.journeyStarted }.count, 1)
         await service.shutdown()
         await events.close()
+    }
+
+    func testInitializationJoinsCachedProfileJournalRecovery() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let snapshot = try await authenticatedSnapshot(fixture)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        let gate = JourneyNthRoutedCaptureGate(eventName: "replay", suspendedCall: 1)
+        let replayStarted = expectation(description: "profile starts journal recovery")
+        replayStarted.assertForOverFulfill = false
+        events.replayPendingRoutesHandler = {
+            replayStarted.fulfill()
+            await gate.intercept(event: "replay")
+            return true
+        }
+        let service = makeService(identity: identity, events: events,
+                                  directory: directory, storageScope: nil)
+        await service.prepareForEvents()
+        let profile = Task {
+            await service.profileDidCommit(snapshot, artifacts: nil,
+                                           authority: fixture.deliveryAuthority,
+                                           admissionGeneration: 1, distinctId: "customer")
+        }
+        await fulfillment(of: [replayStarted], timeout: 2)
+        let startup = Task { await service.initialize() }
+        await gate.release()
+        await profile.value
+        await startup.value
+        let recoveryCount = await gate.observationCount()
+        XCTAssertEqual(recoveryCount, 1, "Initialization must join the profile's recovery, including a just-completed recovery")
+        await service.shutdown()
     }
 
     func testSendEventRoutesTheDurableCaptureToCommittedSubscribers() async throws {

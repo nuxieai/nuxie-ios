@@ -31,6 +31,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _routedCaptureHandler:
         (@Sendable (_ event: String, _ eventId: String) async -> Void)?
     private var _drainHandler: (@Sendable () async -> Void)?
+    private var _replayPendingRoutesHandler: (@Sendable () async -> Bool)?
     private var _capturedEventObserver: (@Sendable (NuxieEvent) -> Void)?
     private var _stableCaptures: [String: DurableTriggerCapture] = [:]
     private var _stableCaptureBatchFailureIndex: Int?
@@ -51,6 +52,16 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         (@Sendable (_ event: String, _ eventId: String) async -> Void)? {
         get { lock.withLock { _routedCaptureHandler } }
         set { lock.withLock { _routedCaptureHandler = newValue } }
+    }
+
+    public var replayPendingRoutesHandler: (@Sendable () async -> Bool)? {
+        get { lock.withLock { _replayPendingRoutesHandler } }
+        set { lock.withLock { _replayPendingRoutesHandler = newValue } }
+    }
+
+    public func replayPendingStableRoutes(distinctId: String) async -> Bool {
+        let handler = replayPendingRoutesHandler
+        return await handler?() ?? true
     }
 
     public var drainHandler: (@Sendable () async -> Void)? {
@@ -770,6 +781,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _preparedTriggerBeforeSend = nil
             _prepareEventPropertiesHandler = nil
             _drainHandler = nil
+            _replayPendingRoutesHandler = nil
             _committedRoutingDrainCallCount = 0
             _capturedEventObserver = nil
             _stableCaptures.removeAll()
