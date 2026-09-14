@@ -111,6 +111,36 @@ final class ExperienceShellLayoutTests: XCTestCase {
 
     #if canImport(UIKit)
     @MainActor
+    func testSharedDrawerClippingAppliesToPresentedContent() throws {
+        let path = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/drawer-content-clipping.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        for item in try XCTUnwrap(fixture["cases"] as? [[String: Any]]) {
+            let radius = try XCTUnwrap(item["cornerRadius"] as? NSNumber).doubleValue
+            let ratio = try XCTUnwrap(item["extentRatio"] as? NSNumber).doubleValue
+            let presented = UIViewController()
+            presented.loadViewIfNeeded()
+            let input = UITextField()
+            presented.view.addSubview(input)
+            let controller = ExperienceDrawerPresentationController(
+                presentedViewController: presented,
+                presenting: UIViewController(),
+                layout: ExperienceShellLayout(drawer: .init(
+                    edge: .bottom, extentRatio: ratio, cornerRadius: radius, dismissible: true
+                )),
+                dismissible: true,
+                onInteractiveDismissal: {}
+            )
+            controller.containerViewWillLayoutSubviews()
+            XCTAssertTrue(presented.view.layer.masksToBounds)
+            XCTAssertEqual(presented.view.layer.cornerRadius, CGFloat(radius))
+            XCTAssertTrue(input.superview === presented.view)
+        }
+    }
+
+    @MainActor
     func testAdaptiveDismissalDelegateForwardsSystemDismissal() {
         var dismissalCount = 0
         let delegate = ExperienceAdaptivePresentationDismissalDelegate {
