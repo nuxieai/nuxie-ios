@@ -54,9 +54,13 @@ function entry(value) {
 const nextBuild = structuredClone(descriptor);
 nextBuild.identity.buildId += '-next';
 nextBuild.identity.publishedAtSeq += 1;
+const transition = { type: 'fade' };
+const transitionDescriptor = structuredClone(descriptor);
+transitionDescriptor.leg.steps.find(step => step.id === 'present').action.transition = transition;
 const fixture = {
   description: 'Signed two-screen text draft fixture. The same input ID belongs to independent screens; a new build must start fresh.',
   publicKeyBase64: createPublicKey(privateKey).export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64'),
   renderedEntry: entry(descriptor), nextBuildEntry: entry(nextBuild),
+  transition, transitionEntry: entry(transitionDescriptor),
 };
 writeFileSync(new URL('text-input-navigation.json', fixtureRoot), `${JSON.stringify(fixture, null, 2)}\n`);
