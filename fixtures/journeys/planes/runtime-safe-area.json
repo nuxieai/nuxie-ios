@@ -1,0 +1,304 @@
+{
+  "contract": "Insets are relative to the actual rendering view before contain/center projection. Size arrays are width,height; inset arrays are top,bottom,left,right. Letterbox space absorbs insets before inverse scaling. Nonpositive extents return zero.",
+  "cases": [
+    {
+      "name": "identity",
+      "view": [
+        390,
+        844
+      ],
+      "artboard": [
+        390,
+        844
+      ],
+      "insets": [
+        59,
+        34,
+        0,
+        0
+      ],
+      "expected": [
+        59,
+        34,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "downscale",
+      "view": [
+        390,
+        844
+      ],
+      "artboard": [
+        780,
+        1688
+      ],
+      "insets": [
+        59,
+        34,
+        0,
+        0
+      ],
+      "expected": [
+        118,
+        68,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "upscale",
+      "view": [
+        390,
+        844
+      ],
+      "artboard": [
+        195,
+        422
+      ],
+      "insets": [
+        59,
+        34,
+        0,
+        0
+      ],
+      "expected": [
+        29.5,
+        17,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "full-letterbox",
+      "view": [
+        390,
+        844
+      ],
+      "artboard": [
+        390,
+        390
+      ],
+      "insets": [
+        59,
+        34,
+        0,
+        0
+      ],
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "partial-letterbox",
+      "view": [
+        390,
+        844
+      ],
+      "artboard": [
+        390,
+        800
+      ],
+      "insets": [
+        59,
+        34,
+        0,
+        0
+      ],
+      "expected": [
+        37,
+        12,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "pillarbox",
+      "view": [
+        800,
+        400
+      ],
+      "artboard": [
+        300,
+        400
+      ],
+      "insets": [
+        0,
+        21,
+        47,
+        47
+      ],
+      "expected": [
+        0,
+        21,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "rotation",
+      "view": [
+        780,
+        390
+      ],
+      "artboard": [
+        390,
+        780
+      ],
+      "insets": [
+        0,
+        21,
+        47,
+        47
+      ],
+      "expected": [
+        0,
+        42,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "landscape",
+      "view": [
+        844,
+        390
+      ],
+      "artboard": [
+        844,
+        390
+      ],
+      "insets": [
+        0,
+        21,
+        59,
+        59
+      ],
+      "expected": [
+        0,
+        21,
+        59,
+        59
+      ]
+    },
+    {
+      "name": "scale-and-offset",
+      "view": [
+        100,
+        300
+      ],
+      "artboard": [
+        200,
+        400
+      ],
+      "insets": [
+        60,
+        40,
+        8,
+        0
+      ],
+      "expected": [
+        20,
+        0,
+        16,
+        0
+      ]
+    },
+    {
+      "name": "zero-view",
+      "view": [
+        0,
+        844
+      ],
+      "artboard": [
+        390,
+        844
+      ],
+      "insets": [
+        59,
+        34,
+        10,
+        10
+      ],
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "zero-artboard",
+      "view": [
+        390,
+        844
+      ],
+      "artboard": [
+        390,
+        0
+      ],
+      "insets": [
+        59,
+        34,
+        10,
+        10
+      ],
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "negative-view",
+      "view": [
+        390,
+        -10
+      ],
+      "artboard": [
+        390,
+        844
+      ],
+      "insets": [
+        59,
+        34,
+        10,
+        10
+      ],
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "negative-insets",
+      "view": [
+        100,
+        100
+      ],
+      "artboard": [
+        100,
+        100
+      ],
+      "insets": [
+        -1,
+        -2,
+        -3,
+        -4
+      ],
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}

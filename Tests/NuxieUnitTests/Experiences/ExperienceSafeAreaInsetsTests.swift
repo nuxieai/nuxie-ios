@@ -7,6 +7,35 @@ import UIKit
 #endif
 
 final class ExperienceSafeAreaInsetMapperTests: XCTestCase {
+    func testSharedSafeAreaVectors() throws {
+        struct Fixture: Decodable {
+            struct Vector: Decodable {
+                let name: String
+                let view: [Double]
+                let artboard: [Double]
+                let insets: [Double]
+                let expected: [Double]
+            }
+            let cases: [Vector]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/runtime-safe-area.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        for vector in fixture.cases {
+            let result = map(
+                ExperienceSafeAreaInsets(top: vector.insets[0], bottom: vector.insets[1],
+                                         left: vector.insets[2], right: vector.insets[3]),
+                view: CGSize(width: vector.view[0], height: vector.view[1]),
+                artboard: CGSize(width: vector.artboard[0], height: vector.artboard[1])
+            )
+            for (actual, expected) in zip([result.top, result.bottom, result.left, result.right], vector.expected) {
+                XCTAssertEqual(actual, expected, accuracy: 1e-9, vector.name)
+            }
+        }
+    }
+
     private let accuracy = 1e-9
 
     private func map(
