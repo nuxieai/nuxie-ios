@@ -791,7 +791,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _prepareEventPropertiesHandler = nil
             _drainHandler = nil
             _replayPendingRoutesHandler = nil
-        resumeRoutingHandler = nil
+            _resumeRoutingHandler = nil
             _committedRoutingDrainCallCount = 0
             _capturedEventObserver = nil
             _stableCaptures.removeAll()
