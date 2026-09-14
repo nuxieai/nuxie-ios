@@ -163,5 +163,17 @@
       "targetAlpha": 0,
       "translation": 0
     }
+  },
+  "customExecution": {
+    "transitionId": "checkout",
+    "durationMs": 400,
+    "watchdogMs": 650,
+    "outgoingEvent": "out_done",
+    "incomingEvent": "in_done",
+    "preparedAppearances": 1,
+    "requiresBothEvents": true,
+    "registerBeforePhaseWrites": true,
+    "teardownCancels": true,
+    "staleEventsDoNotCompleteNextTransition": true
   }
 }
