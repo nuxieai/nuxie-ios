@@ -1,0 +1,131 @@
+{
+  "declaration": {
+    "id": "checkout",
+    "sourceScreenId": "one",
+    "destinationScreenId": "two",
+    "durationMs": 400,
+    "incomingOnTop": true,
+    "source": {
+      "completeEventName": "out_done"
+    },
+    "destination": {
+      "completeEventName": "in_done"
+    },
+    "reverse": {
+      "source": {
+        "completeEventName": "back_out"
+      },
+      "destination": {
+        "completeEventName": "back_in"
+      }
+    }
+  },
+  "cases": [
+    {
+      "intent": {
+        "type": " PUSH "
+      },
+      "kind": "PUSH"
+    },
+    {
+      "intent": {
+        "type": "modal"
+      },
+      "kind": "MODAL"
+    },
+    {
+      "intent": {
+        "type": "fade"
+      },
+      "kind": "FADE"
+    },
+    {
+      "intent": {
+        "type": "unknown"
+      },
+      "kind": "NONE"
+    },
+    {
+      "intent": {
+        "type": "custom",
+        "transitionId": "  "
+      },
+      "kind": "NONE"
+    },
+    {
+      "intent": {
+        "type": "custom",
+        "transitionId": " checkout "
+      },
+      "kind": "NONE"
+    },
+    {
+      "intent": {
+        "type": "custom",
+        "transitionId": "checkout"
+      },
+      "kind": "CUSTOM",
+      "expected": {
+        "durationMs": 400,
+        "watchdogMs": 650,
+        "incomingOnTop": true,
+        "outgoing": "out_done",
+        "incoming": "in_done"
+      }
+    },
+    {
+      "intent": {
+        "type": "custom",
+        "transitionId": "checkout"
+      },
+      "source": "two",
+      "destination": "one",
+      "kind": "CUSTOM",
+      "expected": {
+        "durationMs": 400,
+        "watchdogMs": 650,
+        "incomingOnTop": true,
+        "outgoing": "back_out",
+        "incoming": "back_in"
+      }
+    },
+    {
+      "intent": {
+        "type": "custom",
+        "transitionId": "checkout"
+      },
+      "source": "two",
+      "destination": "one",
+      "reverseOverrides": {
+        "durationMs": 250,
+        "incomingOnTop": false
+      },
+      "kind": "CUSTOM",
+      "expected": {
+        "durationMs": 250,
+        "watchdogMs": 500,
+        "incomingOnTop": false,
+        "outgoing": "back_out",
+        "incoming": "back_in"
+      }
+    },
+    {
+      "intent": {
+        "type": "custom",
+        "transitionId": "checkout"
+      },
+      "source": "two",
+      "destination": "one",
+      "removeReverse": true,
+      "kind": "NONE"
+    },
+    {
+      "intent": {
+        "type": "custom",
+        "transitionId": "checkout"
+      },
+      "destination": "three",
+      "kind": "NONE"
+    }
+  ]
+}
