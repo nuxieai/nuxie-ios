@@ -127,5 +127,41 @@
       "destination": "three",
       "kind": "NONE"
     }
-  ]
+  ],
+  "standardViewAnimation": {
+    "durationMs": 300,
+    "size": 200,
+    "progress": 0.25,
+    "cases": [
+      {
+        "kind": "FADE",
+        "sourceAlpha": 0.75,
+        "targetAlpha": 0.25,
+        "sourceX": 0,
+        "targetX": 0,
+        "targetY": 0
+      },
+      {
+        "kind": "PUSH",
+        "sourceAlpha": 1,
+        "targetAlpha": 1,
+        "sourceX": -50,
+        "targetX": 150,
+        "targetY": 0
+      },
+      {
+        "kind": "MODAL",
+        "sourceAlpha": 1,
+        "targetAlpha": 1,
+        "sourceX": 0,
+        "targetX": 0,
+        "targetY": 150
+      }
+    ],
+    "rollback": {
+      "sourceAlpha": 1,
+      "targetAlpha": 0,
+      "translation": 0
+    }
+  }
 }
