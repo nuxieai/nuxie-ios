@@ -1,0 +1,86 @@
+{
+  "description": "Ordinary non-composing edits are accepted as a whole only if the candidate fits the shared grapheme limit; rejected edits preserve unselected text. Offsets are UTF-16 code units. IME composition is qualified separately.",
+  "cases": [
+    {
+      "name": "full middle insertion",
+      "current": "ab",
+      "start": 1,
+      "end": 1,
+      "replacement": "X",
+      "maxLength": 2,
+      "allowed": false
+    },
+    {
+      "name": "overlong selected replacement",
+      "current": "ab",
+      "start": 1,
+      "end": 2,
+      "replacement": "XY",
+      "maxLength": 2,
+      "allowed": false
+    },
+    {
+      "name": "selected replacement fits",
+      "current": "ab",
+      "start": 1,
+      "end": 2,
+      "replacement": "Z",
+      "maxLength": 2,
+      "allowed": true
+    },
+    {
+      "name": "combining mark extends grapheme",
+      "current": "a",
+      "start": 1,
+      "end": 1,
+      "replacement": "́",
+      "maxLength": 1,
+      "allowed": true
+    },
+    {
+      "name": "emoji replacement",
+      "current": "😀b",
+      "start": 2,
+      "end": 3,
+      "replacement": "🇺🇸",
+      "maxLength": 2,
+      "allowed": true
+    },
+    {
+      "name": "family emoji single grapheme",
+      "current": "",
+      "start": 0,
+      "end": 0,
+      "replacement": "👨‍👩‍👧‍👦",
+      "maxLength": 1,
+      "allowed": true
+    },
+    {
+      "name": "paste exceeds empty field",
+      "current": "",
+      "start": 0,
+      "end": 0,
+      "replacement": "abc",
+      "maxLength": 2,
+      "allowed": false
+    },
+    {
+      "name": "deletion always fits",
+      "current": "ab",
+      "start": 0,
+      "end": 1,
+      "replacement": "",
+      "maxLength": 2,
+      "allowed": true
+    },
+    {
+      "name": "unlimited paste",
+      "current": "ab",
+      "start": 1,
+      "end": 1,
+      "replacement": "long",
+      "maxLength": null,
+      "allowed": true
+    }
+  ]
+}

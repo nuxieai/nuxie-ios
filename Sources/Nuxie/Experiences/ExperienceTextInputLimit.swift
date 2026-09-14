@@ -1,5 +1,9 @@
 /// Unicode 16 extended graphemes (UAX #29 rev. 45), shared with Android.
 enum ExperienceTextInputLimit {
+    static func fits(_ text: String, maximum: Int?) -> Bool {
+        apply(text, maximum: maximum).utf8.count == text.utf8.count
+    }
+
     static func apply(_ text: String, maximum: Int?) -> String {
         guard let maximum else { return text }
         precondition(maximum >= 0)

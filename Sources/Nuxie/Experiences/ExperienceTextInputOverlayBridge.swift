@@ -417,7 +417,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             in: textRange,
             with: replacement
         )
-        return ExperienceTextInputLimit.apply(candidate, maximum: maximum).utf8.count == candidate.utf8.count
+        return ExperienceTextInputLimit.fits(candidate, maximum: maximum)
     }
 
     private func propagateTextChange(from control: UIView) {
