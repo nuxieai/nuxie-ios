@@ -1,0 +1,21 @@
+{
+  "platform": "android",
+  "contract": "A known unsupported GPU surface capability selects native window copying from the same headless renderer. Attachment driver and argument errors never select compatibility rendering. Both paths deliver effects only after successful window delivery and composition. Resize and surface replacement re-evaluate capabilities; terminal cleanup drains native work before releasing the window or artifact lease.",
+  "unsupportedAttachment": -1,
+  "attached": 0,
+  "failureStatuses": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
+  "copyPresented": 1,
+  "copyFailure": -4
+}
