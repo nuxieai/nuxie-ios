@@ -1,0 +1,70 @@
+{
+  "suite": "runtime-interaction-player",
+  "version": 1,
+  "vectors": [
+    {
+      "name": "authored plus generated",
+      "machines": [
+        "Authored",
+        "Generated Nuxie Pressable Interaction"
+      ],
+      "primary": "Authored",
+      "auxiliary": "Generated Nuxie Pressable Interaction"
+    },
+    {
+      "name": "generated is default",
+      "machines": [
+        "Generated Nuxie Pressable Interaction"
+      ],
+      "primary": "Generated Nuxie Pressable Interaction",
+      "auxiliary": null
+    },
+    {
+      "name": "authored only",
+      "machines": [
+        "Authored"
+      ],
+      "primary": "Authored",
+      "auxiliary": null
+    },
+    {
+      "name": "legacy generated",
+      "machines": [
+        "Authored",
+        "Generated Nuxie Interaction"
+      ],
+      "primary": "Authored",
+      "auxiliary": "Generated Nuxie Interaction"
+    },
+    {
+      "name": "prefer pressable generation",
+      "machines": [
+        "Generated Nuxie Interaction",
+        "Generated Nuxie Pressable Interaction"
+      ],
+      "primary": "Authored",
+      "auxiliary": "Generated Nuxie Pressable Interaction"
+    }
+  ],
+  "step": {
+    "primaryElapsedSeconds": 0.25,
+    "auxiliaryElapsedSeconds": 0,
+    "namedInputOwner": "auxiliary",
+    "pointerOwner": "both",
+    "idleAuxiliaryStepsAfterInitialization": 0,
+    "partialFailure": "reject result and retire occurrence"
+  },
+  "published": {
+    "fixture": "runtime/screen-control/screen.riv",
+    "artboard": "Paywall",
+    "pointer": {
+      "x": 100,
+      "y": 728
+    },
+    "defaultHostCommands": [],
+    "experienceHostCommands": [
+      "$response_set",
+      "script_control_activated"
+    ]
+  }
+}
