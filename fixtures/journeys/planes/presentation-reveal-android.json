@@ -1,0 +1,13 @@
+{
+  "platform": "android",
+  "contract": "Durable screen and presentation admission precede live-host visibility; visibility precedes release of renderer effects and shown. A retired host cannot reveal, and Activity recreation retries visibility without replaying durable admission. Closing while no live frame exists rejects old waiting effects.",
+  "order": [
+    "screen",
+    "admission",
+    "retired-host",
+    "live-host",
+    "batch"
+  ],
+  "recreationAdmissionCount": 1,
+  "closedWaitingPublication": false
+}
