@@ -1,0 +1,8 @@
+{
+  "platform": "android",
+  "contract": "Destination acquisition and provisional native rendering recover on the outgoing screen. Retry is single-flight and drains provisional native resources before releasing their lease or starting the next attempt. Failed attempts do not mutate retained destination lifecycle/input state. The outgoing dismissal checkpoint runs only after successful preparation, never per retry. Close and identity withdrawal cancel both active and provisional ownership.",
+  "attempts": 2,
+  "dismissalCheckpoints": 1,
+  "activityLaunches": 1,
+  "sourceRemainsOwnedWhileRecovering": true
+}
