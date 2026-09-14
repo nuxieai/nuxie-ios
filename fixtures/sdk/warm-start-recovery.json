@@ -1,0 +1,15 @@
+{
+  "suite": "sdk/warm-start-recovery",
+  "version": 1,
+  "notes": [
+    "Recovered outboxes must stage successfully before fresh Journey admission. Failed staging or recovered-route delivery leaves the journal unavailable until a later authenticated reconciliation retries it.",
+    "Ordinary analytics and shutdown must not wait forever for recovery. An unavailable journal rejects Journey admission; it does not suspend the routing worker indefinitely.",
+    "Android serializes journal recovery in its Journey command queue. Routes already owned by the live router are not recovered-route failures: the router may be awaiting that same command queue."
+  ],
+  "healthyOrder": ["started", "completed", "fresh-admission"],
+  "captureFailureOrder": ["started"],
+  "captureRetryOrder": ["started", "started", "completed", "fresh-admission"],
+  "replayFailureOrder": ["started", "completed"],
+  "replayRetryOrder": ["started", "completed", "fresh-admission"],
+  "liveOwnedRouteAllowsReconciliation": true
+}
