@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "description": "Committed text limits count extended grapheme clusters, preserve exact UTF-8 and retain the longest prefix within maxLength. IME composition is qualified separately.",
+  "cases": [
+    {
+      "name": "unbounded",
+      "text": "ab😀",
+      "maxLength": null,
+      "expected": "ab😀"
+    },
+    {
+      "name": "empty",
+      "text": "",
+      "maxLength": 1,
+      "expected": ""
+    },
+    {
+      "name": "ascii",
+      "text": "abc",
+      "maxLength": 2,
+      "expected": "ab"
+    },
+    {
+      "name": "exact",
+      "text": "ab",
+      "maxLength": 2,
+      "expected": "ab"
+    },
+    {
+      "name": "surrogate-pair",
+      "text": "😀z",
+      "maxLength": 1,
+      "expected": "😀"
+    },
+    {
+      "name": "combining-mark",
+      "text": "éz",
+      "maxLength": 1,
+      "expected": "é"
+    },
+    {
+      "name": "family-zwj",
+      "text": "👨‍👩‍👧‍👦z",
+      "maxLength": 1,
+      "expected": "👨‍👩‍👧‍👦"
+    },
+    {
+      "name": "skin-tone",
+      "text": "👍🏽z",
+      "maxLength": 1,
+      "expected": "👍🏽"
+    },
+    {
+      "name": "regional-pair",
+      "text": "🇺🇸🇯🇵",
+      "maxLength": 1,
+      "expected": "🇺🇸"
+    },
+    {
+      "name": "crlf",
+      "text": "\r\nz",
+      "maxLength": 1,
+      "expected": "\r\n"
+    },
+    {
+      "name": "hangul-jamo",
+      "text": "각z",
+      "maxLength": 1,
+      "expected": "각"
+    },
+    {
+      "name": "indic-conjunct",
+      "text": "क्षz",
+      "maxLength": 1,
+      "expected": "क्ष"
+    },
+    {
+      "name": "embedded-nul",
+      "text": "a\u0000b",
+      "maxLength": 2,
+      "expected": "a\u0000"
+    }
+  ]
+}
