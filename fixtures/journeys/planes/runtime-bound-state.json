@@ -1,0 +1,25 @@
+{
+  "contract": "Scalar updates target the default instance already bound to the screen, preserving commerce children and player identity. Missing declarations do not activate a model. Invalid paths, types and non-finite numbers must not mutate state.",
+  "writes": [
+    {
+      "path": "screen/phase",
+      "kind": "string",
+      "value": "entering"
+    },
+    {
+      "path": "screen/appearances",
+      "kind": "number",
+      "value": 2
+    },
+    {
+      "path": "env/reduceMotion",
+      "kind": "boolean",
+      "value": true
+    },
+    {
+      "path": "safeArea/top",
+      "kind": "number",
+      "value": 24.5
+    }
+  ]
+}
