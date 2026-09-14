@@ -156,6 +156,36 @@ final class EventLogTests: AsyncSpec {
                         .toEventually(beEmpty())
                 }
 
+                it("routes retained stable events before captures buffered during startup") {
+                    mockIdentity.setDistinctId("returning-customer")
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    let stored = try StoredEvent(
+                        id: "retained-startup-route", name: "older-retained",
+                        properties: [:], timestamp: Date(timeIntervalSince1970: 1_000),
+                        distinctId: "returning-customer"
+                    )
+                    _ = try await mockStore.commitStableCaptureAndStageRoute(
+                        eventId: stored.id, event: stored, recordedAt: stored.timestamp,
+                        assigningCommitSequence: false, admission: nil
+                    )
+                    log.track("newer-buffered")
+                    try await log.configure(configuration: testConfig)
+                    // Force live routing to run before Journey initialization
+                    // explicitly asks for pending-route recovery.
+                    await log.drain()
+                    let replayed = await log.replayPendingStableRoutes(
+                        distinctId: "returning-customer"
+                    )
+                    expect(replayed).to(beTrue())
+                    await expect { await received.names }.to(equal([
+                        "older-retained", "newer-buffered",
+                    ]))
+                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                }
+
                 it("replays a stable local route left pending by a prior process") {
                     let received = ReceivedEvents()
                     await log.subscribeCommitted { event in

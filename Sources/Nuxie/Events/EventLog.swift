@@ -731,6 +731,11 @@ actor EventLog: EventLogProtocol {
       startFlushTimer()
     }
 
+    // Queue retained routes before readiness releases any newly captured
+    // events. Do not drain here: a subscriber may itself need the open store.
+    // The serial route worker delivers this prefix before live routing.
+    try await enqueuePendingStableRoutes(distinctId: identityService.getDistinctId())
+
     LogInfo("EventLog configured (subscribers: \(subscribers.count))")
     // Signal that storage is initialized and safe to use
     await ready.open()
@@ -2723,6 +2728,25 @@ extension RoutedStableSystemEventCapturing {
 }
 
 extension EventLog {
+  private func enqueuePendingStableRoutes(distinctId: String) async throws {
+    let admissions = committedAdmissionRegistry.capture()
+    for stored in try await store.queryPendingStableRoutes(
+      distinctId: distinctId
+    ) where activeStableRouteIds.insert(stored.id).inserted {
+      routeContinuation.yield(.undurable(RoutedCommittedEvent(
+        event: NuxieEvent(
+          id: stored.id,
+          name: stored.name,
+          distinctId: stored.distinctId,
+          properties: stored.getPropertiesDict(),
+          timestamp: stored.timestamp
+        ),
+        subscriberAdmissions: admissions,
+        stableRouteEventId: stored.id
+      )))
+    }
+  }
+
   @discardableResult
   func drainCommittedRouting() async -> Bool {
     // A committed subscriber already executes inside the serial route worker.
@@ -2740,22 +2764,7 @@ extension EventLog {
     await ready.wait()
     guard !closeFlag.isClosed else { return false }
     do {
-      let admissions = committedAdmissionRegistry.capture()
-      for stored in try await store.queryPendingStableRoutes(
-        distinctId: distinctId
-      ) where activeStableRouteIds.insert(stored.id).inserted {
-        routeContinuation.yield(.undurable(RoutedCommittedEvent(
-          event: NuxieEvent(
-            id: stored.id,
-            name: stored.name,
-            distinctId: stored.distinctId,
-            properties: stored.getPropertiesDict(),
-            timestamp: stored.timestamp
-          ),
-          subscriberAdmissions: admissions,
-          stableRouteEventId: stored.id
-        )))
-      }
+      try await enqueuePendingStableRoutes(distinctId: distinctId)
       guard !Self.isOnCommittedRouteWorker else { return false }
       await drainRouteWorker()
       guard await retryFailedStableRouteAcknowledgements() else {
