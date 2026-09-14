@@ -63,5 +63,12 @@
     "shownBeforeFirstFrame": 0,
     "shownAfterFirstFrame": 1,
     "reusePresentationId": true
+  },
+  "concurrentAdmission": {
+    "contract": "A second presentation request is declined immediately while another preparation owns admission, including a duplicate using the same reservation. It must not queue behind acquisition or future user recovery, clear the admitted reservation, cancel its preparation, acquire content, or launch a second shell. Matching close still drains the admitted late lease before new reservation admission.",
+    "failureReason": "DECLINED",
+    "shellLaunchCount": 1,
+    "competitorAcquisitions": 0,
+    "lateLeaseCloseCount": 1
   }
 }
