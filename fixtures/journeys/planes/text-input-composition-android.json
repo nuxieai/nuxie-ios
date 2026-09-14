@@ -73,5 +73,10 @@
       "maxLength": 3,
       "expected": "ac"
     }
-  ]
+  ],
+  "editingPresentation": {
+    "nativeTextVisible": true,
+    "rendererText": "",
+    "restoreRendererOnBlur": true
+  }
 }
