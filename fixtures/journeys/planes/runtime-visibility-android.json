@@ -1,0 +1,27 @@
+{
+  "platform": "android",
+  "contract": "Activity start/stop gates authored time independently of surface ownership. Paused but visible multi-window Activities continue rendering. Resuming starts with zero elapsed time; queued frames and input from a previous visible interval are discarded.",
+  "initialVisible": false,
+  "steps": [
+    { "action": "attach" },
+    { "action": "frame", "nanos": 1000000000, "elapsed": null },
+    { "action": "visible", "value": true },
+    { "action": "frame", "nanos": 2000000000, "elapsed": 0 },
+    { "action": "frame", "nanos": 2016000000, "elapsed": 0.016 },
+    { "action": "visible", "value": false },
+    { "action": "frame", "nanos": 60000000000, "elapsed": null },
+    { "action": "visible", "value": true },
+    { "action": "frame", "nanos": 100000000000, "elapsed": 0 },
+    { "action": "visible", "value": true },
+    { "action": "frame", "nanos": 100020000000, "elapsed": 0.02 },
+    { "action": "detach" },
+    { "action": "frame", "nanos": 200000000000, "elapsed": null },
+    { "action": "attach" },
+    { "action": "frame", "nanos": 201000000000, "elapsed": 0 },
+    { "action": "frame", "nanos": 201010000000, "elapsed": 0.01 },
+    { "action": "release" },
+    { "action": "visible", "value": false },
+    { "action": "visible", "value": true },
+    { "action": "frame", "nanos": 300000000000, "elapsed": null }
+  ]
+}
