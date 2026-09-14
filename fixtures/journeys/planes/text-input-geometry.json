@@ -1,0 +1,389 @@
+{
+  "description": "Native text geometry resolves slash paths with one optional root label. All components must be finite; dimensions must be positive. Scale visibility is decided by the overlay.",
+  "rootInstanceId": 1,
+  "instances": [
+    1,
+    2
+  ],
+  "values": [
+    {
+      "owner": 1,
+      "name": "input",
+      "type": "reference",
+      "reference": 2
+    },
+    {
+      "owner": 1,
+      "name": "label",
+      "type": "string"
+    },
+    {
+      "owner": 1,
+      "name": "x",
+      "type": "number",
+      "number": 5
+    },
+    {
+      "owner": 1,
+      "name": "y",
+      "type": "number",
+      "number": 20
+    },
+    {
+      "owner": 1,
+      "name": "width",
+      "type": "number",
+      "number": 80
+    },
+    {
+      "owner": 1,
+      "name": "height",
+      "type": "number",
+      "number": 30
+    },
+    {
+      "owner": 1,
+      "name": "rotation",
+      "type": "number",
+      "number": 0
+    },
+    {
+      "owner": 1,
+      "name": "scaleX",
+      "type": "number",
+      "number": 1
+    },
+    {
+      "owner": 1,
+      "name": "scaleY",
+      "type": "number",
+      "number": 1
+    },
+    {
+      "owner": 1,
+      "name": "zero",
+      "type": "number",
+      "number": 0
+    },
+    {
+      "owner": 1,
+      "name": "negative",
+      "type": "number",
+      "number": -2
+    },
+    {
+      "owner": 1,
+      "name": "a.b",
+      "type": "number",
+      "number": 7
+    },
+    {
+      "owner": 1,
+      "name": "nan",
+      "type": "number",
+      "number": "NaN"
+    },
+    {
+      "owner": 1,
+      "name": "infinity",
+      "type": "number",
+      "number": "Infinity"
+    },
+    {
+      "owner": 1,
+      "name": "negativeInfinity",
+      "type": "number",
+      "number": "-Infinity"
+    },
+    {
+      "owner": 2,
+      "name": "x",
+      "type": "number",
+      "number": 12.5
+    }
+  ],
+  "queries": [
+    {
+      "path": "x",
+      "expected": 5
+    },
+    {
+      "path": "input/x",
+      "expected": 12.5
+    },
+    {
+      "path": "Root/input/x",
+      "expected": 12.5
+    },
+    {
+      "path": "/Root//input/x/",
+      "expected": 12.5
+    },
+    {
+      "path": "Root/width",
+      "expected": 80
+    },
+    {
+      "path": "width",
+      "expected": 80
+    },
+    {
+      "path": "Root/input/missing",
+      "expected": null
+    },
+    {
+      "path": "Root/input",
+      "expected": null
+    },
+    {
+      "path": "input/missing",
+      "expected": null
+    },
+    {
+      "path": "label/x",
+      "expected": null
+    },
+    {
+      "path": "Root/Root/input/x",
+      "expected": null
+    },
+    {
+      "path": "Root.input.x",
+      "expected": null
+    },
+    {
+      "path": "a.b",
+      "expected": 7
+    },
+    {
+      "path": "",
+      "expected": null
+    },
+    {
+      "path": "/",
+      "expected": null
+    },
+    {
+      "path": "missing",
+      "expected": null
+    },
+    {
+      "path": "nan",
+      "expected": null
+    },
+    {
+      "path": "infinity",
+      "expected": null
+    },
+    {
+      "path": "negativeInfinity",
+      "expected": null
+    },
+    {
+      "path": "zero",
+      "expected": 0
+    },
+    {
+      "path": "negative",
+      "expected": -2
+    }
+  ],
+  "geometryCases": [
+    {
+      "name": "root fields",
+      "paths": {
+        "xPath": "x",
+        "yPath": "y",
+        "widthPath": "width",
+        "heightPath": "height",
+        "rotationPath": "rotation",
+        "scaleXPath": "scaleX",
+        "scaleYPath": "scaleY"
+      },
+      "expected": [
+        5,
+        20,
+        80,
+        30,
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "nested x",
+      "paths": {
+        "xPath": "input/x",
+        "yPath": "y",
+        "widthPath": "width",
+        "heightPath": "height",
+        "rotationPath": "rotation",
+        "scaleXPath": "scaleX",
+        "scaleYPath": "scaleY"
+      },
+      "expected": [
+        12.5,
+        20,
+        80,
+        30,
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "optional root label",
+      "paths": {
+        "xPath": "Root/x",
+        "yPath": "Root/y",
+        "widthPath": "Root/width",
+        "heightPath": "Root/height",
+        "rotationPath": "Root/rotation",
+        "scaleXPath": "Root/scaleX",
+        "scaleYPath": "Root/scaleY"
+      },
+      "expected": [
+        5,
+        20,
+        80,
+        30,
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "zero width",
+      "paths": {
+        "xPath": "x",
+        "yPath": "y",
+        "widthPath": "zero",
+        "heightPath": "height",
+        "rotationPath": "rotation",
+        "scaleXPath": "scaleX",
+        "scaleYPath": "scaleY"
+      },
+      "expected": null
+    },
+    {
+      "name": "negative height",
+      "paths": {
+        "xPath": "x",
+        "yPath": "y",
+        "widthPath": "width",
+        "heightPath": "negative",
+        "rotationPath": "rotation",
+        "scaleXPath": "scaleX",
+        "scaleYPath": "scaleY"
+      },
+      "expected": null
+    },
+    {
+      "name": "nonfinite x",
+      "paths": {
+        "xPath": "nan",
+        "yPath": "y",
+        "widthPath": "width",
+        "heightPath": "height",
+        "rotationPath": "rotation",
+        "scaleXPath": "scaleX",
+        "scaleYPath": "scaleY"
+      },
+      "expected": null
+    },
+    {
+      "name": "nonfinite rotation",
+      "paths": {
+        "xPath": "x",
+        "yPath": "y",
+        "widthPath": "width",
+        "heightPath": "height",
+        "rotationPath": "infinity",
+        "scaleXPath": "scaleX",
+        "scaleYPath": "scaleY"
+      },
+      "expected": null
+    },
+    {
+      "name": "nonfinite scale",
+      "paths": {
+        "xPath": "x",
+        "yPath": "y",
+        "widthPath": "width",
+        "heightPath": "height",
+        "rotationPath": "rotation",
+        "scaleXPath": "negativeInfinity",
+        "scaleYPath": "scaleY"
+      },
+      "expected": null
+    },
+    {
+      "name": "missing coordinate",
+      "paths": {
+        "xPath": "x",
+        "yPath": "input/missing",
+        "widthPath": "width",
+        "heightPath": "height",
+        "rotationPath": "rotation",
+        "scaleXPath": "scaleX",
+        "scaleYPath": "scaleY"
+      },
+      "expected": null
+    },
+    {
+      "name": "wrong type",
+      "paths": {
+        "xPath": "x",
+        "yPath": "y",
+        "widthPath": "width",
+        "heightPath": "label",
+        "rotationPath": "rotation",
+        "scaleXPath": "scaleX",
+        "scaleYPath": "scaleY"
+      },
+      "expected": null
+    },
+    {
+      "name": "zero scale retained for visibility decision",
+      "paths": {
+        "xPath": "x",
+        "yPath": "y",
+        "widthPath": "width",
+        "heightPath": "height",
+        "rotationPath": "rotation",
+        "scaleXPath": "zero",
+        "scaleYPath": "scaleY"
+      },
+      "expected": [
+        5,
+        20,
+        80,
+        30,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "name": "negative scale retained for overlay visibility policy",
+      "paths": {
+        "xPath": "x",
+        "yPath": "y",
+        "widthPath": "width",
+        "heightPath": "height",
+        "rotationPath": "rotation",
+        "scaleXPath": "scaleX",
+        "scaleYPath": "negative"
+      },
+      "expected": [
+        5,
+        20,
+        80,
+        30,
+        0,
+        1,
+        -2
+      ]
+    }
+  ]
+}
