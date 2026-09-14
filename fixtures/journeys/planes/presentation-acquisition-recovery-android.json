@@ -20,6 +20,20 @@
     "contract": "Initial native mount failure and sustained first-frame wait retain the same logical presentation and artifact lease. Retry retires and drains the previous native host before resetting unseen lifecycle/input state and mounting a new generation. Stale frames/failures cannot affect its replacement; durable admission and shown occur once. Close remains terminal and drains all attached owners. Outgoing navigation recovery is separate.",
     "retryGeneration": 2,
     "shownCount": 1,
-    "leaseCloseCount": 1
+    "leaseCloseCount": 1,
+    "terminalDuringDrain": {
+      "kinds": [
+        "host",
+        "identity"
+      ],
+      "replacementAdmitted": false,
+      "shownFacts": 0,
+      "terminalOutcomes": 1,
+      "leaseCloseCount": 1
+    },
+    "recreatedDrainWaiter": {
+      "replacementAdmittedBeforeDrain": false,
+      "replacementAdmittedAfterDrain": true
+    }
   }
 }
