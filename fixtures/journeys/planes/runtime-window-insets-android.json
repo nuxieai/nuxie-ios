@@ -1,0 +1,206 @@
+{
+  "platform": "android",
+  "contract": "Window system bar and cutout insets are intersected with the rendering view before shared artboard projection. IME is not a safe-area source. Size arrays are width,height; view is left,top,width,height; inset arrays are top,bottom,left,right.",
+  "cases": [
+    {
+      "name": "edge-to-edge",
+      "window": [
+        400,
+        800
+      ],
+      "view": [
+        0,
+        0,
+        400,
+        800
+      ],
+      "insets": [
+        24,
+        48,
+        0,
+        0
+      ],
+      "expected": [
+        24,
+        48,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "already-inset",
+      "window": [
+        400,
+        800
+      ],
+      "view": [
+        0,
+        24,
+        400,
+        728
+      ],
+      "insets": [
+        24,
+        48,
+        0,
+        0
+      ],
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "partial-top",
+      "window": [
+        400,
+        800
+      ],
+      "view": [
+        0,
+        12,
+        400,
+        740
+      ],
+      "insets": [
+        24,
+        48,
+        0,
+        0
+      ],
+      "expected": [
+        12,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "centered-modal",
+      "window": [
+        400,
+        800
+      ],
+      "view": [
+        50,
+        200,
+        300,
+        400
+      ],
+      "insets": [
+        24,
+        48,
+        0,
+        0
+      ],
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "bottom-drawer",
+      "window": [
+        400,
+        800
+      ],
+      "view": [
+        0,
+        400,
+        400,
+        400
+      ],
+      "insets": [
+        24,
+        48,
+        0,
+        0
+      ],
+      "expected": [
+        0,
+        48,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "keyboard-resized-content",
+      "window": [
+        400,
+        800
+      ],
+      "view": [
+        0,
+        24,
+        400,
+        476
+      ],
+      "insets": [
+        24,
+        48,
+        0,
+        0
+      ],
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "landscape-cutout",
+      "window": [
+        800,
+        400
+      ],
+      "view": [
+        20,
+        0,
+        760,
+        400
+      ],
+      "insets": [
+        0,
+        24,
+        40,
+        10
+      ],
+      "expected": [
+        0,
+        24,
+        20,
+        0
+      ]
+    },
+    {
+      "name": "overlapping-small-view",
+      "window": [
+        400,
+        800
+      ],
+      "view": [
+        0,
+        0,
+        400,
+        10
+      ],
+      "insets": [
+        24,
+        48,
+        0,
+        0
+      ],
+      "expected": [
+        10,
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}
