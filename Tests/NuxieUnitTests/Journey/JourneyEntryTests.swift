@@ -51,6 +51,10 @@ final class JourneyEntryTests: XCTestCase {
         try await runVectors("occurrence-evaluation")
     }
 
+    func testSharedHistoryTargetingVectors() async throws {
+        try await runVectors("history-targeting")
+    }
+
     private func runVectors(_ fixture: String) async throws {
         struct Suite: Decodable { let cases: [Vector] }
         let root = URL(fileURLWithPath: #filePath)

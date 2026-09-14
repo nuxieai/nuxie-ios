@@ -1,0 +1,84 @@
+{
+  "suite": "journey-history-targeting-v1",
+  "version": 1,
+  "cases": [
+    {
+      "name": "in-order retains later intermediate matches within per-step limits",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.InOrder",
+            "steps": [
+              {
+                "name": "a"
+              },
+              {
+                "name": "b"
+              },
+              {
+                "name": "c"
+              }
+            ],
+            "overallWithin": {
+              "type": "Duration",
+              "value": 20
+            },
+            "perStepWithin": {
+              "type": "Duration",
+              "value": 10
+            },
+            "since": {
+              "type": "Timestamp",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 20000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 0,
+        "events": [
+          {
+            "id": "0",
+            "name": "a",
+            "timestampMillis": 1000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "b",
+            "timestampMillis": 2000,
+            "properties": {}
+          },
+          {
+            "id": "2",
+            "name": "b",
+            "timestampMillis": 10000,
+            "properties": {}
+          },
+          {
+            "id": "3",
+            "name": "c",
+            "timestampMillis": 19000,
+            "properties": {}
+          }
+        ]
+      }
+    }
+  ]
+}
