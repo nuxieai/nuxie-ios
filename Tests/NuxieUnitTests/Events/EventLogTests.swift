@@ -169,6 +169,22 @@ final class EventLogTests: AsyncSpec {
                         .toEventually(beEmpty())
                 }
 
+                it("does not open a newer recovery gate when startup has no retained routes") {
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in await received.append(event.name) }
+                    _ = await log.deferCommittedRouting()
+                    let recoveryGeneration = await log.deferCommittedRouting()
+                    log.track("new-profile-trigger")
+                    try await log.configure(configuration: testConfig)
+                    await expect { mockStore.storedEvents.map(\.name) }
+                        .toEventually(contain("new-profile-trigger"))
+                    await expect { await received.names }
+                        .toNever(contain("new-profile-trigger"), until: .milliseconds(100))
+                    await log.resumeCommittedRouting(ifGeneration: recoveryGeneration)
+                    await log.drain()
+                    await expect { await received.names }.to(equal(["new-profile-trigger"]))
+                }
+
                 it("routes retained stable events before captures buffered during startup") {
                     mockIdentity.setDistinctId("returning-customer")
                     let received = ReceivedEvents()
