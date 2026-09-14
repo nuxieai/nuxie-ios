@@ -150,6 +150,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
       let eventSystemSetupTask = Task {
         guard !Task.isCancelled else { return }
+        await eventLog.deferCommittedRouting()
         await eventLog.subscribeCommitted(
           reservation: journeyAdmission
         ) { [weak journeyService] event, admittedProfileGeneration in

@@ -47,6 +47,55 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         await events.close()
     }
 
+    func testRetainedRouteWaitsForAuthenticatedProfileOnProductionStartup() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entry: .init(type: .event, eventName: "retained_trigger", segmentId: nil, member: nil, condition: nil),
+            reentry: .init(type: .everyTime, windowSeconds: nil)
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = MockEventStore()
+        let events = EventLog(identity: identity, dateProvider: MockDateProvider(),
+                              apiClient: MockNuxieApi(), store: store)
+        let retained = try StoredEvent(id: "retained-before-profile", name: "retained_trigger",
+                                       properties: [:], timestamp: Date(), distinctId: "customer")
+        _ = try await store.commitStableCaptureAndStageRoute(
+            eventId: retained.id, event: retained, recordedAt: retained.timestamp,
+            assigningCommitSequence: false, admission: nil
+        )
+        let service = JourneyService(
+            identity: identity, events: events,
+            dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
+            journalDirectory: directory, storageScope: nil, featureAccess: { _ in nil },
+            dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
+        )
+        await events.deferCommittedRouting()
+        await events.subscribeCommitted { event in await service.handleEvent(event) }
+        await service.prepareForEvents()
+        let configuration = NuxieConfiguration(apiKey: "startup-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await events.configure(configuration: configuration)
+        await service.initialize()
+        events.track("newer-analytics")
+        _ = await events.flushEvents()
+        XCTAssertTrue(store.pendingStableRouteIds.contains(retained.id))
+        XCTAssertFalse(store.storedEvents.contains { $0.name == JourneyEvents.journeyStarted })
+        await service.profileDidCommit(snapshot, artifacts: nil,
+                                       authority: fixture.deliveryAuthority,
+                                       admissionGeneration: 1, distinctId: "customer")
+        await events.drain()
+        XCTAssertFalse(store.pendingStableRouteIds.contains(retained.id))
+        XCTAssertEqual(store.storedEvents.filter { $0.name == JourneyEvents.journeyStarted }.count, 1)
+        await service.shutdown()
+        await events.close()
+    }
+
     func testSendEventRoutesTheDurableCaptureToCommittedSubscribers() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let snapshot = try await authenticatedSnapshot(fixture)

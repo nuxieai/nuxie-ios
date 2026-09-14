@@ -76,6 +76,7 @@ private enum RouteResolution: Sendable {
 }
 
 private enum RouteCommand: Sendable {
+  case resumeAfterRecovery([RoutedCommittedEvent])
   case resolved(sequence: UInt64, RouteResolution)
   /// Storage failures have no durable commit sequence to order against.
   case undurable(RoutedCommittedEvent)
@@ -325,6 +326,8 @@ protocol EventLogProtocol:
 {
   /// Configure the log from the immutable setup snapshot. Builds enrichment
   /// and delivery settings and opens storage.
+  func deferCommittedRouting() async
+
   func configure(configuration: NuxieSetupConfiguration?) async throws
 
   /// Subscribe to committed events. Handlers run serially, in subscription
@@ -431,6 +434,8 @@ protocol EventLogProtocol:
 }
 
 extension EventLogProtocol {
+  func deferCommittedRouting() async {}
+
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
   }
@@ -533,6 +538,8 @@ actor EventLog: EventLogProtocol {
   private nonisolated let committedAdmissionRegistry =
     CommittedEventAdmissionRegistry()
   private var routeWorker: Task<Void, Never>?
+  private var routingDeferred = false
+  private var deferredRouteCommands: [RouteCommand] = []
   private var nextRouteSequenceToDeliver: UInt64 = 0
   private var pendingRouteResolutions: [UInt64: RouteResolution] = [:]
   /// Prevents a retry from enqueueing the same durable local-route receipt
@@ -730,11 +737,6 @@ actor EventLog: EventLogProtocol {
     if snapshot?.internalConfiguration.suppressBackgroundWork != true {
       startFlushTimer()
     }
-
-    // Queue retained routes before readiness releases any newly captured
-    // events. Do not drain here: a subscriber may itself need the open store.
-    // The serial route worker delivers this prefix before live routing.
-    try await enqueuePendingStableRoutes(distinctId: identityService.getDistinctId())
 
     LogInfo("EventLog configured (subscribers: \(subscribers.count))")
     // Signal that storage is initialized and safe to use
@@ -1340,8 +1342,40 @@ actor EventLog: EventLogProtocol {
     }
   }
 
+  /// Storage/capture remain available while Journey installs authenticated
+  /// state. Only replayPendingStableRoutes may release the retained prefix.
+  func deferCommittedRouting() async {
+    routingDeferred = true
+  }
+
   private func processRoute(_ cmd: RouteCommand) async {
     switch cmd {
+    case .resumeAfterRecovery(let recovered):
+      routingDeferred = false
+      for routed in recovered {
+        await routeToCommittedSubscribers(routed)
+        await acknowledgeStableRouteIfNeeded(routed.stableRouteEventId)
+      }
+      let buffered = deferredRouteCommands
+      deferredRouteCommands.removeAll()
+      for command in buffered { await processRoute(command) }
+      return
+    case .shutdown:
+      for command in deferredRouteCommands {
+        if case .barrier(let continuation) = command { continuation.resume() }
+      }
+      deferredRouteCommands.removeAll()
+      return
+    default:
+      if routingDeferred {
+        deferredRouteCommands.append(cmd)
+        return
+      }
+    }
+    switch cmd {
+    case .resumeAfterRecovery:
+      return
+
     case .resolved(let sequence, let resolution):
       pendingRouteResolutions[sequence] = resolution
       while let next = pendingRouteResolutions.removeValue(
@@ -2728,12 +2762,13 @@ extension RoutedStableSystemEventCapturing {
 }
 
 extension EventLog {
-  private func enqueuePendingStableRoutes(distinctId: String) async throws {
+  private func pendingStableRoutes(distinctId: String) async throws -> [RoutedCommittedEvent] {
+    var recovered: [RoutedCommittedEvent] = []
     let admissions = committedAdmissionRegistry.capture()
     for stored in try await store.queryPendingStableRoutes(
       distinctId: distinctId
     ) where activeStableRouteIds.insert(stored.id).inserted {
-      routeContinuation.yield(.undurable(RoutedCommittedEvent(
+      recovered.append(RoutedCommittedEvent(
         event: NuxieEvent(
           id: stored.id,
           name: stored.name,
@@ -2743,8 +2778,9 @@ extension EventLog {
         ),
         subscriberAdmissions: admissions,
         stableRouteEventId: stored.id
-      )))
+      ))
     }
+    return recovered
   }
 
   @discardableResult
@@ -2753,7 +2789,7 @@ extension EventLog {
     // Waiting for a barrier queued behind that subscriber would deadlock the
     // worker. Any nested capture is still committed before it is enqueued and
     // will route as soon as the current subscriber returns.
-    guard !Self.isOnCommittedRouteWorker else { return false }
+    guard !Self.isOnCommittedRouteWorker, !routingDeferred else { return false }
     await drainRouteWorker()
     return await retryFailedStableRouteAcknowledgements()
   }
@@ -2764,7 +2800,12 @@ extension EventLog {
     await ready.wait()
     guard !closeFlag.isClosed else { return false }
     do {
-      try await enqueuePendingStableRoutes(distinctId: distinctId)
+      let recovered = try await pendingStableRoutes(distinctId: distinctId)
+      if routingDeferred {
+        routeContinuation.yield(.resumeAfterRecovery(recovered))
+      } else {
+        for event in recovered { routeContinuation.yield(.undurable(event)) }
+      }
       guard !Self.isOnCommittedRouteWorker else { return false }
       await drainRouteWorker()
       guard await retryFailedStableRouteAcknowledgements() else {
