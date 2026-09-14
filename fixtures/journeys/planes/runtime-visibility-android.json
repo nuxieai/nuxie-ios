@@ -58,5 +58,20 @@
         { "action": "reset" }, { "action": "take", "expected": ["exit"] }
       ]
     }
-  ]
+  ],
+  "frameBackpressure": {
+    "firstFrameNanos": 1000000000,
+    "busyFrameCount": 100,
+    "busyTickNanos": 1000000,
+    "nextFrameNanos": 1101000000,
+    "expectedOrder": [
+      "frame:0",
+      "write:headline:ok",
+      "frame:0"
+    ],
+    "expectedElapsed": [
+      0,
+      0.101
+    ]
+  }
 }
