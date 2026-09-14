@@ -12,5 +12,15 @@
     "destinationLeaseReleased": true,
     "outgoingPixelsChanged": 0
   },
-  "pendingCheckpointComposedPixelsChanged": 0
+  "pendingCheckpointComposedPixelsChanged": 0,
+  "checkpointRetry": {
+    "contract": "A cancelled waiter does not cancel an admitted dismissal checkpoint. Retry of the same destination joins its result; a different destination is superseded rather than reusing the original checkpoint.",
+    "destination": "screen_details",
+    "result": "REJECTED",
+    "checkpointCalls": 1,
+    "launchCountBeforeResult": 1,
+    "launchCountAfterResult": 1,
+    "conflictingDestination": "screen_welcome",
+    "conflictReason": "SUPERSEDED"
+  }
 }
