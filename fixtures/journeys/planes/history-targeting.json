@@ -79,6 +79,869 @@
           }
         ]
       }
+    },
+    {
+      "name": "in-order overall upper bound excludes a late completion",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.InOrder",
+            "steps": [
+              {
+                "name": "a"
+              },
+              {
+                "name": "b"
+              },
+              {
+                "name": "c"
+              }
+            ],
+            "overallWithin": {
+              "type": "Duration",
+              "value": 17
+            },
+            "perStepWithin": {
+              "type": "Duration",
+              "value": 10
+            },
+            "since": {
+              "type": "Timestamp",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 20000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 0,
+        "events": [
+          {
+            "id": "0",
+            "name": "a",
+            "timestampMillis": 1000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "b",
+            "timestampMillis": 2000,
+            "properties": {}
+          },
+          {
+            "id": "2",
+            "name": "b",
+            "timestampMillis": 10000,
+            "properties": {}
+          },
+          {
+            "id": "3",
+            "name": "c",
+            "timestampMillis": 19000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "in-order per-step upper bound excludes a gap",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.InOrder",
+            "steps": [
+              {
+                "name": "a"
+              },
+              {
+                "name": "b"
+              },
+              {
+                "name": "c"
+              }
+            ],
+            "overallWithin": {
+              "type": "Duration",
+              "value": 20
+            },
+            "perStepWithin": {
+              "type": "Duration",
+              "value": 8
+            },
+            "since": {
+              "type": "Timestamp",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 20000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 0,
+        "events": [
+          {
+            "id": "0",
+            "name": "a",
+            "timestampMillis": 1000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "b",
+            "timestampMillis": 2000,
+            "properties": {}
+          },
+          {
+            "id": "2",
+            "name": "b",
+            "timestampMillis": 10000,
+            "properties": {}
+          },
+          {
+            "id": "3",
+            "name": "c",
+            "timestampMillis": 19000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "in-order accepts inclusive per-step and overall limits",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.InOrder",
+            "steps": [
+              {
+                "name": "a"
+              },
+              {
+                "name": "b"
+              },
+              {
+                "name": "c"
+              }
+            ],
+            "overallWithin": {
+              "type": "Duration",
+              "value": 18
+            },
+            "perStepWithin": {
+              "type": "Duration",
+              "value": 9
+            },
+            "since": {
+              "type": "Timestamp",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 20000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 0,
+        "events": [
+          {
+            "id": "0",
+            "name": "a",
+            "timestampMillis": 1000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "b",
+            "timestampMillis": 2000,
+            "properties": {}
+          },
+          {
+            "id": "2",
+            "name": "b",
+            "timestampMillis": 10000,
+            "properties": {}
+          },
+          {
+            "id": "3",
+            "name": "c",
+            "timestampMillis": 19000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "in-order cannot reuse one event for repeated steps",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.InOrder",
+            "steps": [
+              {
+                "name": "a"
+              },
+              {
+                "name": "a"
+              }
+            ],
+            "overallWithin": {
+              "type": "Duration",
+              "value": 20
+            },
+            "perStepWithin": {
+              "type": "Duration",
+              "value": 10
+            },
+            "since": {
+              "type": "Timestamp",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 20000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 0,
+        "events": [
+          {
+            "id": "0",
+            "name": "a",
+            "timestampMillis": 1000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "in-order equal timestamps use stable row identity order",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.InOrder",
+            "steps": [
+              {
+                "name": "a"
+              },
+              {
+                "name": "b"
+              },
+              {
+                "name": "c"
+              }
+            ],
+            "overallWithin": {
+              "type": "Duration",
+              "value": 20
+            },
+            "perStepWithin": {
+              "type": "Duration",
+              "value": 10
+            },
+            "since": {
+              "type": "Timestamp",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 20000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 0,
+        "events": [
+          {
+            "id": "c",
+            "name": "c",
+            "timestampMillis": 1000,
+            "properties": {}
+          },
+          {
+            "id": "a",
+            "name": "a",
+            "timestampMillis": 1000,
+            "properties": {}
+          },
+          {
+            "id": "b",
+            "name": "b",
+            "timestampMillis": 1000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "in-order respects each step predicate",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.InOrder",
+            "steps": [
+              {
+                "name": "a"
+              },
+              {
+                "name": "b",
+                "where": {
+                  "type": "Pred",
+                  "op": "eq",
+                  "key": "eligible",
+                  "value": {
+                    "type": "Bool",
+                    "value": true
+                  }
+                }
+              },
+              {
+                "name": "c"
+              }
+            ],
+            "overallWithin": {
+              "type": "Duration",
+              "value": 20
+            },
+            "perStepWithin": {
+              "type": "Duration",
+              "value": 10
+            },
+            "since": {
+              "type": "Timestamp",
+              "value": 0
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 20000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 0,
+        "events": [
+          {
+            "id": "0",
+            "name": "a",
+            "timestampMillis": 1000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "b",
+            "timestampMillis": 2000,
+            "properties": {}
+          },
+          {
+            "id": "2",
+            "name": "b",
+            "timestampMillis": 10000,
+            "properties": {}
+          },
+          {
+            "id": "3",
+            "name": "c",
+            "timestampMillis": 19000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "in-order incomplete history remains unknown under negation",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Events.InOrder",
+              "steps": [
+                {
+                  "name": "a"
+                },
+                {
+                  "name": "b"
+                },
+                {
+                  "name": "c"
+                }
+              ],
+              "overallWithin": {
+                "type": "Duration",
+                "value": 20
+              },
+              "perStepWithin": {
+                "type": "Duration",
+                "value": 10
+              },
+              "since": {
+                "type": "Timestamp",
+                "value": 0
+              }
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 20000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1000,
+        "events": [
+          {
+            "id": "0",
+            "name": "a",
+            "timestampMillis": 1000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "b",
+            "timestampMillis": 2000,
+            "properties": {}
+          },
+          {
+            "id": "2",
+            "name": "b",
+            "timestampMillis": 10000,
+            "properties": {}
+          },
+          {
+            "id": "3",
+            "name": "c",
+            "timestampMillis": 19000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "active days count buckets rather than events",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.ActivePeriods",
+            "name": "active",
+            "period": "day",
+            "totalPeriods": 2,
+            "minPeriods": 2
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 1709294400000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1640995200000,
+        "events": [
+          {
+            "id": "0",
+            "name": "active",
+            "timestampMillis": 1709164800000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "active",
+            "timestampMillis": 1709251200000,
+            "properties": {}
+          },
+          {
+            "id": "2",
+            "name": "active",
+            "timestampMillis": 1709287200000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "active days exclude events before the calendar window",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.ActivePeriods",
+            "name": "active",
+            "period": "day",
+            "totalPeriods": 2,
+            "minPeriods": 2
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 1709294400000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1640995200000,
+        "events": [
+          {
+            "id": "0",
+            "name": "active",
+            "timestampMillis": 1709164799000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "active",
+            "timestampMillis": 1709287200000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "active weeks use the UTC Gregorian week boundary",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.ActivePeriods",
+            "name": "active",
+            "period": "week",
+            "totalPeriods": 2,
+            "minPeriods": 2
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 1709467200000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1640995200000,
+        "events": [
+          {
+            "id": "0",
+            "name": "active",
+            "timestampMillis": 1709423999000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "active",
+            "timestampMillis": 1709424000000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "active months include leap day in the preceding month",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.ActivePeriods",
+            "name": "active",
+            "period": "month",
+            "totalPeriods": 2,
+            "minPeriods": 2
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 1709294400000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1640995200000,
+        "events": [
+          {
+            "id": "0",
+            "name": "active",
+            "timestampMillis": 1709251199000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "active",
+            "timestampMillis": 1709251200000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "active years span the UTC calendar rollover",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.ActivePeriods",
+            "name": "active",
+            "period": "year",
+            "totalPeriods": 2,
+            "minPeriods": 2
+          }
+        }
+      },
+      "expected": true,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 1704110400000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1640995200000,
+        "events": [
+          {
+            "id": "0",
+            "name": "active",
+            "timestampMillis": 1704067199000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "active",
+            "timestampMillis": 1704067200000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "active periods exclude future event buckets",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Events.ActivePeriods",
+            "name": "active",
+            "period": "day",
+            "totalPeriods": 2,
+            "minPeriods": 2
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 1709294400000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1640995200000,
+        "events": [
+          {
+            "id": "0",
+            "name": "active",
+            "timestampMillis": 1709287200000,
+            "properties": {}
+          },
+          {
+            "id": "1",
+            "name": "active",
+            "timestampMillis": 1709337600000,
+            "properties": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "active periods require complete retained calendar history",
+      "condition": {
+        "type": "app_foregrounded",
+        "condition": {
+          "ir_version": 1,
+          "expr": {
+            "type": "Not",
+            "arg": {
+              "type": "Events.ActivePeriods",
+              "name": "active",
+              "period": "day",
+              "totalPeriods": 2,
+              "minPeriods": 1
+            }
+          }
+        }
+      },
+      "expected": false,
+      "foreground": true,
+      "event": null,
+      "nowMillis": 1709294400000,
+      "facts": {
+        "properties": {},
+        "memberships": {},
+        "assignments": {}
+      },
+      "references": {
+        "propertyKeys": [],
+        "segmentIds": [],
+        "experimentIds": []
+      },
+      "history": {
+        "coverageStartMillis": 1709251200000,
+        "events": [
+          {
+            "id": "0",
+            "name": "active",
+            "timestampMillis": 1709287200000,
+            "properties": {}
+          }
+        ]
+      }
     }
   ]
 }
