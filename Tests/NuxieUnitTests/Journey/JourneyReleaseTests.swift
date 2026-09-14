@@ -56,30 +56,34 @@ final class JourneyReleaseTests: XCTestCase {
     }
 
     func testAuthenticatesRenderedLegWithExactScreenClosure() throws {
-        let fixture = try golden(entryKey: "renderedEntry")
-        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
-        let source = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
-        let requirements = try XCTUnwrap(source["requirements"] as? [String: Any])
-        let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
-        let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
-        let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
-        let supported = JourneyReleaseSupportedRuntime(
-            currentSdkVersion: try XCTUnwrap(requirements["minimumSdkVersion"] as? String),
-            supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
-            supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
-            sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
-            timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
-            timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
-            supportedCapabilities: Set(try XCTUnwrap(requirements["requiredCapabilities"] as? [String]))
-        )
-        let authenticated = try JourneyReleaseVerifier().authenticateJourney(
-            envelopeBytes: JSONEncoder().encode(fixture.envelope), authorizationKeys: [key(fixture.publicKey)],
-            expectedIdentity: fixture.identity, expectedLegId: String(repeating: "a", count: 64),
-            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0)
-        )
-        XCTAssertFalse(authenticated.descriptor.leg.screens.isEmpty)
-        XCTAssertNotNil(authenticated.descriptor.render)
-        XCTAssertTrue(authenticated.descriptor.leg.screens.allSatisfy { $0.responseCaptures.isEmpty })
+        for (file, entryKey) in [("release.json", "renderedEntry"),
+                                 ("text-input-navigation.json", "renderedEntry"),
+                                 ("text-input-navigation.json", "nextBuildEntry")] {
+            let fixture = try golden(entryKey: entryKey, file: file)
+            let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+            let source = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            let requirements = try XCTUnwrap(source["requirements"] as? [String: Any])
+            let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
+            let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
+            let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
+            let supported = JourneyReleaseSupportedRuntime(
+                currentSdkVersion: try XCTUnwrap(requirements["minimumSdkVersion"] as? String),
+                supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
+                supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
+                sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
+                timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
+                timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
+                supportedCapabilities: Set(try XCTUnwrap(requirements["requiredCapabilities"] as? [String]))
+            )
+            let authenticated = try JourneyReleaseVerifier().authenticateJourney(
+                envelopeBytes: JSONEncoder().encode(fixture.envelope), authorizationKeys: [key(fixture.publicKey)],
+                expectedIdentity: fixture.identity, expectedLegId: String(repeating: "a", count: 64),
+                supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0)
+            )
+            XCTAssertFalse(authenticated.descriptor.leg.screens.isEmpty)
+            XCTAssertNotNil(authenticated.descriptor.render)
+            XCTAssertTrue(authenticated.descriptor.leg.screens.allSatisfy { $0.responseCaptures.isEmpty })
+        }
     }
 
     func testRejectsHostDismissalThatImmediatelyPresentsAgain() throws {
@@ -267,9 +271,9 @@ final class JourneyReleaseTests: XCTestCase {
                   signatureBase64: try signingKey.signature(for: Data(domain.utf8) + bytes).base64EncodedString()))
     }
 
-    private func golden(entryKey: String = "entry") throws -> (envelope: JourneyReleaseEnvelope, identity: JourneyReleaseIdentity, publicKey: Data) {
+    private func golden(entryKey: String = "entry", file: String = "release.json") throws -> (envelope: JourneyReleaseEnvelope, identity: JourneyReleaseIdentity, publicKey: Data) {
         let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/release.json")
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/\(file)")
         let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
         let entry = try XCTUnwrap(fixture[entryKey] as? [String: Any])
         let envelope = try JSONDecoder().decode(JourneyReleaseEnvelope.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(entry["envelope"])))
