@@ -59,6 +59,15 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         set { lock.withLock { _replayPendingRoutesHandler = newValue } }
     }
 
+    private var _resumeRoutingHandler: (@Sendable () -> Void)?
+    public var resumeRoutingHandler: (@Sendable () -> Void)? {
+        get { lock.withLock { _resumeRoutingHandler } }
+        set { lock.withLock { _resumeRoutingHandler = newValue } }
+    }
+    public func resumeCommittedRouting(ifGeneration: UInt64) async {
+        resumeRoutingHandler?()
+    }
+
     public func replayPendingStableRoutes(distinctId: String) async -> Bool {
         let handler = replayPendingRoutesHandler
         return await handler?() ?? true
@@ -782,6 +791,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _prepareEventPropertiesHandler = nil
             _drainHandler = nil
             _replayPendingRoutesHandler = nil
+        resumeRoutingHandler = nil
             _committedRoutingDrainCallCount = 0
             _capturedEventObserver = nil
             _stableCaptures.removeAll()
