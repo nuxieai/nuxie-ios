@@ -1,0 +1,10 @@
+{
+  "platform": "android",
+  "contract": "A Journey navigates between rendered screens within one Activity. Prepare a destination behind the outgoing screen before its dismissal checkpoint. Retain the outgoing screen on preparation failure or cancellation; unused destination resources drain before their artifact lease is released. Authored transition timing and checkpoint cancellation reconciliation require additional qualification.",
+  "screens": [
+    "screen_1",
+    "screen_2",
+    "screen_1"
+  ],
+  "activityLaunches": 1
+}
