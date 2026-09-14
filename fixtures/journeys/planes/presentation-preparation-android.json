@@ -1,52 +1,67 @@
 {
   "platform": "android",
-  "contract": "Before any Activity exists, commerce and artifact preparation are owned by one cancellable attempt. Matching terminal close and caller cancellation drain cancellation-resistant work, release any late acquired lease exactly once, and forbid late launch. Commerce cancellation prevents artifact acquisition. Foreign identity shutdown must not cancel another owner. Owned withdrawal reports SUPERSEDED without cancelling the caller job; caller cancellation remains cancellation.",
+  "contract": "Before native content exists, commerce and artifact preparation are owned by one cancellable attempt. Matching terminal close and caller cancellation drain cancellation-resistant work, release any late acquired lease exactly once, and forbid late content activation. Commerce cancellation prevents artifact acquisition. Foreign identity shutdown must not cancel another owner. Owned withdrawal reports SUPERSEDED without cancelling the caller job; caller cancellation remains cancellation.",
   "cases": [
     {
       "action": "hostClose",
       "phase": "commerce",
       "lateLeaseReleased": false,
-      "failureReason": "SUPERSEDED"
+      "failureReason": "SUPERSEDED",
+      "shellLaunchCount": 1
     },
     {
       "action": "hostClose",
       "phase": "acquisition",
       "lateLeaseReleased": true,
-      "failureReason": "SUPERSEDED"
+      "failureReason": "SUPERSEDED",
+      "shellLaunchCount": 1
     },
     {
       "action": "identityShutdown",
       "phase": "commerce",
       "lateLeaseReleased": false,
-      "failureReason": "SUPERSEDED"
+      "failureReason": "SUPERSEDED",
+      "shellLaunchCount": 1
     },
     {
       "action": "identityShutdown",
       "phase": "acquisition",
       "lateLeaseReleased": true,
-      "failureReason": "SUPERSEDED"
+      "failureReason": "SUPERSEDED",
+      "shellLaunchCount": 1
     },
     {
       "action": "journeyShutdown",
       "phase": "commerce",
       "lateLeaseReleased": false,
-      "failureReason": "SUPERSEDED"
+      "failureReason": "SUPERSEDED",
+      "shellLaunchCount": 1
     },
     {
       "action": "journeyShutdown",
       "phase": "acquisition",
       "lateLeaseReleased": true,
-      "failureReason": "SUPERSEDED"
+      "failureReason": "SUPERSEDED",
+      "shellLaunchCount": 1
     },
     {
       "action": "callerCancel",
       "phase": "commerce",
-      "lateLeaseReleased": false
+      "lateLeaseReleased": false,
+      "shellLaunchCount": 1
     },
     {
       "action": "callerCancel",
       "phase": "acquisition",
-      "lateLeaseReleased": true
+      "lateLeaseReleased": true,
+      "shellLaunchCount": 1
     }
-  ]
+  ],
+  "initialShell": {
+    "launchCount": 1,
+    "expectedClearColorArgb": -16119286,
+    "shownBeforeFirstFrame": 0,
+    "shownAfterFirstFrame": 1,
+    "reusePresentationId": true
+  }
 }
