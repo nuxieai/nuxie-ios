@@ -101,6 +101,42 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         await events.close()
     }
 
+    func testProfileReplacementWaitsForRetainedRouteRecovery() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshot = try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load())
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        let service = makeService(identity: identity, events: events, directory: directory)
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        await service.prepareForEvents()
+        let retainedGeneration = service.eventAdmissionGeneration()
+        let gate = JourneyNthRoutedCaptureGate(eventName: "replay", suspendedCall: 1)
+        let replayStarted = expectation(description: "retained replay begins")
+        events.replayPendingRoutesHandler = {
+            replayStarted.fulfill()
+            await gate.intercept(event: "replay")
+            return true
+        }
+        let startup = Task { await service.initialize() }
+        await fulfillment(of: [replayStarted], timeout: 2)
+        let replacementCompleted = expectation(description: "replacement must wait")
+        replacementCompleted.isInverted = true
+        let replacement = Task {
+            await service.profileDidCommit(snapshot, distinctId: "customer")
+            replacementCompleted.fulfill()
+        }
+        await fulfillment(of: [replacementCompleted], timeout: 0.2)
+        XCTAssertEqual(service.eventAdmissionGeneration(), retainedGeneration,
+                       "Retained routes must keep their admitted profile until recovery completes")
+        await gate.release()
+        await startup.value
+        await replacement.value
+        XCTAssertGreaterThan(service.eventAdmissionGeneration(), retainedGeneration)
+        await service.shutdown()
+    }
+
     func testInitializationJoinsCachedProfileJournalRecovery() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
