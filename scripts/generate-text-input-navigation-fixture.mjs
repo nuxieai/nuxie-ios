@@ -22,11 +22,13 @@ secondArtboard.id = 'screen_details';
 secondArtboard.artboardId = 'artboard_details';
 secondArtboard.artboardName = 'Details';
 descriptor.render.screens.push(secondArtboard);
+descriptor.render.textInputs[0].responseFieldKey = "email";
 const secondInput = structuredClone(descriptor.render.textInputs[0]);
 // Deliberately reuse the input ID: draft ownership must include the screen.
 secondInput.screenId = 'screen_details';
 secondInput.artboardId = 'artboard_details';
 secondInput.value = 'Details default';
+secondInput.responseFieldKey = 'details';
 descriptor.render.textInputs.push(secondInput);
 
 function canonical(value) {
