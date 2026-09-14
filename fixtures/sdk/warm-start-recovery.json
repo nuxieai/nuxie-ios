@@ -11,5 +11,7 @@
   "captureRetryOrder": ["started", "started", "completed", "fresh-admission"],
   "replayFailureOrder": ["started", "completed"],
   "replayRetryOrder": ["started", "completed", "fresh-admission"],
+  "presentationFailureOrder": ["presentation"],
+  "presentationRetryOrder": ["presentation", "presentation", "started", "completed", "fresh-admission"],
   "liveOwnedRouteAllowsReconciliation": true
 }
