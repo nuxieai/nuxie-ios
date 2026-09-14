@@ -169,6 +169,46 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         await service.shutdown()
     }
 
+    func testInitializationRetriesJoinedFailedJournalRecovery() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let snapshot = try await authenticatedSnapshot(fixture)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        let gate = JourneyNthRoutedCaptureGate(eventName: "replay", suspendedCall: 1)
+        let replayStarted = expectation(description: "first recovery begins")
+        replayStarted.assertForOverFulfill = false
+        events.replayPendingRoutesHandler = {
+            replayStarted.fulfill()
+            await gate.intercept(event: "replay")
+            return await gate.observationCount() > 1
+        }
+        let service = makeService(identity: identity, events: events,
+                                  directory: directory, storageScope: nil)
+        await service.prepareForEvents()
+        let profile = Task {
+            await service.profileDidCommit(snapshot, artifacts: nil,
+                                           authority: fixture.deliveryAuthority,
+                                           admissionGeneration: 1, distinctId: "customer")
+        }
+        await fulfillment(of: [replayStarted], timeout: 2)
+        let startupCompleted = expectation(description: "startup joins active recovery")
+        startupCompleted.isInverted = true
+        let startup = Task {
+            await service.initialize()
+            startupCompleted.fulfill()
+        }
+        await fulfillment(of: [startupCompleted], timeout: 0.2)
+        await gate.release()
+        await profile.value
+        await startup.value
+        let recoveryCount = await gate.observationCount()
+        XCTAssertEqual(recoveryCount, 2, "A failed joined operation must not masquerade as a recovered journal")
+        await service.shutdown()
+    }
+
     func testInitializationJoinsCachedProfileJournalRecovery() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
