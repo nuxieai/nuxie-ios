@@ -24,12 +24,14 @@
     "terminalDuringDrain": {
       "kinds": [
         "host",
+        "user",
         "identity"
       ],
       "replacementAdmitted": false,
       "shownFacts": 0,
       "terminalOutcomes": 1,
-      "leaseCloseCount": 1
+      "leaseCloseCount": 1,
+      "dismissalCheckpoints": 0
     },
     "recreatedDrainWaiter": {
       "replacementAdmittedBeforeDrain": false,
