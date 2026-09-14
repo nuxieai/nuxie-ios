@@ -51,6 +51,17 @@ final class EventLogTests: AsyncSpec {
                 })
             }
 
+            it("keeps capture available after transient storage initialization or query failure") {
+                mockStore.shouldFailInitialize = true
+                mockStore.shouldFailQuery = true
+                let received = ReceivedEvents()
+                await log.subscribeCommitted { event in await received.append(event.name) }
+                try await log.configure(configuration: testConfig)
+                log.track("best-effort-capture")
+                await log.drain()
+                await expect { await received.names }.to(equal(["best-effort-capture"]))
+            }
+
             // MARK: - Committed-events subscription stream
 
             describe("committed-events subscriptions") {
@@ -171,11 +182,22 @@ final class EventLogTests: AsyncSpec {
                         eventId: stored.id, event: stored, recordedAt: stored.timestamp,
                         assigningCommitSequence: false, admission: nil
                     )
+                    await log.deferCommittedRouting()
                     log.track("newer-buffered")
                     try await log.configure(configuration: testConfig)
-                    // Force live routing to run before Journey initialization
-                    // explicitly asks for pending-route recovery.
-                    await log.drain()
+                    // Storage is open, but the authenticated Journey journal
+                    // has not been installed yet. Captures still persist.
+                    await expect { mockStore.storedEvents.map(\.name) }
+                        .toEventually(contain("newer-buffered"))
+                    await expect { await received.names }.to(beEmpty())
+                    expect(mockStore.pendingStableRouteIds).to(contain(stored.id))
+                    mockStore.shouldFailQuery = true
+                    let failedReplay = await log.replayPendingStableRoutes(
+                        distinctId: "returning-customer"
+                    )
+                    expect(failedReplay).to(beFalse())
+                    await expect { await received.names }.to(beEmpty())
+                    mockStore.shouldFailQuery = false
                     let replayed = await log.replayPendingStableRoutes(
                         distinctId: "returning-customer"
                     )
