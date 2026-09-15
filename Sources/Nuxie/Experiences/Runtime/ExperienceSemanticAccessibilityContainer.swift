@@ -35,9 +35,13 @@ final class ExperienceSemanticAccessibilityContainer {
     func setActive(_ active: Bool) {
         guard active != isActive else { return }
         if !active {
-            let id = rememberFocus()
-            withdrawnFocus = id.flatMap { objects[$0] }
-            focusIntent = id == nil ? .none : .restore
+            // Activation may be withdrawn before a new frame exposes targets.
+            // Keep the pending handoff until there is a presented tree to inspect.
+            if !objects.isEmpty {
+                let id = rememberFocus()
+                withdrawnFocus = id.flatMap { objects[$0] }
+                focusIntent = id == nil ? .none : .restore
+            }
             removeElements()
         }
         isActive = active
