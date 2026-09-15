@@ -171,7 +171,14 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         bridge.commitTextIfChanged(for: field)
         XCTAssertEqual(writes, ["", ""])
         XCTAssertEqual(commits, ["secret"])
-        XCTAssertNil(field.accessibilityValue)
+        // UIKit may expose a masked value. Preserve its native secure semantics
+        // without copying plaintext into the accessibility projection.
+        let nativeSecureField = UITextField()
+        nativeSecureField.isSecureTextEntry = true
+        nativeSecureField.text = "secret"
+        let exposedValue = field.accessibilityValue
+        XCTAssertEqual(exposedValue, nativeSecureField.accessibilityValue)
+        XCTAssertFalse(exposedValue?.contains("secret") ?? false)
         bridge.clear()
     }
 
