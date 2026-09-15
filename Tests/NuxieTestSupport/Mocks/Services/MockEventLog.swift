@@ -201,7 +201,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             for subscriber in subscribers where subscriber.isEnabled() {
                 await subscriber.handler(DurableForwardingEvent(
                     event: nuxieEvent,
-                    receivedAt: nuxieEvent.timestamp
+                    receivedAt: nuxieEvent.timestamp,
+                    identityIsCurrent: { false }
                 ))
             }
         }

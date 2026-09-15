@@ -1,0 +1,29 @@
+{
+  "suite": "encodings/activity-identity",
+  "version": 1,
+  "initialCustomerId": "customer-a",
+  "steps": [
+    {
+      "action": "observe",
+      "expectedCustomerId": "customer-a",
+      "expectedCurrent": true
+    },
+    {
+      "action": "identify",
+      "customerId": "customer-b",
+      "expectedCustomerId": "customer-a",
+      "expectedCurrent": false
+    },
+    {
+      "action": "identify",
+      "customerId": "customer-a",
+      "expectedCustomerId": "customer-a",
+      "expectedCurrent": false
+    },
+    {
+      "action": "shutdown",
+      "expectedCustomerId": "customer-a",
+      "expectedCurrent": false
+    }
+  ]
+}

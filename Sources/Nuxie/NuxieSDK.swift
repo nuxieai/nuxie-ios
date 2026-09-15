@@ -257,7 +257,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       id: durable.event.id,
       timestamp: ActivityCuration.timestamp(durable.event),
       receivedAt: durable.receivedAt,
-      activity: activity
+      activity: activity,
+      customerId: durable.event.distinctId,
+      identityIsCurrent: durable.identityIsCurrent
     )
     await MainActor.run { [weak self] in
       self?.delegate?.nuxieDidEmit(info)

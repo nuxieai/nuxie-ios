@@ -37,6 +37,19 @@ The same flat name and property view works with Mixpanel, PostHog, and similar t
 
 Use `info.id` as an idempotency key when the destination supports one. `info.timestamp` records when the activity happened; `info.receivedAt` records when this SDK durably captured it. For exhaustive Swift handling, switch over `info.activity` and include an `@unknown default` branch.
 
+## Customer attribution
+
+`info.customerId` identifies the customer who produced the durable activity.
+Use that ID when attributing forwarded analytics; the SDK's current customer
+may already have changed by the time the delegate runs.
+
+For UI or gameplay tied to the current customer, check `info.isCurrentIdentity`
+before acting. This property checks the original capture's identity session when
+read. Switching A → B → A does not reactivate activity from the first A session,
+and shutting down the SDK invalidates activities from that SDK session. Stale
+activities are still delivered for analytics, with their original customer ID.
+These fields do not change the flat activity name or properties.
+
 ## Curated activity
 
 | Internal source | Public activity |
