@@ -57,6 +57,23 @@
         { "action": "take", "expected": ["exit", "down"] },
         { "action": "reset" }, { "action": "take", "expected": ["exit"] }
       ]
+    },
+    {
+      "name": "hidden interval rejects stale move and release before a new down",
+      "steps": [
+        { "action": "down" }, { "action": "take", "expected": ["down"] },
+        { "action": "reset" }, { "action": "move" }, { "action": "up" },
+        { "action": "take", "expected": ["exit"] },
+        { "action": "down" }, { "action": "up" },
+        { "action": "take", "expected": ["down", "up"] }
+      ]
+    },
+    {
+      "name": "orphan move and release cannot start a touch gesture",
+      "steps": [
+        { "action": "move" }, { "action": "up" },
+        { "action": "take", "expected": [] }
+      ]
     }
   ],
   "frameBackpressure": {
