@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "temporary-withdrawal",
+      "steps": [
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2
+          ]
+        },
+        {
+          "op": "focus",
+          "target": 2
+        },
+        {
+          "op": "withdraw"
+        },
+        {
+          "op": "resume"
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2
+          ]
+        }
+      ],
+      "expectedFocus": "2"
+    },
+    {
+      "id": "repeated-withdrawal-before-frame",
+      "steps": [
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2
+          ]
+        },
+        {
+          "op": "focus",
+          "target": 2
+        },
+        {
+          "op": "withdraw"
+        },
+        {
+          "op": "resume"
+        },
+        {
+          "op": "withdraw"
+        },
+        {
+          "op": "resume"
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2
+          ]
+        }
+      ],
+      "expectedFocus": "2"
+    },
+    {
+      "id": "shell-focus-wins",
+      "steps": [
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2
+          ]
+        },
+        {
+          "op": "focus",
+          "target": 2
+        },
+        {
+          "op": "withdraw"
+        },
+        {
+          "op": "shell"
+        },
+        {
+          "op": "resume"
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2
+          ]
+        }
+      ],
+      "expectedFocus": "shell"
+    },
+    {
+      "id": "stable-frame-preserves-target",
+      "steps": [
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2
+          ]
+        },
+        {
+          "op": "focus",
+          "target": 2
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2
+          ]
+        }
+      ],
+      "expectedFocus": "2"
+    }
+  ]
+}
