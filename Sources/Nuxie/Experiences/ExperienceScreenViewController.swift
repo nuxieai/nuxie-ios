@@ -177,6 +177,7 @@ final class ExperienceScreenViewController: UIViewController {
     private var isShuttingDown = false
     private var shutdownTask: Task<Void, Never>?
     private var contentHidden = false
+    private var semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
     private var controllerIsVisible = false
     private var lastPushedSafeAreaInsets: ExperienceSafeAreaInsets?
     private var lifecycleState: ExperienceScreenLifecycleState
@@ -373,6 +374,7 @@ final class ExperienceScreenViewController: UIViewController {
             self.interactiveScreen = nil
             self.finishExitWaiters()
             self.semanticContainer.clear()
+            self.semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
             self.textInputOverlayBridge.clear()
             await loop?.shutdown()
             self.isShuttingDown = false
@@ -384,7 +386,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     func setContentHidden(_ hidden: Bool) {
         contentHidden = hidden
-        if hidden, requiresSceneSemantics { semanticContainer.clear() }
+        if hidden, requiresSceneSemantics { semanticContainer.setActive(false) }
         surfaceView.isHidden = hidden
         textInputOverlayBridge.setHidden(hidden)
         updatePresentationVisibility()
@@ -489,7 +491,10 @@ final class ExperienceScreenViewController: UIViewController {
             to: .active,
             reduceMotion: reduceMotion
         )
-        await applyLifecycleSnapshot(snapshot)
+        let write = await applyLifecycleSnapshot(snapshot)
+        if requiresSceneSemantics, let write, semanticFocusLifecycle.admitsHandoff(from: write) {
+            semanticContainer.requestFocusOnNextPresentation()
+        }
         try? await presentationLoop?.advanceZeroDelta()
     }
 
@@ -726,7 +731,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private var semanticInputIsEligible: Bool {
-        !isShuttingDown && !contentHidden && controllerIsVisible && lifecyclePhase == .active
+        !isShuttingDown && runtimeFailure == nil && !contentHidden && controllerIsVisible && lifecyclePhase == .active
             && ExperienceSemanticAccessibilityElement.allowsInteraction(in: surfaceView)
     }
 
@@ -992,12 +997,16 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func updatePresentationVisibility() {
+        if requiresSceneSemantics {
+            semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
+        }
         presentationLoop?.setPresentationVisible(controllerIsVisible && !contentHidden)
     }
 
     private func handleTerminalFailure(_ error: Error) {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         runtimeFailure = error
+        if requiresSceneSemantics { semanticContainer.clear() }
         finishExitWaiters()
         surfaceView.isHidden = true
         textInputOverlayBridge.setHidden(true)
@@ -1013,11 +1022,16 @@ final class ExperienceScreenViewController: UIViewController {
         )
     }
 
-    private func applyLifecycleSnapshot(_ snapshot: ExperienceScreenLifecycleSnapshot) async {
-        guard !lifecycleWritesUnavailable else { return }
+    @discardableResult
+    private func applyLifecycleSnapshot(_ snapshot: ExperienceScreenLifecycleSnapshot) async -> UUID? {
+        let write = semanticFocusLifecycle.beginWrite(phase: snapshot.phase)
+        if requiresSceneSemantics {
+            semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
+        }
+        guard !lifecycleWritesUnavailable else { return nil }
         guard let defaultViewModelName = journeyScreen?.defaultViewModelName else {
             markLifecycleWritesUnavailable("screen has no default root ViewModel")
-            return
+            return nil
         }
         let instanceID = journeyScreen?.defaultInstanceId
         let command = snapshot.stateCommand(
@@ -1038,8 +1052,14 @@ final class ExperienceScreenViewController: UIViewController {
             }
         }
         if case .failure(let error) = result {
+            semanticFocusLifecycle.completeWrite(write, succeeded: false)
+            updatePresentationVisibility()
             markLifecycleWritesUnavailable(error.localizedDescription)
+            return nil
         }
+        guard semanticFocusLifecycle.completeWrite(write, succeeded: true) else { return nil }
+        updatePresentationVisibility()
+        return write
     }
 
     private func markLifecycleWritesUnavailable(_ reason: String) {
