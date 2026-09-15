@@ -1,6 +1,23 @@
 import XCTest
 
 final class ExperienceRuntimePackageSmokeTests: XCTestCase {
+    func testNativeTextFieldIsAccessibleAndEditableWithoutDiagnostics() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--nuxie-fixture", "rendered-text-input"]
+        app.launch()
+        let row = app.cells["nuxie-fixture-rendered-text-input"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+
+        let field = app.textFields["nuxie-text-input-text-input/screen_1/email_input"]
+        XCTAssertTrue(field.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertEqual(field.value as? String, "levi@nuxie.dev")
+        field.tap()
+        field.typeText("x")
+        XCTAssertEqual(field.value as? String, "levi@nuxie.devx")
+        XCTAssertFalse(app.otherElements.matching(NSPredicate(format: "label == %@", "screen_1")).firstMatch.exists)
+    }
+
     func testSDKBehaviorPackagesCreateNativeRuntimeSurfaces() throws {
         let app = XCUIApplication()
         let indexedFixtures = [
