@@ -15,7 +15,12 @@ final class SignedSemanticJourneyTests: XCTestCase {
         try await exercise(.scriptFailure)
     }
 
+    func testSignedAuthoredRolesExposeOneSecureEditorAndPersistNativeActions() async throws {
+        try await exercise(.roles)
+    }
+
     private enum Scenario: String {
+        case roles = "rendered-semantic-roles"
         case success = "rendered-semantic-screen-control"
         case scriptFailure = "rendered-semantic-screen-control-error"
     }
@@ -122,31 +127,40 @@ final class SignedSemanticJourneyTests: XCTestCase {
             await journeys.profileDidCommit(prepared.snapshot, artifacts: artifacts.artifacts,
                 authority: authority, admissionGeneration: 1, distinctId: owner)
             await journeys.onAppBecameActive()
-            try await waitUntil("The signed button must reach the UIKit accessibility container") {
-                observer.revealed && self.button(in: presentations.currentExperienceViewController?.view) != nil
+            try await waitUntil("Signed controls must reach the UIKit accessibility container") {
+                observer.revealed && (scenario == .roles
+                    ? self.semanticElements(in: presentations.currentExperienceViewController?.view).count == 8
+                    : self.button(in: presentations.currentExperienceViewController?.view) != nil)
             }
-            let button = try XCTUnwrap(button(in: presentations.currentExperienceViewController?.view))
-            XCTAssertTrue(button.accessibilityTraits.contains(.button))
-            XCTAssertTrue(button.accessibilityActivate())
-            if scenario == .success {
-                try await waitUntil("Authored navigation must follow durable emission admission") { observer.navigationResponses != nil && observer.accepted.count == 1 }
-                XCTAssertEqual(observer.navigationResponses?["selection"], .string("pro"))
-                XCTAssertEqual(observer.accepted.first?.emissions.map(\.name), [JourneyResponseControlNames.responseSet, "script_control_activated"])
-                let stored = try await journal.runs()
-                XCTAssertEqual(stored.first?.context.responses["selection"], .string("pro"))
-                XCTAssertTrue(presentations.isExperiencePresented)
+            if scenario == .roles {
+                try await assertAuthoredRoles(in: presentations.currentExperienceViewController?.view,
+                    observer: observer, journal: journal)
             } else {
-                try await waitUntil("A throwing script must retire the presentation") { observer.failureResponses != nil && !presentations.isExperiencePresented }
-                XCTAssertNil(observer.failureResponses?["selection"])
-                XCTAssertTrue(observer.accepted.isEmpty)
-                XCTAssertNil(observer.navigationResponses)
-                let mark = try await journal.checkmark(experienceId: release.descriptor.identity.experienceId)
-                XCTAssertEqual(mark?.outcome, "abandoned")
-                let runs = try await journal.runs()
-                XCTAssertTrue(runs.isEmpty)
+                let button = try XCTUnwrap(button(in: presentations.currentExperienceViewController?.view))
+                XCTAssertTrue(button.accessibilityTraits.contains(.button))
+                XCTAssertTrue(button.accessibilityActivate())
+                if scenario == .success {
+                    try await waitUntil("Authored navigation must follow durable emission admission") { observer.navigationResponses != nil && observer.accepted.count == 1 }
+                    XCTAssertEqual(observer.navigationResponses?["selection"], .string("pro"))
+                    XCTAssertEqual(observer.accepted.first?.emissions.map(\.name), [JourneyResponseControlNames.responseSet, "script_control_activated"])
+                    let stored = try await journal.runs()
+                    XCTAssertEqual(stored.first?.context.responses["selection"], .string("pro"))
+                    XCTAssertTrue(presentations.isExperiencePresented)
+                } else {
+                    try await waitUntil("A throwing script must retire the presentation") { observer.failureResponses != nil && !presentations.isExperiencePresented }
+                    XCTAssertNil(observer.failureResponses?["selection"])
+                    XCTAssertTrue(observer.accepted.isEmpty)
+                    XCTAssertNil(observer.navigationResponses)
+                    let mark = try await journal.checkmark(experienceId: release.descriptor.identity.experienceId)
+                    XCTAssertEqual(mark?.outcome, "abandoned")
+                    let runs = try await journal.runs()
+                    XCTAssertTrue(runs.isEmpty)
+                }
             }
             XCTAssertTrue(requests.paths.contains { $0.hasPrefix("renders/sha256/") })
-            XCTAssertTrue(requests.paths.contains { $0.hasPrefix("screen-behavior/sha256/") })
+            if scenario != .roles {
+                XCTAssertTrue(requests.paths.contains { $0.hasPrefix("screen-behavior/sha256/") })
+            }
         } catch {
             await journeys.shutdown()
             await presentations.shutdownCurrentExperience()
@@ -156,6 +170,53 @@ final class SignedSemanticJourneyTests: XCTestCase {
         await journeys.shutdown()
         await presentations.shutdownCurrentExperience()
         await events.close()
+    }
+
+    private func assertAuthoredRoles(in view: UIView?, observer: SemanticJourneyPresenter,
+                                     journal: JourneyRunJournal) async throws {
+        let elements = semanticElements(in: view)
+        XCTAssertEqual(elements.compactMap(\.accessibilityLabel).sorted(), [
+            "Annual plan", "Choose your plan", "Continue", "Password", "Plan option", "Plan option", "Seats", "Unavailable",
+        ].sorted())
+        let field = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Password" } as? UITextField)
+        XCTAssertTrue(field.isSecureTextEntry)
+        XCTAssertEqual(field.text, "")
+        XCTAssertEqual(elements.filter { $0 is UITextField }.count, 1)
+        let selected = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Annual plan" })
+        XCTAssertTrue(selected.accessibilityTraits.contains(.selected))
+        let disabled = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Unavailable" })
+        XCTAssertTrue(disabled.accessibilityTraits.contains(.notEnabled))
+        XCTAssertFalse(disabled.accessibilityActivate())
+        let repeated = elements.filter { $0.accessibilityLabel == "Plan option" }
+        XCTAssertEqual(Set(repeated.map(ObjectIdentifier.init)).count, 2)
+        let seats = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Seats" })
+        XCTAssertTrue(seats.accessibilityTraits.contains(.adjustable))
+        seats.accessibilityIncrement()
+        try await waitUntil("The authored increment must reach the Journey emission boundary") {
+            observer.accepted.flatMap(\.emissions).filter { $0.name == "seat_increased" }.count == 1
+        }
+        seats.accessibilityDecrement()
+        try await waitUntil("The authored decrement must reach the Journey emission boundary") {
+            observer.accepted.flatMap(\.emissions).filter { $0.name == "seat_decreased" }.count == 1
+        }
+        field.text = "typed-password"
+        field.sendActions(for: .editingChanged)
+        try await waitUntil("The native editor must commit a response emission") {
+            observer.accepted.flatMap(\.emissions).contains { $0.name == JourneyResponseControlNames.responseSet }
+        }
+        let runs = try await journal.runs()
+        XCTAssertEqual(runs.first?.context.responses["password"], .string("typed-password"))
+        XCTAssertNotEqual(field.accessibilityValue, "typed-password")
+        XCTAssertFalse(elements.contains { $0.accessibilityValue == "fixture-secret-never-publish" })
+        XCTAssertEqual(semanticElements(in: view).filter { $0.accessibilityLabel == "Password" }.count, 1)
+    }
+
+    private func semanticElements(in view: UIView?) -> [NSObject] {
+        guard let view else { return [] }
+        if let elements = view.accessibilityElements?.compactMap({ $0 as? NSObject }), !elements.isEmpty {
+            return elements
+        }
+        return view.subviews.flatMap { semanticElements(in: $0) }
     }
 
     private func object(at url: URL) throws -> [String: Any] {
