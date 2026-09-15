@@ -1,0 +1,8 @@
+{
+  "publisherSourceCommit": "12ed2fa1480c5cb50c18c3479c2d897bb13f16c7",
+  "descriptorSha256": "d006f999e79c198d110d3e1d2171ba2ec34c73de07aca94dd21ed146441b0050",
+  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+  "qualification": "Test-authored event-entry signed Journey; reuses unchanged publisher-generated render and screen-action artifacts. Not a live publisher release qualification.",
+  "sourceFixture": "journeys/rendered-screen-control",
+  "sourceDescriptorSha256": "c38eb1e759ade49002d74772e6aee150d62c69aebdbde5e10d968cfd9fb6fea9"
+}

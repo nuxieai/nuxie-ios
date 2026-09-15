@@ -4,16 +4,26 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 
 const source = new URL('../fixtures/journeys/rendered-screen-control/', import.meta.url);
-const target = new URL('../fixtures/journeys/rendered-startup-event/', import.meta.url);
+const parked = process.argv.includes('--parked');
+if (process.argv.slice(2).some(arg => arg !== '--parked')) throw new Error('Unknown fixture option');
+const target = new URL(`../fixtures/journeys/rendered-startup-${parked ? 'parked' : 'event'}/`, import.meta.url);
 const original = JSON.parse(readFileSync(new URL('release-entry.json', source), 'utf8'));
 const provenance = JSON.parse(readFileSync(new URL('provenance.json', source), 'utf8'));
 const descriptor = JSON.parse(Buffer.from(original.envelope.descriptorBytesBase64, 'base64'));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-const name = 'compiled-startup-event';
+const name = parked ? 'compiled-startup-parked' : 'compiled-startup-event';
 descriptor.identity = { ...descriptor.identity, appId: `app-${name}`, buildId: `${name}-build`,
   experienceId: name, experienceVersionId: `${name}-v1` };
 descriptor.leg.id = sha256(`${name}-leg`);
 descriptor.leg.entryCondition = { type: 'event', eventName: 'startup_probe' };
+if (parked) {
+  descriptor.leg.entryStepId = 'wait';
+  descriptor.leg.steps.unshift({ id: 'wait', kind: 'action', action: {
+    type: 'wait_until', trigger: { kind: 'event', eventName: 'resume_probe' },
+    condition: { type: 'Truthy', value: { type: 'Boolean', value: true } }, maxTimeMs: 300000,
+  }, outlets: { satisfied: 'show', timeout: 'expired' } });
+  descriptor.leg.steps.push({ id: 'expired', kind: 'complete', outcome: 'expired' });
+}
 descriptor.metadata = { ...descriptor.metadata, name,
   description: 'Test-authored event-entry Journey reusing publisher-generated native control bytes' };
 function canonical(value) {
