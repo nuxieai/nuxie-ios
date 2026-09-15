@@ -58,6 +58,7 @@ private struct TrackPayload: @unchecked Sendable {
   let name: String
   let properties: [String: Any]
   let forcedDistinctId: String  // snapshot at call site
+  let activityIdentity: @Sendable (String) -> Bool
   let routeToSubscribers: Bool
   /// Subscriber-specific authority captured synchronously at `track`.
   let subscriberAdmissions: [UInt64: UInt64]
@@ -97,11 +98,13 @@ private enum ForwardingCommand: Sendable {
 
 private struct ForwardingAdmission: Sendable {
   let receivedAt: Date
+  let activityIdentity: @Sendable (String) -> Bool
 }
 
 struct DurableForwardingEvent: Sendable {
   let event: NuxieEvent
   let receivedAt: Date
+  let identityIsCurrent: @Sendable () -> Bool
 }
 
 /// A committed-event subscriber callback. Invoked in commit order, after the
@@ -915,6 +918,7 @@ actor EventLog: EventLogProtocol {
       name: event,
       properties: custom,
       forcedDistinctId: distinctIdOverride,
+      activityIdentity: captureActivityIdentity(),
       routeToSubscribers: true,
       subscriberAdmissions: committedAdmissionRegistry.capture()
     )
@@ -933,6 +937,7 @@ actor EventLog: EventLogProtocol {
       name: event,
       properties: properties ?? [:],
       forcedDistinctId: distinctIdOverride,
+      activityIdentity: captureActivityIdentity(),
       routeToSubscribers: false,
       subscriberAdmissions: [:]
     )))
@@ -1061,6 +1066,7 @@ actor EventLog: EventLogProtocol {
   ) async -> DurableTriggerCapture? {
     guard !request.name.isEmpty else { return nil }
     guard !closeFlag.isClosed else { return nil }
+    let activityIdentity = captureActivityIdentity()
     let subscriberAdmissions = routeToSubscribers
       ? committedAdmissionRegistry.capture()
       : [:]
@@ -1087,7 +1093,8 @@ actor EventLog: EventLogProtocol {
           return durableCapture(from: existing, request: request)
         }
         let forwardingAdmission = forwardingAdmission(
-          receivedAt: attemptedTimestamp
+          receivedAt: attemptedTimestamp,
+          activityIdentity: activityIdentity
         )
         let commit = try await store.commitStableCaptureAndStageRoute(
           eventId: request.eventId,
@@ -1125,7 +1132,7 @@ actor EventLog: EventLogProtocol {
           request.name == JourneyEvents.journeyCompleted
       )
       guard !closeFlag.isClosed else { return nil }
-      let forwardingAdmission = forwardingAdmission(receivedAt: attemptedTimestamp)
+      let forwardingAdmission = forwardingAdmission(receivedAt: attemptedTimestamp, activityIdentity: activityIdentity)
       let storedEvent = transformedEvent.map(makeStoredEvent(from:))
       let commit: StableEventCaptureCommit
       if routeToSubscribers {
@@ -1236,13 +1243,15 @@ actor EventLog: EventLogProtocol {
 
   @discardableResult
   public func storePreparedEventInHistory(_ event: NuxieEvent) async -> Bool {
+    let activityIdentity = captureActivityIdentity()
     await ready.wait()
 
     do {
       _ = try await persist(
         event,
         deliveryState: .delivered,
-        receivedAt: event.timestamp
+        receivedAt: event.timestamp,
+        activityIdentity: activityIdentity
       )
       try await performCleanupIfNeeded()
       return true
@@ -1324,7 +1333,8 @@ actor EventLog: EventLogProtocol {
       await commit(
         finalEvent,
         routeToSubscribers: payload.routeToSubscribers,
-        subscriberAdmissions: payload.subscriberAdmissions
+        subscriberAdmissions: payload.subscriberAdmissions,
+        activityIdentity: payload.activityIdentity
       )
 
     case .flush(let cont):
@@ -1485,12 +1495,13 @@ actor EventLog: EventLogProtocol {
     _ event: NuxieEvent,
     deliveryState: EventDeliveryState,
     receivedAt: Date,
+    activityIdentity: @escaping @Sendable (String) -> Bool,
     origin: StoredEventOrigin = .device,
     stageForDelivery: Bool = false,
     routeToSubscribers: Bool = false,
     subscriberAdmissions: [UInt64: UInt64] = [:]
   ) async throws -> Bool {
-    let admission = forwardingAdmission(receivedAt: receivedAt)
+    let admission = forwardingAdmission(receivedAt: receivedAt, activityIdentity: activityIdentity)
     let commit = try await store.insert(
       makeStoredEvent(from: event),
       deliveryState: deliveryState,
@@ -1520,11 +1531,25 @@ actor EventLog: EventLogProtocol {
     return commit.newlyDurable
   }
 
-  private func forwardingAdmission(receivedAt: Date) -> ForwardingAdmission? {
+  private nonisolated func captureActivityIdentity() -> @Sendable (String) -> Bool {
+    let token = identityService.performWithCurrentIdentityFence(
+      identityService.getDistinctId()
+    ) { _ in true }?.token
+    return { [weak self] customerId in
+      guard let self, !self.closeFlag.isClosed, let token,
+            token.distinctId == customerId else { return false }
+      return self.identityService.performIfCurrentIdentityFenceToken(token) { true } ?? false
+    }
+  }
+
+  private func forwardingAdmission(
+    receivedAt: Date,
+    activityIdentity: @escaping @Sendable (String) -> Bool
+  ) -> ForwardingAdmission? {
     guard forwardingSubscribers.contains(where: { $0.isEnabled() }) else {
       return nil
     }
-    return ForwardingAdmission(receivedAt: receivedAt)
+    return ForwardingAdmission(receivedAt: receivedAt, activityIdentity: activityIdentity)
   }
 
   private func resolveForwarding(
@@ -1533,10 +1558,12 @@ actor EventLog: EventLogProtocol {
     event: NuxieEvent?
   ) {
     let resolution = admission.flatMap { admission in
-      event.map {
-        ForwardingResolution.event(DurableForwardingEvent(
-          event: $0,
-          receivedAt: admission.receivedAt
+      event.map { event in
+        let customerId = event.distinctId
+        return ForwardingResolution.event(DurableForwardingEvent(
+          event: event,
+          receivedAt: admission.receivedAt,
+          identityIsCurrent: { admission.activityIdentity(customerId) }
         ))
       }
     } ?? .skipped
@@ -1570,7 +1597,8 @@ actor EventLog: EventLogProtocol {
   private func commit(
     _ event: NuxieEvent,
     routeToSubscribers: Bool,
-    subscriberAdmissions: [UInt64: UInt64]
+    subscriberAdmissions: [UInt64: UInt64],
+    activityIdentity: @escaping @Sendable (String) -> Bool
   ) async {
     extractUserProperties(from: event)
     var wasPersisted = false
@@ -1579,6 +1607,7 @@ actor EventLog: EventLogProtocol {
         event,
         deliveryState: .pending,
         receivedAt: event.timestamp,
+        activityIdentity: activityIdentity,
         stageForDelivery: true,
         routeToSubscribers: routeToSubscribers,
         subscriberAdmissions: subscriberAdmissions
@@ -2882,6 +2911,7 @@ extension EventLog {
     }
     guard !items.isEmpty else { return [:] }
     guard !closeFlag.isClosed else { return nil }
+    let activityIdentity = captureActivityIdentity()
     let subscriberAdmissions = committedAdmissionRegistry.capture()
     await acquireStableCaptureCommit()
     defer { releaseStableCaptureCommit() }
@@ -2919,7 +2949,8 @@ extension EventLog {
 
       guard !closeFlag.isClosed else { return nil }
       let forwardingAdmission = forwardingAdmission(
-        receivedAt: attemptedTimestamp
+        receivedAt: attemptedTimestamp,
+        activityIdentity: activityIdentity
       )
       let records = prepared.map { value in
         StableEventCaptureRecord(

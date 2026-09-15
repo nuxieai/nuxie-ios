@@ -13,16 +13,32 @@ public struct NuxieActivityInfo: Sendable {
   public let receivedAt: Date
   /// Typed activity payload.
   public let activity: NuxieActivity
+  /// Customer attributed to the durable event, including an anonymous customer.
+  public let customerId: String
+  /// Whether the original identity session is still active when this property is read.
+  /// Switching away and back does not reactivate an old activity. Analytics may still
+  /// forward stale activities using `customerId`; identity-scoped UI should ignore them.
+  public var isCurrentIdentity: Bool { identityIsCurrent() }
+  private let identityIsCurrent: @Sendable () -> Bool
   /// Stable analytics-ready activity name.
   public var name: String { activity.wireName }
   /// Flat JSON-safe activity properties.
   public var properties: [String: NuxieActivityValue] { activity.wireProperties }
 
-  init(id: String, timestamp: Date, receivedAt: Date, activity: NuxieActivity) {
+  init(
+    id: String,
+    timestamp: Date,
+    receivedAt: Date,
+    activity: NuxieActivity,
+    customerId: String = "",
+    identityIsCurrent: @escaping @Sendable () -> Bool = { false }
+  ) {
     self.id = id
     self.timestamp = timestamp
     self.receivedAt = receivedAt
     self.activity = activity
+    self.customerId = customerId
+    self.identityIsCurrent = identityIsCurrent
   }
 }
 
@@ -171,7 +187,13 @@ public enum PermissionKind: String, Sendable {
   case other
 }
 
-extension NuxieActivityInfo: Equatable {}
+extension NuxieActivityInfo: Equatable {
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.id == rhs.id && lhs.timestamp == rhs.timestamp &&
+      lhs.receivedAt == rhs.receivedAt && lhs.activity == rhs.activity &&
+      lhs.customerId == rhs.customerId
+  }
+}
 extension NuxieActivityValue: Equatable {}
 extension NuxieActivity: Equatable {}
 extension PurchaseInfo: Equatable {}
