@@ -462,6 +462,8 @@ targets:
         type: folder
       - path: fixtures/journeys/rendered-semantic-screen-control-error
         type: folder
+      - path: fixtures/journeys/rendered-semantic-roles
+        type: folder
     dependencies:
       - target: NuxieExperienceRuntimeHostApp
       - target: NuxieSDK
