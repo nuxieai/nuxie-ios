@@ -55,5 +55,15 @@
         false
       ]
     }
-  ]
+  ],
+  "deferredLiveRoute": {
+    "sequence": [
+      "profile admitted while visible and revalidating",
+      "live event rejected with its routing receipt still owned",
+      "foreground revalidation completes",
+      "live routing worker receives the deferred result"
+    ],
+    "expectedNewRuns": 1,
+    "expectedPendingLocalRoutes": 0
+  }
 }
