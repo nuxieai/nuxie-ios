@@ -1,7 +1,7 @@
 {
   "publisherSourceCommit": "4f555cd437e2cd3a368ba5b3e679c9c88c197356",
-  "snapshotPath": "tools/rive-compiler/fixtures/publish-path/scripted-response-set.json",
   "sha256": "906bcd5aed60801553ed32c12833767e6d2bc75c555cd8fb583cab1d6f3a9ad7",
   "sizeBytes": 4102,
-  "qualification": "Publisher-generated native control fixture; full signed SDK admission and durable routing require separate qualification."
+  "qualification": "Publisher-generated native control fixture; full signed SDK admission and durable routing require separate qualification.",
+  "sourceSnapshotSha256": "dbb86c23bab800970526e712fd34ab040ae6616031b2060f8136b7f67ba2b319"
 }
