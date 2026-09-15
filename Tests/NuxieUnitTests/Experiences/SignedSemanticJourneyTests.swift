@@ -80,13 +80,24 @@ final class SignedSemanticJourneyTests: XCTestCase {
             try? FileManager.default.removeItem(at: directory)
         }
         let requests = FixtureRequests()
+        let descriptorBytes = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))
+        let descriptorDocument = try XCTUnwrap(JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any])
+        let render = try XCTUnwrap(descriptorDocument["render"] as? [String: Any])
+        let references = [try XCTUnwrap(render["riv"] as? [String: Any])]
+            + (render["assets"] as? [[String: Any]] ?? [])
+            + (descriptorDocument["screenBehaviors"] as? [[String: Any]] ?? []).compactMap {
+                ($0["script"] as? [String: Any])?["artifact"] as? [String: Any]
+            }
+        let contentTypes = try Dictionary(uniqueKeysWithValues: references.map {
+            (try XCTUnwrap($0["key"] as? String), try XCTUnwrap($0["contentType"] as? String))
+        })
         StubURLProtocol.register(matcher: { $0.url?.host == "semantic.sdk-fixtures.nuxie.test" }) { request in
             let url = try XCTUnwrap(request.url)
             let path = String(url.path.dropFirst())
             let bytes = try Data(contentsOf: root.appendingPathComponent(path))
             requests.record(path)
             return (HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: [
-                "Content-Type": path.hasSuffix(".riv") ? "application/vnd.rive" : "application/octet-stream",
+                "Content-Type": try XCTUnwrap(contentTypes[path]),
                 "Content-Length": String(bytes.count),
             ])!, bytes)
         }
