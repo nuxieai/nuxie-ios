@@ -226,11 +226,10 @@ final class ExperienceScreenViewController: UIViewController {
 
         surfaceView.translatesAutoresizingMaskIntoConstraints = false
         surfaceView.accessibilityIdentifier = "nuxie-experience-surface"
-        surfaceView.accessibilityLabel = screenId
         if presentationDiagnosticsEnabled {
             surfaceView.accessibilityValue = "first-frame-presentation:pending"
         }
-        surfaceView.isAccessibilityElement = true
+        surfaceView.isAccessibilityElement = false
         surfaceView.isHidden = contentHidden
         view.addSubview(surfaceView)
         NSLayoutConstraint.activate([

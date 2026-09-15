@@ -36,6 +36,13 @@
       "capabilities": [
         "scripted-resource-bootstrap"
       ]
+    },
+    {
+      "id": "rendered-text-input",
+      "experienceId": "nuxie-sdk-fixture-rendered-text-input",
+      "capabilities": [
+        "native-text-input"
+      ]
     }
   ]
 }
