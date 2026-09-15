@@ -159,7 +159,6 @@ struct JourneyReleaseVerifier: Sendable {
         if let requirements = descriptor.requirements {
             try validateRuntimeRequirements(requirements, supported: supportedRuntime)
         }
-        try validateRuntimeBindings(descriptor.screenBehaviors)
         return AuthenticatedJourneyRelease(
             authenticatedKeyID: envelope.signature.keyId, exactDescriptorBytes: bytes,
             descriptorSHA256: envelope.descriptorSha256, descriptor: descriptor,
@@ -429,22 +428,6 @@ struct JourneyReleaseVerifier: Sendable {
             throw JourneyReleaseAuthenticationError.malformedBounds(
                 "artifactAggregateBytes"
             )
-        }
-    }
-
-    private func validateRuntimeBindings(
-        _ screenBehaviors: [[String: JourneyReleaseJSONValue]]
-    ) throws {
-        for screen in screenBehaviors {
-            guard case .array(let controls) = screen["controls"] else { continue }
-            for value in controls {
-                guard case .object(let control) = value,
-                      case .object(let behavior) = control["behavior"],
-                      case .string("script") = behavior["kind"] else { continue }
-                throw JourneyReleaseAuthenticationError.unsupportedRuntime(
-                    "screen_actions"
-                )
-            }
         }
     }
 

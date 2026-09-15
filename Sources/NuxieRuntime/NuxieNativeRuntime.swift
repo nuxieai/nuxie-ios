@@ -909,7 +909,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     let renderer: NuxieNativeRendererHandle
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
     private var auxiliaryPlayersNeedInitialStep = true
-    private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle, fields: [String: NuxieNativeSemanticNode])?
+    private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle, fields: [String: NuxieNativeSemanticNode], tree: NuxieNativeSemanticTree)?
     private var isClosed = false
 
     init(
@@ -1109,9 +1109,21 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 }
                 fields[run] = node
             }
-            let id = UUID()
+            // Rendering may recapture an unchanged tree before UIKit dispatches
+            // an action from the last presented frame. Keep that ownership only
+            // while both native revision fences and all copied associations match.
+            let id: UUID
+            if let previous = semanticCapture,
+               previous.tree.renderRevision == tree.renderRevision,
+               previous.tree.treeVersion == tree.treeVersion,
+               previous.tree.nodes == tree.nodes,
+               previous.fields == fields {
+                id = previous.id
+            } else {
+                id = UUID()
+            }
             try retireSemanticCapture()
-            semanticCapture = (id, owned, fields)
+            semanticCapture = (id, owned, fields, tree)
             return NuxieNativeSemanticCapture(id: id, tree: tree, fieldsByTextRun: fields)
         } catch {
             try? owned.close()
