@@ -1,0 +1,8 @@
+{
+  "suite": "android-provider-checkout-terms",
+  "version": 1,
+  "vectors": [
+    { "name": "personalized exact offer", "personalized": true },
+    { "name": "ordinary exact offer", "personalized": false }
+  ]
+}
