@@ -432,6 +432,54 @@ final class FeatureServiceTests: AsyncSpec {
                 _ = try await second.value
             }
 
+            it("keeps a new customer's query alive when its queued identity transition arrives") {
+                let controlledCheck = ControlledFeatureCheckFake()
+                let isolatedService = FeatureService(
+                    api: controlledCheck, identity: mockIdentityService,
+                    profile: mockProfileService, dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(), cacheTTL: 300
+                )
+                mockIdentityService.setDistinctId("customer-b")
+                let checkTask = Task {
+                    try await isolatedService.check(featureId: "energy", entityId: "entity-a")
+                }
+                await controlledCheck.waitUntilStarted()
+                await isolatedService.handleUserChange(from: "customer-123", to: "customer-b")
+                await controlledCheck.resolve(FeatureCheckResult(
+                    customerId: "customer-b", featureId: "energy", requiredBalance: 1,
+                    code: "ok", allowed: true, unlimited: false, balance: 3,
+                    type: .metered, preview: nil
+                ))
+                let result = try await checkTask.value
+                expect(result.balance).to(equal(3))
+            }
+
+            it("cancels an old query across an identity cycle before queued transitions run") {
+                let controlledCheck = ControlledFeatureCheckFake()
+                let isolatedService = FeatureService(
+                    api: controlledCheck, identity: mockIdentityService,
+                    profile: mockProfileService, dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(), cacheTTL: 300
+                )
+                let checkTask = Task {
+                    try await isolatedService.check(featureId: "energy", entityId: "entity-a")
+                }
+                await controlledCheck.waitUntilStarted()
+                mockIdentityService.setDistinctId("customer-b")
+                mockIdentityService.setDistinctId("customer-123")
+                await controlledCheck.resolve(FeatureCheckResult(
+                    customerId: "customer-123", featureId: "energy", requiredBalance: 1,
+                    code: "ok", allowed: true, unlimited: false, balance: 3,
+                    type: .metered, preview: nil
+                ))
+                do {
+                    _ = try await checkTask.value
+                    fail("A query from the previous identity generation must be cancelled")
+                } catch is CancellationError {
+                    // The synchronous identity fence rejects the old generation.
+                }
+            }
+
             it("cancels an in-flight check across an A to B to A identity cycle") {
                 let controlledCheck = ControlledFeatureCheckFake()
                 let isolatedService = FeatureService(

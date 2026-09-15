@@ -100,11 +100,8 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         if transition.kind == .reset {
             await profileService.clearCache(distinctId: transition.from)
         }
-        switch transition.kind {
-        case .identify:
-            await featureService.handleUserChange(from: transition.from, to: transition.to)
-        case .reset:
-            await featureService.clearCache()
+        await featureService.handleUserChange(from: transition.from, to: transition.to)
+        if transition.kind == .reset {
             await experienceService.clearCache()
         }
         // Clear the departing customer's projections before admitting the new
