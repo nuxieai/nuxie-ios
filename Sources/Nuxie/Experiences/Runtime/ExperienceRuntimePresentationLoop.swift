@@ -1,6 +1,7 @@
 #if canImport(UIKit) && canImport(QuartzCore)
 import Foundation
 import Metal
+import NuxieRuntime
 import QuartzCore
 import UIKit
 
@@ -144,6 +145,8 @@ final class ExperienceRuntimePresentationFrameCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var callback: (@Sendable () -> Void)?
     private var presentedDrawableCallback: (@Sendable (ExperienceRuntimePresentedDrawable) -> Void)?
+    private var presentedWork: (@Sendable () -> Void)?
+    private var hasRegisteredPresentedWork = false
     private var renderOutcome: ExperienceRuntimePresentationRenderOutcome?
     private var presentationObservation: (
         time: TimeInterval,
@@ -174,6 +177,7 @@ final class ExperienceRuntimePresentationFrameCompletion: @unchecked Sendable {
         }
         callback?()
         deliverPresentedDrawable(delivery)
+        deliverReadyWork()
     }
 
     func recordRenderOutcome(_ outcome: ExperienceRuntimePresentationRenderOutcome) {
@@ -181,6 +185,7 @@ final class ExperienceRuntimePresentationFrameCompletion: @unchecked Sendable {
             renderOutcome = outcome
             return takePresentedDrawableIfReady()
         })
+        deliverReadyWork()
     }
 
     func signalDrawablePresented(
@@ -191,6 +196,32 @@ final class ExperienceRuntimePresentationFrameCompletion: @unchecked Sendable {
             presentationObservation = (time, provenance)
             return takePresentedDrawableIfReady()
         })
+        deliverReadyWork()
+    }
+
+    /// Registration may race the render result and presentation observation.
+    /// Delivery consumes the callback once, outside the native-completion lock.
+    func recordPresentedWork(_ work: @escaping @Sendable () -> Void) {
+        lock.withLock {
+            guard !hasRegisteredPresentedWork else { return }
+            hasRegisteredPresentedWork = true
+            presentedWork = work
+        }
+        deliverReadyWork()
+    }
+
+    private func deliverReadyWork() {
+        let work: (@Sendable () -> Void)? = lock.withLock {
+            guard let outcome = renderOutcome else { return nil }
+            guard outcome.health == .healthy, outcome.disposition == .presented else {
+                presentedWork = nil
+                return nil
+            }
+            guard presentationObservation != nil else { return nil }
+            defer { presentedWork = nil }
+            return presentedWork
+        }
+        work?()
     }
 
     private func takePresentedDrawableIfReady() -> (
@@ -295,9 +326,12 @@ struct ExperienceRuntimePresentationSessionResult: @unchecked Sendable {
         Self(.work(requestsFrame: requestsFrame), deliverOnMainActor: deliverOnMainActor)
     }
 
-    static func renderer(_ outcome: ExperienceRuntimePresentationRenderOutcome) -> Self {
-        Self(.renderer(outcome))
+    static func renderer(_ outcome: ExperienceRuntimePresentationRenderOutcome,
+        deliverOnMainActor: (@MainActor @Sendable () async -> Void)? = nil) -> Self {
+        Self(.renderer(outcome), deliverOnMainActor: deliverOnMainActor)
     }
+
+    var hasDelivery: Bool { deliverOnMainActor != nil }
 
     @MainActor
     func deliver() async {
@@ -314,13 +348,16 @@ struct ExperienceRuntimePresentationSession: Sendable {
     ) async throws -> ExperienceRuntimePresentationSessionResult
 
     let artboardBounds: CGRect
+    let observesEveryPresentation: Bool
     private let performOperation: Perform
 
     init(
         artboardBounds: CGRect = .zero,
+        observesEveryPresentation: Bool = false,
         perform: @escaping Perform
     ) {
         self.artboardBounds = artboardBounds
+        self.observesEveryPresentation = observesEveryPresentation
         performOperation = perform
     }
 
@@ -338,15 +375,18 @@ extension ExperienceInteractiveScreen {
     /// step and product projection both succeed.
     nonisolated func presentationSession(
         includesSnapshotAfterStep: Bool = false,
+        onSemantics: (@MainActor @Sendable (NuxieNativeSemanticCapture) -> Void)? = nil,
         onStep: @escaping @MainActor @Sendable (
             [ExperienceInteractiveEffect],
             ExperienceInteractiveViewModelSnapshot?
         ) async -> Void
     ) -> ExperienceRuntimePresentationSession {
         let screen = self
-        return ExperienceRuntimePresentationSession(artboardBounds: artboardBounds) { operation in
+        return ExperienceRuntimePresentationSession(artboardBounds: artboardBounds,
+            observesEveryPresentation: onSemantics != nil) { operation in
             switch operation {
             case .copyMetalDevice:
+                if onSemantics != nil { try await screen.enableSemantics() }
                 return .metalDevice(try await screen.metalDevice().value)
             case .step(let step):
                 let result = try await screen.step(
@@ -381,11 +421,16 @@ extension ExperienceInteractiveScreen {
                     drawable = nil
                     isOccluded = true
                 }
-                return .renderer(Self.presentationOutcome(try await screen.render(
+                let frame = try await screen.renderFrame(
                     drawable: drawable,
                     isOccluded: isOccluded,
+                    capturesSemantics: onSemantics != nil,
                     completion: { completion.signalFromNative() }
-                )))
+                )
+                if let semantics = frame.semantics, let onSemantics {
+                    return .renderer(Self.presentationOutcome(frame.outcome)) { onSemantics(semantics) }
+                }
+                return .renderer(Self.presentationOutcome(frame.outcome))
             case .queued(let work):
                 return try await work.perform()
             case .close:
@@ -508,6 +553,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var lastAppliedSize: ExperienceRuntimeSurfaceSize?
     private var frameSequence: UInt64 = 0
     private var lifecycleGeneration: UInt64 = 0
+    private var semanticPresentationEpoch: UInt64 = 0
+    private var lastSemanticFrame: UInt64 = 0
     private var inFlightFrameIDs: Set<UInt64> = []
     private var terminalError: Error?
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
@@ -663,24 +710,26 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     /// Queues product work behind all previously accepted native operations.
     /// Its result delivery and completion run exactly once on MainActor.
+    @discardableResult
     func enqueue(
         _ work: ExperienceRuntimePresentationQueuedWork,
         completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void = { _ in }
-    ) {
+    ) -> Bool {
         guard terminalError == nil, !isShuttingDown else {
             completion(.failure(terminalError ?? CancellationError()))
-            return
+            return false
         }
         let acceptedWorkCount = pendingWork.count + (inFlightWork == nil ? 0 : 1)
         guard acceptedWorkCount < ExperienceRuntimePresentationLimits.pendingWork else {
             completion(.failure(ExperienceRuntimePresentationLoopError.pendingWorkOverflow))
-            return
+            return false
         }
         pendingWork.append(PendingWork(
             work: work,
             completion: ExperienceRuntimePresentationWorkCompletion(completion)
         ))
         drain()
+        return true
     }
 
     func displayLinkDidFire(at timestamp: TimeInterval) {
@@ -695,6 +744,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     func setPresentationVisible(_ visible: Bool) {
         guard isPresentationVisible != visible else { return }
         isPresentationVisible = visible
+        semanticPresentationEpoch &+= 1
         if visible, isTimelineActive {
             frameClock.reset()
             // Request an immediate delta-0 frame instead of seeding wall-clock
@@ -710,6 +760,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     func setTimelineActive(_ active: Bool) {
         guard isTimelineActive != active else { return }
         isTimelineActive = active
+        semanticPresentationEpoch &+= 1
         pendingTimestamp = nil
         frameClock.reset()
         if active {
@@ -734,6 +785,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     }
 
     func runtimeSurfaceViewGeometryDidChange() {
+        semanticPresentationEpoch &+= 1
         updateOwningSceneObservers()
         updateDisplayLinkForCurrentScreen()
         guard isStarted else { return }
@@ -741,6 +793,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     }
 
     func runtimeSurfaceViewVisibilityDidChange() {
+        semanticPresentationEpoch &+= 1
         refreshOwningSceneActivity()
         updateOwningSceneObservers()
         updateDisplayLinkForCurrentScreen()
@@ -773,11 +826,14 @@ final class ExperienceRuntimePresentationLoop: NSObject {
               let operation = nextOperation() else { return }
 
         operationInFlight = true
+        let semanticEpoch = semanticPresentationEpoch
+        let generation = lifecycleGeneration
+        let frame = frameSequence
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let result = try await self.session.perform(operation)
-                try await self.consume(result, for: operation)
+                try await self.consume(result, for: operation, semanticEpoch: semanticEpoch, generation: generation, frame: frame)
             } catch {
                 if case .queued = operation {
                     self.finishInFlightWork(.failure(error))
@@ -866,7 +922,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     private func consume(
         _ result: ExperienceRuntimePresentationSessionResult,
-        for operation: ExperienceRuntimePresentationSessionOperation
+        for operation: ExperienceRuntimePresentationSessionOperation,
+        semanticEpoch: UInt64, generation: UInt64, frame: UInt64
     ) async throws {
         switch (operation, result.value) {
         case (.copyMetalDevice, .metalDevice(let device)):
@@ -897,6 +954,18 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 }
             }
         case (.render(_, let completion), .renderer(let outcome)):
+            if result.hasDelivery {
+                completion.recordPresentedWork { [weak self] in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.shouldPresent, self.terminalError == nil,
+                              self.lifecycleGeneration == generation,
+                              self.semanticPresentationEpoch == semanticEpoch,
+                              frame > self.lastSemanticFrame else { return }
+                        self.lastSemanticFrame = frame
+                        await result.deliver()
+                    }
+                }
+            }
             completion.recordRenderOutcome(outcome)
             try consumeRenderOutcome(outcome)
         case (.queued, .work(let requestsFrame)):
@@ -963,7 +1032,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return .render(.timeout, completion: completion)
         }
         let firstPresentedDrawableGate = firstPresentedDrawableGate
-        let shouldObservePresentation = !firstPresentedDrawableGate.isClaimed
+        let shouldObservePresentation = session.observesEveryPresentation || !firstPresentedDrawableGate.isClaimed
         let presentedDrawableCallback: (@Sendable (
             ExperienceRuntimePresentedDrawable
         ) -> Void)? = if shouldObservePresentation {
@@ -1118,6 +1187,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
+                    self?.semanticPresentationEpoch &+= 1
                     self?.applicationIsActive = false
                     self?.pendingTimestamp = nil
                     self?.frameClock.reset()
@@ -1130,6 +1200,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
+                    self?.semanticPresentationEpoch &+= 1
                     self?.applicationIsActive = true
                     self?.refreshOwningSceneActivity()
                     self?.frameClock.reset()
@@ -1153,6 +1224,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
+                    self?.semanticPresentationEpoch &+= 1
                     self?.owningSceneIsActive = false
                     self?.pendingTimestamp = nil
                     self?.frameClock.reset()
@@ -1165,6 +1237,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
+                    self?.semanticPresentationEpoch &+= 1
                     self?.owningSceneIsActive = true
                     self?.frameClock.reset()
                     self?.pendingTimestamp = CACurrentMediaTime()

@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: test-experience-input generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -47,7 +47,7 @@ NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.fr
 help:
 	@echo "Available targets:"
 	@echo "  generate         - Generate Xcode project using XcodeGen"
-	@echo "  test             - Run the full unit + native-runtime + integration + macOS gate"
+	@echo "  test             - Run the full unit + native-runtime + integration + macOS gate (includes hosted input)"
 	@echo "  test-ios         - Alias for the full test gate"
 	@echo "  test-unit        - Run unit tests"
 	@echo "  test-storekit    - Run real StoreKitTest native-purchase qualification (Xcode 26.6+)"
@@ -56,8 +56,9 @@ help:
 	@echo "  test-macos-unit  - Run unit tests on macOS"
 	@echo "  test-integration - Run integration tests"
 	@echo "  test-e2e         - Run the example app end-to-end tests"
+	@echo "  test-experience-input - Run hosted UIKit editor contract tests"
 	@echo "  test-experience-runtime-ui - Run signed release runtime UI tests"
-	@echo "  test-all         - Run unit + native-runtime + integration + macOS tests"
+	@echo "  test-all         - Run unit + native-runtime + hosted input + integration + macOS tests"
 	@echo "  build-ios-device - Link and audit the Release framework for a generic iOS device"
 	@echo "  build-macos      - Build macOS framework target"
 	@echo "  build-reference-app - Build the signed release runtime reference app"
@@ -249,6 +250,10 @@ test-xcode: test-product-neutrality check-staged-runtime-xcframework generate
 		$(XCODEBUILD_TEST_FLAGS)
 	@$(MAKE) verify-customer-framework
 
+# UIKit target-action delivery requires an application host.
+test-experience-input: SCHEME = NuxieExperienceInputTests
+test-experience-input: test-xcode
+
 test-unit: SCHEME = $(SCHEME_UNIT)
 test-unit: test-xcode
 
@@ -304,11 +309,12 @@ test-experience-runtime-ui: check-staged-runtime-xcframework generate
 # repinned to a revision that calls test-experience-runtime-ui.
 test-flow-runtime-ui: test-experience-runtime-ui
 
-# The holistic gate: iOS unit + focused native-runtime + integration
+# The holistic gate: iOS unit + focused native-runtime + hosted UIKit input + integration
 # (orchestration + conformance-fixture runners live in these schemes) + macOS unit.
 test-all: check-sdk-guidance check-provider-adapters check-event-catalog
 	@$(MAKE) test-unit
 	@$(MAKE) test-native-runtime
+	@$(MAKE) test-experience-input
 	@$(MAKE) test-integration
 	@$(MAKE) test-macos-unit
 

@@ -738,6 +738,12 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.artboard.setTextRuns(mutations) }
     }
 
+    /// Validate the captured editor owner and mutate on the same pinned executor turn.
+    package func setSemanticTextRun(captureID: UUID, name: String, text: Data) async throws -> Bool {
+        let state = try requireState()
+        return try await executor.call { try state.setSemanticTextRun(captureID: captureID, name: name, text: text) }
+    }
+
     package func setNumber(
         _ value: Float,
         path: String,
@@ -785,6 +791,33 @@ package actor NuxieNativeRuntime {
                 completion: completion
             )
         }
+    }
+
+    package func enableSemantics() async throws {
+        let state = try requireState()
+        try await executor.call {
+            try requireOK(nux_player_enable_semantics(try state.player.require()), operation: "enable semantics")
+        }
+    }
+
+    package func captureSemantics(textRuns: [String] = []) async throws -> NuxieNativeSemanticCapture {
+        let state = try requireState()
+        let executor = self.executor
+        return try await executor.call { try state.captureSemantics(executor: executor, textRuns: textRuns) }
+    }
+
+    package func queueSemanticAction(
+        captureID: UUID,
+        nodeID: UInt32,
+        action: NuxieNativeSemanticAction
+    ) async throws {
+        let state = try requireState()
+        try await executor.call { try state.queueSemanticAction(captureID: captureID, nodeID: nodeID, action: action) }
+    }
+
+    package func retireSemanticCapture() async throws {
+        let state = try requireState()
+        try await executor.call { try state.retireSemanticCapture() }
     }
 
     package func executorThreadIdentity() async throws -> UInt64 {
@@ -876,6 +909,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     let renderer: NuxieNativeRendererHandle
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
     private var auxiliaryPlayersNeedInitialStep = true
+    private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle, fields: [String: NuxieNativeSemanticNode])?
     private var isClosed = false
 
     init(
@@ -944,7 +978,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         retainedViewModels.removeAll()
         // The renderer owns the factory domain used at import. Every bound
         // descendant, including the file itself, must be gone before it.
-        var operations: [() throws -> Void] = []
+        var operations: [() throws -> Void] = [{ try self.retireSemanticCapture() }]
         operations.append(contentsOf: players.reversed().map { player in
             { try player.close() }
         })
@@ -1018,6 +1052,109 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             hostCommands: hostCommands,
             viewModelChanges: viewModelChanges
         )
+    }
+
+    func captureSemantics(
+        executor: NuxieRuntimePinnedThreadExecutor,
+        textRuns: [String]
+    ) throws -> NuxieNativeSemanticCapture {
+        let player = try self.player.require()
+        var pointer: OpaquePointer?
+        try requireOK(nux_player_semantic_snapshot(player, &pointer), operation: "capture semantics")
+        guard let pointer else { throw NuxieNativeRuntimeError.missingHandle("semantic snapshot") }
+        let owned = NuxieNativeOwnedHandle(pointer, name: "semantic snapshot", executor: executor,
+            free: nux_semantic_snapshot_free)
+        do {
+            var info = NuxSemanticSnapshotInfo()
+            info.struct_size = UInt32(MemoryLayout<NuxSemanticSnapshotInfo>.size)
+            try requireOK(nux_semantic_snapshot_info(pointer, &info), operation: "read semantic snapshot info")
+            guard info.node_count <= 16_384 else { throw NuxieNativeSemanticTreeError.tooManyNodes }
+            var nodes: [NuxieNativeSemanticNode] = []
+            nodes.reserveCapacity(info.node_count)
+            for index in 0..<info.node_count {
+                var node = NuxSemanticNodeView()
+                node.struct_size = UInt32(MemoryLayout<NuxSemanticNodeView>.size)
+                try requireOK(nux_semantic_snapshot_node(pointer, index, &node), operation: "read semantic node")
+                let value = node.state_flags & NuxieNativeSemanticNode.obscured == 0
+                    ? try copyString(node.value, label: "semantic value") : ""
+                nodes.append(NuxieNativeSemanticNode(
+                    id: node.id,
+                    parentID: node.parent_id == -1 ? nil : UInt32(bitPattern: node.parent_id),
+                    siblingIndex: node.sibling_index,
+                    role: node.role,
+                    stateFlags: node.state_flags,
+                    traitFlags: node.trait_flags,
+                    headingLevel: node.heading_level,
+                    actions: node.actions,
+                    bounds: CGRect(x: CGFloat(node.min_x), y: CGFloat(node.min_y),
+                        width: CGFloat(node.max_x - node.min_x), height: CGFloat(node.max_y - node.min_y)),
+                    label: try copyString(node.label, label: "semantic label"),
+                    value: value,
+                    hint: try copyString(node.hint, label: "semantic hint")
+                ))
+            }
+            let tree = try NuxieNativeSemanticTree(renderRevision: info.render_revision,
+                treeVersion: info.tree_version, nodes: nodes)
+            let byID = Dictionary(uniqueKeysWithValues: tree.nodes.map { ($0.id, $0) })
+            var fields: [String: NuxieNativeSemanticNode] = [:]
+            for run in textRuns {
+                var id: UInt32 = 0
+                let status = withStringView(run) { name in
+                    nux_player_semantic_node_for_text_run(player, pointer, name, &id)
+                }
+                if status == NUX_STATUS_NOT_FOUND.rawValue { continue }
+                try requireOK(status, operation: "associate semantic text run")
+                guard let node = byID[id], node.role == UInt32(NUX_SEMANTIC_ROLE_TEXT_FIELD) else {
+                    throw NuxieNativeRuntimeError.invalidNativeValue("semantic text run has no captured field")
+                }
+                fields[run] = node
+            }
+            let id = UUID()
+            try retireSemanticCapture()
+            semanticCapture = (id, owned, fields)
+            return NuxieNativeSemanticCapture(id: id, tree: tree, fieldsByTextRun: fields)
+        } catch {
+            try? owned.close()
+            throw error
+        }
+    }
+
+    func setSemanticTextRun(captureID: UUID, name: String, text: Data) throws -> Bool {
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "write semantic text")
+        }
+        let player = try self.player.require()
+        let snapshot = try capture.handle.require()
+        try requireOK(nux_player_validate_semantic_snapshot(player, snapshot), operation: "validate semantic text capture")
+        guard let field = capture.fields[name],
+              field.stateFlags & (NuxieNativeSemanticNode.disabled | NuxieNativeSemanticNode.hidden
+                | NuxieNativeSemanticNode.readOnly) == 0 else {
+            throw nativeFailure(status: NUX_STATUS_NOT_FOUND.rawValue, operation: "resolve editable semantic field")
+        }
+        var currentID: UInt32 = 0
+        let status = withStringView(name) { nux_player_semantic_node_for_text_run(player, snapshot, $0, &currentID) }
+        try requireOK(status, operation: "validate semantic text owner")
+        guard currentID == field.id else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "validate semantic text owner")
+        }
+        return try artboard.setTextRuns([NuxieNativeTextRunMutation(name: name, text: text)])
+    }
+
+    func retireSemanticCapture() throws {
+        let previous = semanticCapture
+        semanticCapture = nil
+        try previous?.handle.close()
+    }
+
+    func queueSemanticAction(captureID: UUID, nodeID: UInt32, action: NuxieNativeSemanticAction) throws {
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "queue semantic action")
+        }
+        try requireOK(nux_player_queue_semantic_action(try player.require(), try capture.handle.require(),
+            nodeID, action.rawValue), operation: "queue semantic action")
+        // Exact semantic listeners may belong to a generated auxiliary player.
+        // Consume their normal journals in the next ordinary occurrence step.
+        auxiliaryPlayersNeedInitialStep = true
     }
 
     private static func makePlayers(

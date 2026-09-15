@@ -448,6 +448,32 @@ targets:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
 
+  NuxieExperienceInputTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/NuxieUnitTests
+        name: NuxieUnitTests
+        includes:
+          - Experiences/ExperienceTextInputSemanticsTests.swift
+          - Fixtures/semantic_text.riv
+    dependencies:
+      - target: NuxieExperienceRuntimeHostApp
+      - target: NuxieSDK
+      - target: NuxieRuntime
+        link: false
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.experience-input-tests
+      SWIFT_PACKAGE_NAME: Nuxie
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) NUXIE_HOSTED_INPUT_TESTS
+      TEST_HOST: $(BUILT_PRODUCTS_DIR)/NuxieExperienceRuntimeHost.app/NuxieExperienceRuntimeHost
+      BUNDLE_LOADER: $(TEST_HOST)
+      GENERATE_INFOPLIST_FILE: YES
+      SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+      SUPPORTS_MACCATALYST: NO
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+
   NuxieExperienceRuntimeUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -575,6 +601,16 @@ schemes:
         NUXIE_STOREKIT_REQUIRE_AVAILABLE: $(NUXIE_STOREKIT_REQUIRE_AVAILABLE)
       targets:
         - NuxieSDKStoreKitTests
+      gatherCoverageData: false
+
+  NuxieExperienceInputTests:
+    build:
+      targets:
+        NuxieExperienceRuntimeHostApp: all
+        NuxieExperienceInputTests: all
+    test:
+      targets:
+        - NuxieExperienceInputTests
       gatherCoverageData: false
 
   NuxieExperienceRuntimeUITests:

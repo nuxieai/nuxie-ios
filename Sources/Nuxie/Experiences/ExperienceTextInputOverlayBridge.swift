@@ -86,6 +86,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         _ completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void
     ) -> Void
 
+    typealias SemanticTextWriter = (
+        _ captureID: UUID, _ inputID: String, _ text: String,
+        _ completion: @escaping @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void
+    ) -> Void
+
     private final class TextField: UITextField {
         override func textRect(forBounds bounds: CGRect) -> CGRect { bounds }
         override func editingRect(forBounds bounds: CGRect) -> CGRect { bounds }
@@ -101,6 +106,13 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             switch self {
             case .field(let value): value
             case .textView(let value): value
+            }
+        }
+
+        var hasMarkedText: Bool {
+            switch self {
+            case .field(let field): field.markedTextRange != nil
+            case .textView(let textView): textView.markedTextRange != nil
             }
         }
 
@@ -128,12 +140,15 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private weak var surfaceView: UIView?
     private var artboardBounds: CGRect = .zero
     private var textWriter: TextWriter?
+    private var semanticTextWriter: SemanticTextWriter?
+    private var semanticDrafts: [String: ExperienceSemanticTextDraft] = [:]
     private var bindingsByInputID: [String: Binding] = [:]
     private var geometriesByInputID: [String: ExperienceTextInputGeometry] = [:]
     private var textValuesByInputID: [String: String] = [:]
     private var committedTextByInputID: [String: String] = [:]
     private var fontSHA256ByRiveUniqueName: [String: String] = [:]
     private var failedInputIDs = Set<String>()
+    private var semanticFields: [String: NuxieNativeSemanticNode]?
     private var activeBuildID: String?
     private var generation: UInt64 = 0
     private var hidden = false
@@ -164,25 +179,28 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func bind(
         screenID: String,
-        artifact: LoadedExperienceArtifact,
+        renderPlan: NativeExperienceRenderPlan,
         surfaceView: UIView,
         artboardBounds: CGRect,
+        semanticTextWriter: SemanticTextWriter? = nil,
         textWriter: @escaping TextWriter
     ) {
-        if activeBuildID != artifact.renderPlan.identity.buildId {
+        if activeBuildID != renderPlan.identity.buildId {
             textValuesByInputID.removeAll()
             committedTextByInputID.removeAll()
-            activeBuildID = artifact.renderPlan.identity.buildId
+            activeBuildID = renderPlan.identity.buildId
         }
         clear()
         self.surfaceView = surfaceView
         self.artboardBounds = artboardBounds
         self.textWriter = textWriter
-        fontSHA256ByRiveUniqueName = artifact.renderPlan.fonts.reduce(into: [:]) {
+        self.semanticTextWriter = semanticTextWriter
+        if semanticTextWriter != nil { semanticFields = [:] }
+        fontSHA256ByRiveUniqueName = renderPlan.fonts.reduce(into: [:]) {
             $0[$1.riveUniqueName] = $1.sha256
         }
 
-        let declared = artifact.renderPlan.textInputs.filter {
+        let declared = renderPlan.textInputs.filter {
             $0.screenId == screenID && $0.editable
         }
         let counts = Dictionary(grouping: declared, by: \.inputId).mapValues(\.count)
@@ -195,7 +213,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 committedTextByInputID[input.inputId] ?? control.text
             surfaceView.addSubview(control.view)
             bindingsByInputID[input.inputId] = Binding(input: input, control: control)
-            write(control.text, for: input)
+            if semanticTextWriter != nil {
+                semanticDrafts[input.inputId] = ExperienceSemanticTextDraft(text: control.text, needsInitialWrite: true)
+            } else {
+                write(control.text, for: input)
+            }
         }
         installDismissTapRecognizer(on: surfaceView)
         layout()
@@ -209,10 +231,79 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         layout()
     }
 
+    /// Exact runtime text-run association keeps each real editor in the scene tree once.
+    func applySemantics(_ capture: NuxieNativeSemanticCapture) -> [UInt32: UIView] {
+        let fields = bindingsByInputID.compactMapValues { binding in
+            capture.fieldsByTextRun[binding.input.riveTextRunName]
+        }
+        let counts = Dictionary(grouping: Array(fields.values), by: \.id).mapValues(\.count)
+        let unique = fields.filter { counts[$0.value.id] == 1 }
+        if semanticTextWriter == nil, semanticFields != unique { generation &+= 1 }
+        semanticFields = unique
+        var controls: [UInt32: UIView] = [:]
+        for (inputID, binding) in bindingsByInputID {
+            let node = unique[inputID]
+            let editable = allowsEditing(binding)
+            if editable {
+                semanticDrafts[inputID]?.present(captureID: capture.id)
+            } else {
+                semanticDrafts[inputID]?.withdraw()
+            }
+            switch binding.control {
+            case .field(let field): field.isEnabled = allowsInteraction(binding)
+            case .textView(let textView):
+                textView.isEditable = editable
+                textView.isSelectable = allowsInteraction(binding)
+            }
+            binding.control.view.accessibilityLabel = node?.label
+            binding.control.view.accessibilityHint = node?.hint
+            if !editable {
+                restoreAcceptedText(binding)
+                if !allowsInteraction(binding) { binding.control.view.resignFirstResponder() }
+            }
+            if let node, node.stateFlags & NuxieNativeSemanticNode.hidden == 0 {
+                controls[node.id] = binding.control.view
+            }
+        }
+        for inputID in bindingsByInputID.keys { drainSemanticWrite(inputID) }
+        layout()
+        return controls
+    }
+
+    private func restoreAcceptedText(_ binding: Binding) {
+        binding.control.text = semanticDrafts[binding.input.inputId]?.acceptedText
+            ?? textValuesByInputID[binding.input.inputId]
+            ?? committedTextByInputID[binding.input.inputId] ?? binding.input.value
+    }
+
+    private func allowsInteraction(_ binding: Binding) -> Bool {
+        guard let semanticFields else { return true }
+        guard !hidden, let surfaceView,
+              ExperienceSemanticAccessibilityElement.allowsInteraction(in: surfaceView),
+              let node = semanticFields[binding.input.inputId] else { return false }
+        return node.stateFlags & (NuxieNativeSemanticNode.disabled | NuxieNativeSemanticNode.hidden) == 0
+    }
+
+    private func allowsEditing(_ binding: Binding) -> Bool {
+        guard allowsInteraction(binding) else { return false }
+        guard let semanticFields else { return true }
+        guard let node = semanticFields[binding.input.inputId] else { return false }
+        return node.stateFlags & NuxieNativeSemanticNode.readOnly == 0
+    }
+
+    private func isSemanticallyHidden(_ inputID: String) -> Bool {
+        guard let semanticFields else { return false }
+        guard let node = semanticFields[inputID] else { return true }
+        return node.stateFlags & NuxieNativeSemanticNode.hidden != 0
+    }
+
     func clear() {
         generation &+= 1
         bindingsByInputID.values.forEach { $0.control.view.removeFromSuperview() }
         bindingsByInputID.removeAll()
+        semanticFields = nil
+        semanticDrafts.removeAll()
+        semanticTextWriter = nil
         geometriesByInputID.removeAll()
         failedInputIDs.removeAll()
         lastAppliedFrames.removeAll()
@@ -229,6 +320,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func setHidden(_ value: Bool) {
         hidden = value
+        if value, semanticTextWriter != nil {
+            for (inputID, binding) in bindingsByInputID {
+                semanticDrafts[inputID]?.withdraw()
+                restoreAcceptedText(binding)
+            }
+        }
         layout()
     }
 
@@ -246,7 +343,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 binding.control.view.isHidden = true
                 continue
             }
-            binding.control.view.isHidden = hidden || failedInputIDs.contains(inputID)
+            binding.control.view.isHidden = hidden || failedInputIDs.contains(inputID) || isSemanticallyHidden(inputID)
             var frame = transform.viewportRect(fromArtboard: CGRect(
                 x: CGFloat(geometry.x),
                 y: CGFloat(geometry.y),
@@ -381,7 +478,15 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func commitTextIfChanged(for control: UIView) {
         guard let binding = binding(for: control) else { return }
+        guard allowsEditing(binding) else { restoreAcceptedText(binding); return }
         propagateTextChange(from: control)
+        guard !binding.control.hasMarkedText else { return }
+        if semanticTextWriter != nil {
+            if let text = semanticDrafts[binding.input.inputId]?.requestCommit() {
+                commitSemanticText(text, input: binding.input)
+            }
+            return
+        }
         let text = binding.control.text
         guard committedTextByInputID[binding.input.inputId] != text else { return }
         committedTextByInputID[binding.input.inputId] = text
@@ -410,7 +515,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         _ replacement: String,
         _ control: UIView
     ) -> Bool {
-        guard let maximum = binding(for: control)?.input.maxLength,
+        guard let binding = binding(for: control), allowsEditing(binding) else { return false }
+        guard let maximum = binding.input.maxLength,
               maximum > 0,
               let textRange = Range(range, in: current) else { return true }
         let candidate = current.replacingCharacters(
@@ -422,9 +528,48 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     private func propagateTextChange(from control: UIView) {
         guard let binding = binding(for: control) else { return }
+        guard allowsEditing(binding) else {
+            restoreAcceptedText(binding)
+            return
+        }
         let text = binding.control.text
+        if semanticTextWriter != nil {
+            semanticDrafts[binding.input.inputId]?.replaceText(text, isComposing: binding.control.hasMarkedText)
+            drainSemanticWrite(binding.input.inputId)
+            return
+        }
         textValuesByInputID[binding.input.inputId] = text
         write(text, for: binding.input)
+    }
+
+    private func commitSemanticText(_ text: String, input: NativeExperienceTextInput) {
+        committedTextByInputID[input.inputId] = text
+        onCommitText?(input, text)
+    }
+
+    private func drainSemanticWrite(_ inputID: String) {
+        guard !hidden, let writer = semanticTextWriter,
+              let binding = bindingsByInputID[inputID], allowsEditing(binding),
+              let write = semanticDrafts[inputID]?.takeWrite() else { return }
+        let currentGeneration = generation
+        let rendered = binding.input.secureTextEntry == true ? "" : write.text
+        writer(write.captureID, inputID, rendered) { [weak self] outcome in
+            guard let self, self.generation == currentGeneration else { return }
+            guard self.allowsEditing(binding) else {
+                self.semanticDrafts[inputID]?.withdraw()
+                self.restoreAcceptedText(binding)
+                return
+            }
+            // UIKit may change marked text before delivering its change notification.
+            // Completion must compare against the editor's current provisional draft.
+            self.semanticDrafts[inputID]?.replaceText(binding.control.text,
+                isComposing: binding.control.hasMarkedText)
+            let commit = self.semanticDrafts[inputID]?.finish(write, outcome: outcome)
+            self.textValuesByInputID[inputID] = self.semanticDrafts[inputID]?.acceptedText
+            if let commit { self.commitSemanticText(commit, input: binding.input) }
+            if case .rejected = outcome { self.restoreAcceptedText(binding) }
+            self.drainSemanticWrite(inputID)
+        }
     }
 
     private func write(_ text: String, for input: NativeExperienceTextInput) {

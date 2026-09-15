@@ -7,6 +7,121 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeRuntimeTests: XCTestCase {
+    func testPresentedSemanticCaptureCopiesUnicodeAndRejectsRetiredCaptureActions() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: try fixture(named: "semantic_text", extension: "riv"), importMode: .portable)
+        let artboards = try await prepared.artboards()
+        let name = try XCTUnwrap(artboards.first).name
+        let runtime = try await prepared.openSession(artboardName: name, player: .defaultScene,
+            pixelWidth: 64, pixelHeight: 64)
+        defer { Task { try? await runtime.close() } }
+        try await runtime.enableSemantics()
+        _ = try await runtime.step(elapsedSeconds: 0)
+        do {
+            _ = try await runtime.captureSemantics()
+            XCTFail("An unpresented revision must not publish semantics")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
+        let outcome = try await render(runtime)
+        XCTAssertEqual(outcome.disposition, .presented)
+        let first = try await runtime.captureSemantics(textRuns: ["field/名前", "missing"])
+        XCTAssertEqual(first.tree.nodes.count, 1)
+        let field = try XCTUnwrap(first.fieldsByTextRun["field/名前"])
+        XCTAssertEqual(field.role, 6)
+        XCTAssertEqual(field.label, "Prénom 👋")
+        XCTAssertNil(field.parentID)
+        XCTAssertNil(first.fieldsByTextRun["missing"])
+        let second = try await runtime.captureSemantics()
+        XCTAssertNotEqual(first.id, second.id)
+        do {
+            try await runtime.queueSemanticAction(captureID: first.id, nodeID: field.id, action: .tap)
+            XCTFail("Replacing a capture must retire its action identity")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
+        try await runtime.retireSemanticCapture()
+        do {
+            try await runtime.queueSemanticAction(captureID: second.id, nodeID: field.id, action: .tap)
+            XCTFail("Retired captures must reject actions")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
+        try await runtime.close()
+        XCTAssertEqual(first.tree.nodes.first?.label, "Prénom 👋")
+    }
+
+    func testSemanticTextWriteRequiresCurrentCapturedOwner() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: try fixture(named: "semantic_text", extension: "riv"), importMode: .portable)
+        let artboards = try await prepared.artboards()
+        let runtime = try await prepared.openSession(artboardName: XCTUnwrap(artboards.first).name,
+            player: .defaultScene, pixelWidth: 64, pixelHeight: 64)
+        defer { Task { try? await runtime.close() } }
+        try await runtime.enableSemantics()
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        let capture = try await runtime.captureSemantics(textRuns: ["field/名前"])
+        let changed = try await runtime.setSemanticTextRun(captureID: capture.id, name: "field/名前", text: Data("Alice".utf8))
+        XCTAssertTrue(changed)
+        _ = try await runtime.step(elapsedSeconds: 0)
+        do {
+            _ = try await runtime.setSemanticTextRun(captureID: capture.id, name: "field/名前", text: Data("stale".utf8))
+            XCTFail("A new runtime revision must reject the old presented editor capture")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
+        _ = try await render(runtime)
+        let replacement = try await runtime.captureSemantics(textRuns: ["field/名前"])
+        let replacementChanged = try await runtime.setSemanticTextRun(captureID: replacement.id,
+            name: "field/名前", text: Data("Bob".utf8))
+        XCTAssertTrue(replacementChanged)
+        try await runtime.retireSemanticCapture()
+        do {
+            _ = try await runtime.setSemanticTextRun(captureID: replacement.id, name: "field/名前", text: Data("late".utf8))
+            XCTFail("Retired editor ownership must reject mutation")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
+        let changedAfterRejection = try await runtime.setTextRuns([
+            NuxieNativeTextRunMutation(name: "field/名前", text: Data("Bob".utf8))
+        ])
+        XCTAssertFalse(changedAfterRejection, "Rejected stale writes must leave the accepted native text intact")
+        try await runtime.close()
+    }
+
+    func testSemanticTapExecutesAuthoredDropdownTransition() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: try fixture(named: "semantic_dropdown", extension: "riv"), importMode: .portable)
+        let artboards = try await prepared.artboards()
+        let name = try XCTUnwrap(artboards.first).name
+        let runtime = try await prepared.openSession(artboardName: name, player: .defaultScene,
+            pixelWidth: 64, pixelHeight: 64, bindDefaultViewModel: true)
+        defer { Task { try? await runtime.close() } }
+        try await runtime.enableSemantics()
+        for _ in 0..<10 { _ = try await runtime.step(elapsedSeconds: 0.1) }
+        let firstPresentation = try await render(runtime)
+        XCTAssertEqual(firstPresentation.disposition, .presented)
+        let before = try await runtime.captureSemantics()
+        let button = try XCTUnwrap(before.tree.nodes.first { $0.label == "Select a fandom" })
+        XCTAssertEqual(button.actions, 1)
+        XCTAssertNotEqual(button.stateFlags & 1, 0, "Authored dropdown begins expanded")
+        try await runtime.queueSemanticAction(captureID: before.id, nodeID: button.id, action: .tap)
+        do {
+            try await runtime.queueSemanticAction(captureID: before.id, nodeID: button.id, action: .tap)
+            XCTFail("Accepted action must invalidate its presented capture")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
+        for _ in 0..<10 { _ = try await runtime.step(elapsedSeconds: 0.1) }
+        let nextPresentation = try await render(runtime)
+        XCTAssertEqual(nextPresentation.disposition, .presented)
+        let after = try await runtime.captureSemantics()
+        let changed = try XCTUnwrap(after.tree.nodes.first { $0.id == button.id })
+        XCTAssertEqual(changed.stateFlags & 1, 0, "Authored tap closes the dropdown after normal stepping")
+        try await runtime.close()
+    }
+
     func testPreparedFileOpensFreshIndependentRendererBoundSessions() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "data_binding_test", extension: "riv"),

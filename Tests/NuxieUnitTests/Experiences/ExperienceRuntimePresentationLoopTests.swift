@@ -6,6 +6,42 @@ import XCTest
 
 final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     @MainActor
+    func testPresentedSemanticDeliveryWaitsForObservationAndRejectsHiddenEpoch() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let firstDelivery = expectation(description: "first presented semantic frame")
+        let staleDelivery = expectation(description: "obsolete semantic frame")
+        staleDelivery.isInverted = true
+        var deliveries = 0
+        let recorder = PresentationSessionRecorder(device: device) {
+            deliveries += 1
+            if deliveries == 1 { firstDelivery.fulfill() } else { staleDelivery.fulfill() }
+        }
+        let (window, view) = makePresentationSurface()
+        var observations: [@Sendable (TimeInterval, ExperienceRuntimePresentedDrawable.Provenance) -> Void] = []
+        let loop = makeLoop(recorder: recorder, view: view, observesEveryPresentation: true,
+            observeDrawablePresentation: { _, handler in observations.append(handler) },
+            nativeCompletionPresentationFallback: nil)
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let firstRendered = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(firstRendered)
+        XCTAssertEqual(deliveries, 0)
+        XCTAssertEqual(observations.count, 1)
+        observations[0](1, .injectedTestObserver)
+        await fulfillment(of: [firstDelivery], timeout: 2)
+        loop.displayLinkDidFire(at: 2)
+        let secondRendered = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(secondRendered)
+        XCTAssertEqual(observations.count, 2, "Observe semantic frames after initial reveal")
+        loop.setPresentationVisible(false)
+        observations[1](2, .injectedTestObserver)
+        await fulfillment(of: [staleDelivery], timeout: 0.1)
+        XCTAssertEqual(deliveries, 1)
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testVisibleSessionKeepsTickingAcrossCompletedSteps() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
@@ -973,6 +1009,7 @@ private actor PresentationSessionRecorder {
     enum CompletionMode { case immediate, held }
 
     private let device: any MTLDevice
+    private let onRenderDelivery: (@MainActor @Sendable () async -> Void)?
     private var names: [String] = []
     private var sizes: [ExperienceRuntimeSurfaceSize] = []
     private var recordedSteps: [ExperienceRuntimePresentationStep] = []
@@ -991,8 +1028,9 @@ private actor PresentationSessionRecorder {
     private var presentedDrawCalls: [UInt64] = []
     private var currentSize = ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0)
 
-    init(device: any MTLDevice) {
+    init(device: any MTLDevice, onRenderDelivery: (@MainActor @Sendable () async -> Void)? = nil) {
         self.device = device
+        self.onRenderDelivery = onRenderDelivery
     }
 
     func perform(_ operation: ExperienceRuntimePresentationSessionOperation) async throws
@@ -1043,7 +1081,7 @@ private actor PresentationSessionRecorder {
                 heldCompletions.append(completion)
             }
             let health = renderHealth.isEmpty ? .healthy : renderHealth.removeFirst()
-            return .renderer(outcome(disposition: disposition, health: health))
+            return .renderer(outcome(disposition: disposition, health: health), deliverOnMainActor: onRenderDelivery)
         case .queued(let work):
             names.append("queued")
             if shouldHoldQueuedWork {
@@ -1155,6 +1193,7 @@ private func makeLoop(
     recorder: PresentationSessionRecorder,
     view: ExperienceRuntimeSurfaceView,
     notificationCenter: NotificationCenter = .default,
+    observesEveryPresentation: Bool = false,
     acquireDrawable: @escaping @MainActor (CAMetalLayer) -> (any CAMetalDrawable)? = {
         $0.nextDrawable()
     },
@@ -1177,6 +1216,7 @@ private func makeLoop(
     ExperienceRuntimePresentationLoop(
         session: ExperienceRuntimePresentationSession(
             artboardBounds: CGRect(x: 0, y: 0, width: 128, height: 64),
+            observesEveryPresentation: observesEveryPresentation,
             perform: { try await recorder.perform($0) }
         ),
         surfaceView: view,

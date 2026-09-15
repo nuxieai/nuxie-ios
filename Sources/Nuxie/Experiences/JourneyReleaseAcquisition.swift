@@ -614,6 +614,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
     }
 
     private struct RuntimeReleaseAuthority {
+        let requiredCapabilities: Set<String>
         let authenticatedKeyID: String
         let identity: JourneyReleaseIdentity
         let descriptorSHA256: String
@@ -723,7 +724,17 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         let definition = try ExperienceDefinition(
             journeyDescriptor: release.descriptor
         )
+        let requiredCapabilities: Set<String>
+        if let value = release.descriptor.requirements?["requiredCapabilities"], case .array(let values) = value {
+            requiredCapabilities = Set(values.compactMap { value in
+                if case .string(let name) = value { return name }
+                return nil
+            })
+        } else {
+            requiredCapabilities = []
+        }
         return RuntimeReleaseAuthority(
+            requiredCapabilities: requiredCapabilities,
             authenticatedKeyID: release.authenticatedKeyID,
             identity: release.descriptor.identity,
             descriptorSHA256: release.descriptorSHA256,
@@ -915,6 +926,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             )
             return (screen.id, AuthenticatedRuntimePayload(
                 authenticatedKeyID: authority.authenticatedKeyID,
+                requiredCapabilities: authority.requiredCapabilities,
                 renderPlan: renderPlan,
                 journey: authority.journey,
                 definition: authority.definition,

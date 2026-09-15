@@ -1,0 +1,96 @@
+import XCTest
+@testable import Nuxie
+
+final class ExperienceSemanticTextDraftTests: XCTestCase {
+    func testRapidTypingCoalescesAndCommitWaitsForLatestNativeAcceptance() throws {
+        var draft = ExperienceSemanticTextDraft(text: "saved")
+        draft.present(captureID: UUID())
+        draft.replaceText("A")
+        let first = try XCTUnwrap(draft.takeWrite())
+        draft.replaceText("Alice")
+        XCTAssertNil(draft.takeWrite())
+        XCTAssertNil(draft.requestCommit())
+        XCTAssertNil(draft.finish(first, outcome: .accepted))
+        let latest = try XCTUnwrap(draft.takeWrite())
+        XCTAssertEqual(latest.text, "Alice")
+        XCTAssertEqual(draft.finish(latest, outcome: .accepted), "Alice")
+        XCTAssertNil(draft.requestCommit())
+    }
+
+    func testStaleCaptureRetainsDraftAndResumesOnlyWithFreshCapture() throws {
+        var draft = ExperienceSemanticTextDraft(text: "saved")
+        draft.present(captureID: UUID())
+        draft.replaceText("Alice")
+        let write = try XCTUnwrap(draft.takeWrite())
+        XCTAssertNil(draft.requestCommit())
+        XCTAssertNil(draft.finish(write, outcome: .staleCapture))
+        XCTAssertEqual(draft.text, "Alice")
+        XCTAssertEqual(draft.acceptedText, "saved")
+        XCTAssertNil(draft.takeWrite())
+        let replacement = UUID()
+        draft.present(captureID: replacement)
+        let retry = try XCTUnwrap(draft.takeWrite())
+        XCTAssertEqual(retry.captureID, replacement)
+        XCTAssertEqual(retry.text, "Alice")
+        XCTAssertEqual(draft.finish(retry, outcome: .accepted), "Alice")
+    }
+
+    func testLateStaleResultDoesNotDiscardAlreadyPresentedReplacement() throws {
+        var draft = ExperienceSemanticTextDraft(text: "")
+        draft.present(captureID: UUID())
+        draft.replaceText("new")
+        let first = try XCTUnwrap(draft.takeWrite())
+        let replacement = UUID()
+        draft.present(captureID: replacement)
+        XCTAssertNil(draft.finish(first, outcome: .staleCapture))
+        XCTAssertEqual(draft.takeWrite()?.captureID, replacement)
+    }
+
+    func testPendingCommitCannotPublishAReplacementComposingDraft() throws {
+        var draft = ExperienceSemanticTextDraft(text: "saved")
+        draft.present(captureID: UUID())
+        draft.replaceText("A")
+        let first = try XCTUnwrap(draft.takeWrite())
+        XCTAssertNil(draft.requestCommit())
+        draft.replaceText("한", isComposing: true)
+        XCTAssertNil(draft.finish(first, outcome: .accepted))
+        let composing = try XCTUnwrap(draft.takeWrite())
+        XCTAssertNil(draft.finish(composing, outcome: .accepted))
+        XCTAssertNil(draft.requestCommit())
+        draft.replaceText("한")
+        XCTAssertEqual(draft.requestCommit(), "한")
+        XCTAssertNil(draft.requestCommit())
+    }
+
+    func testWithdrawnInFlightWriteReconcilesAcceptedValueOnNextCapture() throws {
+        var draft = ExperienceSemanticTextDraft(text: "saved")
+        draft.present(captureID: UUID())
+        draft.replaceText("provisional")
+        let write = try XCTUnwrap(draft.takeWrite())
+        draft.withdraw()
+        XCTAssertNil(draft.finish(write, outcome: .accepted))
+        draft.present(captureID: UUID())
+        let reconciliation = try XCTUnwrap(draft.takeWrite())
+        XCTAssertEqual(reconciliation.text, "saved")
+        XCTAssertNil(draft.finish(reconciliation, outcome: .accepted))
+        XCTAssertNil(draft.takeWrite())
+        XCTAssertNil(draft.requestCommit())
+    }
+
+    func testWithdrawalAndRejectionRestoreAcceptedTextAndFenceLateCompletion() throws {
+        for reject in [false, true] {
+            var draft = ExperienceSemanticTextDraft(text: "saved")
+            draft.present(captureID: UUID())
+            draft.replaceText("late")
+            let write = try XCTUnwrap(draft.takeWrite())
+            XCTAssertNil(draft.requestCommit())
+            if reject { XCTAssertNil(draft.finish(write, outcome: .rejected)) }
+            else { draft.withdraw() }
+            XCTAssertNil(draft.finish(write, outcome: .accepted))
+            XCTAssertEqual(draft.text, "saved")
+            XCTAssertEqual(draft.acceptedText, "saved")
+            XCTAssertNil(draft.takeWrite())
+            XCTAssertNil(draft.requestCommit())
+        }
+    }
+}

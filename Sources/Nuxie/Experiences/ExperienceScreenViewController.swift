@@ -1,5 +1,6 @@
 #if canImport(UIKit) && canImport(QuartzCore)
 import Foundation
+import NuxieRuntime
 import QuartzCore
 import UIKit
 
@@ -165,6 +166,10 @@ final class ExperienceScreenViewController: UIViewController {
     private let screen: NativeExperienceScreen
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
+    private var requiresSceneSemantics: Bool {
+        artifact.payload.requiredCapabilities.contains("scene-semantics-v1")
+    }
+    private lazy var semanticContainer = ExperienceSemanticAccessibilityContainer(view: surfaceView)
 
     private var interactiveScreen: ExperienceInteractiveScreen?
     private var presentationLoop: ExperienceRuntimePresentationLoop?
@@ -288,9 +293,16 @@ final class ExperienceScreenViewController: UIViewController {
         let includesTextInputSnapshot = artifact.renderPlan.textInputs.contains {
             $0.screenId == screenId && $0.editable
         }
+        let semanticConsumer: (@MainActor @Sendable (NuxieNativeSemanticCapture) -> Void)?
+        if requiresSceneSemantics {
+            semanticConsumer = { [weak self] capture in self?.applySemantics(capture) }
+        } else {
+            semanticConsumer = nil
+        }
         let loop = ExperienceRuntimePresentationLoop(
             session: interactive.presentationSession(
-                includesSnapshotAfterStep: includesTextInputSnapshot
+                includesSnapshotAfterStep: includesTextInputSnapshot,
+                onSemantics: semanticConsumer
             ) { [weak self] effects, snapshot in
                 await self?.deliverStep(effects: effects, snapshot: snapshot)
             },
@@ -360,6 +372,7 @@ final class ExperienceScreenViewController: UIViewController {
             self.presentationLoop = nil
             self.interactiveScreen = nil
             self.finishExitWaiters()
+            self.semanticContainer.clear()
             self.textInputOverlayBridge.clear()
             await loop?.shutdown()
             self.isShuttingDown = false
@@ -371,6 +384,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     func setContentHidden(_ hidden: Bool) {
         contentHidden = hidden
+        if hidden, requiresSceneSemantics { semanticContainer.clear() }
         surfaceView.isHidden = hidden
         textInputOverlayBridge.setHidden(hidden)
         updatePresentationVisibility()
@@ -654,6 +668,42 @@ final class ExperienceScreenViewController: UIViewController {
         return enqueueStateCommand(command)
     }
 
+    private func applySemantics(_ capture: NuxieNativeSemanticCapture) {
+        guard !isShuttingDown, !contentHidden, controllerIsVisible,
+              let interactiveScreen, let presentationLoop,
+              let transform = ExperienceContainCenterTransform(
+                artboardBounds: interactiveScreen.artboardBounds,
+                viewportBounds: surfaceView.bounds) else { return }
+        let nativeControls = textInputOverlayBridge.applySemantics(capture)
+        semanticContainer.update(capture: capture, nativeControls: nativeControls, project: { [weak self] node in
+            guard let self, let role = NuxieNativeSemanticRole(rawValue: node.role), role != .none else { return nil }
+            let frame = transform.viewportRect(fromArtboard: node.bounds).intersection(self.surfaceView.bounds)
+            guard !frame.isNull, !frame.isInfinite, !frame.isEmpty else { return nil }
+            var traits: UIAccessibilityTraits = []
+            switch role {
+            case .button, .checkbox, .switchControl, .radioButton, .tab: traits.insert(.button)
+            case .link: traits.insert(.link)
+            case .slider: traits.insert(.adjustable)
+            case .text: traits.insert(.staticText)
+            case .image: traits.insert(.image)
+            case .group, .list, .listItem, .tabList, .dialog, .alertDialog, .radioGroup:
+                guard !node.label.isEmpty else { return nil }
+            case .none, .textField: break
+            }
+            if node.headingLevel > 0 { traits.insert(.header) }
+            if node.stateFlags & 2 != 0 { traits.insert(.selected) }
+            return .init(frame: frame, traits: traits)
+        }, submit: { [weak self] captureID, nodeID, action in
+            guard let self, !self.isShuttingDown, !self.contentHidden, self.controllerIsVisible,
+                  self.lifecyclePhase == .active,
+                  ExperienceSemanticAccessibilityElement.allowsInteraction(in: self.surfaceView) else { return false }
+            return presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
+                try await interactiveScreen.queueSemanticAction(captureID: captureID, nodeID: nodeID, action: action)
+                return .work(requestsFrame: true)
+            })
+        })
+    }
+
     private func configureTextInputCallbacks() {
         textInputOverlayBridge.onCommitText = { [weak self] input, text in
             guard let self,
@@ -682,9 +732,36 @@ final class ExperienceScreenViewController: UIViewController {
         to interactiveScreen: ExperienceInteractiveScreen,
         loop: ExperienceRuntimePresentationLoop
     ) {
+        let semanticWriter: ExperienceTextInputOverlayBridge.SemanticTextWriter? = requiresSceneSemantics
+            ? { [weak self] captureID, inputID, text, completion in
+                loop.enqueue(ExperienceRuntimePresentationQueuedWork { [weak self] in
+                    let canWrite = await MainActor.run { [weak self] in
+                        guard let self else { return false }
+                        return !self.isShuttingDown && !self.contentHidden && self.controllerIsVisible
+                            && self.lifecyclePhase == .active
+                            && ExperienceSemanticAccessibilityElement.allowsInteraction(in: self.surfaceView)
+                    }
+                    guard canWrite else {
+                        return .work(requestsFrame: false) { completion(.rejected) }
+                    }
+                    do {
+                        let changed = try await interactiveScreen.setSemanticText(
+                            captureID: captureID, inputID: inputID, value: text)
+                        return .work(requestsFrame: changed) { completion(.accepted) }
+                    } catch NuxieNativeRuntimeError.callFailed(let diagnostic)
+                        where diagnostic.status == .handleMismatch {
+                        return .work(requestsFrame: true) { completion(.staleCapture) }
+                    } catch {
+                        return .work(requestsFrame: false) { completion(.rejected) }
+                    }
+                }, completion: { result in
+                    if case .failure = result { completion(.rejected) }
+                })
+            }
+            : nil
         textInputOverlayBridge.bind(
             screenID: screenId,
-            artifact: artifact,
+            renderPlan: artifact.renderPlan,
             surfaceView: surfaceView,
             artboardBounds: CGRect(
                 x: 0,
@@ -692,6 +769,7 @@ final class ExperienceScreenViewController: UIViewController {
                 width: screen.width,
                 height: screen.height
             ),
+            semanticTextWriter: semanticWriter,
             textWriter: { inputID, text, completion in
                 loop.enqueue(
                     ExperienceRuntimePresentationQueuedWork {
