@@ -386,11 +386,8 @@ internal actor FeatureService: FeatureServiceProtocol {
         requiredBalance: Double?,
         entityId: String?
     ) async throws -> (result: FeatureCheckResult, requestRevision: UInt64) {
-        await synchronizeCustomerScopeIfNeeded()
-        let customerId = identityService.getDistinctId()
-        guard let identityFence = identityService.performWithCurrentIdentityFence(customerId, { _ in () })?.token else {
-            throw CancellationError()
-        }
+        let identityFence = await synchronizeCustomerScopeIfNeeded()
+        let customerId = identityFence.distinctId
         let requestGeneration = stateGeneration
         featureMutationRevisions[featureId, default: 0] &+= 1
         let requestRevision = featureMutationRevisions[featureId, default: 0]
@@ -459,10 +456,18 @@ internal actor FeatureService: FeatureServiceProtocol {
             committedCacheRevisions[cacheKey] =
                 featureMutationRevisions[affectedFeatureId]
             if entityId == nil {
-                await notifyFeatureInfoUpdate(
-                    featureId: affectedFeatureId,
-                    access: featureOverride.publishedAccess()
-                )
+                let info = featureInfo
+                let identity = identityService
+                let access = featureOverride.publishedAccess()
+                await MainActor.run {
+                    _ = identity.publishIfCurrentIdentityFenceToken(identityFence) {
+                        info.update(affectedFeatureId, access: access)
+                    }
+                }
+                guard identityService.performIfCurrentIdentityFenceToken(identityFence, { true }) == true,
+                      stateGeneration == requestGeneration else {
+                    throw CancellationError()
+                }
             }
         }
 
@@ -526,12 +531,16 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Clear all cached data
     func clearCache() async {
-        let distinctId = identityService.getDistinctId()
-        clearCustomerScopedState(for: distinctId)
+        let identityFence = await synchronizeCustomerScopeIfNeeded()
+        let distinctId = identityFence.distinctId
+        clearCustomerScopedState(for: distinctId, identityFence: identityFence)
         let info = featureInfo
+        let identity = identityService
         await MainActor.run {
-            info.setProjectionDistinctId(distinctId)
-            info.clear()
+            _ = identity.publishIfCurrentIdentityFenceToken(identityFence) {
+                info.setProjectionDistinctId(distinctId)
+                info.clear()
+            }
         }
         LogInfo("Feature cache cleared")
     }
@@ -692,19 +701,32 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// than waiting for the serialized profile/segment/Journey transition to
     /// reach FeatureService. This makes an immediate cache-first read for the
     /// new customer safe.
-    private func synchronizeCustomerScopeIfNeeded() async {
-        let distinctId = identityService.getDistinctId()
-        let identityFence = identityService.performWithCurrentIdentityFence(distinctId) { _ in () }?.token
-        guard cacheDistinctId != distinctId || cacheIdentityFence != identityFence else { return }
-        clearCustomerScopedState(for: distinctId)
-        let info = featureInfo
-        await MainActor.run {
-            info.setProjectionDistinctId(distinctId)
-            info.clear()
+    @discardableResult
+    private func synchronizeCustomerScopeIfNeeded() async -> IdentityFenceToken {
+        while true {
+            let distinctId = identityService.getDistinctId()
+            guard let identityFence = identityService.performWithCurrentIdentityFence(distinctId, { _ in () })?.token else {
+                await Task.yield()
+                continue
+            }
+            if cacheDistinctId == distinctId && cacheIdentityFence == identityFence {
+                return identityFence
+            }
+            clearCustomerScopedState(for: distinctId, identityFence: identityFence)
+            let info = featureInfo
+            let identity = identityService
+            await MainActor.run {
+                _ = identity.publishIfCurrentIdentityFenceToken(identityFence) {
+                    info.setProjectionDistinctId(distinctId)
+                    info.clear()
+                }
+            }
+            // Publication yields and can invoke identity-changing observers.
+            // Admit the request only after its cache and live identity agree.
         }
     }
 
-    private func clearCustomerScopedState(for distinctId: String) {
+    private func clearCustomerScopedState(for distinctId: String, identityFence: IdentityFenceToken?) {
         stateGeneration &+= 1
         realTimeCache.removeAll()
         invalidatedCacheRevisions.removeAll()
@@ -712,7 +734,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         featureMutationRevisions.removeAll()
         committedCacheRevisions.removeAll()
         cacheDistinctId = distinctId
-        cacheIdentityFence = identityService.performWithCurrentIdentityFence(distinctId) { _ in () }?.token
+        cacheIdentityFence = identityFence
     }
 
 }

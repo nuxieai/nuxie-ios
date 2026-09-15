@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Quick
 import Nimble
@@ -452,6 +453,60 @@ final class FeatureServiceTests: AsyncSpec {
                 ))
                 let result = try await checkTask.value
                 expect(result.balance).to(equal(3))
+            }
+
+            it("resynchronizes identity when it changes during cache-scope admission") {
+                let controlledCheck = ControlledFeatureCheckFake()
+                let isolatedService = FeatureService(
+                    api: controlledCheck, identity: mockIdentityService,
+                    profile: mockProfileService, dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(), cacheTTL: 300
+                )
+                mockIdentityService.setDistinctId("customer-b")
+                mockIdentityService.changeDistinctIdAfterNextFencedWork(to: "customer-c")
+                let checkTask = Task {
+                    try await isolatedService.check(featureId: "energy", entityId: "entity-a")
+                }
+                await controlledCheck.waitUntilStarted()
+                await isolatedService.handleUserChange(from: "customer-b", to: "customer-c")
+                await controlledCheck.resolve(FeatureCheckResult(
+                    customerId: "customer-c", featureId: "energy", requiredBalance: 1,
+                    code: "ok", allowed: true, unlimited: false, balance: 3,
+                    type: .metered, preview: nil
+                ))
+                let result = try await checkTask.value
+                expect(result.balance).to(equal(3))
+            }
+
+            it("rejects a query whose feature observer changes the identity generation") { @MainActor in
+                let controlledCheck = ControlledFeatureCheckFake()
+                let info = FeatureInfo()
+                let isolatedService = FeatureService(
+                    api: controlledCheck, identity: mockIdentityService,
+                    profile: mockProfileService, dateProvider: mockFactory.dateProvider,
+                    featureInfo: info, cacheTTL: 300
+                )
+                let subscription = info.$all.sink { values in
+                    guard values["energy"] != nil else { return }
+                    mockIdentityService.setDistinctId("customer-b")
+                    mockIdentityService.setDistinctId("customer-123")
+                }
+                defer { subscription.cancel() }
+                let checkTask = Task { try await isolatedService.check(featureId: "energy") }
+                await controlledCheck.waitUntilStarted()
+                await controlledCheck.resolve(FeatureCheckResult(
+                    customerId: "customer-123", featureId: "energy", requiredBalance: 1,
+                    code: "ok", allowed: true, unlimited: false, balance: 3,
+                    type: .metered, preview: nil
+                ))
+                do {
+                    _ = try await checkTask.value
+                    fail("A query superseded by its feature observer must be cancelled")
+                } catch is CancellationError {
+                    // Publication can synchronously supersede the original generation.
+                }
+                let cached = await isolatedService.getCached(featureId: "energy", entityId: nil)
+                expect(cached).to(beNil())
             }
 
             it("cancels an old query across an identity cycle before queued transitions run") {
