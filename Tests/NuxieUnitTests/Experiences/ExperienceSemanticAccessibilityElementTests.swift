@@ -93,10 +93,106 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         element.accessibilityDecrement()
     }
 
-    private func node(actions: UInt32, flags: UInt32 = 0) -> NuxieNativeSemanticNode {
-        NuxieNativeSemanticNode(id: .max, parentID: nil, siblingIndex: 0, role: 1,
-            stateFlags: flags, traitFlags: 0, headingLevel: 0, actions: actions,
-            bounds: .zero, label: "Prénom 👋", value: "", hint: "Activate")
+    func testToggleStateRefreshesWithoutChangingAuthoredValueOrInventingActions() {
+        let container = UIView()
+        let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
+        for role in [NuxieNativeSemanticRole.checkbox, .switchControl, .radioButton] {
+            for state in [NuxieNativeSemanticNode.checked, NuxieNativeSemanticNode.toggled] {
+                element.update(captureID: UUID(), node: node(actions: 0, flags: state, role: role.rawValue, value: "Valeur publiée"),
+                    frameInContainer: .zero, traits: .button) { _, _, _ in XCTFail("No authored action"); return true }
+                if #available(iOS 17.0, *) { XCTAssertTrue(element.accessibilityTraits.contains(.toggleButton)) }
+                XCTAssertFalse(element.accessibilityTraits.contains(.selected), "On/off is not selection")
+                XCTAssertEqual(element.accessibilityValue, "Valeur publiée")
+                XCTAssertFalse(element.accessibilityActivate())
+                element.update(captureID: UUID(), node: node(actions: 0, role: role.rawValue),
+                    frameInContainer: .zero, traits: .button) { _, _, _ in false }
+                XCTAssertFalse(element.accessibilityTraits.contains(.selected))
+                XCTAssertEqual(element.accessibilityValue, "0")
+            }
+        }
+        element.update(captureID: UUID(), node: node(actions: 0, flags: NuxieNativeSemanticNode.toggled,
+            semanticTraits: NuxieNativeSemanticTrait.toggleable), frameInContainer: .zero,
+            traits: .button) { _, _, _ in false }
+        XCTAssertEqual(element.accessibilityValue, "1", "Authored toggle capability also applies to button roles")
+        element.update(captureID: UUID(), node: node(actions: 0), frameInContainer: .zero,
+            traits: .button) { _, _, _ in false }
+        if #available(iOS 17.0, *) { XCTAssertFalse(element.accessibilityTraits.contains(.toggleButton)) }
+        XCTAssertFalse(element.accessibilityTraits.contains(.selected))
+    }
+
+    func testToggleFallbackDoesNotInventMixedOrObscuredValues() {
+        let container = UIView()
+        let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
+        for flag in [NuxieNativeSemanticNode.mixed, NuxieNativeSemanticNode.obscured] {
+            element.update(captureID: UUID(), node: node(actions: 1,
+                flags: flag | NuxieNativeSemanticNode.toggled, role: NuxieNativeSemanticRole.switchControl.rawValue),
+                frameInContainer: .zero, traits: .button) { _, _, _ in false }
+            XCTAssertNil(element.accessibilityValue)
+        }
+        element.update(captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.selected),
+            frameInContainer: .zero, traits: .button) { _, _, _ in false }
+        XCTAssertTrue(element.accessibilityTraits.contains(.selected))
+    }
+
+    func testExpandableStatusDistinguishesCollapsedFromUnsupportedAndRetires() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("Native expanded status requires iOS 18") }
+        let container = UIView()
+        let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
+        let submit: ExperienceSemanticAccessibilityElement.Submit = { _, _, _ in false }
+        element.update(captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.expanded,
+            semanticTraits: NuxieNativeSemanticTrait.expandable), frameInContainer: .zero, traits: .button, submit: submit)
+        XCTAssertEqual(element.accessibilityExpandedStatus, .expanded)
+        element.update(captureID: UUID(), node: node(actions: 1,
+            semanticTraits: NuxieNativeSemanticTrait.expandable), frameInContainer: .zero, traits: .button, submit: submit)
+        XCTAssertEqual(element.accessibilityExpandedStatus, .collapsed)
+        element.update(captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.expanded),
+            frameInContainer: .zero, traits: .button, submit: submit)
+        XCTAssertEqual(element.accessibilityExpandedStatus, .unsupported, "A state bit cannot invent capability")
+        element.retire()
+        XCTAssertEqual(element.accessibilityExpandedStatus, .unsupported)
+        XCTAssertEqual(element.accessibilityTraits, [])
+    }
+
+    func testSharedControlStateVectors() throws {
+        struct Vector: Decodable {
+            let id: String
+            let role: UInt32
+            let traits: UInt32
+            let state: UInt32
+            let value: String
+            let checkable: Bool
+            let expandable: Bool
+            let expanded: Bool
+            let iosValue: String?
+        }
+        struct Suite: Decodable { let schemaVersion: Int; let cases: [Vector] }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let suite = try JSONDecoder().decode(Suite.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/accessibility/control-state.json")))
+        XCTAssertEqual(suite.schemaVersion, 1)
+        let container = UIView()
+        let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
+        for vector in suite.cases {
+            element.update(captureID: UUID(), node: node(actions: 1, flags: vector.state,
+                role: vector.role, semanticTraits: vector.traits, value: vector.value),
+                frameInContainer: .zero, traits: .button) { _, _, _ in false }
+            XCTAssertEqual(element.accessibilityValue, vector.iosValue, vector.id)
+            if #available(iOS 17.0, *) {
+                XCTAssertEqual(element.accessibilityTraits.contains(.toggleButton), vector.checkable, vector.id)
+            }
+            if #available(iOS 18.0, *) {
+                XCTAssertEqual(element.accessibilityExpandedStatus, !vector.expandable ? .unsupported
+                    : (vector.expanded ? .expanded : .collapsed), vector.id)
+            }
+        }
+    }
+
+    private func node(actions: UInt32, flags: UInt32 = 0, role: UInt32 = 1,
+                      semanticTraits: UInt32 = 0, value: String = "") -> NuxieNativeSemanticNode {
+        NuxieNativeSemanticNode(id: .max, parentID: nil, siblingIndex: 0, role: role,
+            stateFlags: flags, traitFlags: semanticTraits, headingLevel: 0, actions: actions,
+            bounds: .zero, label: "Prénom 👋", value: value, hint: "Activate")
     }
 }
 #endif

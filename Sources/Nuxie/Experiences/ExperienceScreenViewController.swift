@@ -691,7 +691,6 @@ final class ExperienceScreenViewController: UIViewController {
             case .none, .textField: break
             }
             if node.headingLevel > 0 { traits.insert(.header) }
-            if node.stateFlags & NuxieNativeSemanticNode.selected != 0 { traits.insert(.selected) }
             return .init(frame: frame, traits: traits)
         }, submit: { [weak self] captureID, nodeID, action in
             guard let self else { return false }

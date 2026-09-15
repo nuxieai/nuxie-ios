@@ -27,6 +27,26 @@ final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
         accessibilityHint = node.hint.isEmpty ? nil : node.hint
         accessibilityFrameInContainerSpace = frameInContainer
         accessibilityTraits = traits
+        let role = NuxieNativeSemanticRole(rawValue: node.role)
+        let isToggle = role == .checkbox || role == .switchControl || role == .radioButton
+            || node.traitFlags & (NuxieNativeSemanticTrait.checkable | NuxieNativeSemanticTrait.toggleable) != 0
+        if isToggle {
+            if #available(iOS 17.0, *) { accessibilityTraits.insert(.toggleButton) }
+            if accessibilityValue == nil,
+               node.stateFlags & (NuxieNativeSemanticNode.mixed | NuxieNativeSemanticNode.obscured) == 0 {
+                // UIKit exposes binary switch values as 0/1. Selection is a
+                // separate semantic state and must not stand in for on/off.
+                accessibilityValue = node.stateFlags & (NuxieNativeSemanticNode.checked | NuxieNativeSemanticNode.toggled) != 0
+                    ? "1" : "0"
+            }
+        }
+        if node.stateFlags & NuxieNativeSemanticNode.selected != 0 {
+            accessibilityTraits.insert(.selected)
+        }
+        if #available(iOS 18.0, *) {
+            accessibilityExpandedStatus = node.traitFlags & NuxieNativeSemanticTrait.expandable == 0
+                ? .unsupported : (node.stateFlags & NuxieNativeSemanticNode.expanded != 0 ? .expanded : .collapsed)
+        }
         if node.stateFlags & NuxieNativeSemanticNode.disabled != 0 {
             accessibilityTraits.insert(.notEnabled)
         }
@@ -41,6 +61,8 @@ final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
         accessibilityLabel = nil
         accessibilityValue = nil
         accessibilityHint = nil
+        accessibilityTraits = []
+        if #available(iOS 18.0, *) { accessibilityExpandedStatus = .unsupported }
     }
 
     override func accessibilityActivate() -> Bool { perform(.tap) }
