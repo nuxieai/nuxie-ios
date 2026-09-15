@@ -1,8 +1,12 @@
 s:5Nuxie0A12ActivityInfoV	TypeDecl	NuxieActivityInfo
+s:5Nuxie0A12ActivityInfoV10customerIdSSvp	Var	customerId
 s:5Nuxie0A12ActivityInfoV10propertiesSDySSAA0aB5ValueOGvg	Accessor	Get()
 s:5Nuxie0A12ActivityInfoV10propertiesSDySSAA0aB5ValueOGvp	Var	properties
 s:5Nuxie0A12ActivityInfoV10receivedAt10Foundation4DateVvp	Var	receivedAt
 s:5Nuxie0A12ActivityInfoV13schemaVersionSivpZ	Var	schemaVersion
+s:5Nuxie0A12ActivityInfoV17isCurrentIdentitySbvg	Accessor	Get()
+s:5Nuxie0A12ActivityInfoV17isCurrentIdentitySbvp	Var	isCurrentIdentity
+s:5Nuxie0A12ActivityInfoV2eeoiySbAC_ACtFZ	Function	==(_:_:)
 s:5Nuxie0A12ActivityInfoV2idSSvp	Var	id
 s:5Nuxie0A12ActivityInfoV4nameSSvg	Accessor	Get()
 s:5Nuxie0A12ActivityInfoV4nameSSvp	Var	name
