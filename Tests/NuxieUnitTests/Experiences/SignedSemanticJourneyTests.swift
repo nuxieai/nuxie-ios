@@ -209,6 +209,11 @@ final class SignedSemanticJourneyTests: XCTestCase {
         XCTAssertNotEqual(field.accessibilityValue, "typed-password")
         XCTAssertFalse(elements.contains { $0.accessibilityValue == "fixture-secret-never-publish" })
         XCTAssertEqual(semanticElements(in: view).filter { $0.accessibilityLabel == "Password" }.count, 1)
+        // Allow queued frames to expose late duplicates before checking the entire transaction sequence.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(observer.accepted.map { $0.emissions.map(\.name) }, [
+            ["seat_increased"], ["seat_decreased"], [JourneyResponseControlNames.responseSet],
+        ])
     }
 
     private func semanticElements(in view: UIView?) -> [NSObject] {
