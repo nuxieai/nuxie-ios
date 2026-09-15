@@ -66,5 +66,17 @@
       "$response_set",
       "script_control_activated"
     ]
+  },
+  "scriptFailure": {
+    "fixture": "runtime/screen-control-error/screen.riv",
+    "artboard": "Paywall",
+    "pointer": {
+      "x": 100,
+      "y": 728
+    },
+    "nativeStatus": 4,
+    "partialCommandsPublished": false,
+    "retrySameOccurrence": false,
+    "freshOccurrenceCanInitialize": true
   }
 }

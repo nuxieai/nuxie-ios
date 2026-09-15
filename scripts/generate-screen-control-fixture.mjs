@@ -7,6 +7,9 @@ import {pathToFileURL} from 'node:url';
 import {createHash,createPrivateKey,createPublicKey,sign} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 const root=resolve(process.argv[2] ?? '../../');
+const failing=process.argv.includes('--failure');
+const fixtureName=failing?'screen-control-error':'screen-control';
+const releaseName=failing?'compiled-screen-control-error':'compiled-screen-control';
 const {buildEditorRiveViaWasm}=await import(pathToFileURL(resolve(root,'packages/view-compiler/src/compiler-backends/editor-publisher-wasm.ts')).href);
 const compiler=await import(pathToFileURL(resolve(root,'apps/nuxie-publish/src/generated/editor_scripted_resource_compiler.js')).href);
 compiler.initSync({module:readFileSync(resolve(root,'apps/nuxie-publish/src/generated/editor_scripted_resource_compiler_bg.wasm'))});
@@ -14,7 +17,7 @@ const source = `local Nuxie = require("nuxie")
 return function(context)
   return { actions = { submit = function(invocation)
     Nuxie.response.set("selection", "pro")
-    Nuxie.emit("script_control_activated", { source = "compiled" })
+    ${failing ? 'error("script_failure_probe")' : 'Nuxie.emit("script_control_activated", { source = "compiled" })'}
   end } }
 end`;
 const compiled = JSON.parse(compiler.compileScriptedResource(JSON.stringify({type:'compileScreenActionBytecode',source,actionId:'submit'})));
@@ -23,7 +26,7 @@ const snapshotPath='tools/rive-compiler/fixtures/publish-path/scripted-response-
 const snapshot=JSON.parse(readFileSync(resolve(root,snapshotPath),'utf8')).snapshotArtifact.snapshot;
 const output=await buildEditorRiveViaWasm({snapshot,screenScripts:[{hostId:'screen_1',scriptId:'script_response_set',assetId:'asset_script_response_set',protocol:'listenerAction',bytecode:Buffer.from(compiled.bytecodeBase64,'base64')}]});
 if (output.externalAssetFiles.length !== 0) throw new Error('Fixture must be self-contained');
-const directory=new URL('../fixtures/runtime/screen-control/',import.meta.url);
+const directory=new URL(`../fixtures/runtime/${fixtureName}/`,import.meta.url);
 mkdirSync(directory,{recursive:true});
 writeFileSync(new URL('screen.riv',directory),output.rivBytes);
 writeFileSync(new URL('action.luau',directory),source);
@@ -36,7 +39,7 @@ writeFileSync(new URL('provenance.json',directory),JSON.stringify({
 console.log('Generated native screen-control fixture',output.rivBytes.length);
 
 // A test-authored signed Journey around the real publisher render and action bytes.
-const releaseDirectory=new URL('../fixtures/journeys/rendered-screen-control/',import.meta.url);
+const releaseDirectory=new URL(`../fixtures/journeys/rendered-${fixtureName}/`,import.meta.url);
 mkdirSync(releaseDirectory,{recursive:true});
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 function artifact(bytes,prefix,contentType) {
@@ -47,9 +50,9 @@ function artifact(bytes,prefix,contentType) {
 }
 const base=JSON.parse(readFileSync(new URL('../fixtures/journeys/rendered-text-input/release-entry.json',import.meta.url),'utf8'));
 const descriptor=JSON.parse(Buffer.from(base.envelope.descriptorBytesBase64,'base64'));
-descriptor.identity={...descriptor.identity,appId:'app-compiled-screen-control',buildId:'compiled-screen-control-build',experienceId:'compiled-screen-control',experienceVersionId:'compiled-screen-control-v1'};
+descriptor.identity={...descriptor.identity,appId:`app-${releaseName}`,buildId:`${releaseName}-build`,experienceId:releaseName,experienceVersionId:`${releaseName}-v1`};
 descriptor.metadata={...descriptor.metadata,name:'compiled-screen-control',description:'Test-authored signed Journey over publisher-generated native action bytecode'};
-descriptor.leg={...descriptor.leg,id:sha256('compiled-screen-control-leg'),entryStepId:'show',outputs:[{key:'selection',required:true,type:'text'}],screens:[{id:'screen_1',responseCaptures:['selection']}],steps:[
+descriptor.leg={...descriptor.leg,id:sha256(`${releaseName}-leg`),entryStepId:'show',outputs:[{key:'selection',required:true,type:'text'}],screens:[{id:'screen_1',responseCaptures:['selection']}],steps:[
   {kind:'action',id:'show',action:{type:'navigate',screenId:'screen_1'},outlets:{}},
   {kind:'action',id:'refresh',action:{type:'navigate',screenId:'screen_1'},outlets:{}},
 ],routes:[{host:{kind:'screen',screenId:'screen_1'},eventName:'script_control_activated',entryStepId:'refresh'}]};
