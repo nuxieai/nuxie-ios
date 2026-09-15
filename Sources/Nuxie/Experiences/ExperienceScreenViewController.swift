@@ -691,16 +691,14 @@ final class ExperienceScreenViewController: UIViewController {
             case .none, .textField: break
             }
             if node.headingLevel > 0 { traits.insert(.header) }
-            if node.stateFlags & 2 != 0 { traits.insert(.selected) }
+            if node.stateFlags & NuxieNativeSemanticNode.selected != 0 { traits.insert(.selected) }
             return .init(frame: frame, traits: traits)
         }, submit: { [weak self] captureID, nodeID, action in
-            guard let self, !self.isShuttingDown, !self.contentHidden, self.controllerIsVisible,
-                  self.lifecyclePhase == .active,
-                  ExperienceSemanticAccessibilityElement.allowsInteraction(in: self.surfaceView) else { return false }
-            return presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
+            guard let self else { return false }
+            return presentationLoop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
                 try await interactiveScreen.queueSemanticAction(captureID: captureID, nodeID: nodeID, action: action)
                 return .work(requestsFrame: true)
-            })
+            }, isEligible: { [weak self] in self?.semanticInputIsEligible == true })
         })
     }
 
@@ -728,22 +726,18 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
+    private var semanticInputIsEligible: Bool {
+        !isShuttingDown && !contentHidden && controllerIsVisible && lifecyclePhase == .active
+            && ExperienceSemanticAccessibilityElement.allowsInteraction(in: surfaceView)
+    }
+
     private func bindTextInputs(
         to interactiveScreen: ExperienceInteractiveScreen,
         loop: ExperienceRuntimePresentationLoop
     ) {
         let semanticWriter: ExperienceTextInputOverlayBridge.SemanticTextWriter? = requiresSceneSemantics
             ? { [weak self] captureID, inputID, text, completion in
-                loop.enqueue(ExperienceRuntimePresentationQueuedWork { [weak self] in
-                    let canWrite = await MainActor.run { [weak self] in
-                        guard let self else { return false }
-                        return !self.isShuttingDown && !self.contentHidden && self.controllerIsVisible
-                            && self.lifecyclePhase == .active
-                            && ExperienceSemanticAccessibilityElement.allowsInteraction(in: self.surfaceView)
-                    }
-                    guard canWrite else {
-                        return .work(requestsFrame: false) { completion(.rejected) }
-                    }
+                loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
                     do {
                         let changed = try await interactiveScreen.setSemanticText(
                             captureID: captureID, inputID: inputID, value: text)
@@ -754,7 +748,7 @@ final class ExperienceScreenViewController: UIViewController {
                     } catch {
                         return .work(requestsFrame: false) { completion(.rejected) }
                     }
-                }, completion: { result in
+                }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { result in
                     if case .failure = result { completion(.rejected) }
                 })
             }
