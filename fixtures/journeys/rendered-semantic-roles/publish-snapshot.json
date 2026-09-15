@@ -1,0 +1,576 @@
+{
+  "headSeq": 1811,
+  "snapshot": {
+    "version": 1,
+    "project": {
+      "id": "project_1",
+      "data": {}
+    },
+    "document": {
+      "rootId": "root",
+      "nodes": [
+        {
+          "id": "root",
+          "projectId": "project_1",
+          "parentId": null,
+          "kind": "root",
+          "type": "root",
+          "data": {
+            "kind": "root"
+          }
+        },
+        {
+          "id": "project_1::artboard_tree",
+          "projectId": "project_1",
+          "parentId": "root",
+          "kind": "artboard_tree",
+          "type": "artboard_tree",
+          "data": {
+            "kind": "artboard_tree",
+            "version": 1
+          }
+        },
+        {
+          "id": "project_1::journey_root",
+          "projectId": "project_1",
+          "parentId": "root",
+          "kind": "journey_root",
+          "type": "journey_root",
+          "data": {
+            "kind": "journey_root",
+            "version": 1
+          }
+        },
+        {
+          "id": "screen_1",
+          "projectId": "project_1",
+          "parentId": "project_1::artboard_tree",
+          "orderKey": "a",
+          "kind": "artboard",
+          "type": "artboard",
+          "name": "Paywall",
+          "data": {
+            "kind": "artboard",
+            "isComponent": false,
+            "canvas": {
+              "position": {
+                "x": 0,
+                "y": 0
+              },
+              "dimensions": {
+                "width": 390,
+                "height": 844
+              }
+            },
+            "responseCaptures": [
+              "password"
+            ]
+          }
+        },
+        {
+          "id": "screen_1::view_tree",
+          "projectId": "project_1",
+          "parentId": "screen_1",
+          "kind": "view_tree",
+          "type": "view_tree",
+          "data": {
+            "kind": "view_tree"
+          }
+        },
+        {
+          "id": "screen_1::animation_tree",
+          "projectId": "project_1",
+          "parentId": "screen_1",
+          "kind": "animation_tree",
+          "type": "animation_tree",
+          "data": {
+            "kind": "animation_tree"
+          }
+        },
+        {
+          "id": "heading",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "a",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "heading",
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "accessibilityRole": "text",
+                "accessibilityLabel": "Choose your plan",
+                "style": {
+                  "x": 24,
+                  "y": 24,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827",
+                  "fontFamily": "Nuxie Editor",
+                  "fontWeight": "400",
+                  "fontSize": 18,
+                  "color": "#ffffff"
+                },
+                "children": "Choose your plan"
+              }
+            }
+          }
+        },
+        {
+          "id": "continue",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "b",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "continue",
+              "type": "View",
+              "systemId": "Pressable",
+              "props": {
+                "accessibilityRole": "button",
+                "accessibilityLabel": "Continue",
+                "style": {
+                  "x": 24,
+                  "y": 88,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "selected",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "c",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "selected",
+              "type": "View",
+              "systemId": "Pressable",
+              "props": {
+                "accessibilityRole": "checkbox",
+                "accessibilityLabel": "Annual plan",
+                "selected": true,
+                "style": {
+                  "x": 24,
+                  "y": 152,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "amount",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "d",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "amount",
+              "type": "View",
+              "systemId": "View",
+              "props": {
+                "accessibilityRole": "slider",
+                "accessibilityLabel": "Seats",
+                "style": {
+                  "x": 24,
+                  "y": 216,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "password",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "e",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "password",
+              "type": "View",
+              "systemId": "TextInput",
+              "props": {
+                "value": "fixture-secret-never-publish",
+                "secureTextEntry": true,
+                "editable": true,
+                "placeholder": "Password",
+                "accessibilityRole": "textfield",
+                "accessibilityLabel": "Password",
+                "style": {
+                  "x": 24,
+                  "y": 280,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827",
+                  "fontFamily": "Nuxie Editor",
+                  "fontWeight": "400",
+                  "fontSize": 18,
+                  "color": "#ffffff"
+                }
+              },
+              "propExpressions": {
+                "onChangeText": {
+                  "kind": "Path",
+                  "root": "vm",
+                  "segments": [
+                    {
+                      "type": "prop",
+                      "name": "response"
+                    },
+                    {
+                      "type": "prop",
+                      "name": "values"
+                    },
+                    {
+                      "type": "prop",
+                      "name": "password"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "disabled",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "f",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "disabled",
+              "type": "View",
+              "systemId": "Pressable",
+              "props": {
+                "accessibilityRole": "button",
+                "accessibilityLabel": "Unavailable",
+                "disabled": true,
+                "style": {
+                  "x": 24,
+                  "y": 344,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "decoration",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "g",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "decoration",
+              "type": "View",
+              "systemId": "View",
+              "props": {
+                "style": {
+                  "x": 24,
+                  "y": 408,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "repeated_item",
+          "projectId": "project_1",
+          "parentId": "project_1::artboard_tree",
+          "kind": "artboard",
+          "type": "artboard",
+          "orderKey": "b",
+          "data": {
+            "kind": "artboard",
+            "name": "Plan item",
+            "isComponent": true,
+            "canvas": {
+              "dimensions": {
+                "width": 342,
+                "height": 48
+              }
+            }
+          }
+        },
+        {
+          "id": "repeated_item::view_tree",
+          "projectId": "project_1",
+          "parentId": "repeated_item",
+          "kind": "view_tree",
+          "type": "view_tree",
+          "orderKey": "a",
+          "data": {
+            "kind": "view_tree"
+          }
+        },
+        {
+          "id": "item_label",
+          "projectId": "project_1",
+          "parentId": "repeated_item::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "a",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "item_label",
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "accessibilityRole": "listitem",
+                "accessibilityLabel": "Plan option",
+                "style": {
+                  "x": 24,
+                  "y": 0,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827",
+                  "fontFamily": "Nuxie Editor",
+                  "fontWeight": "400",
+                  "fontSize": 18,
+                  "color": "#ffffff"
+                },
+                "children": "Plan option"
+              }
+            }
+          }
+        },
+        {
+          "id": "item_first",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "h",
+          "data": {
+            "kind": "view",
+            "viewKind": "component",
+            "componentArtboardId": "repeated_item",
+            "view": {
+              "id": "item_first",
+              "type": "View",
+              "props": {
+                "style": {
+                  "x": 24,
+                  "y": 472,
+                  "width": 342,
+                  "height": 48
+                }
+              }
+            },
+            "childVmRefPath": "vm.items.item_first"
+          }
+        },
+        {
+          "id": "item_second",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "i",
+          "data": {
+            "kind": "view",
+            "viewKind": "component",
+            "componentArtboardId": "repeated_item",
+            "view": {
+              "id": "item_second",
+              "type": "View",
+              "props": {
+                "style": {
+                  "x": 24,
+                  "y": 536,
+                  "width": 342,
+                  "height": 48
+                }
+              }
+            },
+            "childVmRefPath": "vm.items.item_second"
+          }
+        },
+        {
+          "id": "adjustment",
+          "projectId": "project_1",
+          "parentId": "screen_1::animation_tree",
+          "kind": "state_machine",
+          "type": "state_machine",
+          "orderKey": "a",
+          "data": {
+            "kind": "state_machine",
+            "name": "Adjust seats",
+            "events": [
+              {
+                "id": "seat_increased",
+                "name": "seat_increased"
+              },
+              {
+                "id": "seat_decreased",
+                "name": "seat_decreased"
+              }
+            ],
+            "listeners": [
+              {
+                "id": "seats_increase",
+                "targetObjectKey": "amount",
+                "listenerType": "semantic",
+                "semanticAction": "increase",
+                "actions": [
+                  {
+                    "id": "emit_increase",
+                    "type": "fireEvent",
+                    "eventObjectKey": "event/seat_increased"
+                  }
+                ]
+              },
+              {
+                "id": "seats_decrease",
+                "targetObjectKey": "amount",
+                "listenerType": "semantic",
+                "semanticAction": "decrease",
+                "actions": [
+                  {
+                    "id": "emit_decrease",
+                    "type": "fireEvent",
+                    "eventObjectKey": "event/seat_decreased"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "adjustment_layer",
+          "projectId": "project_1",
+          "parentId": "adjustment",
+          "kind": "state_machine_layer",
+          "type": "state_machine_layer",
+          "orderKey": "a",
+          "data": {
+            "kind": "state_machine_layer"
+          }
+        },
+        {
+          "id": "adjustment_entry",
+          "projectId": "project_1",
+          "parentId": "adjustment_layer",
+          "kind": "layer_state",
+          "type": "layer_state",
+          "orderKey": "entry",
+          "data": {
+            "kind": "layer_state",
+            "type": "entry"
+          }
+        },
+        {
+          "id": "adjustment_any",
+          "projectId": "project_1",
+          "parentId": "adjustment_layer",
+          "kind": "layer_state",
+          "type": "layer_state",
+          "orderKey": "any",
+          "data": {
+            "kind": "layer_state",
+            "type": "any"
+          }
+        },
+        {
+          "id": "adjustment_exit",
+          "projectId": "project_1",
+          "parentId": "adjustment_layer",
+          "kind": "layer_state",
+          "type": "layer_state",
+          "orderKey": "exit",
+          "data": {
+            "kind": "layer_state",
+            "type": "exit"
+          }
+        },
+        {
+          "id": "screen_1::response_tree",
+          "projectId": "project_1",
+          "parentId": "screen_1",
+          "kind": "capability_tree",
+          "type": "capability_tree",
+          "orderKey": "response",
+          "data": {
+            "kind": "capability_tree"
+          }
+        },
+        {
+          "id": "screen_1::password_response",
+          "projectId": "project_1",
+          "parentId": "screen_1::response_tree",
+          "kind": "capability",
+          "type": "capability",
+          "orderKey": "password",
+          "data": {
+            "kind": "capability",
+            "capabilityId": "response",
+            "enabled": true,
+            "instanceId": "password-response",
+            "config": {
+              "responseSchemaId": "password-survey",
+              "versionId": "password-survey-v1",
+              "schemaVersion": 1,
+              "fields": [
+                {
+                  "key": "password",
+                  "type": "text",
+                  "required": true
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "designSystem": {
+      "designSystems": [],
+      "screenDesignSystems": []
+    }
+  },
+  "compiledScripts": []
+}
