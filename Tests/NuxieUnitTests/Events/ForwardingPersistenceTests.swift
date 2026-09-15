@@ -24,11 +24,29 @@ private final class ForwardingAdmissionGate: @unchecked Sendable {
   func enable() { lock.withLock { enabled = true } }
 }
 
+/// Blocks only the delivery lane, after event enrichment and durable persistence.
+private final class ForwardingMainActorGate: @unchecked Sendable {
+  private let entered = DispatchSemaphore(value: 0)
+  private let release = DispatchSemaphore(value: 0)
+  private let lock = NSLock()
+  private var releasedInTime = false
+
+  @MainActor func hold() {
+    entered.signal()
+    let result = release.wait(timeout: .now() + 5)
+    lock.withLock { releasedInTime = result == .success }
+  }
+  func waitUntilEntered() -> Bool { entered.wait(timeout: .now() + 2) == .success }
+  func unblock() { release.signal() }
+  func completedBeforeTimeout() -> Bool { lock.withLock { releasedInTime } }
+}
+
 @MainActor
 private final class PublicForwardingDelegate {
   private let acceptedNames: Set<String>
   private var activities: [NuxieActivityInfo] = []
   private var mainThreadDeliveries: [Bool] = []
+  private var identityStatesAtDelivery: [Bool] = []
 
   init(acceptedNames: Set<String>) {
     self.acceptedNames = acceptedNames
@@ -37,12 +55,15 @@ private final class PublicForwardingDelegate {
   func nuxieDidEmit(_ info: NuxieActivityInfo) {
     guard acceptedNames.contains(info.name) else { return }
     activities.append(info)
+    identityStatesAtDelivery.append(info.isCurrentIdentity)
     mainThreadDeliveries.append(Thread.isMainThread)
   }
 
   func snapshot() -> (activities: [NuxieActivityInfo], mainThreadDeliveries: [Bool]) {
     (activities, mainThreadDeliveries)
   }
+
+  func identityStates() -> [Bool] { identityStatesAtDelivery }
 }
 
 extension PublicForwardingDelegate: NuxieDelegate {}
@@ -103,12 +124,76 @@ final class ForwardingPersistenceTests: XCTestCase {
         XCTAssertTrue(fresh.isCurrentIdentity)
         await sdk.shutdown()
         XCTAssertFalse(fresh.isCurrentIdentity)
+        try sdk.setup(with: configuration, overrides: overrides)
+        let replacement = try XCTUnwrap(sdk.core)
+        replacement.identity.setDistinctId(fixture.initialCustomerId)
+        replacement.eventLog.track(
+          SystemEventNames.appBackgrounded,
+          properties: nil, userProperties: nil, userPropertiesSetOnce: nil
+        )
+        await replacement.eventLog.drain()
+        XCTAssertTrue(try XCTUnwrap(delegate.snapshot().activities.last).isCurrentIdentity)
+        XCTAssertFalse(fresh.isCurrentIdentity)
+        await sdk.shutdown()
       default: XCTFail("Unknown identity fixture action: \(step.action)")
       }
       XCTAssertEqual(original.customerId, step.expectedCustomerId, step.action)
       XCTAssertEqual(original.isCurrentIdentity, step.expectedCurrent, step.action)
     }
     sdk.delegate = nil
+  }
+
+  func testHeldMainActorActivityIsStaleAfterIdentifyOrResetRoundTrip() async throws {
+    for resets in [false, true] {
+      let storageURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("nuxie-held-activity-\(UUID().uuidString)")
+      try FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: storageURL) }
+      let sdk = NuxieSDK.shared
+      await sdk.shutdown()
+      let delegate = await MainActor.run {
+        PublicForwardingDelegate(acceptedNames: ["app_backgrounded"])
+      }
+      await MainActor.run { sdk.delegate = delegate }
+      let configuration = NuxieConfiguration(apiKey: "test-api-key")
+      configuration.testingOverrides.customStoragePath = storageURL
+      configuration.testingOverrides.suppressBackgroundWork = true
+      let identity = IdentityService(customStoragePath: storageURL)
+      identity.setDistinctId("customer-a")
+      let log = EventLog(
+        identity: identity, dateProvider: MockDateProvider(),
+        apiClient: MockNuxieApiForQueue(), store: MockEventStore()
+      )
+      let gate = ForwardingMainActorGate()
+      defer { gate.unblock() }
+      let held = expectation(description: "durable activity awaits main-actor delivery")
+      // Register before SDK setup so this observer can hold the real main actor
+      // after persistence, immediately before the SDK's last-mile subscriber.
+      await log.subscribeForwarding { durable in
+        guard durable.event.forwardingName == SystemEventNames.appBackgrounded else { return }
+        Task { @MainActor in gate.hold() }
+        if gate.waitUntilEntered() { held.fulfill() }
+      }
+      var overrides = NuxieCoreOverrides()
+      overrides.api = MockNuxieApi()
+      overrides.identity = identity
+      overrides.eventLog = log
+      try sdk.setup(with: configuration, overrides: overrides)
+      log.track(SystemEventNames.appBackgrounded)
+      await fulfillment(of: [held], timeout: 3)
+      if resets { identity.reset(keepAnonymousId: true) }
+      else { identity.setDistinctId("customer-b") }
+      identity.setDistinctId("customer-a")
+      gate.unblock()
+      await log.drain()
+      XCTAssertTrue(gate.completedBeforeTimeout(), "Main actor hold timed out before identity changed")
+      let delivered = await MainActor.run { delegate.snapshot().activities }
+      let currentAtDelivery = await MainActor.run { delegate.identityStates() }
+      XCTAssertEqual(delivered.map(\.customerId), ["customer-a"])
+      XCTAssertEqual(currentAtDelivery, [false])
+      await sdk.shutdown()
+      await MainActor.run { sdk.delegate = nil }
+    }
   }
 
   func testIdentityIsCapturedBeforeBeforeSendForOrdinaryAndStableActivity() async throws {
