@@ -6,6 +6,42 @@ import NuxieRuntime
 
 @MainActor
 final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
+    func testSharedFocusRestorationScenarios() throws {
+        struct Step: Decodable { let op: String; let nodes: [UInt32]?; let target: UInt32? }
+        struct Scenario: Decodable { let id: String; let steps: [Step]; let expectedFocus: String }
+        struct Suite: Decodable { let schemaVersion: Int; let cases: [Scenario] }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let suite = try JSONDecoder().decode(Suite.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/accessibility/focus-restoration.json")))
+        XCTAssertEqual(suite.schemaVersion, 1)
+        for scenario in suite.cases {
+            let view = UIView()
+            let shell = UIButton()
+            var focused: AnyObject?
+            let container = ExperienceSemanticAccessibilityContainer(view: view,
+                focusedElement: { focused }, moveFocus: { focused = $0 })
+            container.setActive(true)
+            for step in scenario.steps {
+                switch step.op {
+                case "publish":
+                    let nodes = try XCTUnwrap(step.nodes).enumerated().map { node($0.element, order: UInt32($0.offset)) }
+                    container.update(capture: try capture(nodes), nativeControls: [:], project: projection) { _, _, _ in true }
+                case "focus":
+                    let label = String(try XCTUnwrap(step.target))
+                    focused = try XCTUnwrap(view.accessibilityElements?.compactMap { $0 as? UIAccessibilityElement }
+                        .first { $0.accessibilityLabel == label })
+                case "withdraw": container.setActive(false)
+                case "resume": container.setActive(true)
+                case "shell": focused = shell
+                default: XCTFail("Unknown shared operation: \(step.op)")
+                }
+            }
+            let actual = focused === shell ? "shell" : (focused as? UIAccessibilityElement)?.accessibilityLabel
+            XCTAssertEqual(actual, scenario.expectedFocus, scenario.id)
+        }
+    }
+
     func testReadingOrderMixesNativeFieldOnceAndPreservesDrawnIdentity() throws {
         let view = UIView()
         let field = UITextField()
