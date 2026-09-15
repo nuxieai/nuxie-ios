@@ -1,0 +1,8 @@
+{
+  "platform": "android",
+  "contract": "Terminal Journey shutdown drains native ownership without joining an already-admitted durable outcome callback. The outer identity shutdown still joins that outcome. This prevents a Journey worker from waiting for a callback queued to itself.",
+  "terminalCompletesBeforeNativeDetach": false,
+  "terminalCompletesAfterNativeDetach": true,
+  "identityCompletesBeforeOutcome": false,
+  "outcomeCount": 1
+}
