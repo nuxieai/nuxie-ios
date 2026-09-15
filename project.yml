@@ -456,10 +456,16 @@ targets:
         name: NuxieUnitTests
         includes:
           - Experiences/ExperienceTextInputSemanticsTests.swift
+          - Experiences/SignedSemanticJourneyTests.swift
           - Fixtures/semantic_text.riv
+      - path: fixtures/journeys/rendered-semantic-screen-control
+        type: folder
+      - path: fixtures/journeys/rendered-semantic-screen-control-error
+        type: folder
     dependencies:
       - target: NuxieExperienceRuntimeHostApp
       - target: NuxieSDK
+      - target: NuxieTestSupportiOS
       - target: NuxieRuntime
         link: false
     settings:

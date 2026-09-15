@@ -1028,11 +1028,15 @@ final class ExperienceScreenViewController: UIViewController {
         if requiresSceneSemantics {
             semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
         }
-        guard !lifecycleWritesUnavailable else { return nil }
         guard let defaultViewModelName = journeyScreen?.defaultViewModelName else {
-            markLifecycleWritesUnavailable("screen has no default root ViewModel")
-            return nil
+            // Screens without a root ViewModel have no native lifecycle fields
+            // to acknowledge. Their host lifecycle still owns semantic focus.
+            guard interactiveScreen != nil, !isShuttingDown,
+                  semanticFocusLifecycle.completeWrite(write, succeeded: true) else { return nil }
+            updatePresentationVisibility()
+            return write
         }
+        guard !lifecycleWritesUnavailable else { return nil }
         let instanceID = journeyScreen?.defaultInstanceId
         let command = snapshot.stateCommand(
             viewModelName: defaultViewModelName,

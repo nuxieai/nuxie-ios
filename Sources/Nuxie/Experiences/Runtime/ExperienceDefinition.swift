@@ -4,8 +4,8 @@ import Foundation
 /// Renderer-owned projection of one authenticated Journey.
 ///
 /// Journey traversal, routes, waits, and outcomes belong to JourneyService.
-/// The renderer receives only screens, view-model defaults, and declarative
-/// screen controls.
+/// The renderer receives screens, view-model defaults, and screen-control
+/// bindings. Scripted listeners execute in the native interaction player.
 struct ExperienceDefinition: Sendable {
     let screens: [JourneyScreen]
     let viewModelValues: [JourneyViewModelValue]
@@ -96,14 +96,27 @@ struct ExperienceDefinition: Sendable {
                       case .string(let actionId) = control["actionId"],
                       case .object(let binding) = control["behavior"],
                       case .string(let kind) = binding["kind"],
-                      kind == "declarative",
-                      case .array(let actions) = binding["program"],
                       table[actionId] == nil else {
+                    throw JourneyReleaseAuthenticationError.invalidDescriptor
+                }
+                let actionBinding: ScreenControlActionBinding
+                switch kind {
+                case "declarative":
+                    guard case .array(let actions) = binding["program"] else {
+                        throw JourneyReleaseAuthenticationError.invalidDescriptor
+                    }
+                    actionBinding = .declarative(try actions.map(declarativeAction))
+                case "script":
+                    // The authored native listener executes on the generated
+                    // interaction player and publishes ordinary typed effects.
+                    // Metadata alone must never execute the script a second time.
+                    actionBinding = .script
+                default:
                     throw JourneyReleaseAuthenticationError.invalidDescriptor
                 }
                 table[actionId] = ScreenControlActionDefinition(
                     actionId: actionId,
-                    binding: .declarative(try actions.map(declarativeAction))
+                    binding: actionBinding
                 )
             }
             guard result[screenId] == nil else {

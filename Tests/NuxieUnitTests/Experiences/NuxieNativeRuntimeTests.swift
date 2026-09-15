@@ -32,6 +32,11 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(field.label, "Prénom 👋")
         XCTAssertNil(field.parentID)
         XCTAssertNil(first.fieldsByTextRun["missing"])
+        let unchanged = try await runtime.captureSemantics(textRuns: ["field/名前", "missing"])
+        XCTAssertEqual(unchanged.tree.renderRevision, first.tree.renderRevision)
+        XCTAssertEqual(unchanged.tree.treeVersion, first.tree.treeVersion)
+        XCTAssertEqual(unchanged.id, first.id,
+            "An unchanged presented capture must preserve queued UIKit action ownership")
         let second = try await runtime.captureSemantics()
         XCTAssertNotEqual(first.id, second.id)
         do {
@@ -47,6 +52,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
             XCTAssertEqual(diagnostic.status, .handleMismatch)
         }
+        let fresh = try await runtime.captureSemantics()
+        XCTAssertNotEqual(fresh.id, second.id,
+            "Explicit retirement must never revive ownership even for an unchanged tree")
         try await runtime.close()
         XCTAssertEqual(first.tree.nodes.first?.label, "Prénom 👋")
     }

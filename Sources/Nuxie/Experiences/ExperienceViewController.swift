@@ -1400,6 +1400,12 @@ class ExperienceViewController: NuxiePlatformViewController {
                 "ExperienceViewController: terminal runtime failure on screen \(screenId): \(error)"
             )
             self.viewModel.handleLoadingFailed(error)
+            if self.didNotifyPresentationReveal {
+                // An active occurrence cannot resume after a terminal runtime
+                // failure. Resolve its Journey before releasing presentation;
+                // acquisition failures before reveal retain loading recovery.
+                self.performDismiss(reason: .error(error))
+            }
         }
         runtimeSession.ownFailureTask(task, generation: generation)
     }
