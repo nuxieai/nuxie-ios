@@ -48,6 +48,133 @@ private final class PublicForwardingDelegate {
 extension PublicForwardingDelegate: NuxieDelegate {}
 
 final class ForwardingPersistenceTests: XCTestCase {
+  private struct IdentitySuite: Decodable {
+    struct Step: Decodable {
+      let action: String
+      let customerId: String?
+      let expectedCustomerId: String
+      let expectedCurrent: Bool
+    }
+    let initialCustomerId: String
+    let steps: [Step]
+  }
+
+  @MainActor
+  func testPublicActivityRetainsCustomerAndExpiresAcrossIdentityRoundTripAndShutdown() async throws {
+    let storageURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("nuxie-forwarding-identity-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: storageURL) }
+    let sdk = NuxieSDK.shared
+    await sdk.shutdown()
+    let delegate = PublicForwardingDelegate(acceptedNames: ["app_backgrounded"])
+    sdk.delegate = delegate
+    let configuration = NuxieConfiguration(apiKey: "test-api-key")
+    configuration.testingOverrides.customStoragePath = storageURL
+    configuration.testingOverrides.suppressBackgroundWork = true
+    var overrides = NuxieCoreOverrides()
+    overrides.api = MockNuxieApi()
+    try sdk.setup(with: configuration, overrides: overrides)
+    let core = try XCTUnwrap(sdk.core)
+    let fixture = try JSONDecoder().decode(
+      IdentitySuite.self,
+      from: Data(contentsOf: repositoryRoot.appendingPathComponent(
+        "fixtures/encodings/activity-identity.json"
+      ))
+    )
+    core.identity.setDistinctId(fixture.initialCustomerId)
+    core.eventLog.track(
+      SystemEventNames.appBackgrounded,
+      properties: nil, userProperties: nil, userPropertiesSetOnce: nil
+    )
+    await core.eventLog.drain()
+    let original = try XCTUnwrap(delegate.snapshot().activities.last)
+    for step in fixture.steps {
+      switch step.action {
+      case "observe": break
+      case "identify": core.identity.setDistinctId(try XCTUnwrap(step.customerId))
+      case "shutdown":
+        core.eventLog.track(
+          SystemEventNames.appBackgrounded,
+          properties: nil, userProperties: nil, userPropertiesSetOnce: nil
+        )
+        await core.eventLog.drain()
+        let fresh = try XCTUnwrap(delegate.snapshot().activities.last)
+        XCTAssertTrue(fresh.isCurrentIdentity)
+        await sdk.shutdown()
+        XCTAssertFalse(fresh.isCurrentIdentity)
+      default: XCTFail("Unknown identity fixture action: \(step.action)")
+      }
+      XCTAssertEqual(original.customerId, step.expectedCustomerId, step.action)
+      XCTAssertEqual(original.isCurrentIdentity, step.expectedCurrent, step.action)
+    }
+    sdk.delegate = nil
+  }
+
+  func testIdentityIsCapturedBeforeBeforeSendForOrdinaryAndStableActivity() async throws {
+    for stable in [false, true] {
+      let identity = MockIdentityService()
+      identity.setDistinctId("customer-a")
+      let store = MockEventStore()
+      let log = makeUnconfiguredLog(store: store, identity: identity)
+      let recorder = ForwardingRecorder()
+      await log.subscribeForwarding { event in await recorder.record(event) }
+      let configuration = NuxieConfiguration(apiKey: "test-api-key")
+      configuration.beforeSend = { event in
+        identity.setDistinctId("customer-b")
+        identity.setDistinctId("customer-a")
+        return event
+      }
+      try await log.configure(configuration: configuration)
+      if stable {
+        _ = await log.captureSystemEvent(
+          SystemEventNames.appBackgrounded, properties: nil,
+          eventId: "stable-identity", distinctId: "customer-a"
+        )
+      } else {
+        log.track(SystemEventNames.appBackgrounded)
+      }
+      await log.drain()
+      let activities = await recorder.snapshot()
+      let activity = try XCTUnwrap(activities.first)
+      XCTAssertEqual(activities.count, 1)
+      XCTAssertEqual(activity.event.distinctId, "customer-a")
+      XCTAssertFalse(activity.identityIsCurrent())
+      XCTAssertEqual(store.storedEvents.count, 1)
+      await log.close()
+    }
+  }
+
+  func testHistoryActivityExpiresWhileItsDurableWriteIsSuspended() async throws {
+    let identity = MockIdentityService()
+    identity.setDistinctId("customer-a")
+    let store = MockEventStore()
+    store.suspendInsert(id: "history-identity")
+    let log = makeUnconfiguredLog(store: store, identity: identity)
+    let recorder = ForwardingRecorder()
+    await log.subscribeForwarding { event in await recorder.record(event) }
+    try await log.configure(configuration: NuxieConfiguration(apiKey: "test-api-key"))
+    let capture = Task {
+      await log.storePreparedEventInHistory(NuxieEvent(
+        id: "history-identity", name: SystemEventNames.appBackgrounded,
+        distinctId: "customer-a"
+      ))
+    }
+    try await waitForStoreCallCount(1, store: store)
+    identity.setDistinctId("customer-b")
+    identity.setDistinctId("customer-a")
+    store.resumeInsert(id: "history-identity")
+    _ = await capture.value
+    await log.drain()
+    let activities = await recorder.snapshot()
+    let activity = try XCTUnwrap(activities.first)
+    XCTAssertEqual(activities.count, 1)
+    XCTAssertEqual(activity.event.distinctId, "customer-a")
+    XCTAssertFalse(activity.identityIsCurrent())
+    XCTAssertEqual(store.storedEvents.count, 1)
+    await log.close()
+  }
+
   func testForwardingFollowsDurabilityOrderWhenPersistenceLanesInterleave() async throws {
     let store = MockEventStore()
     store.suspendInsert(id: "slow-first-admission")
@@ -515,9 +642,12 @@ final class ForwardingPersistenceTests: XCTestCase {
     return (log, store)
   }
 
-  private func makeUnconfiguredLog(store: MockEventStore) -> EventLog {
+  private func makeUnconfiguredLog(
+    store: MockEventStore,
+    identity: MockIdentityService = MockIdentityService()
+  ) -> EventLog {
     EventLog(
-      identity: MockIdentityService(),
+      identity: identity,
       dateProvider: MockDateProvider(),
       apiClient: MockNuxieApiForQueue(),
       store: store
