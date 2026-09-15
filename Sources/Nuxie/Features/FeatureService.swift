@@ -29,7 +29,8 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
     /// Clear all feature cache
     func clearCache() async
 
-    /// Handle user identity change
+    /// Synchronize queued identity work without invalidating reads already scoped
+    /// to the current identity generation.
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
 
     /// Sync FeatureInfo from profile cache (call after profile refresh)
@@ -216,6 +217,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// asynchronous, so every FeatureService boundary validates this scope
     /// before reading or mutating access.
     private var cacheDistinctId: String
+    private var cacheIdentityFence: IdentityFenceToken?
 
     // Constructor-injected collaborators (Phase 4c composition root).
     private let api: FeatureChecking
@@ -242,6 +244,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         self.featureInfo = featureInfo
         self.realTimeCacheTTL = cacheTTL
         self.cacheDistinctId = identity.getDistinctId()
+        self.cacheIdentityFence = identity.performWithCurrentIdentityFence(identity.getDistinctId()) { _ in () }?.token
     }
 
     // MARK: - Public Methods
@@ -385,6 +388,9 @@ internal actor FeatureService: FeatureServiceProtocol {
     ) async throws -> (result: FeatureCheckResult, requestRevision: UInt64) {
         await synchronizeCustomerScopeIfNeeded()
         let customerId = identityService.getDistinctId()
+        guard let identityFence = identityService.performWithCurrentIdentityFence(customerId, { _ in () })?.token else {
+            throw CancellationError()
+        }
         let requestGeneration = stateGeneration
         featureMutationRevisions[featureId, default: 0] &+= 1
         let requestRevision = featureMutationRevisions[featureId, default: 0]
@@ -399,7 +405,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         // A response belongs only to the identity that initiated it. Returning
         // customer A's access after identify/reset would expose that access to
         // customer B even if the shared cache correctly rejected the write.
-        guard identityService.getDistinctId() == customerId,
+        guard identityService.performIfCurrentIdentityFenceToken(identityFence, { true }) == true,
               stateGeneration == requestGeneration else {
             throw CancellationError()
         }
@@ -530,11 +536,12 @@ internal actor FeatureService: FeatureServiceProtocol {
         LogInfo("Feature cache cleared")
     }
 
-    /// Handle user identity change
+    /// Synchronize queued identity work without invalidating reads already scoped
+    /// to the current identity generation.
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
-        await clearCache()
+        await synchronizeCustomerScopeIfNeeded()
         await notifyFeatureInfoUpdate()
-        LogInfo("Feature cache cleared due to user change")
+        LogInfo("Feature cache synchronized after user change")
     }
 
     /// Sync FeatureInfo from profile cache (call after profile refresh)
@@ -687,7 +694,8 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// new customer safe.
     private func synchronizeCustomerScopeIfNeeded() async {
         let distinctId = identityService.getDistinctId()
-        guard cacheDistinctId != distinctId else { return }
+        let identityFence = identityService.performWithCurrentIdentityFence(distinctId) { _ in () }?.token
+        guard cacheDistinctId != distinctId || cacheIdentityFence != identityFence else { return }
         clearCustomerScopedState(for: distinctId)
         let info = featureInfo
         await MainActor.run {
@@ -704,6 +712,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         featureMutationRevisions.removeAll()
         committedCacheRevisions.removeAll()
         cacheDistinctId = distinctId
+        cacheIdentityFence = identityService.performWithCurrentIdentityFence(distinctId) { _ in () }?.token
     }
 
 }
