@@ -79,6 +79,29 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
         XCTAssertEqual((moves.last as? UIAccessibilityElement)?.accessibilityLabel, "1", "Shutdown discards restoration")
     }
 
+    func testRepeatedWithdrawalBeforePresentationPreservesOwnedRestoration() throws {
+        let view = UIView()
+        var focused: AnyObject?
+        var moves: [AnyObject] = []
+        let container = ExperienceSemanticAccessibilityContainer(view: view,
+            focusedElement: { focused }, moveFocus: { moves.append($0); focused = $0 })
+        func publish() throws {
+            container.update(capture: try capture([node(1), node(2, order: 1)]),
+                nativeControls: [:], project: projection) { _, _, _ in true }
+        }
+        container.setActive(true)
+        try publish()
+        focused = view.accessibilityElements?[1] as AnyObject?
+        container.setActive(false)
+        container.setActive(true)
+        container.setActive(false)
+        container.setActive(true)
+        XCTAssertEqual(moves.count, 1)
+        try publish()
+        XCTAssertEqual(moves.count, 2)
+        XCTAssertEqual((moves.last as? UIAccessibilityElement)?.accessibilityLabel, "2")
+    }
+
     func testNativeFieldFocusAndRemovedTargetUseCurrentReadingOrder() throws {
         let view = UIView()
         let field = UITextField()
