@@ -16,6 +16,7 @@ struct AuthenticatedRuntimeAsset: Equatable, Sendable {
 /// The sole renderer input produced by descriptor authentication and acquisition.
 struct AuthenticatedRuntimePayload: Sendable {
     let authenticatedKeyID: String
+    let requiredCapabilities: Set<String>
     let renderPlan: NativeExperienceRenderPlan
     let journey: JourneyDocument
     let definition: ExperienceDefinition?
@@ -24,6 +25,7 @@ struct AuthenticatedRuntimePayload: Sendable {
 
     init(
         authenticatedKeyID: String,
+        requiredCapabilities: Set<String> = [],
         renderPlan: NativeExperienceRenderPlan,
         journey: JourneyDocument,
         definition: ExperienceDefinition? = nil,
@@ -31,6 +33,7 @@ struct AuthenticatedRuntimePayload: Sendable {
         assets: [AuthenticatedRuntimeAsset]
     ) {
         self.authenticatedKeyID = authenticatedKeyID
+        self.requiredCapabilities = requiredCapabilities
         self.renderPlan = renderPlan
         self.journey = journey
         self.definition = definition

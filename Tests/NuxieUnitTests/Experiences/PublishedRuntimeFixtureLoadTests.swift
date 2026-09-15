@@ -112,6 +112,22 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
             XCTAssertFalse(artifact.sceneBytes.isEmpty, fixture.id)
             XCTAssertEqual(artifact.payload.renderPlan.entry.screenId, initialScreenID, fixture.id)
             XCTAssertEqual(artifact.payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR", fixture.id)
+            let requirements = try XCTUnwrap(release.descriptor.requirements)
+            guard case .array(let declared) = requirements["requiredCapabilities"] else {
+                return XCTFail("Signed runtime fixture has no capability declaration")
+            }
+            let expected = try Set(declared.map { value -> String in
+                guard case .string(let name) = value else {
+                    throw NSError(domain: "invalid fixture capability", code: 1)
+                }
+                return name
+            })
+            XCTAssertTrue(expected.contains("rive"), "Exercise nonempty signed requirements")
+            XCTAssertEqual(artifact.payload.requiredCapabilities, expected, fixture.id)
+            for screen in release.descriptor.leg.screens where screen.id != initialScreenID {
+                let other = try await presentation.artifactLoader(presentation.experience, nil, screen.id)
+                XCTAssertEqual(other.payload.requiredCapabilities, expected, "\(fixture.id)/\(screen.id)")
+            }
         }
     }
 

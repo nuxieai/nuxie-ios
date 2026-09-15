@@ -9,6 +9,31 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    func testSemanticFrameCaptureIsOnlyReturnedForPresentedScreen() async throws {
+        let fixture = try await twoScreenStatePayload()
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: fixture.payload)
+        let screen = try await preparation.openScreen(screenID: fixture.firstScreenID,
+            pixelWidth: 64, pixelHeight: 64)
+        defer { Task { try? await screen.close() } }
+        try await screen.enableSemantics()
+        _ = try await screen.step(elapsedSeconds: 0)
+        let skipped = try await screen.renderFrame(drawable: nil, isOccluded: true, capturesSemantics: true)
+        XCTAssertNil(skipped.semantics)
+        let device = try await screen.metalDevice()
+        let layer = CAMetalLayer()
+        layer.device = device.value
+        layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = true
+        layer.drawableSize = CGSize(width: 64, height: 64)
+        guard let drawable = layer.nextDrawable() else { throw XCTSkip("This host cannot vend a CAMetalDrawable") }
+        let frame = try await screen.renderFrame(drawable: ExperienceInteractiveDrawable(drawable),
+            capturesSemantics: true)
+        XCTAssertEqual(frame.outcome.disposition, .presented)
+        XCTAssertNotNil(frame.semantics)
+        try await screen.retireSemanticCapture()
+        try await screen.close()
+    }
+
     func testStateContractFailureRetainsItsReasonForArtifactTelemetry() {
         let error = ExperienceInteractiveScreenError.stateContract(
             "view model 'Experiment' does not resolve exactly once"

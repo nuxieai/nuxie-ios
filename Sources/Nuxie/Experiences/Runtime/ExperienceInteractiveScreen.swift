@@ -316,6 +316,11 @@ enum ExperienceInteractiveRendererHealth: Equatable, Sendable {
     case failed
 }
 
+struct ExperienceInteractiveRenderedFrame: Sendable {
+    let outcome: ExperienceInteractiveRenderOutcome
+    let semantics: NuxieNativeSemanticCapture?
+}
+
 struct ExperienceInteractiveRenderOutcome: Equatable, Sendable {
     let disposition: ExperienceInteractiveRenderDisposition
     let health: ExperienceInteractiveRendererHealth
@@ -3314,6 +3319,21 @@ actor ExperienceInteractiveScreen {
         }
     }
 
+    func setSemanticText(captureID: UUID, inputID: String, value: String) async throws -> Bool {
+        guard let input = textInputs[inputID] else {
+            throw ExperienceInteractiveScreenError.textInputNotFound(inputID)
+        }
+        guard input.editable else {
+            throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
+        }
+        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
+        let runtime = runtime
+        return try await operationGate.withLock {
+            try await runtime.setSemanticTextRun(captureID: captureID,
+                name: input.riveTextRunName, text: Data(limited.utf8))
+        }
+    }
+
     func metalDevice() async throws -> ExperienceInteractiveMetalDevice {
         ExperienceInteractiveMetalDevice(value: try await runtime.metalDevice().value)
     }
@@ -3329,12 +3349,41 @@ actor ExperienceInteractiveScreen {
         }
     }
 
+    func enableSemantics() async throws {
+        let runtime = runtime
+        try await operationGate.withLock { try await runtime.enableSemantics() }
+    }
+
+    func queueSemanticAction(captureID: UUID, nodeID: UInt32, action: NuxieNativeSemanticAction) async throws {
+        let runtime = runtime
+        try await operationGate.withLock {
+            try await runtime.queueSemanticAction(captureID: captureID, nodeID: nodeID, action: action)
+        }
+    }
+
+    func retireSemanticCapture() async throws {
+        let runtime = runtime
+        try await operationGate.withLock { try await runtime.retireSemanticCapture() }
+    }
+
     func render(
         drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
         clearColor: UInt32 = 0,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> ExperienceInteractiveRenderOutcome {
+        try await renderFrame(drawable: drawable, isOccluded: isOccluded,
+            clearColor: clearColor, capturesSemantics: false, completion: completion).outcome
+    }
+
+    /// Capture and render share the occurrence lock, preventing intervening state/geometry writes.
+    func renderFrame(
+        drawable: ExperienceInteractiveDrawable?,
+        isOccluded: Bool = false,
+        clearColor: UInt32 = 0,
+        capturesSemantics: Bool,
+        completion: (@Sendable () -> Void)? = nil
+    ) async throws -> ExperienceInteractiveRenderedFrame {
         let state: NuxieNativeDrawableState
         if let drawable {
             state = .available(NuxieNativeDrawable(drawable.value))
@@ -3342,14 +3391,16 @@ actor ExperienceInteractiveScreen {
             state = isOccluded ? .occluded : .timeout
         }
         let runtime = runtime
+        let textRuns = textInputs.values.filter(\.editable).map(\.riveTextRunName).sorted()
         return try await operationGate.withLock {
-            Self.renderOutcome(
-                try await runtime.render(
-                    drawable: state,
-                    clearColor: clearColor,
-                    completion: completion
-                )
-            )
+            let outcome = try await runtime.render(drawable: state, clearColor: clearColor, completion: completion)
+            let semantics: NuxieNativeSemanticCapture?
+            if capturesSemantics, outcome.disposition == .presented {
+                semantics = try await runtime.captureSemantics(textRuns: textRuns)
+            } else {
+                semantics = nil
+            }
+            return ExperienceInteractiveRenderedFrame(outcome: Self.renderOutcome(outcome), semantics: semantics)
         }
     }
 
