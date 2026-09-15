@@ -1,0 +1,59 @@
+{
+  "contract": "Android screen admission requires a visible host and completed authority revalidation for that visibility generation. Pending local routes are retained while revalidating; background events do not enroll screen-bearing arms.",
+  "cases": [
+    {
+      "name": "visible_waits_for_authority",
+      "operations": [
+        "visible",
+        "complete"
+      ],
+      "expectedActive": [
+        false,
+        true
+      ]
+    },
+    {
+      "name": "background_invalidates_refresh",
+      "operations": [
+        "visible",
+        "background",
+        "complete"
+      ],
+      "expectedActive": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "return_invalidates_old_refresh",
+      "operations": [
+        "visible",
+        "background",
+        "visible",
+        "complete-old",
+        "complete"
+      ],
+      "expectedActive": [
+        false,
+        false,
+        false,
+        false,
+        true
+      ]
+    },
+    {
+      "name": "background_closes_active",
+      "operations": [
+        "visible",
+        "complete",
+        "background"
+      ],
+      "expectedActive": [
+        false,
+        true,
+        false
+      ]
+    }
+  ]
+}
