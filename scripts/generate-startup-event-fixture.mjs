@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Reuse the qualified publisher bytes; change and sign only the test Journey entry condition.
+// Derive signed test Journey variants while reusing the qualified publisher bytes.
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 
