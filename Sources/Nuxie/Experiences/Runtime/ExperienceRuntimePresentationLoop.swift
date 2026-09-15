@@ -732,6 +732,32 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         return true
     }
 
+    /// Interactive work belongs to the visibility/lifecycle generation that admitted it.
+    /// Host commands use enqueue directly because they may intentionally run while hidden.
+    @discardableResult
+    func enqueueInteraction(
+        _ work: ExperienceRuntimePresentationQueuedWork,
+        isEligible: @escaping @MainActor @Sendable () -> Bool,
+        completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void = { _ in }
+    ) -> Bool {
+        guard shouldPresent, isEligible() else {
+            completion(.failure(CancellationError()))
+            return false
+        }
+        let epoch = semanticPresentationEpoch
+        let generation = lifecycleGeneration
+        return enqueue(ExperienceRuntimePresentationQueuedWork { [weak self] in
+            let eligible = await MainActor.run { [weak self] in
+                guard let self, self.shouldPresent,
+                      self.semanticPresentationEpoch == epoch,
+                      self.lifecycleGeneration == generation else { return false }
+                return isEligible()
+            }
+            guard eligible else { throw CancellationError() }
+            return try await work.perform()
+        }, completion: completion)
+    }
+
     func displayLinkDidFire(at timestamp: TimeInterval) {
         guard shouldAdvance else {
             reconcile()

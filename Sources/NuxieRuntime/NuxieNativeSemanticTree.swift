@@ -2,6 +2,7 @@ import Foundation
 
 /// Portable semantic ABI values. Platform views consume copied values, never native handles.
 package struct NuxieNativeSemanticNode: Equatable, Sendable {
+    package static let selected: UInt32 = 1 << 1
     package static let disabled: UInt32 = 1 << 6
     package static let readOnly: UInt32 = 1 << 10
     package static let hidden: UInt32 = 1 << 8

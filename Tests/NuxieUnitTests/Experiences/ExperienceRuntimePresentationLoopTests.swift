@@ -775,6 +775,51 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testQueuedInteractionRejectsWithdrawalIncludingHideAndRestore() async throws {
+        for withdrawal in 0..<3 {
+            let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+            let recorder = PresentationSessionRecorder(device: device)
+            let (window, view) = makePresentationSurface()
+            let loop = makeLoop(recorder: recorder, view: view)
+            try await loop.start()
+            await recorder.holdNextQueuedWork()
+            loop.enqueue(ExperienceRuntimePresentationQueuedWork { .work(requestsFrame: false) })
+            let blocked = await recorder.waitForOperation(named: "queued")
+            XCTAssertTrue(blocked)
+            let completed = expectation(description: "Withdrawn interaction completes as cancellation")
+            var performed = false
+            var eligible = true
+            XCTAssertTrue(loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                await MainActor.run { performed = true }
+                return .work(requestsFrame: false)
+            }, isEligible: { eligible }, completion: { result in
+                XCTAssertFalse(result.isSuccess)
+                completed.fulfill()
+            }))
+            if withdrawal == 2 { eligible = false }
+            else {
+                loop.setPresentationVisible(false)
+                if withdrawal == 1 { loop.setPresentationVisible(true) }
+            }
+            await recorder.releaseQueuedWork()
+            await fulfillment(of: [completed], timeout: 3)
+            XCTAssertFalse(performed)
+            eligible = true
+            loop.setPresentationVisible(true)
+            let fresh = expectation(description: "Fresh interaction executes after restoration")
+            XCTAssertTrue(loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                .work(requestsFrame: false)
+            }, isEligible: { eligible }, completion: { result in
+                XCTAssertTrue(result.isSuccess)
+                fresh.fulfill()
+            }))
+            await fulfillment(of: [fresh], timeout: 3)
+            await loop.shutdown()
+            _ = window
+        }
+    }
+
+    @MainActor
     func testShutdownCancelsOnlyQueuedWorkAndLetsAcceptedWorkDeliverBeforeClose() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
