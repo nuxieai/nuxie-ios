@@ -587,9 +587,17 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let payload = try await statePayload(defaultViewModelName: "Test")
         let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 64, pixelHeight: 64)
         defer { Task { try? await screen.close() } }
+        try await screen.enableSemantics()
+        var deliveries: [String] = []
         var deliveredText: ExperienceInteractiveTextFrame?
         var deliveredSteps = 0
-        let session = screen.presentationSession(onTextFrame: { deliveredText = $0 }) { _ in
+        let session = screen.presentationSession(onSemantics: { _ in
+            XCTAssertNotNil(deliveredText, "Native editors need this frame's geometry before semantic admission")
+            deliveries.append("semantics")
+        }, onTextFrame: {
+            deliveredText = $0
+            deliveries.append("text")
+        }) { _ in
             deliveredSteps += 1
         }
         XCTAssertTrue(session.observesEveryPresentation)
@@ -619,6 +627,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let root = try await screen.rootViewModel()
         _ = try await screen.mutateState([.setNumber(root, path: "Number", value: 91)])
         await rendered.deliver()
+        XCTAssertEqual(deliveries, ["text", "semantics"])
         let snapshot = try XCTUnwrap(deliveredText?.snapshot)
         XCTAssertEqual(snapshot.values.first { $0.name == "Number" }?.value, .number(0))
         let current = try await screen.snapshot()
