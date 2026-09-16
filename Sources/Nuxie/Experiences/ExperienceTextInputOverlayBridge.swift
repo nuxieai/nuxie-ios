@@ -417,6 +417,15 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         let color = UIColor(nuxieARGB: style.color)
         let textColor: UIColor = secure ? color : .clear
         let alignment = Self.textAlignment(style.textAlign)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = alignment
+        // A -1 line height is font-natural. UIKit represents that with zero
+        // paragraph constraints; explicit height is a scaled baseline interval.
+        if style.lineHeight > 0 {
+            let height = CGFloat(style.lineHeight) * fontScale
+            paragraph.minimumLineHeight = height
+            paragraph.maximumLineHeight = height
+        }
         switch control {
         case .field(let field):
             field.font = font
@@ -427,6 +436,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             attributes[.font] = font
             attributes[.foregroundColor] = textColor
             attributes[.kern] = CGFloat(style.letterSpacing) * horizontalScale
+            attributes[.paragraphStyle] = paragraph
             field.defaultTextAttributes = attributes
         case .textView(let textView):
             textView.font = font
@@ -434,6 +444,17 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             textView.textColor = textColor
             textView.tintColor = color
             textView.typingAttributes[.kern] = CGFloat(style.letterSpacing) * horizontalScale
+            textView.typingAttributes[.paragraphStyle] = paragraph
+            let range = NSRange(location: 0, length: textView.textStorage.length)
+            var needsParagraph = false
+            textView.textStorage.enumerateAttribute(.paragraphStyle, in: range) { value, _, _ in
+                if (value as? NSParagraphStyle) != paragraph { needsParagraph = true }
+            }
+            if needsParagraph {
+                // Edit attributes in place, retaining text, selection and any
+                // marked range rather than replacing the attributed string.
+                textView.textStorage.addAttribute(.paragraphStyle, value: paragraph, range: range)
+            }
         }
     }
 

@@ -18,6 +18,8 @@ These JSON vectors define the contracts shared by SDK implementations.
 
 The signed release fixture is the only release wire shape. Tests consume it directly and never rebuild a retired runtime model.
 
+- `journeys/planes/text-input-typography.json`: native multiline font size and baseline intervals, natural line-height sentinel, contain/geometry scaling, and restyling invariants. Consumers compare actual native layout with independently configured platform controls.
+
 ## Events
 
 - `events/catalog.json`: every reserved event, property contract, capture path, emitter, and forwarding decision.
