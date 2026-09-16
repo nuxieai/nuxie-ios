@@ -24,6 +24,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         struct Case: Decodable { let fontSize: Float; let lineHeight: Float }
         struct Field: Decodable {
             let runName: String
+            let path: String
             let x: CGFloat; let y: CGFloat; let width: CGFloat; let height: CGFloat
         }
         struct Fixture: Decodable { let cases: [Case]; let geometry: [Field] }
@@ -63,9 +64,18 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                 if index == 0 && fieldIndex == 0 { firstGeometry = geometry }
             }
             let snapshot = try await runtime.snapshot()
-            func number(_ name: String) throws -> Float {
+            func number(_ path: String) throws -> Float {
+                let segments = path.split(separator: "/").map(String.init)
+                var owner = snapshot.rootInstanceID
+                for name in segments.dropLast() {
+                    let entry = try XCTUnwrap(snapshot.values.first { $0.ownerInstanceID == owner && $0.name == name })
+                    guard case .referencedInstance(let child) = entry.value else {
+                        throw NSError(domain: "FontMetricsFixture", code: 2)
+                    }
+                    owner = child
+                }
                 let entry = try XCTUnwrap(snapshot.values.first {
-                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == name
+                    $0.ownerInstanceID == owner && $0.name == segments.last
                 })
                 guard case .number(let value) = entry.value else {
                     throw NSError(domain: "FontMetricsFixture", code: 1)
@@ -76,6 +86,10 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             XCTAssertEqual(try number("observedLineHeight"), item.lineHeight)
             XCTAssertEqual(try number("fixedFontSize"), 18)
             XCTAssertEqual(try number("fixedLineHeight"), 24)
+            for (fieldIndex, field) in fixture.geometry.enumerated() {
+                XCTAssertEqual(try number("\(field.path)/fontSize"), fieldIndex == 0 ? item.fontSize : 18)
+                XCTAssertEqual(try number("\(field.path)/lineHeight"), fieldIndex == 0 ? item.lineHeight : 24)
+            }
             let frame = try await renderPixels(runtime, width: 390, height: 844)
             XCTAssertEqual(frame.outcome.disposition, .presented)
             let presented = try await runtime.captureSemantics()
