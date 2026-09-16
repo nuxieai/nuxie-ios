@@ -42,6 +42,34 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testPresentedDeliveryRetainsEpochOfStepAcrossHideAndResume() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let staleDelivery = expectation(description: "old step must not publish into resumed presentation")
+        staleDelivery.isInverted = true
+        let recorder = PresentationSessionRecorder(device: device) { staleDelivery.fulfill() }
+        await recorder.holdNextStep()
+        let (window, view) = makePresentationSurface()
+        var observations: [@Sendable (TimeInterval, ExperienceRuntimePresentedDrawable.Provenance) -> Void] = []
+        let loop = makeLoop(recorder: recorder, view: view, observesEveryPresentation: true,
+            observeDrawablePresentation: { _, handler in observations.append(handler) },
+            nativeCompletionPresentationFallback: nil)
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let stepped = await recorder.waitForOperation(named: "step")
+        XCTAssertTrue(stepped)
+        loop.setPresentationVisible(false)
+        loop.setPresentationVisible(true)
+        await recorder.releaseStep()
+        let rendered = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(rendered)
+        XCTAssertFalse(observations.isEmpty)
+        observations[0](1, .injectedTestObserver)
+        await fulfillment(of: [staleDelivery], timeout: 0.1)
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testVisibleSessionKeepsTickingAcrossCompletedSteps() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")

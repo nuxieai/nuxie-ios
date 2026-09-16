@@ -241,6 +241,14 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         layout()
     }
 
+    func invalidateLayout() {
+        geometriesByInputID.removeAll()
+        metricsByInputID.removeAll()
+        lastAppliedMetrics.removeAll()
+        invalidMetricIDs = Set(bindingsByInputID.keys)
+        layout()
+    }
+
     func update(snapshot: ExperienceInteractiveViewModelSnapshot) {
         let resolver = ExperienceTextInputGeometryResolver(snapshot: snapshot)
         metricsByInputID = bindingsByInputID.compactMapValues {
