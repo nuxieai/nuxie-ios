@@ -74,7 +74,7 @@ final class ExperienceTextInputGeometryTests: XCTestCase {
             .appendingPathComponent("fixtures/journeys/planes/text-input-effective-metrics.json")
         let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
-        XCTAssertEqual(cases.count, 17)
+        XCTAssertEqual(cases.count, 18)
         for item in cases {
             var values: [ExperienceInteractiveViewModelSnapshot.Value] = [
                 .init(ownerInstanceID: 1, propertyIndex: 0, name: "nuxieTextInputs", value: .referencedInstance(2)),
