@@ -93,6 +93,16 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             }
             let frame = try await renderPixels(runtime, width: 390, height: 844)
             XCTAssertEqual(frame.outcome.disposition, .presented)
+            if index == 0 {
+                let repeated = try await renderPixels(runtime, width: 390, height: 844)
+                XCTAssertEqual(repeated.outcome.disposition, .presented)
+                if frame.pixels != repeated.pixels {
+                    try attachMetricPixels(frame.pixels, name: "unchanged-first")
+                    try attachMetricPixels(repeated.pixels, name: "unchanged-second")
+                }
+                XCTAssertEqual(frame.pixels, repeated.pixels,
+                    "An unchanged scene should retain its pixels across consecutive presentations")
+            }
             let presented = try await runtime.captureSemantics()
             XCTAssertEqual(Set(fields.values.map(\.renderRevision)), [presented.tree.renderRevision],
                 "Copied geometry must identify the exact presented revision")
