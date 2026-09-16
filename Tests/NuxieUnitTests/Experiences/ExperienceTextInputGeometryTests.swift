@@ -92,7 +92,7 @@ final class ExperienceTextInputGeometryTests: XCTestCase {
                 } else { value = .unsupported }
                 values.append(.init(ownerInstanceID: 3, propertyIndex: index, name: entry.key, value: value))
             }
-            let resolver = ExperienceTextInputGeometryResolver(snapshot: .init(rootInstanceID: 1, instances: [], values: values))
+            let resolver = ExperienceTextInputMetricsResolver(snapshot: .init(rootInstanceID: 1, instances: [], values: values))
             let expected = (item["expected"] as? [String: NSNumber]).map {
                 ExperienceTextInputMetrics(fontSize: $0["fontSize"]!.doubleValue, lineHeight: $0["lineHeight"]!.doubleValue)
             }
@@ -104,7 +104,7 @@ final class ExperienceTextInputGeometryTests: XCTestCase {
         }
     }
 
-    func testSharedGeometryPathsAndBounds() throws {
+    func testSharedSnapshotValuePaths() throws {
         let path = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -139,7 +139,7 @@ final class ExperienceTextInputGeometryTests: XCTestCase {
             return .init(id: id.uint64Value, schemaIndex: 0,
                          valueRange: (indices.first ?? 0)..<((indices.last ?? -1) + 1))
         }
-        let resolver = ExperienceTextInputGeometryResolver(snapshot: .init(
+        let resolver = ExperienceTextInputMetricsResolver(snapshot: .init(
             rootInstanceID: try XCTUnwrap(fixture["rootInstanceId"] as? NSNumber).uint64Value,
             instances: instances, values: values))
         let queries = try XCTUnwrap(fixture["queries"] as? [[String: Any]])
@@ -147,19 +147,6 @@ final class ExperienceTextInputGeometryTests: XCTestCase {
         for query in queries {
             let path = try XCTUnwrap(query["path"] as? String)
             XCTAssertEqual(resolver.number(at: path), (query["expected"] as? NSNumber)?.doubleValue, path)
-        }
-        let cases = try XCTUnwrap(fixture["geometryCases"] as? [[String: Any]])
-        XCTAssertEqual(cases.count, 12)
-        for item in cases {
-            let paths = try XCTUnwrap(item["paths"] as? [String: String])
-            func path(_ key: String) throws -> String { try XCTUnwrap(paths[key]) }
-            let actual = try resolver.geometry(for: .init(
-                xPath: path("xPath"), yPath: path("yPath"), widthPath: path("widthPath"),
-                heightPath: path("heightPath"), rotationPath: path("rotationPath"),
-                scaleXPath: path("scaleXPath"), scaleYPath: path("scaleYPath")))
-            let components = actual.map { [$0.x, $0.y, $0.width, $0.height, $0.rotation, $0.scaleX, $0.scaleY] }
-            let name = try XCTUnwrap(item["name"] as? String)
-            XCTAssertEqual(components, (item["expected"] as? [NSNumber])?.map(\.doubleValue), name)
         }
     }
 }
