@@ -158,9 +158,56 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     ) -> Void
 
     private final class TextField: UITextField {
-        override func textRect(forBounds bounds: CGRect) -> CGRect { bounds }
-        override func editingRect(forBounds bounds: CGRect) -> CGRect { bounds }
-        override func placeholderRect(forBounds bounds: CGRect) -> CGRect { bounds }
+        private var textOffset = CGPoint.zero
+        private var presentationLineHeight: CGFloat?
+        private var measuredLine: (metrics: ExperienceTextInputMetrics, height: CGFloat, baseline: CGFloat)?
+        private var capturedBaseline: (metrics: ExperienceTextInputMetrics, offset: CGFloat)?
+
+        func align(firstBaseline: CGFloat?, origin: CGPoint, metrics: ExperienceTextInputMetrics) {
+            contentVerticalAlignment = .top
+            if measuredLine?.metrics != metrics {
+                // UIKit baseline anchors describe intrinsic-height controls,
+                // not an editor stretched to the authored field's touch box.
+                // Measure native typography without copying entered text.
+                let probe = UITextField()
+                probe.borderStyle = .none
+                probe.contentVerticalAlignment = .top
+                probe.defaultTextAttributes = defaultTextAttributes
+                probe.isSecureTextEntry = isSecureTextEntry
+                probe.text = " "
+                probe.frame = CGRect(x: 0, y: 0, width: bounds.width, height: probe.intrinsicContentSize.height)
+                let guide = UILayoutGuide()
+                probe.addLayoutGuide(guide)
+                NSLayoutConstraint.activate([
+                    guide.topAnchor.constraint(equalTo: probe.firstBaselineAnchor),
+                    guide.leadingAnchor.constraint(equalTo: probe.leadingAnchor),
+                    guide.widthAnchor.constraint(equalToConstant: 0),
+                    guide.heightAnchor.constraint(equalToConstant: 0),
+                ])
+                probe.setNeedsLayout()
+                probe.layoutIfNeeded()
+                measuredLine = (metrics, probe.bounds.height, guide.layoutFrame.minY)
+            }
+            guard let measuredLine else { return }
+            if let firstBaseline { capturedBaseline = (metrics, firstBaseline - origin.y) }
+            let target = firstBaseline ?? capturedBaseline.flatMap {
+                $0.metrics == metrics ? origin.y + $0.offset : nil
+            }
+            presentationLineHeight = measuredLine.height
+            textOffset = CGPoint(x: origin.x, y: target.map { $0 - measuredLine.baseline } ?? origin.y)
+            setNeedsLayout()
+            layoutIfNeeded()
+        }
+
+        private func contentRect(_ bounds: CGRect) -> CGRect {
+            guard let presentationLineHeight else { return bounds }
+            return CGRect(x: bounds.minX + textOffset.x, y: bounds.minY + textOffset.y,
+                width: bounds.width - textOffset.x, height: presentationLineHeight)
+        }
+
+        override func textRect(forBounds bounds: CGRect) -> CGRect { contentRect(bounds) }
+        override func editingRect(forBounds bounds: CGRect) -> CGRect { contentRect(bounds) }
+        override func placeholderRect(forBounds bounds: CGRect) -> CGRect { contentRect(bounds) }
     }
 
     @MainActor
@@ -541,6 +588,10 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     private func alignBaseline(_ binding: Binding, placement: ExperienceTextInputPlacement,
         metrics: ExperienceTextInputMetrics) {
+        if case .field(let field) = binding.control {
+            field.align(firstBaseline: placement.firstBaseline?.y, origin: placement.textOrigin, metrics: metrics)
+            return
+        }
         guard case .textView(let editor) = binding.control else { return }
         let manager = editor.layoutManager
         manager.ensureLayout(for: editor.textContainer)

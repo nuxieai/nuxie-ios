@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import CoreText
 import XCTest
 @testable import NuxieRuntime
 @testable import Nuxie
@@ -445,6 +446,150 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         try await runtime.close()
     }
 
+    func testSingleLineAndSecureFieldsUseCapturedFirstBaseline() throws {
+        let item = Fixture.Case(name: "single-line", fontSize: 18, lineHeight: 24, containScale: 1,
+            geometryScale: 1, expectedFontSize: 18, expectedBaselineDistance: 24)
+        var ordinaryCarets: [CGRect] = []
+        for secure in [false, true] {
+            let bridge = ExperienceTextInputOverlayBridge()
+            defer { bridge.clear() }
+            let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+            var writes = 0
+            bridge.bind(screenID: "screen", renderPlan: plan(item, text: "AAAAA", prefix: "nuxieTextInputs/field/", multiline: false, secure: secure),
+                surfaceView: surface, artboardBounds: surface.bounds,
+                textWriter: { _, _, done in writes += 1; done(.success(())) })
+            let matrix = CGAffineTransform(translationX: 24, y: 24)
+            func update(size: Float, height: Float, baseline: CGFloat?) {
+                let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [], values: [
+                    .init(ownerInstanceID: 1, propertyIndex: 0, name: "nuxieTextInputs", value: .referencedInstance(2)),
+                    .init(ownerInstanceID: 2, propertyIndex: 0, name: "field", value: .referencedInstance(3)),
+                    .init(ownerInstanceID: 3, propertyIndex: 0, name: "fontSize", value: .number(size)),
+                    .init(ownerInstanceID: 3, propertyIndex: 1, name: "lineHeight", value: .number(height)),
+                ])
+                bridge.update(frame: .init(snapshot: snapshot, geometry: .captured(["run": .init(renderRevision: 1,
+                    worldTransform: matrix, contentTransform: matrix, textBounds: .zero,
+                    layout: .init(transform: matrix, bounds: CGRect(x: 0, y: 0, width: 240, height: 180)), firstBaseline: baseline)])))
+            }
+            update(size: 18, height: 24, baseline: 18)
+            let field = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextField }.first)
+            #if NUXIE_HOSTED_INPUT_TESTS
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+            let controller = UIViewController()
+            window.rootViewController = controller
+            controller.view.addSubview(surface)
+            window.makeKeyAndVisible()
+            defer { field.resignFirstResponder(); window.isHidden = true; window.rootViewController = nil }
+            XCTAssertTrue(field.becomeFirstResponder())
+            #endif
+            let start = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: 1))
+            let end = try XCTUnwrap(field.position(from: start, offset: 3))
+            field.selectedTextRange = field.textRange(from: start, to: end)
+            #if NUXIE_HOSTED_INPUT_TESTS
+            if !secure { field.setMarkedText("AAA", selectedRange: NSRange(location: 0, length: 3)) }
+            #endif
+            let before = writes
+            let cases: [(Float, Float)] = [(18, 24), (36, 48), (24, -1), (18, 36), (18, 24)]
+            for (index, metrics) in cases.enumerated() {
+                let (size, height) = metrics
+                update(size: size, height: height, baseline: CGFloat(size))
+                surface.layoutIfNeeded()
+                if !secure {
+                    try assertSingleLineInkBaseline(field, surface: surface, baseline: 24 + CGFloat(size))
+                }
+                let caret = field.textInputView.convert(field.caretRect(for: field.beginningOfDocument), to: surface)
+                // Secure UIKit carets use the font height; ordinary carets also
+                // include explicit paragraph spacing. Preserve native behavior.
+                let native = UITextField()
+                native.defaultTextAttributes = field.defaultTextAttributes
+                native.isSecureTextEntry = secure
+                native.text = "AAAAA"
+                native.contentVerticalAlignment = .top
+                native.frame = CGRect(x: 300, y: 0, width: 240, height: native.intrinsicContentSize.height)
+                surface.addSubview(native)
+                native.layoutIfNeeded()
+                let naturalCaret = native.textInputView.convert(native.caretRect(for: native.beginningOfDocument), to: surface)
+                XCTAssertEqual(caret.height, naturalCaret.height, accuracy: 0.1)
+                native.removeFromSuperview()
+                if secure {
+                    XCTAssertEqual(caret.minY, ordinaryCarets[index].minY, accuracy: 1)
+                } else {
+                    ordinaryCarets.append(caret)
+                }
+                XCTAssertEqual(field.isSecureTextEntry, secure)
+                XCTAssertEqual(field.font?.pointSize, CGFloat(size))
+                XCTAssertEqual(field.text, "AAAAA")
+                XCTAssertEqual(writes, before)
+                let range = try XCTUnwrap(field.selectedTextRange)
+                XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: range.start), 1)
+                XCTAssertEqual(field.offset(from: range.start, to: range.end), 3)
+                #if NUXIE_HOSTED_INPUT_TESTS
+                if !secure { XCTAssertNotNil(field.markedTextRange) }
+                #endif
+            }
+            let caret = field.textInputView.convert(field.caretRect(for: field.beginningOfDocument), to: surface)
+            update(size: 18, height: 24, baseline: nil)
+            surface.layoutIfNeeded()
+            if !secure { try assertSingleLineInkBaseline(field, surface: surface, baseline: 42) }
+            XCTAssertEqual(field.textInputView.convert(field.caretRect(for: field.beginningOfDocument), to: surface), caret)
+            XCTAssertEqual(writes, before)
+            XCTAssertEqual(field.text, "AAAAA")
+            XCTAssertTrue(field.point(inside: CGPoint(x: 120, y: 170), with: nil), "Baseline correction preserves the entire authored touch area")
+            #if NUXIE_HOSTED_INPUT_TESTS
+            if !secure { XCTAssertNotNil(field.markedTextRange) }
+            #endif
+        }
+    }
+
+    /// Compare actual UIKit ink with a CoreText line at the captured baseline.
+    /// Baseline anchors on the stretched production field are not a valid oracle.
+    private func assertSingleLineInkBaseline(_ field: UITextField, surface: UIView, baseline: CGFloat,
+        file: StaticString = #filePath, line: UInt = #line) throws {
+        field.textColor = .black
+        let font = try XCTUnwrap(field.font)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let bitmap = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 400), format: format).image { drawing in
+            UIColor.white.setFill()
+            drawing.fill(CGRect(x: 0, y: 0, width: 600, height: 400))
+            surface.layer.render(in: drawing.cgContext)
+            drawing.cgContext.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+            drawing.cgContext.textPosition = CGPoint(x: 300, y: baseline)
+            let reference = CTLineCreateWithAttributedString(NSAttributedString(string: "AAAAA",
+                attributes: [.font: font, .foregroundColor: UIColor.black]))
+            CTLineDraw(reference, drawing.cgContext)
+        }
+        let image = try XCTUnwrap(bitmap.cgImage)
+        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        try pixels.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        func inkRows(_ range: Range<Int>) -> [Int] {
+            (0..<image.height).filter { y in
+                range.contains { x in
+                    let offset = (y * image.width + x) * 4
+                    return pixels[offset] < 128 && pixels[offset + 1] < 128 && pixels[offset + 2] < 128
+                }
+            }
+        }
+        let actual = inkRows(24..<264)
+        let expected = inkRows(300..<600)
+        let actualTop = try XCTUnwrap(actual.first)
+        let actualBottom = try XCTUnwrap(actual.last)
+        let expectedTop = try XCTUnwrap(expected.first)
+        let expectedBottom = try XCTUnwrap(expected.last)
+        if abs(actualTop - expectedTop) > 1 || abs(actualBottom - expectedBottom) > 1 {
+            let attachment = XCTAttachment(image: bitmap)
+            attachment.name = "UIKit field and CoreText baseline reference"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertEqual(Double(actualTop), Double(expectedTop), accuracy: 1, "font=\(font.pointSize), baseline=\(baseline)", file: file, line: line)
+        XCTAssertEqual(Double(actualBottom), Double(expectedBottom), accuracy: 1, "font=\(font.pointSize), baseline=\(baseline)", file: file, line: line)
+    }
+
     private func baselines(_ view: UITextView) -> [CGFloat] {
         let manager = view.layoutManager
         manager.ensureLayout(for: view.textContainer)
@@ -459,7 +604,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         return result
     }
 
-    private func plan(_ item: Fixture.Case, text: String, prefix: String = "") -> NativeExperienceRenderPlan {
+    private func plan(_ item: Fixture.Case, text: String, prefix: String = "", multiline: Bool = true, secure: Bool = false) -> NativeExperienceRenderPlan {
         let input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",
             viewNodeId: "v", renderedNodeId: "r", riveTextObjectKey: "text", riveTextRunObjectKey: "run",
             riveTextName: "text", riveTextRunName: "run", value: text, placeholder: nil, editable: true,
@@ -467,7 +612,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                 scaleXPath: "\(prefix)sx", scaleYPath: "\(prefix)sy"),
             style: .init(fontFamily: "system", fontWeight: "normal", fontStyle: "normal", fontSize: item.fontSize,
                 lineHeight: item.lineHeight, letterSpacing: 0, color: 0, fontAssetRiveUniqueName: "", textAlign: nil),
-            keyboardType: nil, secureTextEntry: false, multiline: true, maxLength: nil, responseFieldKey: "answer")
+            keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: nil, responseFieldKey: "answer")
         return NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "b", appId: "a", environment: "test"),
             scene: .init(key: "scene", sha256: "", sizeBytes: 0), entry: .init(screenId: "screen"),
             screens: [], transitions: [], textInputs: [input], images: [], fonts: [])
