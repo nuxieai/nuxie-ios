@@ -4,7 +4,7 @@
   "fileId": 1,
   "recordCount": 112,
   "outputSizeBytes": 2545,
-  "outputSha256": "11ae69588418b65a9df3001dfb010fb243d431ab62e48526db063ded78c13a4f",
+  "outputSha256": "c0c9a47247a5ed4b8f34e68d9f4934f0c84400ca441536eaf042ed44d7673102",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -32,11 +32,11 @@
       "images": [],
       "fonts": [
         {
-          "family": "Nuxie Editor",
+          "family": "Fixture Sans",
           "weight": "400",
           "style": "normal",
           "riveAssetId": 0,
-          "riveUniqueName": "font-nuxie-editor-400-normal-17520362-0",
+          "riveUniqueName": "font-fixture-sans-400-normal-c3ced8ac-0",
           "sha256": "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5",
           "sizeBytes": 192936,
           "contentType": "font/otf",
@@ -67,14 +67,14 @@
           "scaleY": 1
         },
         "style": {
-          "fontFamily": "Nuxie Editor",
+          "fontFamily": "Fixture Sans",
           "fontWeight": "400",
           "fontStyle": "normal",
           "fontSize": 18,
           "lineHeight": 24,
           "letterSpacing": 0,
           "color": 4294967295,
-          "fontAssetRiveUniqueName": "font-nuxie-editor-400-normal-17520362-0",
+          "fontAssetRiveUniqueName": "font-fixture-sans-400-normal-c3ced8ac-0",
           "textAlign": "left"
         },
         "multiline": true
@@ -100,14 +100,14 @@
           "scaleY": 1
         },
         "style": {
-          "fontFamily": "Nuxie Editor",
+          "fontFamily": "Fixture Sans",
           "fontWeight": "400",
           "fontStyle": "normal",
           "fontSize": 18,
           "lineHeight": 24,
           "letterSpacing": 0,
           "color": 4294967295,
-          "fontAssetRiveUniqueName": "font-nuxie-editor-400-normal-17520362-0",
+          "fontAssetRiveUniqueName": "font-fixture-sans-400-normal-c3ced8ac-0",
           "textAlign": "left"
         },
         "multiline": true
