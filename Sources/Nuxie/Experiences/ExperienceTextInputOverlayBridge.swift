@@ -649,7 +649,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         horizontalScale: CGFloat,
         secure: Bool
     ) {
-        let fontSize = max(1, CGFloat(metrics.fontSize) * fontScale)
+        let fontSize = CGFloat(metrics.fontSize) * fontScale
         let font = Self.font(
             for: style,
             contentSHA256: fontSHA256ByRiveUniqueName[style.fontAssetRiveUniqueName],
