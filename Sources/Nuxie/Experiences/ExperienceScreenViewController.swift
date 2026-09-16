@@ -264,12 +264,7 @@ final class ExperienceScreenViewController: UIViewController {
         let textConsumer: (@MainActor @Sendable (ExperienceInteractiveTextFrame) -> Void)?
         if includesTextInputSnapshot {
             textConsumer = { [weak self] frame in
-                guard let self else { return }
-                if let snapshot = frame.snapshot {
-                    self.textInputOverlayBridge.update(snapshot: snapshot)
-                } else {
-                    self.textInputOverlayBridge.invalidateLayout()
-                }
+                self?.textInputOverlayBridge.update(frame: frame)
             }
         } else {
             textConsumer = nil

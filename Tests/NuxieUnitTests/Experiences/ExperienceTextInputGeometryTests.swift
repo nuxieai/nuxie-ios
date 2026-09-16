@@ -1,9 +1,72 @@
 #if canImport(UIKit)
 import Foundation
+import UIKit
+@testable import NuxieRuntime
 import XCTest
 @testable import Nuxie
 
 final class ExperienceTextInputGeometryTests: XCTestCase {
+    @MainActor
+    func testSharedAffineCornersAndNativeHitTesting() throws {
+        let path = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/text-input-affine.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
+        XCTAssertEqual(cases.count, 8)
+        let parent = UIView(frame: CGRect(x: 0, y: 0, width: 600, height: 600))
+        let viewport = try XCTUnwrap(ExperienceContainCenterTransform(
+            artboardBounds: CGRect(x: 0, y: 0, width: 400, height: 400),
+            viewportBounds: CGRect(x: 100, y: 100, width: 400, height: 400)))
+        for item in cases {
+            let name = try XCTUnwrap(item["name"] as? String)
+            let values = try XCTUnwrap(item["transform"] as? [Double])
+            let matrix = CGAffineTransform(a: values[0], b: values[1], c: values[2], d: values[3], tx: values[4], ty: values[5])
+            let placement = ExperienceTextInputPlacement(geometry: .init(renderRevision: 1,
+                worldTransform: matrix, contentTransform: matrix, textBounds: .zero,
+                layout: .init(transform: matrix, bounds: CGRect(x: 0, y: 0, width: 10, height: 20)),
+                firstBaseline: 7), viewport: viewport)
+            guard let expected = item["corners"] as? [Double] else {
+                XCTAssertNil(placement, name)
+                continue
+            }
+            let resolved = try XCTUnwrap(placement, name)
+            let editor = UITextView(frame: .zero)
+            parent.addSubview(editor)
+            resolved.apply(to: editor)
+            let corners = [CGPoint.zero, CGPoint(x: 10, y: 0), CGPoint(x: 10, y: 20), CGPoint(x: 0, y: 20)]
+            for (index, point) in corners.enumerated() {
+                let actual = editor.convert(point, to: parent)
+                XCTAssertEqual(actual.x, expected[index * 2] + 100, accuracy: 0.001, name)
+                XCTAssertEqual(actual.y, expected[index * 2 + 1] + 100, accuracy: 0.001, name)
+            }
+            let target = CGPoint(x: (expected[0] + expected[4]) / 2 + 100,
+                y: (expected[1] + expected[5]) / 2 + 100)
+            let hit = try XCTUnwrap(parent.hitTest(target, with: nil), name)
+            XCTAssertTrue(hit === editor || hit.isDescendant(of: editor), name)
+            XCTAssertEqual(try XCTUnwrap(resolved.firstBaseline).y, 7, accuracy: 0.001, name)
+            editor.removeFromSuperview()
+        }
+    }
+
+    func testAffinePlacementIncludesLayoutOriginAndContainOffset() throws {
+        let viewport = try XCTUnwrap(ExperienceContainCenterTransform(
+            artboardBounds: CGRect(x: 10, y: 20, width: 100, height: 100),
+            viewportBounds: CGRect(x: 0, y: 0, width: 400, height: 200)))
+        let matrix = CGAffineTransform(a: 2, b: 0, c: 0.5, d: 3, tx: 24, ty: 32)
+        let placement = try XCTUnwrap(ExperienceTextInputPlacement(geometry: .init(renderRevision: 1,
+            worldTransform: matrix, contentTransform: matrix, textBounds: .zero,
+            layout: .init(transform: matrix, bounds: CGRect(x: 5, y: 7, width: 10, height: 20)),
+            firstBaseline: 15), viewport: viewport))
+        let origin = CGPoint.zero.applying(placement.transform)
+        XCTAssertEqual(origin.x, 155, accuracy: 0.001)
+        XCTAssertEqual(origin.y, 66, accuracy: 0.001)
+        XCTAssertEqual(placement.textOrigin.x, -5, accuracy: 0.001)
+        XCTAssertEqual(placement.textOrigin.y, -7, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(placement.firstBaseline).y, 8, accuracy: 0.001)
+    }
+
     func testSharedEffectiveMetricCompatibility() throws {
         let path = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

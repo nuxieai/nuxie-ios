@@ -13,6 +13,57 @@ struct ExperienceTextInputGeometry {
     let scaleY: Double
 }
 
+/// A native control stays in field-local units; UIKit applies the complete
+/// runtime transform to its drawing, caret, accessibility and hit testing.
+struct ExperienceTextInputPlacement: Equatable {
+    let size: CGSize
+    let transform: CGAffineTransform
+    let firstBaseline: CGPoint?
+    let textOrigin: CGPoint
+
+    init?(geometry: NuxieNativeTextRunGeometry, viewport: ExperienceContainCenterTransform) {
+        guard geometry.renderRevision != 0, let layout = geometry.layout,
+              layout.bounds.width > 0, layout.bounds.height > 0,
+              Self.isFinite(layout.transform), Self.isFinite(geometry.contentTransform),
+              [layout.bounds.minX, layout.bounds.minY, layout.bounds.width, layout.bounds.height].allSatisfy(\.isFinite),
+              Self.isInvertible(layout.transform) else { return nil }
+        let localToArtboard = CGAffineTransform(translationX: layout.bounds.minX, y: layout.bounds.minY)
+            .concatenating(layout.transform)
+        let artboardToViewport = CGAffineTransform(a: viewport.scale, b: 0, c: 0, d: viewport.scale,
+            tx: viewport.contentBounds.minX - viewport.artboardBounds.minX * viewport.scale,
+            ty: viewport.contentBounds.minY - viewport.artboardBounds.minY * viewport.scale)
+        let projected = localToArtboard.concatenating(artboardToViewport)
+        guard Self.isFinite(projected), Self.isInvertible(projected) else { return nil }
+        let contentToLocal = geometry.contentTransform.concatenating(localToArtboard.inverted())
+        let origin = CGPoint.zero.applying(contentToLocal)
+        let baseline = geometry.firstBaseline.map { CGPoint(x: 0, y: $0).applying(contentToLocal) }
+        guard origin.x.isFinite, origin.y.isFinite,
+              baseline.map({ $0.x.isFinite && $0.y.isFinite }) ?? true else { return nil }
+        size = layout.bounds.size
+        transform = projected
+        firstBaseline = baseline
+        textOrigin = origin
+    }
+
+    @MainActor
+    func apply(to view: UIView) {
+        // Setting frame while transformed loses shear/reflection and makes
+        // UIKit's inverse touch projection disagree with the painted field.
+        view.bounds = CGRect(origin: .zero, size: size)
+        view.center = CGPoint(x: size.width / 2, y: size.height / 2).applying(transform)
+        view.transform = CGAffineTransform(a: transform.a, b: transform.b, c: transform.c, d: transform.d, tx: 0, ty: 0)
+    }
+
+    private static func isFinite(_ t: CGAffineTransform) -> Bool {
+        [t.a, t.b, t.c, t.d, t.tx, t.ty].allSatisfy(\.isFinite)
+    }
+
+    private static func isInvertible(_ t: CGAffineTransform) -> Bool {
+        let determinant = t.a * t.d - t.b * t.c
+        return determinant.isFinite && determinant != 0
+    }
+}
+
 struct ExperienceTextInputMetrics: Equatable {
     let fontSize: Double
     let lineHeight: Double
@@ -159,6 +210,10 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var semanticDrafts: [String: ExperienceSemanticTextDraft] = [:]
     private var bindingsByInputID: [String: Binding] = [:]
     private var geometriesByInputID: [String: ExperienceTextInputGeometry] = [:]
+    private var runtimeGeometryByRun: [String: NuxieNativeTextRunGeometry]?
+    private var invalidGeometryIDs = Set<String>()
+    private var lastAppliedPlacements: [String: ExperienceTextInputPlacement] = [:]
+    private var baselineCorrections: [String: (metrics: ExperienceTextInputMetrics, offset: CGFloat)] = [:]
     private var metricsByInputID: [String: ExperienceTextInputMetrics] = [:]
     private var invalidMetricIDs = Set<String>()
     private var lastAppliedMetrics: [String: ExperienceTextInputMetrics] = [:]
@@ -249,7 +304,21 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         layout()
     }
 
+    func update(frame: ExperienceInteractiveTextFrame) {
+        guard let snapshot = frame.snapshot else { invalidateLayout(); return }
+        let geometry: [String: NuxieNativeTextRunGeometry]
+        if case .captured(let captured) = frame.geometry { geometry = captured } else { geometry = [:] }
+        update(snapshot: snapshot, runtimeGeometry: geometry)
+    }
+
     func update(snapshot: ExperienceInteractiveViewModelSnapshot) {
+        update(snapshot: snapshot, runtimeGeometry: nil)
+    }
+
+    private func update(snapshot: ExperienceInteractiveViewModelSnapshot,
+        runtimeGeometry: [String: NuxieNativeTextRunGeometry]?) {
+        runtimeGeometryByRun = runtimeGeometry
+        if runtimeGeometry == nil { lastAppliedPlacements.removeAll() }
         let resolver = ExperienceTextInputGeometryResolver(snapshot: snapshot)
         metricsByInputID = bindingsByInputID.compactMapValues {
             resolver.metrics(xPath: $0.input.geometry.xPath,
@@ -309,7 +378,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private func allowsInteraction(_ binding: Binding) -> Bool {
-        guard !invalidMetricIDs.contains(binding.input.inputId) else { return false }
+        guard !invalidMetricIDs.contains(binding.input.inputId),
+              !invalidGeometryIDs.contains(binding.input.inputId) else { return false }
         guard let semanticFields else { return true }
         guard !hidden, let surfaceView,
               ExperienceSemanticAccessibilityElement.allowsInteraction(in: surfaceView),
@@ -340,6 +410,10 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         geometriesByInputID.removeAll()
         metricsByInputID.removeAll()
         invalidMetricIDs.removeAll()
+        runtimeGeometryByRun = nil
+        invalidGeometryIDs.removeAll()
+        lastAppliedPlacements.removeAll()
+        baselineCorrections.removeAll()
         lastAppliedMetrics.removeAll()
         failedInputIDs.removeAll()
         lastAppliedFrames.removeAll()
@@ -371,10 +445,25 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                   artboardBounds: artboardBounds,
                   viewportBounds: surfaceView.bounds
               ) else {
-            bindingsByInputID.values.forEach { $0.control.view.isHidden = true }
+            invalidGeometryIDs = Set(bindingsByInputID.keys)
+            for (inputID, binding) in bindingsByInputID {
+                layoutRuntimeField(binding, inputID: inputID, placement: nil)
+            }
             return
         }
+        let placements = runtimeGeometryByRun.map { captured in
+            bindingsByInputID.compactMapValues { binding in
+                captured[binding.input.riveTextRunName].flatMap {
+                    ExperienceTextInputPlacement(geometry: $0, viewport: transform)
+                }
+            }
+        }
+        invalidGeometryIDs = placements.map { Set(bindingsByInputID.keys).subtracting($0.keys) } ?? []
         for (inputID, binding) in bindingsByInputID {
+            if placements != nil {
+                layoutRuntimeField(binding, inputID: inputID, placement: placements?[inputID])
+                continue
+            }
             switch binding.control {
             case .field(let field): field.isEnabled = allowsInteraction(binding)
             case .textView(let textView):
@@ -419,6 +508,60 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 }
             }
         }
+    }
+
+    private func layoutRuntimeField(_ binding: Binding, inputID: String,
+        placement: ExperienceTextInputPlacement?) {
+        switch binding.control {
+        case .field(let field): field.isEnabled = allowsInteraction(binding)
+        case .textView(let textView):
+            textView.isEditable = allowsEditing(binding)
+            textView.isSelectable = allowsInteraction(binding)
+        }
+        guard let placement, let metrics = metricsByInputID[inputID] else {
+            // Fence delegate callbacks before resigning a composing editor.
+            binding.control.view.isHidden = true
+            binding.control.view.resignFirstResponder()
+            lastAppliedPlacements.removeValue(forKey: inputID)
+            return
+        }
+        binding.control.view.isHidden = hidden || failedInputIDs.contains(inputID) || isSemanticallyHidden(inputID)
+        guard lastAppliedPlacements[inputID] != placement || lastAppliedMetrics[inputID] != metrics else { return }
+        lastAppliedPlacements[inputID] = placement
+        lastAppliedMetrics[inputID] = metrics
+        lastAppliedFrames.removeValue(forKey: inputID)
+        lastAppliedRotations.removeValue(forKey: inputID)
+        applyStyle(binding.input.style, metrics: metrics, to: binding.control,
+            fontScale: 1, horizontalScale: 1, secure: binding.input.secureTextEntry == true)
+        UIView.performWithoutAnimation {
+            placement.apply(to: binding.control.view)
+            alignBaseline(binding, placement: placement, metrics: metrics)
+        }
+    }
+
+    private func alignBaseline(_ binding: Binding, placement: ExperienceTextInputPlacement,
+        metrics: ExperienceTextInputMetrics) {
+        guard case .textView(let editor) = binding.control else { return }
+        let manager = editor.layoutManager
+        manager.ensureLayout(for: editor.textContainer)
+        guard manager.numberOfGlyphs > 0 else { return }
+        let firstGlyph = manager.glyphIndexForCharacter(at: 0)
+        let fragment = manager.lineFragmentRect(forGlyphAt: firstGlyph, effectiveRange: nil)
+        let nativeBaseline = fragment.minY + manager.location(forGlyphAt: firstGlyph).y
+        let correction: CGFloat
+        if let baseline = placement.firstBaseline {
+            correction = baseline.y - placement.textOrigin.y - nativeBaseline
+            baselineCorrections[binding.input.inputId] = (metrics, correction)
+        } else if let previous = baselineCorrections[binding.input.inputId], previous.metrics == metrics {
+            // A blank runtime run can coexist with retained native text, such
+            // as secure entry. Preserve the offset without retaining text.
+            correction = previous.offset
+        } else {
+            correction = 0
+        }
+        let top = placement.textOrigin.y + correction
+        let insets = UIEdgeInsets(top: top, left: placement.textOrigin.x, bottom: 0, right: 0)
+        if editor.textContainerInset != insets { editor.textContainerInset = insets }
     }
 
     private func makeControl(for input: NativeExperienceTextInput) -> Control {
