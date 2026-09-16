@@ -7,6 +7,64 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeRuntimeTests: XCTestCase {
+    func testPublishedTextStyleMetricsReverseBindAfterOneStep() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/font-metrics-binding")
+        let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let font = try XCTUnwrap(assets.first { $0.kind == .font })
+        let fontBytes = try Data(contentsOf: directory.appendingPathComponent(
+            "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5.otf"))
+        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Paywall",
+            player: .staticArtboard, pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: true,
+            importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
+                externalAssets: [font.ordinal: fontBytes]))
+        defer { Task { try? await runtime.close() } }
+        struct Case: Decodable { let fontSize: Float; let lineHeight: Float }
+        struct Fixture: Decodable { let cases: [Case] }
+        let fixture = try JSONDecoder().decode(Fixture.self,
+            from: Data(contentsOf: directory.appendingPathComponent("expectations.json")))
+        let root = try await runtime.rootViewModelReference()
+        var baselinePixels: Data?
+        for (index, item) in fixture.cases.enumerated() {
+            _ = try await runtime.mutateViewModel([
+                .setNumber(instance: root, path: "requestedFontSize", value: item.fontSize),
+                .setNumber(instance: root, path: "requestedLineHeight", value: item.lineHeight),
+            ])
+            _ = try await runtime.step(elapsedSeconds: 0)
+            let snapshot = try await runtime.snapshot()
+            func number(_ name: String) throws -> Float {
+                let entry = try XCTUnwrap(snapshot.values.first {
+                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == name
+                })
+                guard case .number(let value) = entry.value else {
+                    throw NSError(domain: "FontMetricsFixture", code: 1)
+                }
+                return value
+            }
+            XCTAssertEqual(try number("observedFontSize"), item.fontSize)
+            XCTAssertEqual(try number("observedLineHeight"), item.lineHeight)
+            XCTAssertEqual(try number("fixedFontSize"), 18)
+            XCTAssertEqual(try number("fixedLineHeight"), 24)
+            let frame = try await renderPixels(runtime, width: 390, height: 844)
+            XCTAssertEqual(frame.outcome.disposition, .presented)
+            if let baselinePixels {
+                // The fixed input begins at y=264; only the upper input is bound.
+                let fixedRange = (264 * 390 * 4)..<frame.pixels.count
+                XCTAssertEqual(frame.pixels.subdata(in: fixedRange), baselinePixels.subdata(in: fixedRange))
+                if index == fixture.cases.count - 1 {
+                    XCTAssertEqual(frame.pixels, baselinePixels, "Restoring authored metrics restores the rendered frame")
+                } else {
+                    XCTAssertNotEqual(frame.pixels, baselinePixels, "The bound style must change actual rendered text")
+                }
+            } else {
+                baselinePixels = frame.pixels
+            }
+        }
+        try await runtime.close()
+    }
+
     func testPresentedSemanticCaptureCopiesUnicodeAndRejectsRetiredCaptureActions() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "semantic_text", extension: "riv"), importMode: .portable)
