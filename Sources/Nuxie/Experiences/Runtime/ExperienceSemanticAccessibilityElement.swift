@@ -8,7 +8,7 @@ import UIKit
 final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
     typealias Submit = (UUID, UInt32, NuxieNativeSemanticAction) -> Bool
 
-    private var captureID: UUID?
+    private(set) var captureID: UUID?
     private var node: NuxieNativeSemanticNode?
     private var submit: Submit?
 
