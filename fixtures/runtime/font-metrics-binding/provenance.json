@@ -1,7 +1,7 @@
 {
-  "publisherSourceCommit": "d30dc4e51fc74fbaa78e238449bb2d43bf54879b",
-  "publisherWasmSha256": "67bf2afdbf9d15ead8201e8cb4476957b7bf9bf61d0b7a650aee9efbf17ef45e",
+  "publisherSourceCommit": "1515cc3956c52861aa34b6dc3c6f59f036343e38",
+  "publisherWasmSha256": "bbe96c273363451c9eeaee9502d4581f0919127c3e1b1255cc5ba70fe0dd0f34",
   "sourceSnapshotSha256": "6c169bce1c2809c514d1784fe1b7d653cdd1778e286e6e10364f058a8feec05c",
-  "renderSha256": "c0c9a47247a5ed4b8f34e68d9f4934f0c84400ca441536eaf042ed44d7673102",
+  "renderSha256": "1a90d3b9017143d557be5a68303c784eab8e74bab7bba625586eedc61a5a2e9a",
   "fontSha256": "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5"
 }
