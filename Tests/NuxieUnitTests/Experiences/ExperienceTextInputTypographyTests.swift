@@ -271,9 +271,17 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
     }
 
     func testPublishedRuntimeFontBaselinesMatchNativeEditors() async throws {
+        try await verifyPublishedEditors(fixture: "font-metrics-binding", singleLine: false)
+    }
+
+    func testPublishedSingleLineAndSecureEditorsPreserveNativeTypography() async throws {
+        try await verifyPublishedEditors(fixture: "text-input-single-line", singleLine: true)
+    }
+
+    private func verifyPublishedEditors(fixture: String, singleLine: Bool) async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("fixtures/runtime/font-metrics-binding")
+            .appendingPathComponent("fixtures/runtime/\(fixture)")
         struct PublishedInput: Decodable {
             struct Style: Decodable {
                 let fontFamily: String; let fontWeight: String; let fontStyle: String
@@ -283,7 +291,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             let viewNodeId: String; let renderedNodeId: String; let artboardId: String
             let riveTextObjectKey: String; let riveTextRunObjectKey: String
             let riveTextName: String; let riveTextRunName: String; let value: String
-            let editable: Bool; let multiline: Bool; let style: Style
+            let editable: Bool; let multiline: Bool; let secureTextEntry: Bool?; let style: Style
         }
         struct Report: Decodable {
             struct Metadata: Decodable { let textInputs: [PublishedInput] }
@@ -311,7 +319,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                     fontStyle: item.style.fontStyle, fontSize: item.style.fontSize, lineHeight: item.style.lineHeight,
                     letterSpacing: item.style.letterSpacing, color: item.style.color,
                     fontAssetRiveUniqueName: item.style.fontAssetRiveUniqueName, textAlign: item.style.textAlign),
-                keyboardType: nil, secureTextEntry: false, multiline: item.multiline, maxLength: nil, responseFieldKey: nil)
+                keyboardType: nil, secureTextEntry: item.secureTextEntry ?? false, multiline: item.multiline, maxLength: nil, responseFieldKey: nil)
         }
         let fontName = try XCTUnwrap(inputs.first).style.fontAssetRiveUniqueName
         let scope = ExperienceRuntimeFontScope()
@@ -382,6 +390,79 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             await fulfillment(of: [completed], timeout: 2)
             XCTAssertEqual(outcome.disposition, .presented)
             bridge.update(frame: .init(snapshot: snapshot, geometry: step.textGeometry))
+            if singleLine {
+                let fields = surface.subviews.compactMap { $0 as? UITextField }.sorted { $0.center.y < $1.center.y }
+                XCTAssertEqual(fields.count, inputs.count)
+                XCTAssertEqual(writes, initialWrites)
+                if caseIndex == 0 {
+                    for editor in fields where editor.isSecureTextEntry {
+                        #if NUXIE_HOSTED_INPUT_TESTS
+                        XCTAssertTrue(editor.becomeFirstResponder())
+                        editor.insertText("AAAAA")
+                        editor.resignFirstResponder()
+                        #else
+                        editor.text = "AAAAA"
+                        editor.sendActions(for: .editingChanged)
+                        #endif
+                        editor.layoutIfNeeded()
+                    }
+                    initialWrites = writes
+                }
+                for (index, editor) in fields.enumerated() {
+                    let captured = try XCTUnwrap(geometry[inputs[index].riveTextRunName])
+                    XCTAssertEqual(editor.font?.fontName, registeredName)
+                    XCTAssertEqual(editor.font?.pointSize, CGFloat(item.fontSize))
+                    if editor.isSecureTextEntry {
+                        XCTAssertNil(captured.firstBaseline, "Secure text is never shaped by the renderer")
+                        XCTAssertEqual(inputs[index].value, "")
+                        // A secure field has no rendered baseline. Its native caret
+                        // follows UIKit typography at the captured content origin.
+                        let reference = UITextField()
+                        reference.defaultTextAttributes = editor.defaultTextAttributes
+                        reference.isSecureTextEntry = true
+                        reference.text = "AAAAA"
+                        reference.contentVerticalAlignment = .top
+                        let origin = CGPoint.zero.applying(captured.contentTransform)
+                        reference.frame = CGRect(origin: origin, size: CGSize(width: editor.bounds.width,
+                            height: reference.intrinsicContentSize.height))
+                        surface.addSubview(reference)
+                        reference.layoutIfNeeded()
+                        XCTAssertEqual(reference.font?.fontName, editor.font?.fontName, "Native reference font")
+                        XCTAssertEqual(reference.font?.pointSize, editor.font?.pointSize, "Native reference size")
+                        let expectedCaret = reference.textInputView.convert(reference.caretRect(for: reference.beginningOfDocument), to: surface)
+                        let actualCaret = editor.textInputView.convert(editor.caretRect(for: editor.beginningOfDocument), to: surface)
+                        XCTAssertEqual(actualCaret.minY, expectedCaret.minY, accuracy: 1)
+                        XCTAssertEqual(actualCaret.height, expectedCaret.height, accuracy: 1)
+                        reference.removeFromSuperview()
+                    } else {
+                        let baseline = try XCTUnwrap(captured.firstBaseline)
+                        let point = CGPoint(x: 0, y: baseline).applying(captured.contentTransform)
+                        try assertSingleLineInkBaseline(editor, surface: surface, baseline: point.y)
+                    }
+                    XCTAssertEqual(editor.text, "AAAAA")
+                    if caseIndex == 0 {
+                        #if NUXIE_HOSTED_INPUT_TESTS
+                        if !editor.isSecureTextEntry { XCTAssertTrue(editor.becomeFirstResponder()) }
+                        #endif
+                        let start = try XCTUnwrap(editor.position(from: editor.beginningOfDocument, offset: 1))
+                        let end = try XCTUnwrap(editor.position(from: start, offset: 3))
+                        editor.selectedTextRange = editor.textRange(from: start, to: end)
+                        #if NUXIE_HOSTED_INPUT_TESTS
+                        if !editor.isSecureTextEntry {
+                            editor.setMarkedText("AAA", selectedRange: NSRange(location: 0, length: 3))
+                        }
+                        #endif
+                    }
+                    let selection = try XCTUnwrap(editor.selectedTextRange)
+                    XCTAssertEqual(editor.offset(from: editor.beginningOfDocument, to: selection.start), 1)
+                    XCTAssertEqual(editor.offset(from: selection.start, to: selection.end), 3)
+                    #if NUXIE_HOSTED_INPUT_TESTS
+                    if !editor.isSecureTextEntry { XCTAssertNotNil(editor.markedTextRange) }
+                    #endif
+                }
+                initialWrites = writes
+                continue
+            }
             let editors = surface.subviews.compactMap { $0 as? UITextView }.sorted { $0.center.y < $1.center.y }
             XCTAssertEqual(editors.count, inputs.count)
             for (index, editor) in editors.enumerated() {
@@ -423,9 +504,11 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                 }
             }
         }
-        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextView }.min { $0.center.y < $1.center.y })
-        let priorInset = editor.textContainerInset
-        let caret = editor.caretRect(for: editor.beginningOfDocument)
+        let editor = surface.subviews.compactMap { $0 as? UITextView }.min { $0.center.y < $1.center.y }
+        let priorInset = editor?.textContainerInset
+        let caret = editor.map { $0.caretRect(for: $0.beginningOfDocument) }
+        let fields = surface.subviews.compactMap { $0 as? UITextField }
+        let fieldCarets = fields.map { $0.textInputView.convert($0.caretRect(for: $0.beginningOfDocument), to: surface) }
         _ = try await runtime.setTextRuns(inputs.map { .init(name: $0.riveTextRunName, text: Data()) })
         let blank = try await runtime.step(elapsedSeconds: 0, textRunNames: inputs.map(\.riveTextRunName))
         guard case .captured(let blankGeometry) = blank.textGeometry else { return XCTFail("No blank geometry") }
@@ -435,14 +518,26 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         _ = try await runtime.render(drawable: .available(.init(drawable)), completion: { blankCompleted.fulfill() })
         await fulfillment(of: [blankCompleted], timeout: 2)
         bridge.update(frame: .init(snapshot: try XCTUnwrap(lastSnapshot), geometry: blank.textGeometry))
-        XCTAssertEqual(editor.textContainerInset, priorInset)
-        XCTAssertEqual(editor.caretRect(for: editor.beginningOfDocument), caret)
-        XCTAssertEqual(editor.selectedRange, NSRange(location: 1, length: 3))
-        XCTAssertEqual(editor.text, inputs[0].value)
+        if let editor {
+            XCTAssertEqual(editor.textContainerInset, priorInset)
+            XCTAssertEqual(editor.caretRect(for: editor.beginningOfDocument), caret)
+            XCTAssertEqual(editor.selectedRange, NSRange(location: 1, length: 3))
+            XCTAssertEqual(editor.text, inputs[0].value)
+            #if NUXIE_HOSTED_INPUT_TESTS
+            XCTAssertNotNil(editor.markedTextRange)
+            #endif
+        }
+        for (index, field) in fields.enumerated() {
+            XCTAssertEqual(field.textInputView.convert(field.caretRect(for: field.beginningOfDocument), to: surface), fieldCarets[index])
+            XCTAssertEqual(field.text, "AAAAA")
+            let selection = try XCTUnwrap(field.selectedTextRange)
+            XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: selection.start), 1)
+            XCTAssertEqual(field.offset(from: selection.start, to: selection.end), 3)
+            #if NUXIE_HOSTED_INPUT_TESTS
+            if !field.isSecureTextEntry { XCTAssertNotNil(field.markedTextRange) }
+            #endif
+        }
         XCTAssertEqual(writes, initialWrites)
-        #if NUXIE_HOSTED_INPUT_TESTS
-        XCTAssertNotNil(editor.markedTextRange)
-        #endif
         try await runtime.close()
     }
 
@@ -545,6 +640,8 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
     private func assertSingleLineInkBaseline(_ field: UITextField, surface: UIView, baseline: CGFloat,
         file: StaticString = #filePath, line: UInt = #line) throws {
         field.textColor = .black
+        // Exclude insertion/selection chrome from the black-glyph pixel oracle.
+        field.tintColor = .systemBlue
         let font = try XCTUnwrap(field.font)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -566,8 +663,9 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
             context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         }
+        let fieldBottom = min(image.height, Int(ceil(field.convert(field.bounds, to: surface).maxY)))
         func inkRows(_ range: Range<Int>) -> [Int] {
-            (0..<image.height).filter { y in
+            (0..<fieldBottom).filter { y in
                 range.contains { x in
                     let offset = (y * image.width + x) * 4
                     return pixels[offset] < 128 && pixels[offset + 1] < 128 && pixels[offset + 2] < 128
