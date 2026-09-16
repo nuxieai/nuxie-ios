@@ -1,0 +1,21 @@
+{
+  "description": "Forward and reverse numeric bindings on actual text-style properties. One runtime step must update observed metrics; fixed style stays 18/24. This fixture does not qualify system preference projection or native-overlay alignment.",
+  "cases": [
+    {
+      "fontSize": 18,
+      "lineHeight": 24
+    },
+    {
+      "fontSize": 36,
+      "lineHeight": 48
+    },
+    {
+      "fontSize": 24,
+      "lineHeight": -1
+    },
+    {
+      "fontSize": 18,
+      "lineHeight": 24
+    }
+  ]
+}
