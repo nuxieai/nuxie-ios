@@ -1,0 +1,119 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 146,
+  "outputSizeBytes": 3040,
+  "outputSha256": "a8785bd11c921248a6e2840e1e816e0727aac6e5beb5af7079da9a93aabf145c",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen_1",
+        "publishedName": "Paywall",
+        "role": "experience",
+        "width": 390,
+        "height": 844,
+        "authoredOrder": 0
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen_1",
+        "artboardId": "screen_1",
+        "artboardName": "Paywall",
+        "width": 390,
+        "height": 844,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "Fixture Sans",
+          "weight": "400",
+          "style": "normal",
+          "riveAssetId": 0,
+          "riveUniqueName": "font-fixture-sans-400-normal-c3ced8ac-0",
+          "sha256": "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5",
+          "sizeBytes": 192936,
+          "contentType": "font/otf",
+          "format": "otf",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": [
+      {
+        "artboardId": "screen_1",
+        "viewNodeId": "bound",
+        "renderedNodeId": "bound",
+        "riveTextObjectKey": "artboard/screen_1/bound/text",
+        "riveTextRunObjectKey": "artboard/screen_1/bound/text-run",
+        "riveTextName": "bound",
+        "riveTextRunName": "bound Run",
+        "sourceNodeId": "bound",
+        "value": "AAAAA",
+        "editable": true,
+        "geometry": {
+          "x": 24,
+          "y": 24,
+          "width": 342,
+          "height": 24,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1
+        },
+        "style": {
+          "fontFamily": "Fixture Sans",
+          "fontWeight": "400",
+          "fontStyle": "normal",
+          "fontSize": 18,
+          "lineHeight": 24,
+          "letterSpacing": 0,
+          "color": 4278190080,
+          "fontAssetRiveUniqueName": "font-fixture-sans-400-normal-c3ced8ac-0",
+          "textAlign": "left"
+        },
+        "secureTextEntry": false,
+        "multiline": false
+      },
+      {
+        "artboardId": "screen_1",
+        "viewNodeId": "fixed",
+        "renderedNodeId": "fixed",
+        "riveTextObjectKey": "artboard/screen_1/fixed/text",
+        "riveTextRunObjectKey": "artboard/screen_1/fixed/text-run",
+        "riveTextName": "fixed",
+        "riveTextRunName": "fixed Run",
+        "sourceNodeId": "fixed",
+        "value": "",
+        "editable": true,
+        "geometry": {
+          "x": 24,
+          "y": 264,
+          "width": 342,
+          "height": 24,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1
+        },
+        "style": {
+          "fontFamily": "Fixture Sans",
+          "fontWeight": "400",
+          "fontStyle": "normal",
+          "fontSize": 18,
+          "lineHeight": 24,
+          "letterSpacing": 0,
+          "color": 4278190080,
+          "fontAssetRiveUniqueName": "font-fixture-sans-400-normal-c3ced8ac-0",
+          "textAlign": "left"
+        },
+        "secureTextEntry": true,
+        "multiline": false
+      }
+    ]
+  }
+}

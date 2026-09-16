@@ -1,0 +1,45 @@
+{
+  "description": "Published ordinary and secure single-line inputs using the same requested font metrics. Both fields change together; the retained fixed node identifier is not a fixed scaling policy in this fixture.",
+  "cases": [
+    {
+      "fontSize": 18,
+      "lineHeight": 24
+    },
+    {
+      "fontSize": 36,
+      "lineHeight": 48
+    },
+    {
+      "fontSize": 24,
+      "lineHeight": -1
+    },
+    {
+      "fontSize": 18,
+      "lineHeight": 36
+    },
+    {
+      "fontSize": 18,
+      "lineHeight": 24
+    }
+  ],
+  "geometry": [
+    {
+      "path": "nuxieTextInputs/input_bound_c74308af",
+      "x": 24,
+      "y": 24,
+      "width": 342,
+      "height": 220,
+      "runName": "bound Run",
+      "secure": false
+    },
+    {
+      "path": "nuxieTextInputs/input_fixed_9022c96b",
+      "x": 24,
+      "y": 264,
+      "width": 342,
+      "height": 220,
+      "runName": "fixed Run",
+      "secure": true
+    }
+  ]
+}
