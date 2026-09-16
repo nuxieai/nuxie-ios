@@ -281,6 +281,28 @@ package struct NuxieNativeViewModelChange: Equatable, Sendable {
     package let value: NuxieNativeViewModelValue
 }
 
+/// Value-owned geometry copied before the native step result is freed.
+package struct NuxieNativeTextRunGeometry: Equatable, Sendable {
+    package struct Layout: Equatable, Sendable {
+        package let transform: CGAffineTransform
+        package let bounds: CGRect
+    }
+    package let renderRevision: UInt64
+    package let worldTransform: CGAffineTransform
+    package let contentTransform: CGAffineTransform
+    package let textBounds: CGRect
+    package let layout: Layout?
+    package let firstBaseline: CGFloat?
+}
+
+/// Geometry is ancillary to already-committed step journals. A failed read
+/// withdraws native field placement without discarding those journals.
+package enum NuxieNativeTextGeometryCapture: Equatable, Sendable {
+    case notRequested
+    case captured([String: NuxieNativeTextRunGeometry])
+    case failed(NuxieNativeRuntimeError)
+}
+
 package struct NuxieNativePlayerStepResult: Equatable, Sendable {
     package let keepGoing: Bool
     package let pointerHits: [NuxieNativePointerHit]
@@ -288,6 +310,25 @@ package struct NuxieNativePlayerStepResult: Equatable, Sendable {
     package let events: [NuxieNativeEvent]
     package let hostCommands: [NuxieNativeHostCommand]
     package let viewModelChanges: [NuxieNativeViewModelChange]
+    package let textGeometry: NuxieNativeTextGeometryCapture
+
+    package init(
+        keepGoing: Bool,
+        pointerHits: [NuxieNativePointerHit],
+        stateChanges: [(layerIndex: Int, coreType: UInt32, globalID: UInt32?)],
+        events: [NuxieNativeEvent],
+        hostCommands: [NuxieNativeHostCommand],
+        viewModelChanges: [NuxieNativeViewModelChange],
+        textGeometry: NuxieNativeTextGeometryCapture = .notRequested
+    ) {
+        self.keepGoing = keepGoing
+        self.pointerHits = pointerHits
+        self.stateChanges = stateChanges
+        self.events = events
+        self.hostCommands = hostCommands
+        self.viewModelChanges = viewModelChanges
+        self.textGeometry = textGeometry
+    }
 
     package static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.keepGoing == rhs.keepGoing
@@ -300,6 +341,7 @@ package struct NuxieNativePlayerStepResult: Equatable, Sendable {
             && lhs.events == rhs.events
             && lhs.hostCommands == rhs.hostCommands
             && lhs.viewModelChanges == rhs.viewModelChanges
+            && lhs.textGeometry == rhs.textGeometry
     }
 }
 
@@ -675,7 +717,8 @@ package actor NuxieNativeRuntime {
         inputs: [NuxieNativePlayerInput] = [],
         pointers: [NuxieNativePointerEvent] = [],
         elapsedSeconds: Float,
-        correlationID: UInt64 = 0
+        correlationID: UInt64 = 0,
+        textRunNames: [String] = []
     ) async throws -> NuxieNativePlayerStepResult {
         let state = try requireState()
         return try await executor.call {
@@ -683,7 +726,8 @@ package actor NuxieNativeRuntime {
                 inputs: inputs,
                 pointers: pointers,
                 elapsedSeconds: elapsedSeconds,
-                correlationID: correlationID
+                correlationID: correlationID,
+                textRunNames: textRunNames
             )
         }
     }
@@ -999,7 +1043,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         inputs: [NuxieNativePlayerInput],
         pointers: [NuxieNativePointerEvent],
         elapsedSeconds: Float,
-        correlationID: UInt64
+        correlationID: UInt64,
+        textRunNames: [String] = []
     ) throws -> NuxieNativePlayerStepResult {
         var keepGoing = false
         var pointerHits = Array(repeating: NuxieNativePointerHit.none, count: pointers.count)
@@ -1007,6 +1052,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         var events: [NuxieNativeEvent] = []
         var hostCommands: [NuxieNativeHostCommand] = []
         var viewModelChanges: [NuxieNativeViewModelChange] = []
+        var textGeometry = NuxieNativeTextGeometryCapture.notRequested
+        let stepsAuxiliary = auxiliaryPlayersNeedInitialStep || !inputs.isEmpty || !pointers.isEmpty
+        let finalPlayerIndex = stepsAuxiliary ? players.count - 1 : 0
 
         for (index, player) in players.enumerated() {
             let isAuxiliary = index > 0
@@ -1029,8 +1077,10 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 ),
                 pointers: pointers,
                 elapsedSeconds: isAuxiliary ? 0 : elapsedSeconds,
-                correlationID: correlationID
+                correlationID: correlationID,
+                textRunNames: index == finalPlayerIndex ? textRunNames : []
             )
+            if index == finalPlayerIndex { textGeometry = result.textGeometry }
             keepGoing = keepGoing || result.keepGoing
             for (index, hit) in result.pointerHits.enumerated() where index < pointerHits.count {
                 if hit.precedence > pointerHits[index].precedence {
@@ -1050,7 +1100,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             stateChanges: stateChanges,
             events: events,
             hostCommands: hostCommands,
-            viewModelChanges: viewModelChanges
+            viewModelChanges: viewModelChanges,
+            textGeometry: textGeometry
         )
     }
 
@@ -1954,7 +2005,8 @@ private final class NuxieNativePlayerHandle: @unchecked Sendable {
         inputs: [NuxieNativePlayerInput],
         pointers: [NuxieNativePointerEvent],
         elapsedSeconds: Float,
-        correlationID: UInt64
+        correlationID: UInt64,
+        textRunNames: [String] = []
     ) throws -> NuxieNativePlayerStepResult {
         try withNativeInputChanges(inputs) { nativeInputs in
             let nativePointers = pointers.map {
@@ -1983,7 +2035,8 @@ private final class NuxieNativePlayerHandle: @unchecked Sendable {
                     }
                     let ownedResult = NuxieNativePlayerStepResultHandle(result)
                     defer { try? ownedResult.close() }
-                    return try ownedResult.copy(callStatus: status)
+                    return try ownedResult.copy(callStatus: status,
+                        player: try owned.require(), textRunNames: textRunNames)
                 }
             }
         }
@@ -2002,7 +2055,9 @@ private final class NuxieNativePlayerStepResultHandle {
         if let result { _ = nux_player_step_result_free(result) }
     }
 
-    func copy(callStatus: UInt32) throws -> NuxieNativePlayerStepResult {
+    func copy(callStatus: UInt32, player: OpaquePointer, textRunNames: [String]) throws
+        -> NuxieNativePlayerStepResult
+    {
         guard let result else { throw NuxieNativeRuntimeError.missingHandle("player step result") }
         var resultStatus = NUX_STATUS_RUNTIME_ERROR.rawValue
         try requireOK(
@@ -2124,8 +2179,54 @@ private final class NuxieNativePlayerStepResultHandle {
             stateChanges: stateChanges,
             events: events,
             hostCommands: hostCommands,
-            viewModelChanges: viewModelChanges
+            viewModelChanges: viewModelChanges,
+            textGeometry: copyTextGeometry(player: player, names: textRunNames)
         )
+    }
+
+    private func copyTextGeometry(player: OpaquePointer, names: [String])
+        -> NuxieNativeTextGeometryCapture
+    {
+        guard !names.isEmpty else { return .notRequested }
+        guard let result else { return .failed(.missingHandle("player step result")) }
+        do {
+            var copied: [String: NuxieNativeTextRunGeometry] = [:]
+            for name in names {
+                guard copied[name] == nil else {
+                    throw NuxieNativeRuntimeError.invalidNativeValue("duplicate requested text run")
+                }
+                var raw = NuxTextRunGeometry()
+                raw.struct_size = UInt32(MemoryLayout<NuxTextRunGeometry>.size)
+                try requireOK(withStringView(name) {
+                    nux_player_text_run_geometry(player, result, $0, &raw)
+                }, operation: "copy text run geometry")
+                func transform(_ value: (Float, Float, Float, Float, Float, Float)) -> CGAffineTransform {
+                    CGAffineTransform(a: CGFloat(value.0), b: CGFloat(value.1),
+                        c: CGFloat(value.2), d: CGFloat(value.3),
+                        tx: CGFloat(value.4), ty: CGFloat(value.5))
+                }
+                let layout: NuxieNativeTextRunGeometry.Layout? = raw.has_layout_ancestor == 1
+                    ? .init(transform: transform(raw.layout_ancestor_transform),
+                        bounds: CGRect(x: CGFloat(raw.layout_ancestor_min_x),
+                            y: CGFloat(raw.layout_ancestor_min_y),
+                            width: CGFloat(raw.layout_ancestor_max_x - raw.layout_ancestor_min_x),
+                            height: CGFloat(raw.layout_ancestor_max_y - raw.layout_ancestor_min_y)))
+                    : nil
+                copied[name] = NuxieNativeTextRunGeometry(renderRevision: raw.render_revision,
+                    worldTransform: transform(raw.world_transform),
+                    contentTransform: transform(raw.content_transform),
+                    textBounds: CGRect(x: CGFloat(raw.min_x), y: CGFloat(raw.min_y),
+                        width: CGFloat(raw.max_x - raw.min_x),
+                        height: CGFloat(raw.max_y - raw.min_y)),
+                    layout: layout,
+                    firstBaseline: raw.has_first_baseline == 1 ? CGFloat(raw.first_baseline) : nil)
+            }
+            return .captured(copied)
+        } catch let error as NuxieNativeRuntimeError {
+            return .failed(error)
+        } catch {
+            return .failed(.invalidNativeValue("text geometry capture failed"))
+        }
     }
 
     func close() throws {

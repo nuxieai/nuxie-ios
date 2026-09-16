@@ -22,17 +22,46 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                 externalAssets: [font.ordinal: fontBytes]))
         defer { Task { try? await runtime.close() } }
         struct Case: Decodable { let fontSize: Float; let lineHeight: Float }
-        struct Fixture: Decodable { let cases: [Case] }
+        struct Field: Decodable {
+            let runName: String
+            let x: CGFloat; let y: CGFloat; let width: CGFloat; let height: CGFloat
+        }
+        struct Fixture: Decodable { let cases: [Case]; let geometry: [Field] }
         let fixture = try JSONDecoder().decode(Fixture.self,
             from: Data(contentsOf: directory.appendingPathComponent("expectations.json")))
         let root = try await runtime.rootViewModelReference()
+        try await runtime.enableSemantics()
         var baselinePixels: Data?
+        var firstGeometry: NuxieNativeTextRunGeometry?
         for (index, item) in fixture.cases.enumerated() {
             _ = try await runtime.mutateViewModel([
                 .setNumber(instance: root, path: "requestedFontSize", value: item.fontSize),
                 .setNumber(instance: root, path: "requestedLineHeight", value: item.lineHeight),
             ])
-            _ = try await runtime.step(elapsedSeconds: 0)
+            let step = try await runtime.step(elapsedSeconds: 0,
+                textRunNames: fixture.geometry.map(\.runName))
+            guard case .captured(let fields) = step.textGeometry else {
+                return XCTFail("Expected frame-qualified field geometry: \(step.textGeometry)")
+            }
+            XCTAssertEqual(fields.count, fixture.geometry.count)
+            XCTAssertEqual(Set(fields.values.map(\.renderRevision)).count, 1)
+            for (fieldIndex, expected) in fixture.geometry.enumerated() {
+                let geometry = try XCTUnwrap(fields[expected.runName])
+                XCTAssertGreaterThan(geometry.renderRevision, 0)
+                let layout = try XCTUnwrap(geometry.layout)
+                let box = layout.bounds.applying(layout.transform)
+                XCTAssertEqual(box.minX, expected.x, accuracy: 0.001)
+                XCTAssertEqual(box.minY, expected.y, accuracy: 0.001)
+                XCTAssertEqual(box.width, expected.width, accuracy: 0.001)
+                XCTAssertEqual(box.height, expected.height, accuracy: 0.001)
+                XCTAssertEqual(geometry.worldTransform.tx, expected.x, accuracy: 0.001)
+                // Production lowering preserves this authored first-line offset.
+                XCTAssertEqual(geometry.worldTransform.ty, expected.y + 1.0458984, accuracy: 0.001)
+                let fontSize = fieldIndex == 0 ? CGFloat(item.fontSize) : 18
+                // The bundled font's independently rounded 2048-unit typo ascent.
+                XCTAssertEqual(try XCTUnwrap(geometry.firstBaseline), CGFloat(1929) / 2048 * fontSize, accuracy: 0.001)
+                if index == 0 && fieldIndex == 0 { firstGeometry = geometry }
+            }
             let snapshot = try await runtime.snapshot()
             func number(_ name: String) throws -> Float {
                 let entry = try XCTUnwrap(snapshot.values.first {
@@ -49,6 +78,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             XCTAssertEqual(try number("fixedLineHeight"), 24)
             let frame = try await renderPixels(runtime, width: 390, height: 844)
             XCTAssertEqual(frame.outcome.disposition, .presented)
+            let presented = try await runtime.captureSemantics()
+            XCTAssertEqual(Set(fields.values.map(\.renderRevision)), [presented.tree.renderRevision],
+                "Copied geometry must identify the exact presented revision")
             if let baselinePixels {
                 // The fixed input begins at y=264; only the upper input is bound.
                 let fixedRange = (264 * 390 * 4)..<frame.pixels.count
@@ -63,6 +95,8 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             }
         }
         try await runtime.close()
+        XCTAssertEqual(firstGeometry?.worldTransform.tx, 24,
+            "Copied geometry survives later mutations, step-result frees and runtime close")
     }
 
     func testPresentedSemanticCaptureCopiesUnicodeAndRejectsRetiredCaptureActions() async throws {
@@ -741,8 +775,13 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                 NuxieNativePointerEvent(kind: .up, x: 100, y: 728, pointerID: 1),
             ],
             elapsedSeconds: 0.016,
-            correlationID: 42
+            correlationID: 42,
+            textRunNames: ["missing geometry run"]
         )
+        guard case .failed(.callFailed(let diagnostic)) = result.textGeometry else {
+            return XCTFail("A missing geometry run must report capture failure without losing commands")
+        }
+        XCTAssertEqual(diagnostic.status, .notFound)
 
         XCTAssertEqual(
             result.hostCommands.map(\.name),
