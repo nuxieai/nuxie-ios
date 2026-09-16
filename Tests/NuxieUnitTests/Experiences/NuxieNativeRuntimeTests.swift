@@ -1,6 +1,7 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Darwin
 import Foundation
+import ImageIO
 import Metal
 import QuartzCore
 import XCTest
@@ -98,6 +99,11 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             if let baselinePixels {
                 // The fixed input begins at y=264; only the upper input is bound.
                 let fixedRange = (264 * 390 * 4)..<frame.pixels.count
+                if frame.pixels.subdata(in: fixedRange) != baselinePixels.subdata(in: fixedRange) ||
+                    (index == fixture.cases.count - 1 && frame.pixels != baselinePixels) {
+                    try attachMetricPixels(baselinePixels, name: "baseline-\(index)")
+                    try attachMetricPixels(frame.pixels, name: "actual-\(index)")
+                }
                 XCTAssertEqual(frame.pixels.subdata(in: fixedRange), baselinePixels.subdata(in: fixedRange))
                 if index == fixture.cases.count - 1 {
                     XCTAssertEqual(frame.pixels, baselinePixels, "Restoring authored metrics restores the rendered frame")
@@ -1097,6 +1103,22 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             drawable: .available(NuxieNativeDrawable(drawable)),
             clearColor: 0xFF11_2233
         )
+    }
+
+    private func attachMetricPixels(_ pixels: Data, name: String) throws {
+        let provider = try XCTUnwrap(CGDataProvider(data: pixels as CFData))
+        let image = try XCTUnwrap(CGImage(width: 390, height: 844, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: 390 * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let bytes = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let attachment = XCTAttachment(data: bytes as Data, uniformTypeIdentifier: "public.png")
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func renderPixels(
