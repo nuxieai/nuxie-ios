@@ -1,0 +1,166 @@
+{
+  "description": "Full affine native field placement. Transform order is a,b,c,d,tx,ty; corners are top-left, top-right, bottom-right, bottom-left of a 10 by 20 field. Expected points are independent authored arithmetic. Reflections remain interactive; singular transforms hide fields. This fixture does not qualify font shaping or IME.",
+  "width": 10,
+  "height": 20,
+  "cases": [
+    {
+      "name": "translated",
+      "transform": [
+        1,
+        0,
+        0,
+        1,
+        24,
+        32
+      ],
+      "corners": [
+        24,
+        32,
+        34,
+        32,
+        34,
+        52,
+        24,
+        52
+      ]
+    },
+    {
+      "name": "rotated",
+      "transform": [
+        0,
+        1,
+        -1,
+        0,
+        24,
+        32
+      ],
+      "corners": [
+        24,
+        32,
+        24,
+        42,
+        4,
+        42,
+        4,
+        32
+      ]
+    },
+    {
+      "name": "unequal scales",
+      "transform": [
+        2,
+        0,
+        0,
+        3,
+        24,
+        32
+      ],
+      "corners": [
+        24,
+        32,
+        44,
+        32,
+        44,
+        92,
+        24,
+        92
+      ]
+    },
+    {
+      "name": "horizontal shear",
+      "transform": [
+        1,
+        0,
+        0.5,
+        1,
+        24,
+        32
+      ],
+      "corners": [
+        24,
+        32,
+        34,
+        32,
+        44,
+        52,
+        34,
+        52
+      ]
+    },
+    {
+      "name": "vertical shear",
+      "transform": [
+        1,
+        0.5,
+        0,
+        1,
+        24,
+        32
+      ],
+      "corners": [
+        24,
+        32,
+        34,
+        37,
+        34,
+        57,
+        24,
+        52
+      ]
+    },
+    {
+      "name": "reflection",
+      "transform": [
+        -1,
+        0,
+        0,
+        1,
+        24,
+        32
+      ],
+      "corners": [
+        24,
+        32,
+        14,
+        32,
+        14,
+        52,
+        24,
+        52
+      ]
+    },
+    {
+      "name": "rotated reflected shear",
+      "transform": [
+        0,
+        -2,
+        -3,
+        1,
+        24,
+        32
+      ],
+      "corners": [
+        24,
+        32,
+        24,
+        12,
+        -36,
+        32,
+        -36,
+        52
+      ]
+    },
+    {
+      "name": "collapsed",
+      "transform": [
+        1,
+        2,
+        2,
+        4,
+        24,
+        32
+      ],
+      "corners": null
+    }
+  ]
+}
