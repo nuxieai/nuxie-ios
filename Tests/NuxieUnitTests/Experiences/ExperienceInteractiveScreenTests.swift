@@ -536,51 +536,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     #if canImport(UIKit)
-    func testStepDeliveryOrdersCanonicalEffectsLayoutAndHostPhase() {
-        let reported = ExperienceInteractiveEffect(
-            sequence: 0,
-            correlationID: 0,
-            kind: .reportedEvent(ExperienceInteractiveReportedEvent(
-                localIndex: 0,
-                coreType: 0,
-                name: "reported",
-                url: "",
-                target: "",
-                delay: 0,
-                properties: []
-            ))
-        )
-        let viewModel = ExperienceInteractiveEffect(
-            sequence: 1,
-            correlationID: 0,
-            kind: .viewModelChange(ExperienceInteractiveViewModelChange(
-                origin: .runtime,
-                correlationID: 0,
-                ownerInstanceID: 1,
-                propertyIndex: 0,
-                value: .bytes(Data("canonical".utf8))
-            ))
-        )
-        let hostCommand = ExperienceInteractiveEffect(
-            sequence: 2,
-            correlationID: 0,
-            kind: .hostCommand(name: "custom", payload: .null)
-        )
-
-        XCTAssertEqual(
-            ExperienceInteractiveStepDeliveryPlanner.items(
-                effects: [reported, viewModel, hostCommand],
-                includesTextInputLayout: true
-            ),
-            [
-                .effect(reported),
-                .effect(viewModel),
-                .textInputLayout,
-                .effect(hostCommand),
-            ]
-        )
-    }
-
     func testAuthenticatedExternalFontIsRegisteredForScreenLifetimeAndReleasedOnClose() async throws {
         let payload = try await authenticatedFixturePayload(named: "font-converter")
         let font = try XCTUnwrap(payload.renderPlan.fonts.first(where: {
@@ -628,30 +583,56 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
 
     @MainActor
-    func testPresentationSessionCapturesSnapshotBeforeMainActorDelivery() async throws {
+    func testTextFrameIsCopiedAtStepAndDeliveredOnlyWithPresentedRender() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
-        let screen = try await ExperienceInteractiveScreen.open(
-            payload: payload,
-            pixelWidth: 64,
-            pixelHeight: 64
-        )
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 64, pixelHeight: 64)
         defer { Task { try? await screen.close() } }
-        var deliveredSnapshot: ExperienceInteractiveViewModelSnapshot?
-        let session = screen.presentationSession(
-            includesSnapshotAfterStep: true
-        ) { _, snapshot in
-            deliveredSnapshot = snapshot
+        var deliveredText: ExperienceInteractiveTextFrame?
+        var deliveredSteps = 0
+        let session = screen.presentationSession(onTextFrame: { deliveredText = $0 }) { _ in
+            deliveredSteps += 1
         }
+        XCTAssertTrue(session.observesEveryPresentation)
+        let step = try await session.perform(.step(.init(elapsedSeconds: 0, pointers: [])))
+        await step.deliver()
+        XCTAssertEqual(deliveredSteps, 1)
+        XCTAssertNil(deliveredText)
 
-        let result = try await session.perform(.step(ExperienceRuntimePresentationStep(
-            elapsedSeconds: 0.016,
-            pointers: []
-        )))
-        XCTAssertNil(deliveredSnapshot)
+        let skipped = try await session.perform(.render(.occluded, completion: .init({})))
+        XCTAssertFalse(skipped.hasDelivery)
+        await skipped.deliver()
+        XCTAssertNil(deliveredText)
 
-        await result.deliver()
-        XCTAssertNotNil(deliveredSnapshot)
+        let device = try await screen.metalDevice()
+        let layer = CAMetalLayer()
+        layer.device = device.value
+        layer.pixelFormat = .bgra8Unorm
+        layer.drawableSize = CGSize(width: 64, height: 64)
+        guard let drawable = layer.nextDrawable() else { throw XCTSkip("This host cannot vend a CAMetalDrawable") }
+        let completed = expectation(description: "native render completed")
+        let rendered = try await session.perform(.render(.available(.init(value: drawable)),
+            completion: .init({ completed.fulfill() })))
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertTrue(rendered.hasDelivery)
+        XCTAssertNil(deliveredText)
+        // Later state cannot rewrite the immutable values attached to this render.
+        let root = try await screen.rootViewModel()
+        _ = try await screen.mutateState([.setNumber(root, path: "Number", value: 91)])
+        await rendered.deliver()
+        let snapshot = try XCTUnwrap(deliveredText?.snapshot)
+        XCTAssertEqual(snapshot.values.first { $0.name == "Number" }?.value, .number(0))
+        let current = try await screen.snapshot()
+        XCTAssertEqual(current.values.first { $0.name == "Number" }?.value, .number(91))
+        XCTAssertEqual(deliveredSteps, 1)
+
+        _ = try await screen.resize(pixelWidth: 80, pixelHeight: 80)
+        layer.drawableSize = CGSize(width: 80, height: 80)
+        guard let nextDrawable = layer.nextDrawable() else { throw XCTSkip("No second drawable") }
+        let afterResize = try await screen.renderFrame(drawable: .init(nextDrawable), capturesSemantics: false)
+        XCTAssertNil(afterResize.text, "Resize retires copied geometry until another settled step")
+        try await screen.close()
     }
+
     #endif
 
     func testAuthenticatedScreenPreservesStateAcrossRepeatedRenders() async throws {

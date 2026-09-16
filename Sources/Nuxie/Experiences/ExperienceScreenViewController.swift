@@ -4,11 +4,6 @@ import NuxieRuntime
 import QuartzCore
 import UIKit
 
-enum ExperienceInteractiveStepDeliveryItem: Equatable, Sendable {
-    case effect(ExperienceInteractiveEffect)
-    case textInputLayout
-}
-
 enum ExperienceRuntimeScreenEmission: Equatable, Sendable {
     case control(
         screenId: String,
@@ -63,40 +58,6 @@ struct ExperienceRuntimeScreenEmissionAssembler {
         }
         guard !drafts.isEmpty, let source else { return .success(nil) }
         return .success(.effects(source: source, drafts: drafts))
-    }
-}
-
-enum ExperienceInteractiveStepDeliveryPlanner {
-    static func items(
-        effects: [ExperienceInteractiveEffect],
-        includesTextInputLayout: Bool
-    ) -> [ExperienceInteractiveStepDeliveryItem] {
-        var result: [ExperienceInteractiveStepDeliveryItem] = []
-        result.reserveCapacity(effects.count + (includesTextInputLayout ? 1 : 0))
-        var insertedLayout = false
-        for effect in effects {
-            if includesTextInputLayout,
-               !insertedLayout,
-               isHostPhase(effect.kind) {
-                result.append(.textInputLayout)
-                insertedLayout = true
-            }
-            result.append(.effect(effect))
-        }
-        if includesTextInputLayout, !insertedLayout {
-            result.append(.textInputLayout)
-        }
-        return result
-    }
-
-    private static func isHostPhase(_ effect: ExperienceInteractiveEffectKind) -> Bool {
-        switch effect {
-        case .controlAction, .reportedEvent, .viewModelChange:
-            false
-        case .responseSet, .responseUnset, .journeyEvent, .hostCommand,
-             .rejectedHostCommand:
-            true
-        }
     }
 }
 
@@ -300,12 +261,25 @@ final class ExperienceScreenViewController: UIViewController {
         } else {
             semanticConsumer = nil
         }
+        let textConsumer: (@MainActor @Sendable (ExperienceInteractiveTextFrame) -> Void)?
+        if includesTextInputSnapshot {
+            textConsumer = { [weak self] frame in
+                guard let self else { return }
+                if let snapshot = frame.snapshot {
+                    self.textInputOverlayBridge.update(snapshot: snapshot)
+                } else {
+                    self.textInputOverlayBridge.invalidateLayout()
+                }
+            }
+        } else {
+            textConsumer = nil
+        }
         let loop = ExperienceRuntimePresentationLoop(
             session: interactive.presentationSession(
-                includesSnapshotAfterStep: includesTextInputSnapshot,
-                onSemantics: semanticConsumer
-            ) { [weak self] effects, snapshot in
-                await self?.deliverStep(effects: effects, snapshot: snapshot)
+                onSemantics: semanticConsumer,
+                onTextFrame: textConsumer
+            ) { [weak self] effects in
+                await self?.deliverStep(effects: effects)
             },
             surfaceView: surfaceView,
             onSessionResult: { [weak self] in
@@ -635,20 +609,11 @@ final class ExperienceScreenViewController: UIViewController {
               runtimeFailure == nil,
               let interactiveScreen,
               let presentationLoop else { return false }
-        let includesTextInputSnapshot = artifact.renderPlan.textInputs.contains {
-            $0.screenId == screenId && $0.editable
-        }
         presentationLoop.enqueue(
             ExperienceRuntimePresentationQueuedWork {
                 let result = try await interactiveScreen.applyStateCommand(command)
-                let snapshot: ExperienceInteractiveViewModelSnapshot?
-                if includesTextInputSnapshot {
-                    snapshot = try? await interactiveScreen.snapshot()
-                } else {
-                    snapshot = nil
-                }
                 return .work(requestsFrame: requestsFrame) { [weak self] in
-                    await self?.deliverStep(effects: result.effects, snapshot: snapshot)
+                    await self?.deliverStep(effects: result.effects)
                 }
             },
             completion: { [weak self] result in
@@ -786,52 +751,24 @@ final class ExperienceScreenViewController: UIViewController {
     private func refreshTextInputLayouts() {
         guard artifact.renderPlan.textInputs.contains(where: {
             $0.screenId == screenId && $0.editable
-        }),
-        let interactiveScreen,
-        let presentationLoop else { return }
-        presentationLoop.enqueue(
-            ExperienceRuntimePresentationQueuedWork {
-                let snapshot = try await interactiveScreen.snapshot()
-                return .work(requestsFrame: false) { [weak self] in
-                    self?.textInputOverlayBridge.update(snapshot: snapshot)
-                }
-            },
-            completion: { error in
-                if case .failure(let error) = error {
-                    LogWarning(
-                        "ExperienceScreenViewController: failed to refresh text layout for \(self.screenId): \(error)"
-                    )
-                }
-            }
-        )
+        }), let presentationLoop else { return }
+        presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
+            .work(requestsFrame: true)
+        })
     }
 
-    private func deliverStep(
-        effects: [ExperienceInteractiveEffect],
-        snapshot: ExperienceInteractiveViewModelSnapshot?
-    ) async {
+    private func deliverStep(effects: [ExperienceInteractiveEffect]) async {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         let originatingRun = delegate?.screenEmissionRun(for: self)
-        let items = ExperienceInteractiveStepDeliveryPlanner.items(
-            effects: effects,
-            includesTextInputLayout: snapshot != nil
-        )
         var assembler = ExperienceRuntimeScreenEmissionAssembler()
-        for item in items {
+        for effect in effects {
             guard !isShuttingDown, runtimeFailure == nil else { return }
-            switch item {
-            case .effect(let effect):
-                guard let projected = await route(effect) else { continue }
-                switch projected {
-                case .control(let screenId, let invocation):
-                    assembler.appendControl(screenId: screenId, invocation: invocation)
-                case .draft(let draft, let draftSource):
-                    assembler.appendDraft(draft, source: draftSource)
-                }
-            case .textInputLayout:
-                if let snapshot {
-                    textInputOverlayBridge.update(snapshot: snapshot)
-                }
+            guard let projected = await route(effect) else { continue }
+            switch projected {
+            case .control(let screenId, let invocation):
+                assembler.appendControl(screenId: screenId, invocation: invocation)
+            case .draft(let draft, let draftSource):
+                assembler.appendDraft(draft, source: draftSource)
             }
         }
         let emission: ExperienceRuntimeScreenEmission?

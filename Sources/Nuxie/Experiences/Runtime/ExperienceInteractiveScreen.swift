@@ -316,9 +316,16 @@ enum ExperienceInteractiveRendererHealth: Equatable, Sendable {
     case failed
 }
 
+/// Immutable text state copied under the same occurrence lock as its native step.
+struct ExperienceInteractiveTextFrame: Sendable {
+    let snapshot: ExperienceInteractiveViewModelSnapshot?
+    let geometry: NuxieNativeTextGeometryCapture
+}
+
 struct ExperienceInteractiveRenderedFrame: Sendable {
     let outcome: ExperienceInteractiveRenderOutcome
     let semantics: NuxieNativeSemanticCapture?
+    let text: ExperienceInteractiveTextFrame?
 }
 
 struct ExperienceInteractiveRenderOutcome: Equatable, Sendable {
@@ -1627,6 +1634,7 @@ actor ExperienceInteractiveScreen {
     private var trackedLists: ExperienceInteractiveTrackedListPlanner
     private var reservedChangeFilter: ExperienceInteractiveReservedChangeFilter
     private var router = ExperienceInteractiveEffectRouter()
+    private var pendingTextFrame: ExperienceInteractiveTextFrame?
 
     private var stateCompiler: ExperienceInteractiveStateCompiler {
         ExperienceInteractiveStateCompiler(
@@ -1824,7 +1832,8 @@ actor ExperienceInteractiveScreen {
         inputs: [ExperienceInteractiveInput] = [],
         pointers: [ExperienceInteractivePointerEvent] = [],
         elapsedSeconds: Float,
-        correlationID: UInt64 = 0
+        correlationID: UInt64 = 0,
+        capturesTextLayout: Bool = false
     ) async throws -> ExperienceInteractiveStepResult {
         let nativeInputs = inputs.map(Self.nativeInput)
         let nativePointers = pointers.map(Self.nativePointer)
@@ -1834,8 +1843,10 @@ actor ExperienceInteractiveScreen {
                 inputs: nativeInputs,
                 pointers: nativePointers,
                 elapsedSeconds: elapsedSeconds,
-                correlationID: correlationID
+                correlationID: correlationID,
+                textRunNames: capturesTextLayout ? textInputs.values.filter(\.editable).map(\.riveTextRunName).sorted() : []
             )
+            await captureTextFrame(result, requested: capturesTextLayout)
             let projected = await projectStep(result, correlationID: correlationID)
             // Native step effects have committed. Topology is a recoverable
             // cache and must never turn that committed operation into a
@@ -1843,6 +1854,18 @@ actor ExperienceInteractiveScreen {
             try? await refreshTrackedTopology()
             return projected
         }
+    }
+
+    private func captureTextFrame(_ result: NuxieNativePlayerStepResult, requested: Bool) async {
+        guard requested else {
+            pendingTextFrame = nil
+            return
+        }
+        // Copy failure cannot discard committed step effects. A missing snapshot
+        // travels with this frame so the consumer can withdraw stale editors.
+        let snapshot = try? await runtime.snapshot()
+        pendingTextFrame = ExperienceInteractiveTextFrame(
+            snapshot: snapshot.map(Self.projectSnapshot), geometry: result.textGeometry)
     }
 
     private func projectStep(
@@ -3278,7 +3301,11 @@ actor ExperienceInteractiveScreen {
     func snapshot() async throws -> ExperienceInteractiveViewModelSnapshot {
         let runtime = runtime
         let value = try await operationGate.withLock { try await runtime.snapshot() }
-        return ExperienceInteractiveViewModelSnapshot(
+        return Self.projectSnapshot(value)
+    }
+
+    private static func projectSnapshot(_ value: NuxieNativeViewModelSnapshot) -> ExperienceInteractiveViewModelSnapshot {
+        ExperienceInteractiveViewModelSnapshot(
             rootInstanceID: value.rootInstanceID,
             instances: value.instances.map {
                 ExperienceInteractiveViewModelSnapshot.Instance(
@@ -3342,8 +3369,9 @@ actor ExperienceInteractiveScreen {
         -> ExperienceInteractiveRenderOutcome
     {
         let runtime = runtime
-        return try await operationGate.withLock {
-            Self.renderOutcome(
+        return try await operationGate.withLock { [self] in
+            await discardTextFrame()
+            return Self.renderOutcome(
                 try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
             )
         }
@@ -3392,7 +3420,8 @@ actor ExperienceInteractiveScreen {
         }
         let runtime = runtime
         let textRuns = textInputs.values.filter(\.editable).map(\.riveTextRunName).sorted()
-        return try await operationGate.withLock {
+        return try await operationGate.withLock { [self] in
+            let text = await pendingTextFrame
             let outcome = try await runtime.render(drawable: state, clearColor: clearColor, completion: completion)
             let semantics: NuxieNativeSemanticCapture?
             if capturesSemantics, outcome.disposition == .presented {
@@ -3400,14 +3429,20 @@ actor ExperienceInteractiveScreen {
             } else {
                 semantics = nil
             }
-            return ExperienceInteractiveRenderedFrame(outcome: Self.renderOutcome(outcome), semantics: semantics)
+            return ExperienceInteractiveRenderedFrame(outcome: Self.renderOutcome(outcome), semantics: semantics,
+                text: outcome.disposition == .presented ? text : nil)
         }
     }
+
+    private func discardTextFrame() { pendingTextFrame = nil }
 
     func close() async throws {
         let runtime = runtime
         defer { fontScope.close() }
-        try await operationGate.withLock { try await runtime.close() }
+        try await operationGate.withLock { [self] in
+            await discardTextFrame()
+            try await runtime.close()
+        }
     }
 
     private static func nativeInput(_ input: ExperienceInteractiveInput)

@@ -374,16 +374,13 @@ extension ExperienceInteractiveScreen {
     /// routing into that policy. Effects cross MainActor only after the native
     /// step and product projection both succeed.
     nonisolated func presentationSession(
-        includesSnapshotAfterStep: Bool = false,
         onSemantics: (@MainActor @Sendable (NuxieNativeSemanticCapture) -> Void)? = nil,
-        onStep: @escaping @MainActor @Sendable (
-            [ExperienceInteractiveEffect],
-            ExperienceInteractiveViewModelSnapshot?
-        ) async -> Void
+        onTextFrame: (@MainActor @Sendable (ExperienceInteractiveTextFrame) -> Void)? = nil,
+        onStep: @escaping @MainActor @Sendable ([ExperienceInteractiveEffect]) async -> Void
     ) -> ExperienceRuntimePresentationSession {
         let screen = self
         return ExperienceRuntimePresentationSession(artboardBounds: artboardBounds,
-            observesEveryPresentation: onSemantics != nil) { operation in
+            observesEveryPresentation: onSemantics != nil || onTextFrame != nil) { operation in
             switch operation {
             case .copyMetalDevice:
                 if onSemantics != nil { try await screen.enableSemantics() }
@@ -391,16 +388,11 @@ extension ExperienceInteractiveScreen {
             case .step(let step):
                 let result = try await screen.step(
                     pointers: step.pointers,
-                    elapsedSeconds: step.elapsedSeconds
+                    elapsedSeconds: step.elapsedSeconds,
+                    capturesTextLayout: onTextFrame != nil
                 )
-                let snapshot: ExperienceInteractiveViewModelSnapshot?
-                if includesSnapshotAfterStep {
-                    snapshot = try? await screen.snapshot()
-                } else {
-                    snapshot = nil
-                }
                 return .session {
-                    await onStep(result.effects, snapshot)
+                    await onStep(result.effects)
                 }
             case .resize(let size):
                 return .renderer(Self.presentationOutcome(try await screen.resize(
@@ -427,8 +419,11 @@ extension ExperienceInteractiveScreen {
                     capturesSemantics: onSemantics != nil,
                     completion: { completion.signalFromNative() }
                 )
-                if let semantics = frame.semantics, let onSemantics {
-                    return .renderer(Self.presentationOutcome(frame.outcome)) { onSemantics(semantics) }
+                if frame.semantics != nil || frame.text != nil {
+                    return .renderer(Self.presentationOutcome(frame.outcome)) {
+                        if let semantics = frame.semantics { onSemantics?(semantics) }
+                        if let text = frame.text { onTextFrame?(text) }
+                    }
                 }
                 return .renderer(Self.presentationOutcome(frame.outcome))
             case .queued(let work):
@@ -545,6 +540,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var zeroDeltaGenerationByFrameID: [UInt64: UInt64] = [:]
     private var completedZeroDeltaGeneration: UInt64 = 0
     private var pendingRender = false
+    private var submittedPresentationContext: (epoch: UInt64, generation: UInt64)?
     private var applicationIsActive = true
     private var owningSceneIsActive = true
     private var isPresentationVisible = true
@@ -852,8 +848,15 @@ final class ExperienceRuntimePresentationLoop: NSObject {
               let operation = nextOperation() else { return }
 
         operationInFlight = true
-        let semanticEpoch = semanticPresentationEpoch
-        let generation = lifecycleGeneration
+        let context: (epoch: UInt64, generation: UInt64)
+        if case .render = operation, let submitted = submittedPresentationContext {
+            context = submitted
+            submittedPresentationContext = nil
+        } else {
+            context = (semanticPresentationEpoch, lifecycleGeneration)
+        }
+        let semanticEpoch = context.epoch
+        let generation = context.generation
         let frame = frameSequence
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -968,6 +971,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             }
             onSessionResult()
             pendingRender = step.requestsRender
+            submittedPresentationContext = step.requestsRender ? (semanticEpoch, generation) : nil
             if let generation = zeroDeltaStepGeneration {
                 zeroDeltaStepGeneration = nil
                 if step.requestsRender {
