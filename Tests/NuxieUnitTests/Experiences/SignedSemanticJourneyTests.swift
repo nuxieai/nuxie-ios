@@ -210,8 +210,10 @@ final class SignedSemanticJourneyTests: XCTestCase {
         try await waitUntil("The authored decrement must reach the Journey emission boundary") {
             observer.accepted.flatMap(\.emissions).filter { $0.name == "seat_decreased" }.count == 1
         }
+        XCTAssertTrue(field.becomeFirstResponder())
         field.text = "typed-password"
         field.sendActions(for: .editingChanged)
+        XCTAssertTrue(field.resignFirstResponder())
         try await waitUntil("The native editor must commit a response emission") {
             observer.accepted.flatMap(\.emissions).contains { $0.name == JourneyResponseControlNames.responseSet }
         }
