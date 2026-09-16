@@ -629,6 +629,10 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             XCTAssertEqual(writes, before)
             XCTAssertEqual(field.text, "AAAAA")
             XCTAssertTrue(field.point(inside: CGPoint(x: 120, y: 170), with: nil), "Baseline correction preserves the entire authored touch area")
+            update(size: 0.5, height: -1, baseline: 0.5)
+            XCTAssertEqual(field.font?.pointSize, 0.5, "Positive effective sizes must not be clamped")
+            XCTAssertEqual(field.text, "AAAAA")
+            XCTAssertEqual(writes, before)
             #if NUXIE_HOSTED_INPUT_TESTS
             if !secure { XCTAssertNotNil(field.markedTextRange) }
             #endif

@@ -25,6 +25,17 @@
       }
     },
     {
+      "name": "positive sub-point size",
+      "outputs": {
+        "fontSize": 0.5,
+        "lineHeight": -1
+      },
+      "expected": {
+        "fontSize": 0.5,
+        "lineHeight": -1
+      }
+    },
+    {
       "name": "fixed paint",
       "outputs": {
         "fontSize": 18,
