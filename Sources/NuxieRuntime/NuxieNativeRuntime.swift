@@ -441,6 +441,19 @@ package struct NuxieNativeDrawable: @unchecked Sendable {
     }
 }
 
+/// Caller-owned storage for pixels copied before drawable presentation.
+/// Access or reuse the buffer only after render completion. The native runtime
+/// validates the buffer's device, storage, row stride and capacity.
+package struct NuxieNativeFrameReadback: @unchecked Sendable {
+    fileprivate let buffer: any MTLBuffer
+    fileprivate let bytesPerRow: Int
+
+    package init(buffer: any MTLBuffer, bytesPerRow: Int) {
+        self.buffer = buffer
+        self.bytesPerRow = bytesPerRow
+    }
+}
+
 package enum NuxieNativeDrawableState: Equatable, Sendable {
     case available(NuxieNativeDrawable)
     case timeout
@@ -814,6 +827,7 @@ package actor NuxieNativeRuntime {
     package func render(
         drawable: NuxieNativeDrawableState,
         clearColor: UInt32 = 0,
+        readback: NuxieNativeFrameReadback? = nil,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> NuxieNativeRendererOutcome {
         let state: NuxieNativeRuntimeState
@@ -832,6 +846,7 @@ package actor NuxieNativeRuntime {
                 player: state.player,
                 drawable: drawable,
                 clearColor: clearColor,
+                readback: readback,
                 completion: completion
             )
         }
@@ -2597,6 +2612,7 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
         player: NuxieNativePlayerHandle,
         drawable: NuxieNativeDrawableState,
         clearColor: UInt32,
+        readback: NuxieNativeFrameReadback?,
         completion: (@Sendable () -> Void)?
     ) throws -> NuxieNativeRendererOutcome {
         let renderer = try owned.require()
@@ -2614,6 +2630,10 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
         }
         operation.clear_color = clearColor
         operation.fit = UInt32(NUX_RENDERER_FIT_CONTAIN_CENTER)
+        if let readback {
+            operation.readback_buffer = Unmanaged.passUnretained(readback.buffer as AnyObject).toOpaque()
+            operation.readback_bytes_per_row = readback.bytesPerRow
+        }
         if let completion {
             let box = Unmanaged.passRetained(NuxieNativeRendererCompletion(completion))
             operation.completion_context = box.toOpaque()
@@ -2628,13 +2648,15 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
         var outcome = NuxRendererOutcome()
         outcome.struct_size = UInt32(MemoryLayout<NuxRendererOutcome>.size)
         var result: OpaquePointer?
-        let status = nux_renderer_render_player(
-            renderer,
-            player,
-            &operation,
-            &outcome,
-            &result
-        )
+        let status = withExtendedLifetime((drawable, readback)) {
+            nux_renderer_render_player(
+                renderer,
+                player,
+                &operation,
+                &outcome,
+                &result
+            )
+        }
         if status == NUX_STATUS_OK.rawValue {
             guard result == nil else {
                 defer { _ = nux_capi_result_free(result) }

@@ -8,7 +8,13 @@ _Static_assert(sizeof(NuxStatus) == sizeof(uint32_t), "status must be fixed-widt
 _Static_assert(sizeof(struct NuxStringView) == 16, "unexpected string-view layout");
 _Static_assert(sizeof(struct NuxPlayerStep) == 56, "unexpected player-step layout");
 _Static_assert(sizeof(struct NuxRendererOutcome) == 48, "unexpected renderer outcome layout");
-_Static_assert(sizeof(struct NuxMetalRenderOperation) == 48, "unexpected Metal operation layout");
+_Static_assert(sizeof(struct NuxMetalRenderOperation) == 64, "unexpected Metal operation layout");
+_Static_assert(offsetof(struct NuxMetalRenderOperation, drawable) == 8, "drawable prefix moved");
+_Static_assert(offsetof(struct NuxMetalRenderOperation, completion_context) == 24, "completion prefix moved");
+_Static_assert(offsetof(struct NuxMetalRenderOperation, completion_callback) == 32, "completion callback moved");
+_Static_assert(offsetof(struct NuxMetalRenderOperation, fit) == 40, "renderer-fit prefix moved");
+_Static_assert(offsetof(struct NuxMetalRenderOperation, readback_buffer) == 48, "unexpected capture buffer offset");
+_Static_assert(offsetof(struct NuxMetalRenderOperation, readback_bytes_per_row) == 56, "unexpected capture stride offset");
 _Static_assert(NUX_RENDERER_FIT_NONE == 0, "unexpected raw renderer-fit value");
 _Static_assert(NUX_RENDERER_FIT_CONTAIN_CENTER == 1, "unexpected contain renderer-fit value");
 
