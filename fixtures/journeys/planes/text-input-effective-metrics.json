@@ -1,0 +1,162 @@
+{
+  "description": "Per-input fontSize and lineHeight numeric outputs live beside generated geometry in the same submitted VM snapshot. Both absent means authored legacy style. Partial, non-number or non-finite/non-positive metrics invalidate native placement; lineHeight alone admits the natural -1 sentinel. Effective values are not capped to authored metadata limits because scaling may exceed them.",
+  "authored": {
+    "fontSize": 18,
+    "lineHeight": 24
+  },
+  "cases": [
+    {
+      "name": "legacy absence",
+      "outputs": {},
+      "expected": {
+        "fontSize": 18,
+        "lineHeight": 24
+      }
+    },
+    {
+      "name": "bound enlarged",
+      "outputs": {
+        "fontSize": 36,
+        "lineHeight": 48
+      },
+      "expected": {
+        "fontSize": 36,
+        "lineHeight": 48
+      }
+    },
+    {
+      "name": "fixed paint",
+      "outputs": {
+        "fontSize": 18,
+        "lineHeight": 24
+      },
+      "expected": {
+        "fontSize": 18,
+        "lineHeight": 24
+      }
+    },
+    {
+      "name": "natural height",
+      "outputs": {
+        "fontSize": 24,
+        "lineHeight": -1
+      },
+      "expected": {
+        "fontSize": 24,
+        "lineHeight": -1
+      }
+    },
+    {
+      "name": "scaled above authored limit",
+      "outputs": {
+        "fontSize": 16384,
+        "lineHeight": 24576
+      },
+      "expected": {
+        "fontSize": 16384,
+        "lineHeight": 24576
+      }
+    },
+    {
+      "name": "missing height",
+      "outputs": {
+        "fontSize": 36
+      },
+      "expected": null
+    },
+    {
+      "name": "missing size",
+      "outputs": {
+        "lineHeight": 48
+      },
+      "expected": null
+    },
+    {
+      "name": "zero size",
+      "outputs": {
+        "fontSize": 0,
+        "lineHeight": 24
+      },
+      "expected": null
+    },
+    {
+      "name": "negative size",
+      "outputs": {
+        "fontSize": -1,
+        "lineHeight": 24
+      },
+      "expected": null
+    },
+    {
+      "name": "zero height",
+      "outputs": {
+        "fontSize": 18,
+        "lineHeight": 0
+      },
+      "expected": null
+    },
+    {
+      "name": "negative height",
+      "outputs": {
+        "fontSize": 18,
+        "lineHeight": -2
+      },
+      "expected": null
+    },
+    {
+      "name": "numeric strings",
+      "outputs": {
+        "fontSize": "18",
+        "lineHeight": "24"
+      },
+      "expected": null
+    },
+    {
+      "name": "boolean size",
+      "outputs": {
+        "fontSize": true,
+        "lineHeight": 24
+      },
+      "expected": null
+    },
+    {
+      "name": "null outputs",
+      "outputs": {
+        "fontSize": null,
+        "lineHeight": null
+      },
+      "expected": null
+    },
+    {
+      "name": "non-finite size",
+      "outputs": {
+        "fontSize": {
+          "nativeNumber": "NaN"
+        },
+        "lineHeight": 24
+      },
+      "expected": null
+    },
+    {
+      "name": "non-finite height",
+      "outputs": {
+        "fontSize": 18,
+        "lineHeight": {
+          "nativeNumber": "Infinity"
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "restored",
+      "outputs": {
+        "fontSize": 18,
+        "lineHeight": 24
+      },
+      "expected": {
+        "fontSize": 18,
+        "lineHeight": 24
+      }
+    }
+  ]
+}
