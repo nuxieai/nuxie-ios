@@ -13,6 +13,11 @@ struct ExperienceTextInputGeometry {
     let scaleY: Double
 }
 
+struct ExperienceTextInputMetrics: Equatable {
+    let fontSize: Double
+    let lineHeight: Double
+}
+
 /// Resolves signed geometry paths from a generic native snapshot. This is
 /// product policy over plain values.
 struct ExperienceTextInputGeometryResolver {
@@ -39,40 +44,50 @@ struct ExperienceTextInputGeometryResolver {
         )
     }
 
-    func number(at path: String) -> Double? {
-        let segments = path.split(separator: "/").map(String.init)
-        guard !segments.isEmpty else { return nil }
-        return number(segments: segments, allowingLeadingLabel: true)
+    func metrics(xPath: String, authored: ExperienceTextInputMetrics) -> ExperienceTextInputMetrics? {
+        let components = xPath.split(separator: "/").map(String.init).dropLast()
+        guard (2...3).contains(components.count), components[components.count - 2] == "nuxieTextInputs" else {
+            return authored
+        }
+        let prefix = components.joined(separator: "/")
+        let size = value(at: "\(prefix)/fontSize")
+        let height = value(at: "\(prefix)/lineHeight")
+        if size == nil && height == nil { return authored }
+        guard case .number(let fontSize) = size, fontSize.isFinite, fontSize > 0,
+              case .number(let lineHeight) = height, lineHeight.isFinite,
+              lineHeight == -1 || lineHeight > 0 else { return nil }
+        return .init(fontSize: Double(fontSize), lineHeight: Double(lineHeight))
     }
 
-    private func number(
-        segments: [String],
-        allowingLeadingLabel: Bool
-    ) -> Double? {
+    func number(at path: String) -> Double? {
+        guard case .number(let number) = value(at: path), number.isFinite else { return nil }
+        return Double(number)
+    }
+
+    private func value(at path: String) -> ExperienceInteractiveViewModelValue? {
+        let segments = path.split(separator: "/").map(String.init)
+        guard !segments.isEmpty else { return nil }
+        return value(segments: segments, allowingLeadingLabel: true)
+    }
+
+    private func value(segments: [String], allowingLeadingLabel: Bool) -> ExperienceInteractiveViewModelValue? {
         var owner = snapshot.rootInstanceID
         for (offset, segment) in segments.enumerated() {
-            let matches = snapshot.values.filter {
-                $0.ownerInstanceID == owner && $0.name == segment
-            }
+            let matches = snapshot.values.filter { $0.ownerInstanceID == owner && $0.name == segment }
             if matches.count != 1 {
                 if offset == 0, allowingLeadingLabel, segments.count > 1 {
-                    return number(
-                        segments: Array(segments.dropFirst()),
-                        allowingLeadingLabel: false
-                    )
+                    return value(segments: Array(segments.dropFirst()), allowingLeadingLabel: false)
                 }
                 return nil
             }
             let value = matches[0].value
-            if offset == segments.count - 1 {
-                guard case .number(let number) = value, number.isFinite else { return nil }
-                return Double(number)
-            }
+            if offset == segments.count - 1 { return value }
             guard case .referencedInstance(let child) = value else { return nil }
             owner = child
         }
         return nil
     }
+
 }
 
 @MainActor
@@ -144,6 +159,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var semanticDrafts: [String: ExperienceSemanticTextDraft] = [:]
     private var bindingsByInputID: [String: Binding] = [:]
     private var geometriesByInputID: [String: ExperienceTextInputGeometry] = [:]
+    private var metricsByInputID: [String: ExperienceTextInputMetrics] = [:]
+    private var invalidMetricIDs = Set<String>()
+    private var lastAppliedMetrics: [String: ExperienceTextInputMetrics] = [:]
     private var textValuesByInputID: [String: String] = [:]
     private var committedTextByInputID: [String: String] = [:]
     private var fontSHA256ByRiveUniqueName: [String: String] = [:]
@@ -225,6 +243,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func update(snapshot: ExperienceInteractiveViewModelSnapshot) {
         let resolver = ExperienceTextInputGeometryResolver(snapshot: snapshot)
+        metricsByInputID = bindingsByInputID.compactMapValues {
+            resolver.metrics(xPath: $0.input.geometry.xPath,
+                authored: .init(fontSize: $0.input.style.fontSize, lineHeight: $0.input.style.lineHeight))
+        }
+        invalidMetricIDs = Set(bindingsByInputID.keys).subtracting(metricsByInputID.keys)
+        for inputID in invalidMetricIDs { lastAppliedMetrics.removeValue(forKey: inputID) }
         geometriesByInputID = bindingsByInputID.compactMapValues {
             resolver.geometry(for: $0.input.geometry)
         }
@@ -277,6 +301,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private func allowsInteraction(_ binding: Binding) -> Bool {
+        guard !invalidMetricIDs.contains(binding.input.inputId) else { return false }
         guard let semanticFields else { return true }
         guard !hidden, let surfaceView,
               ExperienceSemanticAccessibilityElement.allowsInteraction(in: surfaceView),
@@ -305,6 +330,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         semanticDrafts.removeAll()
         semanticTextWriter = nil
         geometriesByInputID.removeAll()
+        metricsByInputID.removeAll()
+        invalidMetricIDs.removeAll()
+        lastAppliedMetrics.removeAll()
         failedInputIDs.removeAll()
         lastAppliedFrames.removeAll()
         lastAppliedRotations.removeAll()
@@ -339,7 +367,14 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             return
         }
         for (inputID, binding) in bindingsByInputID {
-            guard let geometry = geometriesByInputID[inputID] else {
+            switch binding.control {
+            case .field(let field): field.isEnabled = allowsInteraction(binding)
+            case .textView(let textView):
+                textView.isEditable = allowsEditing(binding)
+                textView.isSelectable = allowsInteraction(binding)
+            }
+            guard let geometry = geometriesByInputID[inputID], let metrics = metricsByInputID[inputID] else {
+                if invalidMetricIDs.contains(inputID) { binding.control.view.resignFirstResponder() }
                 binding.control.view.isHidden = true
                 continue
             }
@@ -354,11 +389,14 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             frame.size.height *= max(0, CGFloat(geometry.scaleY))
             let rotation = CGFloat(geometry.rotation)
             guard lastAppliedFrames[inputID] != frame
-                    || lastAppliedRotations[inputID] != rotation else { continue }
+                    || lastAppliedRotations[inputID] != rotation
+                    || lastAppliedMetrics[inputID] != metrics else { continue }
             lastAppliedFrames[inputID] = frame
             lastAppliedRotations[inputID] = rotation
+            lastAppliedMetrics[inputID] = metrics
             applyStyle(
                 binding.input.style,
+                metrics: metrics,
                 to: binding.control,
                 fontScale: transform.scale * max(0, CGFloat(geometry.scaleY)),
                 horizontalScale: transform.scale * max(0, CGFloat(geometry.scaleX)),
@@ -403,12 +441,13 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     private func applyStyle(
         _ style: NativeExperienceTextInput.Style,
+        metrics: ExperienceTextInputMetrics,
         to control: Control,
         fontScale: CGFloat,
         horizontalScale: CGFloat,
         secure: Bool
     ) {
-        let fontSize = max(1, CGFloat(style.fontSize) * fontScale)
+        let fontSize = max(1, CGFloat(metrics.fontSize) * fontScale)
         let font = Self.font(
             for: style,
             contentSHA256: fontSHA256ByRiveUniqueName[style.fontAssetRiveUniqueName],
@@ -421,8 +460,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         paragraph.alignment = alignment
         // A -1 line height is font-natural. UIKit represents that with zero
         // paragraph constraints; explicit height is a scaled baseline interval.
-        if style.lineHeight > 0 {
-            let height = CGFloat(style.lineHeight) * fontScale
+        if metrics.lineHeight > 0 {
+            let height = CGFloat(metrics.lineHeight) * fontScale
             paragraph.minimumLineHeight = height
             paragraph.maximumLineHeight = height
         }

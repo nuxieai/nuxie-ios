@@ -4,6 +4,43 @@ import XCTest
 @testable import Nuxie
 
 final class ExperienceTextInputGeometryTests: XCTestCase {
+    func testSharedEffectiveMetricCompatibility() throws {
+        let path = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/text-input-effective-metrics.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
+        XCTAssertEqual(cases.count, 17)
+        for item in cases {
+            var values: [ExperienceInteractiveViewModelSnapshot.Value] = [
+                .init(ownerInstanceID: 1, propertyIndex: 0, name: "nuxieTextInputs", value: .referencedInstance(2)),
+                .init(ownerInstanceID: 2, propertyIndex: 0, name: "field", value: .referencedInstance(3)),
+            ]
+            let outputs = try XCTUnwrap(item["outputs"] as? [String: Any])
+            for (index, entry) in outputs.sorted(by: { $0.key < $1.key }).enumerated() {
+                let value: ExperienceInteractiveViewModelValue
+                if let special = entry.value as? [String: String], let number = special["nativeNumber"] {
+                    value = .number(number == "NaN" ? .nan : .infinity)
+                } else if let number = entry.value as? NSNumber {
+                    value = CFGetTypeID(number) == CFBooleanGetTypeID() ? .bool(number.boolValue) : .number(number.floatValue)
+                } else if let string = entry.value as? String {
+                    value = .bytes(Data(string.utf8))
+                } else { value = .unsupported }
+                values.append(.init(ownerInstanceID: 3, propertyIndex: index, name: entry.key, value: value))
+            }
+            let resolver = ExperienceTextInputGeometryResolver(snapshot: .init(rootInstanceID: 1, instances: [], values: values))
+            let expected = (item["expected"] as? [String: NSNumber]).map {
+                ExperienceTextInputMetrics(fontSize: $0["fontSize"]!.doubleValue, lineHeight: $0["lineHeight"]!.doubleValue)
+            }
+            let name = try XCTUnwrap(item["name"] as? String)
+            for prefix in ["", "Root/"] {
+                XCTAssertEqual(resolver.metrics(xPath: "\(prefix)nuxieTextInputs/field/x", authored: .init(fontSize: 18, lineHeight: 24)),
+                    expected, name)
+            }
+        }
+    }
+
     func testSharedGeometryPathsAndBounds() throws {
         let path = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

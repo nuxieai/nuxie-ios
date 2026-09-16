@@ -109,6 +109,85 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         }
     }
 
+    func testEffectiveMetricsRestyleAnUnchangedFrameWithoutTextTransactions() throws {
+        let item = Fixture.Case(name: "effective", fontSize: 18, lineHeight: 24, containScale: 1,
+            geometryScale: 1, expectedFontSize: 18, expectedBaselineDistance: 24)
+        let text = "Alpha\nBravo\nCharlie"
+        let bridge = ExperienceTextInputOverlayBridge()
+        defer { bridge.clear() }
+        let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        var writes = 0
+        bridge.bind(screenID: "screen", renderPlan: plan(item, text: text, prefix: "nuxieTextInputs/field/"),
+            surfaceView: surface, artboardBounds: surface.bounds,
+            textWriter: { _, _, done in writes += 1; done(.success(())) })
+        func snapshot(_ size: Float?, _ height: Float?) -> ExperienceInteractiveViewModelSnapshot {
+            var values: [ExperienceInteractiveViewModelSnapshot.Value] = [
+                .init(ownerInstanceID: 1, propertyIndex: 0, name: "nuxieTextInputs", value: .referencedInstance(2)),
+                .init(ownerInstanceID: 2, propertyIndex: 0, name: "field", value: .referencedInstance(3)),
+            ]
+            var numbers: [(String, Float)] = [("x", 10), ("y", 10), ("w", 240), ("h", 180), ("r", 0), ("sx", 1), ("sy", 1)]
+            if let size { numbers.append(("fontSize", size)) }
+            if let height { numbers.append(("lineHeight", height)) }
+            values += numbers.enumerated().map { .init(ownerInstanceID: 3, propertyIndex: $0.offset,
+                name: $0.element.0, value: .number($0.element.1)) }
+            return .init(rootInstanceID: 1, instances: [], values: values)
+        }
+        bridge.update(snapshot: snapshot(nil, nil))
+        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextView }.first)
+        XCTAssertEqual(editor.font?.pointSize, 18)
+        let originalFrame = editor.frame
+        editor.selectedRange = NSRange(location: 1, length: 3)
+        #if NUXIE_HOSTED_INPUT_TESTS
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        let controller = UIViewController()
+        window.rootViewController = controller
+        controller.view.addSubview(surface)
+        window.makeKeyAndVisible()
+        defer {
+            editor.resignFirstResponder()
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        XCTAssertTrue(editor.becomeFirstResponder())
+        editor.setMarkedText("lph", selectedRange: NSRange(location: 0, length: 3))
+        XCTAssertNotNil(editor.markedTextRange)
+        #endif
+        let before = writes
+        for (size, height): (Float, Float) in [(36, 48), (18, 24)] {
+            bridge.update(snapshot: snapshot(size, height))
+            XCTAssertEqual(editor.frame, originalFrame)
+            XCTAssertEqual(editor.font?.pointSize, CGFloat(size))
+            let lines = baselines(editor)
+            XCTAssertEqual(lines.count, 3)
+            for line in 1..<lines.count {
+                XCTAssertEqual(lines[line] - lines[line - 1], CGFloat(height), accuracy: 0.1)
+            }
+            XCTAssertEqual(editor.text, text)
+            XCTAssertEqual(editor.selectedRange, NSRange(location: 1, length: 3))
+            XCTAssertEqual(writes, before)
+            #if NUXIE_HOSTED_INPUT_TESTS
+            let marked = try XCTUnwrap(editor.markedTextRange)
+            XCTAssertEqual(editor.offset(from: editor.beginningOfDocument, to: marked.start), 1)
+            XCTAssertEqual(editor.offset(from: marked.start, to: marked.end), 3)
+            #endif
+        }
+        bridge.update(snapshot: snapshot(36, nil))
+        XCTAssertTrue(editor.isHidden)
+        XCTAssertFalse(editor.isEditable)
+        editor.text = "late edit"
+        bridge.textViewDidChange(editor)
+        XCTAssertEqual(writes, before)
+        XCTAssertEqual(editor.text, text)
+        bridge.update(snapshot: snapshot(18, 24))
+        XCTAssertFalse(editor.isHidden)
+        XCTAssertTrue(editor.isEditable)
+        let restored = baselines(editor)
+        XCTAssertEqual(restored.count, 3)
+        for line in 1..<restored.count {
+            XCTAssertEqual(restored[line] - restored[line - 1], 24, accuracy: 0.1)
+        }
+    }
+
     private func baselines(_ view: UITextView) -> [CGFloat] {
         let manager = view.layoutManager
         manager.ensureLayout(for: view.textContainer)
@@ -123,12 +202,12 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         return result
     }
 
-    private func plan(_ item: Fixture.Case, text: String) -> NativeExperienceRenderPlan {
+    private func plan(_ item: Fixture.Case, text: String, prefix: String = "") -> NativeExperienceRenderPlan {
         let input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",
             viewNodeId: "v", renderedNodeId: "r", riveTextObjectKey: "text", riveTextRunObjectKey: "run",
             riveTextName: "text", riveTextRunName: "run", value: text, placeholder: nil, editable: true,
-            geometry: .init(xPath: "x", yPath: "y", widthPath: "w", heightPath: "h", rotationPath: "r",
-                scaleXPath: "sx", scaleYPath: "sy"),
+            geometry: .init(xPath: "\(prefix)x", yPath: "\(prefix)y", widthPath: "\(prefix)w", heightPath: "\(prefix)h", rotationPath: "\(prefix)r",
+                scaleXPath: "\(prefix)sx", scaleYPath: "\(prefix)sy"),
             style: .init(fontFamily: "system", fontWeight: "normal", fontStyle: "normal", fontSize: item.fontSize,
                 lineHeight: item.lineHeight, letterSpacing: 0, color: 0, fontAssetRiveUniqueName: "", textAlign: nil),
             keyboardType: nil, secureTextEntry: false, multiline: true, maxLength: nil, responseFieldKey: "answer")
