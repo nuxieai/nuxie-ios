@@ -24,14 +24,16 @@
       "x": 24,
       "y": 24,
       "width": 342,
-      "height": 220
+      "height": 220,
+      "runName": "bound Run"
     },
     {
       "path": "nuxieTextInputs/input_fixed_9022c96b",
       "x": 24,
       "y": 264,
       "width": 342,
-      "height": 220
+      "height": 220,
+      "runName": "fixed Run"
     }
   ]
 }
