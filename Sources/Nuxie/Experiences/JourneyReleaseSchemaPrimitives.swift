@@ -1004,7 +1004,12 @@ enum JourneyReleaseSchemaPrimitives {
             try boundedString(style["fontWeight"], minimum: 1, maximumUTF16: 32, path: "text.style.fontWeight")
             try enumeration(style["fontStyle"], values: ["normal", "italic"], path: "text.style.fontStyle")
             try finiteNumber(style["fontSize"], minimum: 0, maximum: 2_048, exclusiveMinimum: true, path: "text.style.fontSize")
-            try finiteNumber(style["lineHeight"], minimum: 0, maximum: 8_192, exclusiveMinimum: true, path: "text.style.lineHeight")
+            if let lineHeight = style["lineHeight"] as? NSNumber,
+               isJSONNumber(lineHeight), lineHeight.doubleValue == -1 {
+                // The publisher uses -1 for the font's natural line height.
+            } else {
+                try finiteNumber(style["lineHeight"], minimum: 0, maximum: 8_192, exclusiveMinimum: true, path: "text.style.lineHeight")
+            }
             try finiteNumber(style["letterSpacing"], minimum: -2_048, maximum: 2_048, path: "text.style.letterSpacing")
             try integer(style["color"], minimum: 0, maximum: Double(UInt32.max), path: "text.style.color")
             try identifier(style["fontAssetRiveUniqueName"], path: "text.style.fontAssetRiveUniqueName")
