@@ -200,11 +200,17 @@ final class SignedSemanticJourneyTests: XCTestCase {
         XCTAssertFalse(disabled.accessibilityActivate())
         let repeated = elements.filter { $0.accessibilityLabel == "Plan option" }
         XCTAssertEqual(Set(repeated.map(ObjectIdentifier.init)).count, 2)
-        let seats = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Seats" })
+        let seats = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Seats" } as? ExperienceSemanticAccessibilityElement)
         XCTAssertTrue(seats.accessibilityTraits.contains(.adjustable))
+        let initialCaptureID = try XCTUnwrap(seats.captureID)
         seats.accessibilityIncrement()
         try await waitUntil("The authored increment must reach the Journey emission boundary") {
             observer.accepted.flatMap(\.emissions).filter { $0.name == "seat_increased" }.count == 1
+        }
+        // Durable emission admission precedes presentation of the resulting frame.
+        // A second action must target that new capture, not the retired revision.
+        try await waitUntil("Increment must present a refreshed adjustable capture") {
+            seats.captureID != nil && seats.captureID != initialCaptureID
         }
         seats.accessibilityDecrement()
         try await waitUntil("The authored decrement must reach the Journey emission boundary") {
