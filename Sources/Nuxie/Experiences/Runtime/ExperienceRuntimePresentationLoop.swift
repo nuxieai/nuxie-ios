@@ -421,8 +421,10 @@ extension ExperienceInteractiveScreen {
                 )
                 if frame.semantics != nil || frame.text != nil {
                     return .renderer(Self.presentationOutcome(frame.outcome)) {
-                        if let semantics = frame.semantics { onSemantics?(semantics) }
+                        // Install this frame's editor geometry before semantic
+                        // admission enables fields and drains their initial writes.
                         if let text = frame.text { onTextFrame?(text) }
+                        if let semantics = frame.semantics { onSemantics?(semantics) }
                     }
                 }
                 return .renderer(Self.presentationOutcome(frame.outcome))
