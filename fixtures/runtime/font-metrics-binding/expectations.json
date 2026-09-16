@@ -17,5 +17,21 @@
       "fontSize": 18,
       "lineHeight": 24
     }
+  ],
+  "geometry": [
+    {
+      "path": "nuxieTextInputs/input_bound_c74308af",
+      "x": 24,
+      "y": 24,
+      "width": 342,
+      "height": 220
+    },
+    {
+      "path": "nuxieTextInputs/input_fixed_9022c96b",
+      "x": 24,
+      "y": 264,
+      "width": 342,
+      "height": 220
+    }
   ]
 }
