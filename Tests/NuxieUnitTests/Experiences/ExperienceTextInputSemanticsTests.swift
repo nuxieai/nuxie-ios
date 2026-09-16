@@ -3,7 +3,7 @@ import UIKit
 import QuartzCore
 import XCTest
 @testable import Nuxie
-import NuxieRuntime
+@testable import NuxieRuntime
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
@@ -18,6 +18,9 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             writes.append(text); done(.success(()))
         }
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
+        XCTAssertTrue(field.isHidden, "A bound field has no presented placement yet")
+        XCTAssertFalse(field.isEnabled, "Geometry admission precedes editing")
+        presentField(on: bridge)
         let mapped = bridge.applySemantics(try capture(flags: NuxieNativeSemanticNode.disabled))
         XCTAssertTrue(mapped[1] === field)
         XCTAssertEqual(field.accessibilityLabel, "Your name")
@@ -61,11 +64,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             },
             textWriter: { _, _, _ in XCTFail("Semantic editor used unrestricted writer") })
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
-        bridge.update(snapshot: ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [],
-            values: [("x", Float(0)), ("y", 0), ("w", 100), ("h", 40), ("r", 0), ("sx", 1), ("sy", 1)]
-                .enumerated().map { index, entry in
-                    .init(ownerInstanceID: 1, propertyIndex: index, name: entry.0, value: .number(entry.1))
-                }))
+        presentField(on: bridge)
         XCTAssertTrue(pending.isEmpty)
         _ = bridge.applySemantics(try capture(flags: 0))
         XCTAssertEqual(pending.count, 1)
@@ -122,6 +121,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                 artboardBounds: view.bounds,
                 semanticTextWriter: { _, _, text, done in pending.append((text, done)) },
                 textWriter: { _, _, _ in XCTFail("Semantic editor bypassed captured ownership") })
+            presentField(on: bridge)
             _ = bridge.applySemantics(try capture(flags: 0))
             try XCTUnwrap(pending.first).1(.accepted)
             pending.removeAll()
@@ -163,6 +163,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             artboardBounds: view.bounds,
             semanticTextWriter: { _, _, text, done in writes.append(text); done(.accepted) },
             textWriter: { _, _, _ in XCTFail("Semantic editor used unrestricted writer") })
+        presentField(on: bridge)
         _ = bridge.applySemantics(try capture(flags: NuxieNativeSemanticNode.obscured))
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
         XCTAssertTrue(field.isSecureTextEntry)
@@ -193,6 +194,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                 surfaceView: view, artboardBounds: view.bounds,
                 semanticTextWriter: { _, _, _, done in done(.accepted) },
                 textWriter: { _, _, _ in XCTFail("Semantic editor bypassed captured ownership") })
+            presentField(on: bridge)
             _ = bridge.applySemantics(try capture(flags: 0))
             let editor = try XCTUnwrap(view.subviews.first as? (UIView & UITextInput))
             editor.selectedTextRange = editor.textRange(from: editor.endOfDocument, to: editor.endOfDocument)
@@ -269,6 +271,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                     }
                 }
             }, textWriter: { _, _, _ in XCTFail("Semantic editor bypassed captured ownership") })
+        presentField(on: bridge, textRunName: "field/名前")
         _ = bridge.applySemantics(capture)
         await fulfillment(of: [initialWrite], timeout: 3)
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
@@ -287,6 +290,15 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         try await runtime.close()
     }
     #endif
+
+    /// These tests isolate semantic ownership; geometry is an explicit frame fixture.
+    private func presentField(on bridge: ExperienceTextInputOverlayBridge, textRunName: String = "run") {
+        bridge.update(frame: .init(snapshot: .init(rootInstanceID: 1, instances: [], values: []),
+            geometry: .captured([textRunName: .init(renderRevision: 1,
+                worldTransform: .identity, contentTransform: .identity, textBounds: .zero,
+                layout: .init(transform: .identity, bounds: CGRect(x: 0, y: 0, width: 100, height: 40)),
+                firstBaseline: nil)])))
+    }
 
     private func makePlan(secure: Bool? = nil, textRunName: String = "run", multiline: Bool? = nil) -> NativeExperienceRenderPlan {
         let input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",

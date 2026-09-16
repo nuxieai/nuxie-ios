@@ -3,16 +3,6 @@ import Foundation
 import NuxieRuntime
 import UIKit
 
-struct ExperienceTextInputGeometry {
-    let x: Double
-    let y: Double
-    let width: Double
-    let height: Double
-    let rotation: Double
-    let scaleX: Double
-    let scaleY: Double
-}
-
 /// A native control stays in field-local units; UIKit applies the complete
 /// runtime transform to its drawing, caret, accessibility and hit testing.
 struct ExperienceTextInputPlacement: Equatable {
@@ -69,31 +59,9 @@ struct ExperienceTextInputMetrics: Equatable {
     let lineHeight: Double
 }
 
-/// Resolves signed geometry paths from a generic native snapshot. This is
-/// product policy over plain values.
-struct ExperienceTextInputGeometryResolver {
+/// Resolves effective typography from the snapshot captured with a native frame.
+struct ExperienceTextInputMetricsResolver {
     let snapshot: ExperienceInteractiveViewModelSnapshot
-
-    func geometry(for geometry: NativeExperienceTextInput.Geometry) -> ExperienceTextInputGeometry? {
-        guard let x = number(at: geometry.xPath),
-              let y = number(at: geometry.yPath),
-              let width = number(at: geometry.widthPath),
-              let height = number(at: geometry.heightPath),
-              let rotation = number(at: geometry.rotationPath),
-              let scaleX = number(at: geometry.scaleXPath),
-              let scaleY = number(at: geometry.scaleYPath),
-              width > 0,
-              height > 0 else { return nil }
-        return ExperienceTextInputGeometry(
-            x: x,
-            y: y,
-            width: width,
-            height: height,
-            rotation: rotation,
-            scaleX: scaleX,
-            scaleY: scaleY
-        )
-    }
 
     func metrics(xPath: String, authored: ExperienceTextInputMetrics) -> ExperienceTextInputMetrics? {
         let components = xPath.split(separator: "/").map(String.init).dropLast()
@@ -256,8 +224,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var semanticTextWriter: SemanticTextWriter?
     private var semanticDrafts: [String: ExperienceSemanticTextDraft] = [:]
     private var bindingsByInputID: [String: Binding] = [:]
-    private var geometriesByInputID: [String: ExperienceTextInputGeometry] = [:]
-    private var runtimeGeometryByRun: [String: NuxieNativeTextRunGeometry]?
+    private var runtimeGeometryByRun: [String: NuxieNativeTextRunGeometry] = [:]
     private var invalidGeometryIDs = Set<String>()
     private var lastAppliedPlacements: [String: ExperienceTextInputPlacement] = [:]
     private var baselineCorrections: [String: (metrics: ExperienceTextInputMetrics, offset: CGFloat)] = [:]
@@ -276,8 +243,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var keyboardShift: CGFloat = 0
     private var latestKeyboardFrame: CGRect?
     private var dismissTapRecognizer: UITapGestureRecognizer?
-    private var lastAppliedFrames: [String: CGRect] = [:]
-    private var lastAppliedRotations: [String: CGFloat] = [:]
 
     var onCommitText: ((NativeExperienceTextInput, String) -> Void)?
 
@@ -344,7 +309,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     func invalidateLayout() {
-        geometriesByInputID.removeAll()
+        runtimeGeometryByRun.removeAll()
         metricsByInputID.removeAll()
         lastAppliedMetrics.removeAll()
         invalidMetricIDs = Set(bindingsByInputID.keys)
@@ -353,29 +318,18 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func update(frame: ExperienceInteractiveTextFrame) {
         guard let snapshot = frame.snapshot else { invalidateLayout(); return }
-        let geometry: [String: NuxieNativeTextRunGeometry]
-        if case .captured(let captured) = frame.geometry { geometry = captured } else { geometry = [:] }
-        update(snapshot: snapshot, runtimeGeometry: geometry)
-    }
-
-    func update(snapshot: ExperienceInteractiveViewModelSnapshot) {
-        update(snapshot: snapshot, runtimeGeometry: nil)
-    }
-
-    private func update(snapshot: ExperienceInteractiveViewModelSnapshot,
-        runtimeGeometry: [String: NuxieNativeTextRunGeometry]?) {
-        runtimeGeometryByRun = runtimeGeometry
-        if runtimeGeometry == nil { lastAppliedPlacements.removeAll() }
-        let resolver = ExperienceTextInputGeometryResolver(snapshot: snapshot)
+        if case .captured(let captured) = frame.geometry {
+            runtimeGeometryByRun = captured
+        } else {
+            runtimeGeometryByRun.removeAll()
+        }
+        let resolver = ExperienceTextInputMetricsResolver(snapshot: snapshot)
         metricsByInputID = bindingsByInputID.compactMapValues {
             resolver.metrics(xPath: $0.input.geometry.xPath,
                 authored: .init(fontSize: $0.input.style.fontSize, lineHeight: $0.input.style.lineHeight))
         }
         invalidMetricIDs = Set(bindingsByInputID.keys).subtracting(metricsByInputID.keys)
         for inputID in invalidMetricIDs { lastAppliedMetrics.removeValue(forKey: inputID) }
-        geometriesByInputID = bindingsByInputID.compactMapValues {
-            resolver.geometry(for: $0.input.geometry)
-        }
         layout()
     }
 
@@ -454,17 +408,14 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         semanticFields = nil
         semanticDrafts.removeAll()
         semanticTextWriter = nil
-        geometriesByInputID.removeAll()
+        runtimeGeometryByRun.removeAll()
         metricsByInputID.removeAll()
         invalidMetricIDs.removeAll()
-        runtimeGeometryByRun = nil
         invalidGeometryIDs.removeAll()
         lastAppliedPlacements.removeAll()
         baselineCorrections.removeAll()
         lastAppliedMetrics.removeAll()
         failedInputIDs.removeAll()
-        lastAppliedFrames.removeAll()
-        lastAppliedRotations.removeAll()
         if let dismissTapRecognizer {
             dismissTapRecognizer.view?.removeGestureRecognizer(dismissTapRecognizer)
         }
@@ -498,62 +449,14 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             }
             return
         }
-        let placements = runtimeGeometryByRun.map { captured in
-            bindingsByInputID.compactMapValues { binding in
-                captured[binding.input.riveTextRunName].flatMap {
-                    ExperienceTextInputPlacement(geometry: $0, viewport: transform)
-                }
+        let placements = bindingsByInputID.compactMapValues { binding in
+            runtimeGeometryByRun[binding.input.riveTextRunName].flatMap {
+                ExperienceTextInputPlacement(geometry: $0, viewport: transform)
             }
         }
-        invalidGeometryIDs = placements.map { Set(bindingsByInputID.keys).subtracting($0.keys) } ?? []
+        invalidGeometryIDs = Set(bindingsByInputID.keys).subtracting(placements.keys)
         for (inputID, binding) in bindingsByInputID {
-            if placements != nil {
-                layoutRuntimeField(binding, inputID: inputID, placement: placements?[inputID])
-                continue
-            }
-            switch binding.control {
-            case .field(let field): field.isEnabled = allowsInteraction(binding)
-            case .textView(let textView):
-                textView.isEditable = allowsEditing(binding)
-                textView.isSelectable = allowsInteraction(binding)
-            }
-            guard let geometry = geometriesByInputID[inputID], let metrics = metricsByInputID[inputID] else {
-                if invalidMetricIDs.contains(inputID) { binding.control.view.resignFirstResponder() }
-                binding.control.view.isHidden = true
-                continue
-            }
-            binding.control.view.isHidden = hidden || failedInputIDs.contains(inputID) || isSemanticallyHidden(inputID)
-            var frame = transform.viewportRect(fromArtboard: CGRect(
-                x: CGFloat(geometry.x),
-                y: CGFloat(geometry.y),
-                width: CGFloat(geometry.width),
-                height: CGFloat(geometry.height)
-            ))
-            frame.size.width *= max(0, CGFloat(geometry.scaleX))
-            frame.size.height *= max(0, CGFloat(geometry.scaleY))
-            let rotation = CGFloat(geometry.rotation)
-            guard lastAppliedFrames[inputID] != frame
-                    || lastAppliedRotations[inputID] != rotation
-                    || lastAppliedMetrics[inputID] != metrics else { continue }
-            lastAppliedFrames[inputID] = frame
-            lastAppliedRotations[inputID] = rotation
-            lastAppliedMetrics[inputID] = metrics
-            applyStyle(
-                binding.input.style,
-                metrics: metrics,
-                to: binding.control,
-                fontScale: transform.scale * max(0, CGFloat(geometry.scaleY)),
-                horizontalScale: transform.scale * max(0, CGFloat(geometry.scaleX)),
-                secure: binding.input.secureTextEntry == true
-            )
-            UIView.performWithoutAnimation {
-                binding.control.view.transform = .identity
-                binding.control.view.bounds = CGRect(origin: .zero, size: frame.size)
-                binding.control.view.center = CGPoint(x: frame.midX, y: frame.midY)
-                if rotation != 0 {
-                    binding.control.view.transform = CGAffineTransform(rotationAngle: rotation)
-                }
-            }
+            layoutRuntimeField(binding, inputID: inputID, placement: placements[inputID])
         }
     }
 
@@ -576,10 +479,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         guard lastAppliedPlacements[inputID] != placement || lastAppliedMetrics[inputID] != metrics else { return }
         lastAppliedPlacements[inputID] = placement
         lastAppliedMetrics[inputID] = metrics
-        lastAppliedFrames.removeValue(forKey: inputID)
-        lastAppliedRotations.removeValue(forKey: inputID)
         applyStyle(binding.input.style, metrics: metrics, to: binding.control,
-            fontScale: 1, horizontalScale: 1, secure: binding.input.secureTextEntry == true)
+            secure: binding.input.secureTextEntry == true)
         UIView.performWithoutAnimation {
             placement.apply(to: binding.control.view)
             alignBaseline(binding, placement: placement, metrics: metrics)
@@ -645,11 +546,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         _ style: NativeExperienceTextInput.Style,
         metrics: ExperienceTextInputMetrics,
         to control: Control,
-        fontScale: CGFloat,
-        horizontalScale: CGFloat,
         secure: Bool
     ) {
-        let fontSize = CGFloat(metrics.fontSize) * fontScale
+        let fontSize = CGFloat(metrics.fontSize)
         let font = Self.font(
             for: style,
             contentSHA256: fontSHA256ByRiveUniqueName[style.fontAssetRiveUniqueName],
@@ -661,9 +560,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = alignment
         // A -1 line height is font-natural. UIKit represents that with zero
-        // paragraph constraints; explicit height is a scaled baseline interval.
+        // paragraph constraints; the view transform scales the baseline interval.
         if metrics.lineHeight > 0 {
-            let height = CGFloat(metrics.lineHeight) * fontScale
+            let height = CGFloat(metrics.lineHeight)
             paragraph.minimumLineHeight = height
             paragraph.maximumLineHeight = height
         }
@@ -676,7 +575,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             var attributes = field.defaultTextAttributes
             attributes[.font] = font
             attributes[.foregroundColor] = textColor
-            attributes[.kern] = CGFloat(style.letterSpacing) * horizontalScale
+            attributes[.kern] = CGFloat(style.letterSpacing)
             attributes[.paragraphStyle] = paragraph
             field.defaultTextAttributes = attributes
         case .textView(let textView):
@@ -684,7 +583,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             textView.textAlignment = alignment
             textView.textColor = textColor
             textView.tintColor = color
-            textView.typingAttributes[.kern] = CGFloat(style.letterSpacing) * horizontalScale
+            textView.typingAttributes[.kern] = CGFloat(style.letterSpacing)
             textView.typingAttributes[.paragraphStyle] = paragraph
             let range = NSRange(location: 0, length: textView.textStorage.length)
             var needsParagraph = false

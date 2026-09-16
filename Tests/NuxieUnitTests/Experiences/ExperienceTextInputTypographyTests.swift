@@ -38,30 +38,36 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             bridge.bind(screenID: "screen", renderPlan: plan(item, text: fixture.text), surfaceView: surface,
                 artboardBounds: CGRect(x: 0, y: 0, width: 400, height: 400),
                 textWriter: { _, _, done in writes += 1; done(.success(())) })
-            func snapshot(scale: Double) -> ExperienceInteractiveViewModelSnapshot {
-                ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [],
-                    values: [("x", Float(10)), ("y", 10), ("w", 240), ("h", 180), ("r", 0),
-                             ("sx", Float(scale)), ("sy", Float(scale))]
-                        .enumerated().map { index, entry in
-                            .init(ownerInstanceID: 1, propertyIndex: index, name: entry.0, value: .number(entry.1))
-                        })
+            func update(scale: Double) {
+                let matrix = CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: 10, ty: 10)
+                bridge.update(frame: .init(
+                    snapshot: .init(rootInstanceID: 1, instances: [], values: []),
+                    geometry: .captured(["run": .init(renderRevision: 1,
+                        worldTransform: matrix, contentTransform: matrix, textBounds: .zero,
+                        layout: .init(transform: matrix, bounds: CGRect(x: 0, y: 0, width: 240, height: 180)),
+                        firstBaseline: nil)])))
             }
-            bridge.update(snapshot: snapshot(scale: item.geometryScale))
+            update(scale: item.geometryScale)
             let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextView }.first)
             let oracle = UITextView(frame: editor.bounds)
             oracle.textContainerInset = .zero
             oracle.textContainer.lineFragmentPadding = 0
             let paragraph = NSMutableParagraphStyle()
-            if let height = item.expectedBaselineDistance {
-                paragraph.minimumLineHeight = height
-                paragraph.maximumLineHeight = height
+            if item.lineHeight > 0 {
+                paragraph.minimumLineHeight = item.lineHeight
+                paragraph.maximumLineHeight = item.lineHeight
             }
             oracle.attributedText = NSAttributedString(string: fixture.text, attributes: [
-                .font: UIFont.systemFont(ofSize: item.expectedFontSize), .paragraphStyle: paragraph,
+                .font: UIFont.systemFont(ofSize: item.fontSize), .paragraphStyle: paragraph,
             ])
-            XCTAssertEqual(try XCTUnwrap(editor.font).pointSize, item.expectedFontSize, accuracy: 0.01, item.name)
-            let actual = baselines(editor)
-            let expected = baselines(oracle)
+            let projectionScale = item.containScale * item.geometryScale
+            XCTAssertEqual(try XCTUnwrap(editor.font).pointSize, item.fontSize, accuracy: 0.01, item.name)
+            let unitOrigin = editor.convert(CGPoint.zero, to: surface)
+            let unitEnd = editor.convert(CGPoint(x: 0, y: 1), to: surface)
+            XCTAssertEqual((unitEnd.y - unitOrigin.y) * (try XCTUnwrap(editor.font)).pointSize,
+                item.expectedFontSize, accuracy: 0.01, item.name)
+            let actual = baselines(editor).map { editor.convert(CGPoint(x: 0, y: $0), to: surface).y }
+            let expected = baselines(oracle).map { $0 * projectionScale }
             XCTAssertEqual(actual.count, 3, item.name)
             XCTAssertEqual(expected.count, 3, item.name)
             for line in 1..<min(actual.count, expected.count) {
@@ -88,16 +94,16 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             #endif
             let before = writes
             if let height = item.expectedBaselineDistance {
-                // Force changed paragraph attributes while marked text exists.
-                bridge.update(snapshot: snapshot(scale: item.geometryScale * 1.25))
-                let changed = baselines(editor)
+                // Project changed geometry while marked text exists.
+                update(scale: item.geometryScale * 1.25)
+                let changed = baselines(editor).map { editor.convert(CGPoint(x: 0, y: $0), to: surface).y }
                 XCTAssertEqual(changed.count, 3, item.name)
                 for line in 1..<changed.count {
                     XCTAssertEqual(changed[line] - changed[line - 1], height * 1.25,
                         accuracy: 0.1, "\(item.name) changed baseline \(line)")
                 }
             } else {
-                bridge.update(snapshot: snapshot(scale: item.geometryScale))
+                update(scale: item.geometryScale)
             }
             XCTAssertEqual(editor.text, fixture.text, item.name)
             XCTAssertEqual(editor.selectedRange, NSRange(location: 1, length: 3), item.name)
@@ -134,7 +140,15 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                 name: $0.element.0, value: .number($0.element.1)) }
             return .init(rootInstanceID: 1, instances: [], values: values)
         }
-        bridge.update(snapshot: snapshot(nil, nil))
+        func update(_ size: Float?, _ height: Float?) {
+            let matrix = CGAffineTransform(translationX: 10, y: 10)
+            bridge.update(frame: .init(snapshot: snapshot(size, height),
+                geometry: .captured(["run": .init(renderRevision: 1,
+                    worldTransform: matrix, contentTransform: matrix, textBounds: .zero,
+                    layout: .init(transform: matrix, bounds: CGRect(x: 0, y: 0, width: 240, height: 180)),
+                    firstBaseline: nil)])))
+        }
+        update(nil, nil)
         let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextView }.first)
         XCTAssertEqual(editor.font?.pointSize, 18)
         let originalFrame = editor.frame
@@ -156,7 +170,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         #endif
         let before = writes
         for (size, height): (Float, Float) in [(36, 48), (18, 24)] {
-            bridge.update(snapshot: snapshot(size, height))
+            update(size, height)
             XCTAssertEqual(editor.frame, originalFrame)
             XCTAssertEqual(editor.font?.pointSize, CGFloat(size))
             let lines = baselines(editor)
@@ -173,14 +187,14 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             XCTAssertEqual(editor.offset(from: marked.start, to: marked.end), 3)
             #endif
         }
-        bridge.update(snapshot: snapshot(36, nil))
+        update(36, nil)
         XCTAssertTrue(editor.isHidden)
         XCTAssertFalse(editor.isEditable)
         editor.text = "late edit"
         bridge.textViewDidChange(editor)
         XCTAssertEqual(writes, before)
         XCTAssertEqual(editor.text, text)
-        bridge.update(snapshot: snapshot(18, 24))
+        update(18, 24)
         XCTAssertFalse(editor.isHidden)
         XCTAssertTrue(editor.isEditable)
         let restored = baselines(editor)
