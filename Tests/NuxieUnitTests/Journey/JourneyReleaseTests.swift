@@ -45,6 +45,32 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    func testSharedNativeLineHeightAdmission() throws {
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/text-input-typography.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let golden = try golden(entryKey: "renderedEntry", file: "text-input-navigation.json")
+        let bytes = try XCTUnwrap(Data(base64Encoded: golden.envelope.descriptorBytesBase64))
+        let source = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        for item in try XCTUnwrap(fixture["lineHeightAdmission"] as? [[String: Any]]) {
+            var root = source
+            var render = try XCTUnwrap(root["render"] as? [String: Any])
+            var inputs = try XCTUnwrap(render["textInputs"] as? [[String: Any]])
+            XCTAssertFalse(inputs.isEmpty)
+            var style = try XCTUnwrap(inputs[0]["style"] as? [String: Any])
+            style["lineHeight"] = item["value"]
+            inputs[0]["style"] = style
+            render["textInputs"] = inputs
+            root["render"] = render
+            let name = try XCTUnwrap(item["name"] as? String)
+            if item["valid"] as? Bool == true {
+                XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), name)
+            } else {
+                XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), name)
+            }
+        }
+    }
+
     func testAuthenticatesPublisherGoldenBytesWithoutRenderOrChain() throws {
         let fixture = try golden()
         let release = try authenticate(fixture.envelope, key: fixture.publicKey, identity: fixture.identity)

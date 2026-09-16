@@ -36,13 +36,15 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             bridge.bind(screenID: "screen", renderPlan: plan(item, text: fixture.text), surfaceView: surface,
                 artboardBounds: CGRect(x: 0, y: 0, width: 400, height: 400),
                 textWriter: { _, _, done in writes += 1; done(.success(())) })
-            let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [],
-                values: [("x", Float(10)), ("y", 10), ("w", 240), ("h", 180), ("r", 0),
-                         ("sx", Float(item.geometryScale)), ("sy", Float(item.geometryScale))]
-                    .enumerated().map { index, entry in
-                        .init(ownerInstanceID: 1, propertyIndex: index, name: entry.0, value: .number(entry.1))
-                    })
-            bridge.update(snapshot: snapshot)
+            func snapshot(scale: Double) -> ExperienceInteractiveViewModelSnapshot {
+                ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [],
+                    values: [("x", Float(10)), ("y", 10), ("w", 240), ("h", 180), ("r", 0),
+                             ("sx", Float(scale)), ("sy", Float(scale))]
+                        .enumerated().map { index, entry in
+                            .init(ownerInstanceID: 1, propertyIndex: index, name: entry.0, value: .number(entry.1))
+                        })
+            }
+            bridge.update(snapshot: snapshot(scale: item.geometryScale))
             let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextView }.first)
             let oracle = UITextView(frame: editor.bounds)
             oracle.textContainerInset = .zero
@@ -83,7 +85,18 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             XCTAssertEqual(editor.offset(from: marked.start, to: marked.end), 3, item.name)
             #endif
             let before = writes
-            bridge.update(snapshot: snapshot)
+            if let height = item.expectedBaselineDistance {
+                // Force changed paragraph attributes while marked text exists.
+                bridge.update(snapshot: snapshot(scale: item.geometryScale * 1.25))
+                let changed = baselines(editor)
+                XCTAssertEqual(changed.count, 3, item.name)
+                for line in 1..<changed.count {
+                    XCTAssertEqual(changed[line] - changed[line - 1], height * 1.25,
+                        accuracy: 0.1, "\(item.name) changed baseline \(line)")
+                }
+            } else {
+                bridge.update(snapshot: snapshot(scale: item.geometryScale))
+            }
             XCTAssertEqual(editor.text, fixture.text, item.name)
             XCTAssertEqual(editor.selectedRange, NSRange(location: 1, length: 3), item.name)
             XCTAssertEqual(writes, before, "\(item.name) styling cannot write a response")
