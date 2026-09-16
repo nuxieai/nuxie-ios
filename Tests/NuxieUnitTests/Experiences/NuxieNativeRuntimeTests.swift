@@ -1140,50 +1140,21 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         guard let drawable = layer.nextDrawable() else {
             throw XCTSkip("This host cannot vend a CAMetalDrawable")
         }
-        let texture = drawable.texture
-
+        let bytesPerPixel = 4
+        let bytesPerRow = (width * bytesPerPixel + 255) & ~255
+        let buffer = try XCTUnwrap(device.makeBuffer(
+            length: bytesPerRow * height,
+            options: .storageModeShared
+        ), "Allocate shared storage for the submitted frame")
+        let readback = NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: bytesPerRow)
         let completion = expectation(description: "native text frame completion")
         let outcome = try await runtime.render(
             drawable: .available(NuxieNativeDrawable(drawable)),
             clearColor: 0xFF11_2233,
+            readback: readback,
             completion: { completion.fulfill() }
         )
         await fulfillment(of: [completion], timeout: 2)
-
-        guard
-            let queue = device.makeCommandQueue(),
-            let commandBuffer = queue.makeCommandBuffer(),
-            let blit = commandBuffer.makeBlitCommandEncoder()
-        else {
-            throw XCTSkip("This host cannot read a rendered Metal texture")
-        }
-        let bytesPerPixel = 4
-        let bytesPerRow = (width * bytesPerPixel + 255) & ~255
-        guard let buffer = device.makeBuffer(
-            length: bytesPerRow * height,
-            options: .storageModeShared
-        ) else {
-            throw XCTSkip("This host cannot allocate a shared Metal buffer")
-        }
-        blit.copy(
-            from: texture,
-            sourceSlice: 0,
-            sourceLevel: 0,
-            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-            sourceSize: MTLSize(width: width, height: height, depth: 1),
-            to: buffer,
-            destinationOffset: 0,
-            destinationBytesPerRow: bytesPerRow,
-            destinationBytesPerImage: bytesPerRow * height
-        )
-        blit.endEncoding()
-        await withCheckedContinuation { continuation in
-            commandBuffer.addCompletedHandler { _ in continuation.resume() }
-            commandBuffer.commit()
-        }
-        guard commandBuffer.status == .completed else {
-            throw XCTSkip("This host could not complete the Metal readback")
-        }
 
         let source = buffer.contents().assumingMemoryBound(to: UInt8.self)
         var pixels = Data(capacity: width * height * bytesPerPixel)
