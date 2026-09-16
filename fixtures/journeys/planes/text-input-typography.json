@@ -1,0 +1,69 @@
+{
+  "description": "Native multiline typography. A null baseline distance means platform-native line metrics at the effective font size; -1 is the natural-height sentinel, never a pixel spacing. Explicit line height is baseline-to-baseline distance. Reapplying geometry preserves text, selection and composition without a response commit.",
+  "text": "Alpha\nBravo\nCharlie",
+  "cases": [
+    {
+      "name": "natural",
+      "fontSize": 16,
+      "lineHeight": -1,
+      "containScale": 1,
+      "geometryScale": 1,
+      "expectedFontSize": 16,
+      "expectedBaselineDistance": null
+    },
+    {
+      "name": "explicit",
+      "fontSize": 16,
+      "lineHeight": 32,
+      "containScale": 1,
+      "geometryScale": 1,
+      "expectedFontSize": 16,
+      "expectedBaselineDistance": 32
+    },
+    {
+      "name": "tight",
+      "fontSize": 16,
+      "lineHeight": 12,
+      "containScale": 1,
+      "geometryScale": 1,
+      "expectedFontSize": 16,
+      "expectedBaselineDistance": 12
+    },
+    {
+      "name": "natural-scaled",
+      "fontSize": 16,
+      "lineHeight": -1,
+      "containScale": 1,
+      "geometryScale": 1.5,
+      "expectedFontSize": 24.0,
+      "expectedBaselineDistance": null
+    },
+    {
+      "name": "explicit-scaled",
+      "fontSize": 16,
+      "lineHeight": 32,
+      "containScale": 1,
+      "geometryScale": 1.5,
+      "expectedFontSize": 24.0,
+      "expectedBaselineDistance": 48.0
+    },
+    {
+      "name": "natural-contained",
+      "fontSize": 16,
+      "lineHeight": -1,
+      "containScale": 0.75,
+      "geometryScale": 2,
+      "expectedFontSize": 24.0,
+      "expectedBaselineDistance": null
+    },
+    {
+      "name": "explicit-contained",
+      "fontSize": 16,
+      "lineHeight": 32,
+      "containScale": 0.75,
+      "geometryScale": 2,
+      "expectedFontSize": 24.0,
+      "expectedBaselineDistance": 48.0
+    }
+  ]
+}
