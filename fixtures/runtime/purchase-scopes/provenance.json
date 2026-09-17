@@ -1,8 +1,8 @@
 {
-  "generatorCheckoutCommit": "8f4364129ccbc5a8d5984fbc616e7fbc788a91dc",
-  "generatorSha256": "1968928551c9499b7460fa09bbd4b96246449788b6f6bcb8a4986e1d72cd8f7e",
-  "sourceSnapshotSha256": "bf423935fac36c87214b25432a405a9901084f8f874108f7c8fc979ac931e9ad",
+  "generatorCheckoutCommit": "277f5db1a5fbbc6756cd73e686d36c0a2db66baf",
+  "generatorSha256": "ec20efaeb29fbc5ddf6dc4a845a8e9efc732cc1a593e9d4d749b102aebc52e39",
+  "sourceSnapshotSha256": "5857fd8894e77dd27455b1878b579d322015926649a8ffe6c4b21e56b3251588",
   "publisherWasmSha256": "dbca6f2ca2fe59c7f08368281cae34d23b9593c99c6934646089c63ef2d4ca0f",
-  "renderSha256": "3af98c008b2218fea5e350b9b2610baecec4aa39469bffd01c6f82fc82646632",
+  "renderSha256": "77042b7be42b773d4265449e802bd3997466660257156cecb2a22e8001fa0707",
   "qualification": "Published graph fixture; signed acquisition, pointer routing and checkout require separate executing tests."
 }
