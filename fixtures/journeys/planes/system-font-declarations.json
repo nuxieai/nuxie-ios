@@ -588,5 +588,8 @@
       ],
       "valid": false
     }
+  ],
+  "consumerCapabilities": [
+    "system-fonts"
   ]
 }

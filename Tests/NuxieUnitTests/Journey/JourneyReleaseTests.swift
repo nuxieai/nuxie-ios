@@ -311,6 +311,8 @@ final class JourneyReleaseTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("fixtures/journeys/planes/system-font-declarations.json")
         let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let requiredConsumerCapabilities = try XCTUnwrap(corpus["consumerCapabilities"] as? [String])
+        XCTAssertTrue(JourneyReleaseRuntime.current.supportedCapabilities.isSuperset(of: requiredConsumerCapabilities))
         for item in try XCTUnwrap(corpus["cases"] as? [[String: Any]]) {
             var root = try systemFontRoot()
             var render = try XCTUnwrap(root["render"] as? [String: Any])
@@ -436,6 +438,28 @@ final class JourneyReleaseTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testCurrentSDKAuthenticatesSignedSystemFontRelease() throws {
+        let current = JourneyReleaseRuntime.current
+        var root = try systemFontRoot()
+        let luau = try XCTUnwrap(current.supportedLuauRevisions.first)
+        root["requirements"] = [
+            "minimumSdkVersion": current.currentSdkVersion,
+            "runtimeRevision": try XCTUnwrap(current.supportedRuntimeRevisions.first),
+            "luau": ["revision": luau.key, "bytecodeVersions": luau.value.sorted()],
+            "sceneFormat": ["major": current.sceneFormat.major, "minor": current.sceneFormat.minor],
+            "timezoneData": ["format": "iana-tzdb", "revision": current.timezoneDataRevision, "sha256": current.timezoneDataSHA256],
+            "requiredCapabilities": ["system-fonts"],
+        ]
+        let envelope = try sign(JSONSerialization.data(withJSONObject: root))
+        let fixture = try golden(entryKey: "renderedEntry")
+        XCTAssertNoThrow(try JourneyReleaseVerifier().authenticateJourney(
+            envelopeBytes: JSONEncoder().encode(envelope),
+            authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
+            expectedIdentity: fixture.identity, expectedLegId: String(repeating: "a", count: 64),
+            supportedRuntime: current, replayPolicy: .active(minimumPublishedAtSeq: 0)
+        ))
     }
 
     private func systemFontRoot(weight: String = "400") throws -> [String: Any] {
