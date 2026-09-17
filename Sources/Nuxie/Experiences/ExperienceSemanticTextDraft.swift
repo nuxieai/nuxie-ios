@@ -1,8 +1,8 @@
 import Foundation
 
-enum ExperienceTextInputEventKind: Equatable {
-    case editingEnded
-    case returnPressed
+enum ExperienceTextInputEventKind: String, Decodable, Equatable, Sendable {
+    case editingEnded = "editing-ended"
+    case returnPressed = "return"
 }
 
 struct ExperienceTextInputEvent: Equatable {

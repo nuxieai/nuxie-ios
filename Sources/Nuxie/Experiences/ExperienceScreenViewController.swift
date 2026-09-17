@@ -739,16 +739,29 @@ final class ExperienceScreenViewController: UIViewController {
             })
         }
         textInputOverlayBridge.onEditingEvent = { [weak self] input, event in
-            // Existing scripted input actions attach to editing-ended. Return is
-            // distinct: dismissing the keyboard must not execute that action twice.
-            guard event.kind == .editingEnded,
+            // The signed input policy selects one lifecycle event. Return and
+            // editing-ended may both occur, but invoke this action only once.
+            guard event.kind == (input.actionEvent ?? .editingEnded),
                   let self, let interactiveScreen = self.interactiveScreen,
                   let loop = self.presentationLoop else { return }
+            let originatingRun = self.delegate?.screenEmissionRun(for: self)
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
                 let result = try await interactiveScreen.commitTextInput(inputID: input.inputId, value: event.text)
                 return .work(requestsFrame: result != nil) { [weak self] in
-                    guard let self, self.semanticInputIsEligible, let result else { return }
-                    await self.deliverStep(effects: result.effects)
+                    guard let self, self.semanticInputIsEligible else { return }
+                    if let result {
+                        await self.deliverStep(effects: result.effects)
+                    } else if let invocation = input.declarativeInvocation(for: event) {
+                        await self.delegate?.experienceScreenViewController(
+                            self,
+                            didEmitScreenEmission: .control(
+                                screenId: input.screenId,
+                                invocation: invocation,
+                                additionalDrafts: []
+                            ),
+                            originatingRun: originatingRun
+                        )
+                    }
                 }
             }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { [weak self] result in
                 if case .failure(let error) = result { self?.logRejectedState(error) }

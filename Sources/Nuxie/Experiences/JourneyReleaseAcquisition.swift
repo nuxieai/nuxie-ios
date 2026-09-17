@@ -274,6 +274,8 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let multiline: Bool?
         let maxLength: Int?
         let responseFieldKey: String?
+        var actionEvent: ExperienceTextInputEventKind? = nil
+        var declarativeActionId: String? = nil
     }
 
     struct Asset: Decodable {
@@ -1554,7 +1556,9 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     secureTextEntry: $0.secureTextEntry,
                     multiline: $0.multiline,
                     maxLength: $0.maxLength,
-                    responseFieldKey: $0.responseFieldKey
+                    responseFieldKey: $0.responseFieldKey,
+                    actionEvent: $0.actionEvent,
+                    declarativeActionId: $0.declarativeActionId
                 )
             },
             images: images,
