@@ -1,7 +1,12 @@
 {
   "contract": "published-custom-transition-completion",
   "publisherSourceCommit": "a43031094ef04df48f3f5af8c4f2ca46f1df5126",
-  "descriptorSha256": "e478a8def0f9daf6e09556633174e14b45fd7fadf3bae782e0c7b87e1ed1470c",
+  "descriptorSha256": "5bc17bc4af2ca0bf173cde1fc230e3aeef45b8cdcfc8dd450afbb56d282fdd1b",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "qualification": "Publisher declaration and signing checks passed; native completion event qualification is in progress."
+  "qualification": "Publisher declaration and signing checks passed; native completion event qualification is in progress.",
+  "descriptorRefresh": {
+    "script": "scripts/refresh-signed-fixtures.mjs",
+    "reason": "Explicit CDN font source declarations; published render and asset bytes unchanged",
+    "previousDescriptorSha256": "e478a8def0f9daf6e09556633174e14b45fd7fadf3bae782e0c7b87e1ed1470c"
+  }
 }
