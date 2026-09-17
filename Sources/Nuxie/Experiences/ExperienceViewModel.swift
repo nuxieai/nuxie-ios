@@ -198,7 +198,7 @@ class ExperienceViewModel {
                     return
                 }
                 self.currentArtifactSource = .unavailable
-                self.recordArtifactLoadFailure(errorMessage: error.localizedDescription)
+                self.recordArtifactLoadFailure(error: error)
                 self.cancelLoadingTimeout()
                 // Acquisition failures reach `.error` here rather than through
                 // `handleLoadingFailed`, which covers native mount failures.
@@ -250,7 +250,7 @@ class ExperienceViewModel {
     func handleLoadingFailed(_ error: Error) {
         LogError("Failed to load experience \(experience.id): \(error)")
         recoveryReason = ExperienceShellRecoveryReason(error: error)
-        recordArtifactLoadFailure(errorMessage: error.localizedDescription)
+        recordArtifactLoadFailure(error: error)
         // The controller reporting a native failure already revoked its mount.
         cancelLoading(notifyInvalidation: false)
         currentState = .error
@@ -362,7 +362,7 @@ class ExperienceViewModel {
         )
     }
 
-    private func recordArtifactLoadFailure(errorMessage: String?) {
+    private func recordArtifactLoadFailure(error: Error) {
         guard !hasRecordedArtifactLoadOutcome else { return }
         hasRecordedArtifactLoadOutcome = true
 
@@ -374,7 +374,8 @@ class ExperienceViewModel {
                 artifactBuildId: artifactTelemetryContext.artifactBuildId,
                 artifactSource: currentArtifactSource.rawValue,
                 artifactContentHash: artifactTelemetryContext.artifactContentHash,
-                errorMessage: errorMessage
+                errorMessage: error.localizedDescription,
+                errorCode: ExperiencePresentationTraceContext.systemFontFailureCode(for: error)
             ),
             userProperties: nil,
             userPropertiesSetOnce: nil

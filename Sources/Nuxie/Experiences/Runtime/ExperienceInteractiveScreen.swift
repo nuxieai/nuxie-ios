@@ -342,9 +342,20 @@ enum ExperienceInteractiveScreenError: LocalizedError, Equatable, Sendable {
     case journeyScreenNotFound(String)
     case invalidScreen(String)
     case assetContract(String)
+    case systemFontPreparation(String, ExperienceRuntimeSystemFontProvider.Failure)
     case stateContract(String)
     case textInputNotFound(String)
     case textInputNotEditable(String)
+
+    var systemFontFailureCode: String? {
+        guard case .systemFontPreparation(_, let failure) = self else { return nil }
+        switch failure {
+        case .unsupportedRequest: return "system_font.unsupported_request"
+        case .unavailableFace: return "system_font.face_unavailable"
+        case .unavailableTables: return "system_font.tables_unavailable"
+        case .unusableData: return "system_font.data_unusable"
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -352,6 +363,7 @@ enum ExperienceInteractiveScreenError: LocalizedError, Equatable, Sendable {
         case .journeyScreenNotFound(let id): "Journey screen not found: \(id)"
         case .invalidScreen(let reason): "Invalid experience screen: \(reason)"
         case .assetContract(let reason): "Experience asset contract: \(reason)"
+        case .systemFontPreparation(let name, let failure): "System font preparation failed: \(name) (\(failure.rawValue))"
         case .stateContract(let reason): "Experience state contract: \(reason)"
         case .textInputNotFound(let id): "Experience text input not found: \(id)"
         case .textInputNotEditable(let id): "Experience text input is not editable: \(id)"
@@ -1511,6 +1523,8 @@ actor ExperienceInteractivePreparation {
 
     private let payload: AuthenticatedRuntimePayload
     private let preparedFile: NuxieNativePreparedFile
+    private let systemFontCache: ExperienceRuntimeSystemFontCache
+    private let systemFontLeases: [ExperienceRuntimeSystemFontCache.Lease]
     private let generatedInteractionStateMachineByArtboard: [String: String]
     private let imageIDsByName: [String: UInt64]
     private let inspectionCount: Int
@@ -1521,8 +1535,12 @@ actor ExperienceInteractivePreparation {
         preparedFile: NuxieNativePreparedFile,
         generatedInteractionStateMachineByArtboard: [String: String],
         imageIDsByName: [String: UInt64],
-        inspectionCount: Int
+        inspectionCount: Int,
+        systemFontCache: ExperienceRuntimeSystemFontCache,
+        systemFontLeases: [ExperienceRuntimeSystemFontCache.Lease]
     ) {
+        self.systemFontCache = systemFontCache
+        self.systemFontLeases = systemFontLeases
         self.payload = payload
         self.preparedFile = preparedFile
         self.generatedInteractionStateMachineByArtboard =
@@ -1533,7 +1551,8 @@ actor ExperienceInteractivePreparation {
 
     static func prepare(
         payload: AuthenticatedRuntimePayload,
-        inspectedCatalog: [NuxieNativeFileAssetDescriptor]? = nil
+        inspectedCatalog: [NuxieNativeFileAssetDescriptor]? = nil,
+        systemFontCache: ExperienceRuntimeSystemFontCache = .shared
     ) async throws -> ExperienceInteractivePreparation {
         let catalog: [NuxieNativeFileAssetDescriptor]
         let inspectionCount: Int
@@ -1544,10 +1563,11 @@ actor ExperienceInteractivePreparation {
             catalog = try await NuxieNativeRuntime.inspectAssets(bytes: payload.sceneBytes)
             inspectionCount = 1
         }
-        let externalAssets = try ExperienceInteractiveAssetBinding.bind(
+        let binding = try ExperienceInteractiveAssetBinding.bind(
             renderPlan: payload.renderPlan,
             authenticatedAssets: payload.assets,
-            catalog: catalog
+            catalog: catalog,
+            systemFontCache: systemFontCache
         )
         let imageIDsByName = try ExperienceInteractiveImageIdentityMap.make(
             images: payload.renderPlan.images
@@ -1555,12 +1575,16 @@ actor ExperienceInteractivePreparation {
         let importMode = NuxieNativeImportMode.configured(
             moduleName: "nuxie",
             expectedAssets: catalog,
-            externalAssets: externalAssets
+            externalAssets: binding.bytes
         )
-        let preparedFile = try await NuxieNativePreparedFile.prepare(
-            bytes: payload.sceneBytes,
-            importMode: importMode
-        )
+        let preparedFile: NuxieNativePreparedFile
+        do {
+            preparedFile = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, importMode: importMode)
+            systemFontCache.didImport(binding.systemFonts)
+        } catch {
+            systemFontCache.didFailImport(binding.systemFonts)
+            throw error
+        }
         let preparedArtboards = try await preparedFile.artboards()
         let generatedInteractionStateMachineByArtboard = Dictionary(
             uniqueKeysWithValues: preparedArtboards.compactMap { artboard in
@@ -1575,7 +1599,9 @@ actor ExperienceInteractivePreparation {
             generatedInteractionStateMachineByArtboard:
                 generatedInteractionStateMachineByArtboard,
             imageIDsByName: imageIDsByName,
-            inspectionCount: inspectionCount
+            inspectionCount: inspectionCount,
+            systemFontCache: systemFontCache,
+            systemFontLeases: binding.systemFonts
         )
     }
 
@@ -1602,16 +1628,23 @@ actor ExperienceInteractivePreparation {
         } else {
             resolvedPlayer = player
         }
-        let screen = try await ExperienceInteractiveScreen.openPrepared(
-            payload: payload,
-            preparedFile: preparedFile,
-            imageIDsByName: imageIDsByName,
-            screenID: screenID,
-            products: products,
-            player: resolvedPlayer,
-            pixelWidth: pixelWidth,
-            pixelHeight: pixelHeight
-        )
+        let screen: ExperienceInteractiveScreen
+        do {
+            screen = try await ExperienceInteractiveScreen.openPrepared(
+                payload: payload,
+                preparedFile: preparedFile,
+                imageIDsByName: imageIDsByName,
+                screenID: screenID,
+                products: products,
+                player: resolvedPlayer,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight
+            )
+            systemFontCache.didImport(systemFontLeases)
+        } catch {
+            systemFontCache.didFailImport(systemFontLeases)
+            throw error
+        }
         openedSessionCount += 1
         return screen
     }
@@ -4571,12 +4604,39 @@ private enum ExperienceInteractiveAssetBinding {
         let isEmbedded: Bool
     }
 
+    struct Binding {
+        let bytes: [Int: Data]
+        let systemFonts: [ExperienceRuntimeSystemFontCache.Lease]
+    }
+
     static func bind(
         renderPlan: NativeExperienceRenderPlan,
         authenticatedAssets: [AuthenticatedRuntimeAsset],
-        catalog: [NuxieNativeFileAssetDescriptor]
-    ) throws -> [Int: Data] {
+        catalog: [NuxieNativeFileAssetDescriptor],
+        systemFontCache: ExperienceRuntimeSystemFontCache
+    ) throws -> Binding {
         let declarations = try declarationMap(renderPlan)
+        var systemDeclarations: [Key: NativeExperienceSystemFontRequirement] = [:]
+        for font in renderPlan.systemFonts {
+            guard let authoredID = UInt32(exactly: font.riveAssetId) else {
+                throw ExperienceInteractiveScreenError.assetContract(font.riveUniqueName)
+            }
+            let key = Key(kind: .font, authoredID: authoredID, uniqueName: font.riveUniqueName)
+            guard declarations[key] == nil, systemDeclarations.updateValue(font, forKey: key) == nil else {
+                throw ExperienceInteractiveScreenError.assetContract(font.riveUniqueName)
+            }
+        }
+        for input in renderPlan.textInputs {
+            let system = renderPlan.systemFonts.first { $0.riveUniqueName == input.style.fontAssetRiveUniqueName }
+            if let system {
+                guard input.style.fontFamily == "System", input.style.fontWeight == system.weight,
+                      input.style.fontStyle == system.style else {
+                    throw ExperienceInteractiveScreenError.assetContract(input.style.fontAssetRiveUniqueName)
+                }
+            } else if input.style.fontFamily == "System" {
+                throw ExperienceInteractiveScreenError.assetContract(input.style.fontAssetRiveUniqueName)
+            }
+        }
         var authenticated: [Key: AuthenticatedRuntimeAsset] = [:]
         for asset in authenticatedAssets {
             let key = Key(
@@ -4607,6 +4667,7 @@ private enum ExperienceInteractiveAssetBinding {
 
         var consumed = Set<Key>()
         var externalAssets: [Int: Data] = [:]
+        var systemOrdinals: [Int: NativeExperienceSystemFontRequirement] = [:]
         for descriptor in catalog {
             let kind: AuthenticatedRuntimeAsset.Kind
             switch descriptor.kind {
@@ -4643,6 +4704,13 @@ private enum ExperienceInteractiveAssetBinding {
             }
             let uniqueName = "\(descriptor.name)-\(authoredID)"
             let key = Key(kind: kind, authoredID: authoredID, uniqueName: uniqueName)
+            if let system = systemDeclarations[key] {
+                guard !descriptor.isEmbedded, consumed.insert(key).inserted,
+                      systemOrdinals.updateValue(system, forKey: descriptor.ordinal) == nil else {
+                    throw ExperienceInteractiveScreenError.assetContract(uniqueName)
+                }
+                continue
+            }
             guard let asset = authenticated[key],
                   let declaration = declarations[key],
                   declaration.isEmbedded == descriptor.isEmbedded,
@@ -4653,12 +4721,24 @@ private enum ExperienceInteractiveAssetBinding {
                 externalAssets[descriptor.ordinal] = bytes
             }
         }
-        guard consumed.count == authenticated.count else {
+        guard consumed.count == authenticated.count + systemDeclarations.count else {
             throw ExperienceInteractiveScreenError.assetContract(
                 "the authored scene catalog does not exactly match authenticated assets"
             )
         }
-        return externalAssets
+        // Resolve only after the entire signed declaration set matches the
+        // inspected scene. System fonts never acquire a fabricated CDN object.
+        var leases: [ExperienceRuntimeSystemFontCache.Lease] = []
+        for (ordinal, font) in systemOrdinals {
+            do {
+                let lease = try systemFontCache.prepare(weight: font.weight, style: font.style)
+                leases.append(lease)
+                externalAssets[ordinal] = lease.candidate.bytes
+            } catch let failure as ExperienceRuntimeSystemFontProvider.Failure {
+                throw ExperienceInteractiveScreenError.systemFontPreparation(font.riveUniqueName, failure)
+            }
+        }
+        return Binding(bytes: externalAssets, systemFonts: leases)
     }
 
     private static func declarationMap(

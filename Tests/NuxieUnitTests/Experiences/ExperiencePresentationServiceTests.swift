@@ -412,6 +412,47 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         .to(equal("journey-owner"))
                 }
 
+                #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+                it("settles a System font failure once and releases the Journey surface") { @MainActor in
+                    let versionID = "Journey-system-font-failure"
+                    let screenID = "screen-selected"
+                    let controller = MockExperienceViewController(
+                        mockExperienceVersionId: versionID, mockScreenId: screenID
+                    )
+                    mockExperienceService.mockViewControllers[versionID] = controller
+                    let outcomes = JourneyPresentationOutcomeRecorder()
+                    let reservation = service.reserveJourneyPresentation(ownerDistinctId: "user-1")
+                    let request = JourneyPresentationRequest(
+                        release: makeJourneyRelease(versionId: versionID, screenId: screenID),
+                        delivery: journeyDelivery(), screenId: screenID,
+                        owner: .init(journeyId: "journey-owner", distinctId: "user-1"),
+                        reservation: reservation,
+                        onEmissionBatch: { _ in true },
+                        onOutcome: { outcome, _ in outcomes.record(outcome) }
+                    )
+                    let result = await service.presentJourney(request)
+                    expect(result).to(equal(.shown))
+                    let failure = ExperienceInteractiveScreenError.systemFontPreparation("font-system", .unusableData)
+                    controller.performDismiss(reason: .error(failure))
+                    controller.performDismiss(reason: .error(failure))
+                    await polling(expect(service.isExperiencePresented)).value
+                        .toEventually(beFalse(), timeout: .seconds(1))
+                    await polling(expect(outcomes.outcomes)).value
+                        .toEventually(equal([.abandoned]), timeout: .seconds(1))
+                    expect(service.currentExperienceViewController).to(beNil())
+                    expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
+                    expect(controller.shutdownRuntimeCallCount).to(equal(1))
+                    let errors = mockEventLog.trackedEvents.filter { $0.name == JourneyEvents.experienceErrored }
+                    expect(errors.count).to(equal(1))
+                    expect(errors.first?.properties?["error_code"] as? String).to(equal("system_font.data_unusable"))
+                    expect(errors.first?.properties?["journey_id"] as? String).to(equal("journey-owner"))
+                    expect(mockEventLog.trackedEvents.filter { $0.name == JourneyEvents.experienceDismissed }).to(beEmpty())
+                    let next = service.reserveJourneyPresentation(ownerDistinctId: "user-1")
+                    expect(next).toNot(beNil())
+                    next?.release()
+                }
+                #endif
+
                 it("acknowledges ordinary user dismissal after screen lifecycle handling") { @MainActor in
                     let versionID = "Journey-user-dismiss"
                     let screenID = "screen-selected"

@@ -49,6 +49,45 @@ private actor InteractiveDismissalSuspension {
 }
 
 final class ExperienceArtifactTelemetryTests: XCTestCase {
+    #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+    @MainActor
+    func testSystemFontFailuresKeepDistinctCodesInTraceAndLoadOutcome() {
+        let cases: [(ExperienceInteractiveScreenError, String)] = [
+            (.systemFontPreparation("font-1", .unsupportedRequest), "system_font.unsupported_request"),
+            (.systemFontPreparation("font-1", .unavailableFace), "system_font.face_unavailable"),
+            (.systemFontPreparation("font-1", .unavailableTables), "system_font.tables_unavailable"),
+            (.systemFontPreparation("font-1", .unusableData), "system_font.data_unusable"),
+        ]
+        for (error, code) in cases {
+            let log = MockEventLog()
+            let model = ExperienceViewModel(
+                experience: makeExperience(id: "system-font", versionId: "system-font-v1"),
+                artifactLoader: { _, _, _ in throw CancellationError() }, eventLog: log
+            )
+            let recorder = InMemoryExperiencePresentationTrace()
+            let context = ExperiencePresentationTraceContext(
+                attempt: .make(triggerEvent: "system-font", startedAt: Date()), recorder: recorder
+            )
+            context.fail(context.begin(.runtimePreparation), error: error)
+            let failed = recorder.events().compactMap { event -> (String, String?)? in
+                guard case .workFailed(_, _, _, let code, let attributes) = event.stage else { return nil }
+                return (code, attributes["failure_category"])
+            }
+            XCTAssertEqual(failed.count, 1)
+            XCTAssertEqual(failed.first?.0, code)
+            XCTAssertEqual(failed.first?.1, "preparation")
+            model.handleLoadingFailed(error)
+            model.handleLoadingFailed(error)
+            let outcomes = log.trackedEvents.filter { $0.name == JourneyEvents.experienceArtifactLoadFailed }
+            XCTAssertEqual(outcomes.count, 1)
+            XCTAssertEqual(outcomes.first?.properties?["error_code"] as? String, code)
+            XCTAssertEqual(model.currentState, .error)
+        }
+        XCTAssertNil(ExperiencePresentationTraceContext.systemFontFailureCode(for: URLError(.notConnectedToInternet)))
+        XCTAssertNil(ExperiencePresentationTraceContext.systemFontFailureCode(for: ExperienceInteractiveScreenError.assetContract("image")))
+    }
+    #endif
+
     @MainActor
     private func waitUntil(_ predicate: () -> Bool) async -> Bool {
         for _ in 0..<300 {

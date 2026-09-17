@@ -40,7 +40,8 @@ final class JourneyEvents: Sendable {
         artifactBuildId: String,
         artifactSource: String,
         artifactContentHash: String,
-        errorMessage: String?
+        errorMessage: String?,
+        errorCode: String? = nil
     ) -> [String: Any] {
         var properties = experienceArtifactLoadBaseProperties(
             experienceId: experienceId,
@@ -52,6 +53,7 @@ final class JourneyEvents: Sendable {
         if let errorMessage {
             properties["error_message"] = errorMessage
         }
+        if let errorCode { properties["error_code"] = errorCode }
         return properties
     }
 

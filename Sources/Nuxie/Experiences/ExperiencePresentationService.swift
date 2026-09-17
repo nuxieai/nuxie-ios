@@ -1357,6 +1357,9 @@ final class ExperiencePresentationService {
             properties["reason"] = "host"
         case .error(let error):
             properties["error_message"] = error.localizedDescription
+            if let code = ExperiencePresentationTraceContext.systemFontFailureCode(for: error) {
+                properties["error_code"] = code
+            }
             eventLog.track(
                 JourneyEvents.experienceErrored,
                 properties: properties,

@@ -280,10 +280,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
 
     struct Asset: Decodable {
         let kind: String
-        let key: String
-        let sha256: String
-        let sizeBytes: Int
-        let contentType: String
+        let location: String?
         let riveAssetId: UInt64?
         let riveUniqueName: String?
         let family: String?
@@ -291,14 +288,28 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let style: String?
         let format: String?
         let required: Bool
+        let artifact: Artifact?
 
-        var artifact: Artifact {
-            Artifact(
-                key: key,
-                sha256: sha256,
-                sizeBytes: sizeBytes,
-                contentType: contentType
-            )
+        var isSystem: Bool { kind == "font" && location == "system" }
+        var identity: String { riveUniqueName ?? artifact?.key ?? kind }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try values.decode(String.self, forKey: .kind)
+            location = try values.decodeIfPresent(String.self, forKey: .location)
+            riveAssetId = try values.decodeIfPresent(UInt64.self, forKey: .riveAssetId)
+            riveUniqueName = try values.decodeIfPresent(String.self, forKey: .riveUniqueName)
+            family = try values.decodeIfPresent(String.self, forKey: .family)
+            weight = try values.decodeIfPresent(String.self, forKey: .weight)
+            style = try values.decodeIfPresent(String.self, forKey: .style)
+            format = try values.decodeIfPresent(String.self, forKey: .format)
+            required = try values.decode(Bool.self, forKey: .required)
+            // Authentication has already enforced the strict source union.
+            artifact = kind == "font" && location == "system" ? nil : try Artifact(from: decoder)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case kind, location, riveAssetId, riveUniqueName, family, weight, style, format, required
         }
     }
 
@@ -771,11 +782,8 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         }
         let requirements = try uniqueArtifacts(
             [ArtifactRequirement(artifact: render.riv, required: true)]
-                + render.assets.map {
-                    ArtifactRequirement(
-                        artifact: $0.artifact,
-                        required: $0.required
-                    )
+                + render.assets.compactMap { asset in
+                    asset.artifact.map { ArtifactRequirement(artifact: $0, required: asset.required) }
                 }
                 + journeyArtifacts.map {
                     ArtifactRequirement(artifact: $0, required: true)
@@ -899,22 +907,23 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         let runtimeAssets = try render.assets.compactMap { asset
             -> AuthenticatedRuntimeAsset? in
             guard asset.kind == "image" || asset.kind == "font" else { return nil }
+            guard let artifact = asset.artifact else { return nil }
             guard let authoredID64 = asset.riveAssetId,
                   let authoredID = UInt32(exactly: authoredID64),
                   let uniqueName = asset.riveUniqueName else {
-                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(asset.key)
+                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(artifact.key)
             }
-            let object = objectsByKey[asset.key]
+            let object = objectsByKey[artifact.key]
             guard object != nil || !asset.required else {
-                throw JourneyReleaseAcquisitionError.requiredObjectUnavailable(asset.key)
+                throw JourneyReleaseAcquisitionError.requiredObjectUnavailable(artifact.key)
             }
             return AuthenticatedRuntimeAsset(
                 kind: asset.kind == "image" ? .image : .font,
                 riveAssetID: authoredID,
                 riveUniqueName: uniqueName,
-                sourceKey: asset.key,
-                contentType: asset.contentType,
-                sha256: asset.sha256,
+                sourceKey: artifact.key,
+                contentType: artifact.contentType,
+                sha256: artifact.sha256,
                 required: asset.required,
                 bytes: object?.bytes
             )
@@ -1429,40 +1438,50 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         initialScreenID: String
     ) throws -> NativeExperienceRenderPlan {
         let images = try render.assets.filter { $0.kind == "image" }.map {
-            guard let id = $0.riveAssetId, let name = $0.riveUniqueName else {
-                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding($0.key)
+            guard let id = $0.riveAssetId, let name = $0.riveUniqueName, let artifact = $0.artifact else {
+                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding($0.identity)
             }
             return NativeExperienceImageAsset(
-                location: .external(key: $0.key),
+                location: .external(key: artifact.key),
                 riveAssetId: id,
                 riveUniqueName: name,
-                sha256: $0.sha256,
-                sizeBytes: $0.sizeBytes,
-                contentType: $0.contentType,
+                sha256: artifact.sha256,
+                sizeBytes: artifact.sizeBytes,
+                contentType: artifact.contentType,
                 required: $0.required
             )
         }
-        let fonts = try render.assets.filter { $0.kind == "font" }.map {
+        let fonts = try render.assets.filter { $0.kind == "font" && !$0.isSystem }.map {
             guard let id = $0.riveAssetId,
                   let name = $0.riveUniqueName,
                   let family = $0.family,
                   let weight = $0.weight,
                   let style = $0.style,
-                  let format = $0.format else {
-                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding($0.key)
+                  let format = $0.format,
+                  let artifact = $0.artifact else {
+                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding($0.identity)
             }
             return NativeExperienceFontAsset(
-                location: .external(key: $0.key),
+                location: .external(key: artifact.key),
                 riveAssetId: id,
                 riveUniqueName: name,
                 family: family,
                 weight: weight,
                 style: style,
-                sha256: $0.sha256,
-                sizeBytes: $0.sizeBytes,
-                contentType: $0.contentType,
+                sha256: artifact.sha256,
+                sizeBytes: artifact.sizeBytes,
+                contentType: artifact.contentType,
                 format: format,
                 required: $0.required
+            )
+        }
+        let systemFonts = try render.assets.filter(\.isSystem).map { asset in
+            guard let id = asset.riveAssetId, let name = asset.riveUniqueName,
+                  let weight = asset.weight, let style = asset.style else {
+                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(asset.identity)
+            }
+            return NativeExperienceSystemFontRequirement(
+                riveAssetId: id, riveUniqueName: name, weight: weight, style: style
             )
         }
         return NativeExperienceRenderPlan(
@@ -1562,7 +1581,8 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 )
             },
             images: images,
-            fonts: fonts
+            fonts: fonts,
+            systemFonts: systemFonts
         )
     }
 }

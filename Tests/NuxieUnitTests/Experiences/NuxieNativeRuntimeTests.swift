@@ -1,4 +1,5 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+import CoreText
 import Darwin
 import Foundation
 import ImageIO
@@ -8,6 +9,121 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeRuntimeTests: XCTestCase {
+    #if os(iOS)
+    func testMixedSystemAndCDNFontsRenderBothTextRows() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/system-font-axes")
+        struct Font: Decodable { let location: String; let riveAssetId: UInt32 }
+        struct Scene: Decodable { let name: String; let fonts: [Font]? }
+        struct Provenance: Decodable { let scenes: [Scene] }
+        let provenance = try JSONDecoder().decode(Provenance.self,
+            from: Data(contentsOf: directory.appendingPathComponent("provenance.json")))
+        let fonts = try XCTUnwrap(provenance.scenes.first { $0.name == "mixed" }?.fonts)
+        let systemID = try XCTUnwrap(fonts.first { $0.location == "system" }?.riveAssetId)
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("mixed.nux"))
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+        XCTAssertEqual(assets.count, 2)
+        let system = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
+        let cdn = try Data(contentsOf: directory.appendingPathComponent("mixed-cdn.ttf"))
+        let external = Dictionary(uniqueKeysWithValues: assets.map {
+            ($0.ordinal, $0.authoredID == systemID ? system.bytes : cdn)
+        })
+        let runtime = try await NuxieNativeRuntime.open(bytes: bytes, artboardName: "One",
+            player: .staticArtboard, pixelWidth: 320, pixelHeight: 640, bindDefaultViewModel: false,
+            importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: external))
+        do {
+            _ = try await runtime.step(elapsedSeconds: 0)
+            let rendered = try await renderPixels(runtime, width: 320, height: 640)
+            XCTAssertEqual(rendered.outcome.disposition, .presented)
+            for rows in [16..<112, 144..<240] {
+                let ink = rows.reduce(0) { total, y in
+                    total + (0..<320).reduce(0) { $0 + max(0, Int(rendered.pixels[(y * 320 + $1) * 4 + 2]) - 0x11) }
+                }
+                XCTAssertGreaterThan(ink, 10_000, "Both System and CDN rows must contain visible glyphs")
+            }
+            try await runtime.close()
+        } catch {
+            try? await runtime.close()
+            throw error
+        }
+    }
+
+    func testDeviceSystemFontWeightAndOpticalSizeChangeRenderedGlyphs() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/system-font-axes")
+        func pixels(_ name: String, weight: String, fallback: Bool) async throws -> Data {
+            let bytes = try Data(contentsOf: directory.appendingPathComponent("\(name).nux"))
+            let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+            let fonts = assets.filter { $0.kind == .font }
+            XCTAssertEqual(fonts.count, 1)
+            let font = try XCTUnwrap(fonts.first)
+            let candidate = fallback
+                ? try ExperienceRuntimeSystemFontProvider.prepare(weight: weight, style: "normal", readFile: { _ in Data() })
+                : try ExperienceRuntimeSystemFontProvider.prepare(weight: weight, style: "normal")
+            let runtime = try await NuxieNativeRuntime.open(bytes: bytes, artboardName: "One",
+                player: .staticArtboard, pixelWidth: 320, pixelHeight: 640, bindDefaultViewModel: false,
+                importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
+                    externalAssets: [font.ordinal: candidate.bytes]))
+            do {
+                _ = try await runtime.step(elapsedSeconds: 0)
+                let rendered = try await renderPixels(runtime, width: 320, height: 640)
+                XCTAssertEqual(rendered.outcome.disposition, .presented)
+                try await runtime.close()
+                return rendered.pixels
+            } catch {
+                try? await runtime.close()
+                throw error
+            }
+        }
+        func ink(_ pixels: Data) -> Int {
+            // White glyph coverage above the render helper's dark clear color.
+            stride(from: 2, to: pixels.count, by: 4).reduce(0) { $0 + max(0, Int(pixels[$1]) - 0x11) }
+        }
+        var fileRegular: Data?
+        for fallback in [false, true] {
+            let candidate = fallback
+                ? try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal", readFile: { _ in Data() })
+                : try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
+            let provider = try XCTUnwrap(CGDataProvider(data: candidate.bytes as CFData))
+            let graphicsFont = try XCTUnwrap(CGFont(provider))
+            let nativeFont = CTFontCreateWithGraphicsFont(graphicsFont, 32, nil, nil)
+            func outlines(opticalSize: Double) throws -> [CGPath] {
+                let attributes: [CFString: Any] = [
+                    kCTFontVariationAttribute: [NSNumber(value: 0x6f70737a): opticalSize],
+                    kCTFontOpticalSizeAttribute: opticalSize,
+                ]
+                let descriptor = CTFontDescriptorCreateWithAttributes(attributes as CFDictionary)
+                let font = CTFontCreateCopyWithAttributes(nativeFont, 32, nil, descriptor)
+                let characters = Array("Hamburgefonts 0123".utf16)
+                var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+                XCTAssertTrue(CTFontGetGlyphsForCharacters(font, characters, &glyphs, characters.count))
+                return glyphs.compactMap { CTFontCreatePathForGlyph(font, $0, nil) }
+            }
+            XCTAssertNotEqual(try outlines(opticalSize: 17), try outlines(opticalSize: 32),
+                "CoreText must independently confirm that the control coordinates change this device font")
+            let regular = try await pixels("regular", weight: "400", fallback: fallback)
+            let bold = try await pixels("bold", weight: "700", fallback: fallback)
+            let sharedFaceBold = try await pixels("bold", weight: "400", fallback: fallback)
+            let baseline = try await pixels("optical-baseline", weight: "400", fallback: fallback)
+            let opticalControl = try await pixels("optical-control", weight: "400", fallback: fallback)
+            XCTAssertGreaterThan(ink(regular), 10_000, "The scene must contain visible glyphs")
+            XCTAssertGreaterThan(ink(bold), ink(regular), "Authored bold must increase glyph coverage")
+            XCTAssertEqual(sharedFaceBold, bold,
+                "The authored wght axis must select bold even when both styles share the regular variable face")
+            XCTAssertEqual(baseline, regular, "Test serialization must preserve production rendering")
+            XCTAssertNotEqual(opticalControl, baseline,
+                "Only opsz changes, with authored size and weight held fixed; table fallback: \(fallback)")
+            if let fileRegular {
+                XCTAssertEqual(regular, fileRegular, "Table fallback must preserve the extracted face's rendering")
+            } else {
+                fileRegular = regular
+            }
+        }
+    }
+    #endif
+
     func testPublishedFontScalePolicyAfterOneStep() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
