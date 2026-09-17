@@ -24,6 +24,40 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertEqual(release.descriptor.leg.completionOutputs["continue"]?.responseFields.count, 2)
     }
 
+    func testSignedBehaviorOrderingMatchesWireContract() throws {
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/behavior-ordering.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let publicKey = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(fixture["publicKeyBase64"] as? String)))
+        let verifierKey = try Curve25519.Signing.PublicKey(rawRepresentation: publicKey)
+        for item in try XCTUnwrap(fixture["cases"] as? [[String: Any]]) {
+            let name = try XCTUnwrap(item["name"] as? String)
+            let entry = try XCTUnwrap(item["entry"] as? [String: Any])
+            let envelope = try JSONDecoder().decode(JourneyReleaseEnvelope.self,
+                from: JSONSerialization.data(withJSONObject: XCTUnwrap(entry["envelope"])))
+            let bytes = try XCTUnwrap(Data(base64Encoded: envelope.descriptorBytesBase64))
+            let signature = try XCTUnwrap(Data(base64Encoded: envelope.signature.signatureBase64))
+            XCTAssertTrue(verifierKey.isValidSignature(signature, for: Data(JourneyReleaseDescriptor.signatureDomain.utf8) + bytes), name)
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            let identity = try JSONDecoder().decode(JourneyReleaseIdentity.self,
+                from: JSONSerialization.data(withJSONObject: XCTUnwrap(root["identity"])))
+            let leg = try XCTUnwrap(root["leg"] as? [String: Any])
+            let authenticate = {
+                try JourneyReleaseVerifier().authenticateJourney(envelopeBytes: JSONEncoder().encode(envelope),
+                    authorizationKeys: [self.key(publicKey)], expectedIdentity: identity,
+                    expectedLegId: try XCTUnwrap(leg["id"] as? String), supportedRuntime: JourneyReleaseRuntime.current,
+                    replayPolicy: .active(minimumPublishedAtSeq: 0))
+            }
+            if item["valid"] as? Bool == true {
+                XCTAssertEqual(try authenticate().exactDescriptorBytes, bytes, name)
+            } else {
+                XCTAssertThrowsError(try authenticate(), name) { error in
+                    XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .invalidDescriptor, name)
+                }
+            }
+        }
+    }
+
     func testSharedAdmissionCases() throws {
         let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/admission.json")
