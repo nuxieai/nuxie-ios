@@ -49,6 +49,49 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
     }
 
+    func testPublishedMixedSceneRejectsMissingAndMalformedRequiredFonts() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/system-font-axes")
+        struct Font: Decodable { let location: String; let riveAssetId: UInt32 }
+        struct Scene: Decodable { let name: String; let fonts: [Font]? }
+        struct Provenance: Decodable { let scenes: [Scene] }
+        let provenance = try JSONDecoder().decode(Provenance.self,
+            from: Data(contentsOf: directory.appendingPathComponent("provenance.json")))
+        let fonts = try XCTUnwrap(provenance.scenes.first { $0.name == "mixed" }?.fonts)
+        let systemID = try XCTUnwrap(fonts.first { $0.location == "system" }?.riveAssetId)
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("mixed.nux"))
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+        XCTAssertEqual(assets.count, 2)
+        let system = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
+        let cdn = try Data(contentsOf: directory.appendingPathComponent("mixed-cdn.ttf"))
+        let valid = Dictionary(uniqueKeysWithValues: assets.map {
+            ($0.ordinal, $0.authoredID == systemID ? system.bytes : cdn)
+        })
+        for asset in assets {
+            let source = asset.authoredID == systemID ? "System" : "CDN"
+            for malformed in [false, true] {
+                var external = valid
+                if malformed { external[asset.ordinal] = Data("not a font".utf8) }
+                else { external.removeValue(forKey: asset.ordinal) }
+                do {
+                    let runtime = try await NuxieNativeRuntime.open(bytes: bytes, artboardName: "One",
+                        player: .staticArtboard, pixelWidth: 320, pixelHeight: 640, bindDefaultViewModel: false,
+                        importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: external))
+                    try await runtime.close()
+                    XCTFail("Configured import accepted \(malformed ? "malformed" : "missing") required \(source) font")
+                } catch let error as NuxieNativeRuntimeError {
+                    guard case .callFailed(let diagnostic) = error else {
+                        XCTFail("Unexpected failure for \(source): \(error)")
+                        continue
+                    }
+                    XCTAssertEqual(diagnostic.status, .importError, source)
+                    XCTAssertTrue(diagnostic.message.contains("required text font"), source)
+                }
+            }
+        }
+    }
+
     func testDeviceSystemFontWeightAndOpticalSizeChangeRenderedGlyphs() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
