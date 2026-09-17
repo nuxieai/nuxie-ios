@@ -351,6 +351,8 @@ targets:
     type: application
     platform: iOS
     sources:
+      - path: fixtures/journeys/rendered-semantic-roles
+        type: folder
       - path: Tests/ExperienceRuntimeHostApp/Sources
         name: ExperienceRuntimeHostApp
       - path: Tests/ExperienceRuntimeHostApp/Fixtures

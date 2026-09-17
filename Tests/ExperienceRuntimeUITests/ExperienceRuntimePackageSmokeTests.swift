@@ -1,6 +1,27 @@
 import XCTest
 
 final class ExperienceRuntimePackageSmokeTests: XCTestCase {
+    /// Installed-app client coverage; this does not simulate VoiceOver gestures.
+    func testAccessibilityQualificationHostRunsSignedJourneyWithoutDiagnosticElements() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--nuxie-accessibility-qualification"]
+        app.launch()
+        let start = app.buttons["start-accessibility-journey"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        start.tap()
+        let password = app.secureTextFields["Password"]
+        XCTAssertTrue(password.waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Choose your plan"].exists, app.debugDescription)
+        XCTAssertTrue(app.buttons["Continue"].exists, app.debugDescription)
+        for identifier in ["nuxie-current-fixture", "nuxie-runtime-status", "nuxie-safe-area-probe"] {
+            XCTAssertFalse(app.descendants(matching: .any)[identifier].exists)
+        }
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "signed-accessibility-qualification-host"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     func testNativeTextFieldIsAccessibleAndEditableWithoutDiagnostics() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--nuxie-fixture", "rendered-text-input"]
