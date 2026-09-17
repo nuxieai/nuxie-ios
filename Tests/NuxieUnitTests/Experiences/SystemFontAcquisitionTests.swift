@@ -184,8 +184,61 @@ final class SystemFontAcquisitionTests: XCTestCase {
                 } catch let error as ExperienceInteractiveScreenError {
                     XCTAssertEqual(error, .systemFontPreparation(name, .unsupportedRequest))
                 }
+                if !mixed {
+                    try await verifyProviderFailureMount(
+                        acquired: acquired,
+                        experience: presentation.experience,
+                        payload: replacingSystemFonts(acquired.payload, [invalid]),
+                        expected: .systemFontPreparation(name, .unsupportedRequest)
+                    )
+                }
             }
         }
+    }
+
+    @MainActor
+    private func verifyProviderFailureMount(
+        acquired: AcquiredExperienceArtifact,
+        experience: Experience,
+        payload: AuthenticatedRuntimePayload,
+        expected: ExperienceInteractiveScreenError
+    ) async throws {
+        // The signed acquisition above is valid. Exercise the provider's failure
+        // boundary by changing only its request after acquisition; do not weaken
+        // release admission to manufacture an invalid signed weight.
+        let handle = ExperienceInteractivePreparationHandle(
+            cache: ExperienceInteractivePreparationCache(),
+            provenance: "system-font-provider-mount-failure",
+            payload: payload
+        )
+        let artifact = AcquiredExperienceArtifact(
+            identity: acquired.identity, sceneURL: acquired.sceneURL,
+            sceneBytes: acquired.sceneBytes, assetURLsByRiveUniqueName: acquired.assetURLsByRiveUniqueName,
+            source: acquired.source, payload: payload, interactivePreparation: handle,
+            products: acquired.products, resourceMetrics: acquired.resourceMetrics
+        )
+        let screen = try XCTUnwrap(payload.renderPlan.screens.first)
+        let controller = ExperienceScreenViewController(
+            experience: experience, artifact: LoadedExperienceArtifact(acquired: artifact),
+            screen: screen, reduceMotion: false, delegate: nil
+        )
+        for _ in 0..<2 {
+            do {
+                try await controller.mountInteractiveScreen()
+                XCTFail("A provider failure must reject real screen mounting")
+            } catch let error as ExperienceInteractiveScreenError {
+                XCTAssertEqual(error, expected)
+                XCTAssertEqual(error.systemFontFailureCode, "system_font.unsupported_request")
+            }
+            let status = await handle.status()
+            XCTAssertEqual(status, .miss, "Failed preparation must not be retained")
+            XCTAssertEqual(controller.lifecyclePhase, .hidden)
+        }
+        // Failure never publishes an interactive screen or leaves shutdown work
+        // behind; repeated cleanup uses the ordinary controller path.
+        await controller.shutdownInteractiveScreen()
+        await controller.shutdownInteractiveScreen()
+        XCTAssertEqual(controller.lifecyclePhase, .hidden)
     }
 
     private func replacingSystemFonts(_ payload: AuthenticatedRuntimePayload, _ fonts: [NativeExperienceSystemFontRequirement]) -> AuthenticatedRuntimePayload {
