@@ -3351,6 +3351,27 @@ actor ExperienceInteractiveScreen {
         )
     }
 
+    /// Commits scripted input through generated state and an existing VM trigger.
+    /// Returns nil for an ordinary, non-scripted input.
+    func commitTextInput(inputID: String, value: String) async throws -> ExperienceInteractiveMutationResult? {
+        guard let input = textInputs[inputID] else {
+            throw ExperienceInteractiveScreenError.textInputNotFound(inputID)
+        }
+        guard input.editable else {
+            throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
+        }
+        guard let root = rootViewModelReference,
+              let schema = schemaIndexByViewModel[root],
+              let paths = try stateCompiler.scriptedInputCommitPaths(
+                nodeID: input.viewNodeId, rootSchemaIndex: schema
+              ) else { return nil }
+        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
+        return try await mutateState([
+            .setString(root, path: paths.value, value: Data(limited.utf8)),
+            .fireTrigger(root, path: paths.commit),
+        ])
+    }
+
     /// Applies signed manifest text policy before mutating authored Rive runs.
     @discardableResult
     func setText(inputID: String, value: String) async throws -> Bool {
