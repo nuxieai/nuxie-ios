@@ -7,13 +7,62 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testMultilineReturnInsertsNewlineWithoutAnEditingEvent() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        var values: [String] = []
+        var events: [ExperienceTextInputEvent] = []
+        bridge.onAcceptedTextChange = { _, text in values.append(text) }
+        bridge.onEditingEvent = { _, event in events.append(event) }
+        bridge.bind(screenID: "screen", renderPlan: makePlan(multiline: true), surfaceView: view, artboardBounds: view.bounds,
+            semanticTextWriter: { _, _, _, done in done(.accepted) },
+            textWriter: { _, _, _ in XCTFail("Expected semantic writer") })
+        let textView = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextView }.first)
+        presentField(on: bridge)
+        _ = bridge.applySemantics(try capture(flags: 0))
+        XCTAssertTrue(bridge.textView(textView, shouldChangeTextIn: NSRange(location: 5, length: 0), replacementText: "\n"))
+        textView.text = "saved\n"
+        bridge.textViewDidChange(textView)
+        XCTAssertEqual(values, ["saved\n"])
+        XCTAssertTrue(events.isEmpty)
+        bridge.textViewDidEndEditing(textView)
+        XCTAssertEqual(events, [.init(kind: .editingEnded, text: "saved\n")])
+        bridge.clear()
+    }
+
+    func testNativeTypingReturnAndEndEditingAreSeparateEvents() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        var values: [String] = []
+        var events: [ExperienceTextInputEvent] = []
+        bridge.onAcceptedTextChange = { _, text in values.append(text) }
+        bridge.onEditingEvent = { _, event in events.append(event) }
+        bridge.bind(screenID: "screen", renderPlan: makePlan(), surfaceView: view, artboardBounds: view.bounds,
+            semanticTextWriter: { _, _, _, done in done(.accepted) },
+            textWriter: { _, _, _ in XCTFail("Expected semantic writer") })
+        let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
+        presentField(on: bridge)
+        _ = bridge.applySemantics(try capture(flags: 0))
+        field.text = "Alice"
+        let action = try XCTUnwrap(field.actions(forTarget: bridge, forControlEvent: .editingChanged)?.first)
+        _ = bridge.perform(NSSelectorFromString(action), with: field)
+        XCTAssertEqual(values, ["Alice"], "Capture must not wait for blur or Return")
+        XCTAssertTrue(events.isEmpty)
+        _ = bridge.textFieldShouldReturn(field)
+        XCTAssertEqual(events, [.init(kind: .returnPressed, text: "Alice")])
+        bridge.textFieldDidEndEditing(field)
+        XCTAssertEqual(events, [.init(kind: .returnPressed, text: "Alice"), .init(kind: .editingEnded, text: "Alice")])
+        XCTAssertEqual(values, ["Alice"], "Ending editing does not repeat the value change")
+        bridge.clear()
+    }
+
     func testDisabledSemanticFieldRejectsLateEditsAndRestoresEditing() throws {
         let plan = makePlan()
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         let bridge = ExperienceTextInputOverlayBridge()
         var writes: [String] = []
         var commits: [String] = []
-        bridge.onCommitText = { _, text in commits.append(text) }
+        bridge.onAcceptedTextChange = { _, text in commits.append(text) }
         bridge.bind(screenID: "screen", renderPlan: plan, surfaceView: view, artboardBounds: view.bounds) { _, text, done in
             writes.append(text); done(.success(()))
         }
@@ -28,7 +77,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         XCTAssertFalse(bridge.textField(field, shouldChangeCharactersIn: NSRange(location: 0, length: 0), replacementString: "late"))
         field.text = "late"
         field.sendActions(for: .editingChanged)
-        bridge.commitTextIfChanged(for: field)
+        bridge.flushTextChange(for: field)
         XCTAssertEqual(field.text, "saved")
         XCTAssertEqual(writes, ["saved"])
         XCTAssertTrue(commits.isEmpty)
@@ -36,14 +85,14 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         XCTAssertTrue(field.isEnabled)
         field.text = "accepted"
         field.sendActions(for: .editingChanged)
-        bridge.commitTextIfChanged(for: field)
+        bridge.flushTextChange(for: field)
         XCTAssertEqual(commits, ["accepted"])
         XCTAssertEqual(writes.last, "accepted")
         _ = bridge.applySemantics(try capture(flags: NuxieNativeSemanticNode.readOnly))
         XCTAssertTrue(field.isEnabled, "Read-only controls retain native interaction")
         XCTAssertFalse(bridge.textField(field, shouldChangeCharactersIn: NSRange(location: 0, length: 0), replacementString: "blocked"))
         field.text = "blocked"
-        bridge.commitTextIfChanged(for: field)
+        bridge.flushTextChange(for: field)
         XCTAssertEqual(field.text, "accepted")
         XCTAssertEqual(commits, ["accepted"])
         _ = bridge.applySemantics(try capture(flags: NuxieNativeSemanticNode.hidden))
@@ -57,7 +106,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         var pending: [(UUID, String, @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)] = []
         var commits: [String] = []
-        bridge.onCommitText = { _, text in commits.append(text) }
+        bridge.onAcceptedTextChange = { _, text in commits.append(text) }
         bridge.bind(screenID: "screen", renderPlan: makePlan(), surfaceView: view, artboardBounds: view.bounds,
             semanticTextWriter: { id, _, text, done in
                 pending.append((id, text, done))
@@ -85,7 +134,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         XCTAssertEqual(pending.count, 1, "First editor change must reach the writer")
         field.text = "Alice"
         field.sendActions(for: .editingChanged)
-        bridge.commitTextIfChanged(for: field)
+        bridge.flushTextChange(for: field)
         XCTAssertEqual(pending.count, 1)
         XCTAssertEqual(pending[0].1, "A")
         XCTAssertTrue(commits.isEmpty)
@@ -101,7 +150,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         XCTAssertEqual(commits, ["Alice"])
         field.text = "late"
         field.sendActions(for: .editingChanged)
-        bridge.commitTextIfChanged(for: field)
+        bridge.flushTextChange(for: field)
         _ = bridge.applySemantics(try capture(flags: NuxieNativeSemanticNode.disabled))
         XCTAssertEqual(field.text, "Alice")
         pending.removeFirst().2(.accepted)
@@ -116,7 +165,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             var pending: [(String, @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)] = []
             var commits: [String] = []
             var nativeText = "saved"
-            bridge.onCommitText = { _, text in commits.append(text) }
+            bridge.onAcceptedTextChange = { _, text in commits.append(text) }
             bridge.bind(screenID: "screen", renderPlan: makePlan(), surfaceView: view,
                 artboardBounds: view.bounds,
                 semanticTextWriter: { _, _, text, done in pending.append((text, done)) },
@@ -127,7 +176,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             pending.removeAll()
             let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
             field.text = "Alice"
-            bridge.commitTextIfChanged(for: field)
+            bridge.flushTextChange(for: field)
             let escaped = try XCTUnwrap(pending.first)
             pending.removeAll()
             if hideOverlay { bridge.setHidden(true) }
@@ -136,7 +185,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             nativeText = escaped.0
             escaped.1(.accepted)
             field.text = "late callback"
-            bridge.commitTextIfChanged(for: field)
+            bridge.flushTextChange(for: field)
             XCTAssertEqual(field.text, "saved")
             XCTAssertTrue(commits.isEmpty)
             XCTAssertTrue(pending.isEmpty)
@@ -158,7 +207,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         var writes: [String] = []
         var commits: [String] = []
-        bridge.onCommitText = { _, text in commits.append(text) }
+        bridge.onAcceptedTextChange = { _, text in commits.append(text) }
         bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true), surfaceView: view,
             artboardBounds: view.bounds,
             semanticTextWriter: { _, _, text, done in writes.append(text); done(.accepted) },
@@ -169,7 +218,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         XCTAssertTrue(field.isSecureTextEntry)
         field.text = "secret"
         field.sendActions(for: .editingChanged)
-        bridge.commitTextIfChanged(for: field)
+        bridge.flushTextChange(for: field)
         XCTAssertEqual(writes, ["", ""])
         XCTAssertEqual(commits, ["secret"])
         // UIKit may expose a masked value. Preserve its native secure semantics
@@ -189,7 +238,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             let bridge = ExperienceTextInputOverlayBridge()
             let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
             var commits: [String] = []
-            bridge.onCommitText = { _, text in commits.append(text) }
+            bridge.onAcceptedTextChange = { _, text in commits.append(text) }
             bridge.bind(screenID: "screen", renderPlan: makePlan(multiline: multiline),
                 surfaceView: view, artboardBounds: view.bounds,
                 semanticTextWriter: { _, _, _, done in done(.accepted) },
@@ -200,12 +249,12 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             editor.selectedTextRange = editor.textRange(from: editor.endOfDocument, to: editor.endOfDocument)
             editor.setMarkedText("ㅎ", selectedRange: NSRange(location: 1, length: 0))
             XCTAssertNotNil(editor.markedTextRange)
-            bridge.commitTextIfChanged(for: editor)
+            bridge.flushTextChange(for: editor)
             XCTAssertTrue(commits.isEmpty, "An unfinished IME composition is not a response")
             editor.setMarkedText("한", selectedRange: NSRange(location: 1, length: 0))
             editor.unmarkText()
             XCTAssertNil(editor.markedTextRange)
-            bridge.commitTextIfChanged(for: editor)
+            bridge.flushTextChange(for: editor)
             XCTAssertEqual(commits, ["saved한"])
             bridge.clear()
         }
@@ -236,7 +285,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let response = expectation(description: "Response committed after native write")
         var accepted: [String] = []
         var staleRetries = 0
-        bridge.onCommitText = { _, text in
+        bridge.onAcceptedTextChange = { _, text in
             XCTAssertEqual(accepted.last, text)
             XCTAssertEqual(text, "Alice")
             response.fulfill()
@@ -277,7 +326,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
         field.text = "Alice"
         field.sendActions(for: .editingChanged)
-        bridge.commitTextIfChanged(for: field)
+        bridge.flushTextChange(for: field)
         XCTAssertEqual(accepted, ["saved"], "Native executor has not accepted the queued edit synchronously")
         await fulfillment(of: [response], timeout: 3)
         XCTAssertEqual(accepted, ["saved", "Alice"])

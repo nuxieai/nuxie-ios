@@ -232,7 +232,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var invalidMetricIDs = Set<String>()
     private var lastAppliedMetrics: [String: ExperienceTextInputMetrics] = [:]
     private var textValuesByInputID: [String: String] = [:]
-    private var committedTextByInputID: [String: String] = [:]
+    private var notifiedTextByInputID: [String: String] = [:]
     private var fontSHA256ByRiveUniqueName: [String: String] = [:]
     private var failedInputIDs = Set<String>()
     private var semanticFields: [String: NuxieNativeSemanticNode]?
@@ -244,7 +244,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var latestKeyboardFrame: CGRect?
     private var dismissTapRecognizer: UITapGestureRecognizer?
 
-    var onCommitText: ((NativeExperienceTextInput, String) -> Void)?
+    var onAcceptedTextChange: ((NativeExperienceTextInput, String) -> Void)?
+    var onEditingEvent: ((NativeExperienceTextInput, ExperienceTextInputEvent) -> Void)?
 
     override init() {
         super.init()
@@ -272,7 +273,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     ) {
         if activeBuildID != renderPlan.identity.buildId {
             textValuesByInputID.removeAll()
-            committedTextByInputID.removeAll()
+            notifiedTextByInputID.removeAll()
             activeBuildID = renderPlan.identity.buildId
         }
         clear()
@@ -294,8 +295,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             control.view.accessibilityIdentifier = "nuxie-text-input-\(input.inputId)"
             control.view.isAccessibilityElement = true
             control.text = textValuesByInputID[input.inputId] ?? input.value
-            committedTextByInputID[input.inputId] =
-                committedTextByInputID[input.inputId] ?? control.text
+            notifiedTextByInputID[input.inputId] =
+                notifiedTextByInputID[input.inputId] ?? control.text
             surfaceView.addSubview(control.view)
             bindingsByInputID[input.inputId] = Binding(input: input, control: control)
             if semanticTextWriter != nil {
@@ -375,7 +376,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private func restoreAcceptedText(_ binding: Binding) {
         binding.control.text = semanticDrafts[binding.input.inputId]?.acceptedText
             ?? textValuesByInputID[binding.input.inputId]
-            ?? committedTextByInputID[binding.input.inputId] ?? binding.input.value
+            ?? notifiedTextByInputID[binding.input.inputId] ?? binding.input.value
     }
 
     private func allowsInteraction(_ binding: Binding) -> Bool {
@@ -599,14 +600,17 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     @objc private func textFieldEditingChanged(_ sender: UITextField) {
-        propagateTextChange(from: sender)
+        flushTextChange(for: sender)
     }
 
     func textViewDidChange(_ textView: UITextView) {
-        propagateTextChange(from: textView)
+        flushTextChange(for: textView)
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        guard let binding = binding(for: textField), allowsEditing(binding),
+              !binding.control.hasMarkedText else { return false }
+        emitEditingEvent(.returnPressed, for: textField)
         textField.resignFirstResponder()
         return false
     }
@@ -634,24 +638,36 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     private func endEditing(control: UIView) {
         if activeEditingControl === control { activeEditingControl = nil }
-        commitTextIfChanged(for: control)
+        emitEditingEvent(.editingEnded, for: control)
     }
 
-    func commitTextIfChanged(for control: UIView) {
+    private func emitEditingEvent(_ kind: ExperienceTextInputEventKind, for control: UIView) {
+        guard let binding = binding(for: control), allowsEditing(binding),
+              !binding.control.hasMarkedText else { return }
+        flushTextChange(for: control)
+        if semanticTextWriter != nil {
+            let events = semanticDrafts[binding.input.inputId]?.requestEvent(kind) ?? []
+            for event in events { onEditingEvent?(binding.input, event) }
+        } else {
+            onEditingEvent?(binding.input, .init(kind: kind, text: binding.control.text))
+        }
+    }
+
+    func flushTextChange(for control: UIView) {
         guard let binding = binding(for: control) else { return }
         guard allowsEditing(binding) else { restoreAcceptedText(binding); return }
         propagateTextChange(from: control)
         guard !binding.control.hasMarkedText else { return }
         if semanticTextWriter != nil {
-            if let text = semanticDrafts[binding.input.inputId]?.requestCommit() {
-                commitSemanticText(text, input: binding.input)
+            if let text = semanticDrafts[binding.input.inputId]?.requestValueChange() {
+                notifyAcceptedTextChange(text, input: binding.input)
             }
             return
         }
         let text = binding.control.text
-        guard committedTextByInputID[binding.input.inputId] != text else { return }
-        committedTextByInputID[binding.input.inputId] = text
-        onCommitText?(binding.input, text)
+        guard notifiedTextByInputID[binding.input.inputId] != text else { return }
+        notifiedTextByInputID[binding.input.inputId] = text
+        onAcceptedTextChange?(binding.input, text)
     }
 
     func textField(
@@ -703,9 +719,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         write(text, for: binding.input)
     }
 
-    private func commitSemanticText(_ text: String, input: NativeExperienceTextInput) {
-        committedTextByInputID[input.inputId] = text
-        onCommitText?(input, text)
+    private func notifyAcceptedTextChange(_ text: String, input: NativeExperienceTextInput) {
+        notifiedTextByInputID[input.inputId] = text
+        onAcceptedTextChange?(input, text)
     }
 
     private func drainSemanticWrite(_ inputID: String) {
@@ -727,7 +743,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 isComposing: binding.control.hasMarkedText)
             let commit = self.semanticDrafts[inputID]?.finish(write, outcome: outcome)
             self.textValuesByInputID[inputID] = self.semanticDrafts[inputID]?.acceptedText
-            if let commit { self.commitSemanticText(commit, input: binding.input) }
+            if let commit { self.notifyAcceptedTextChange(commit, input: binding.input) }
+            let events = self.semanticDrafts[inputID]?.takeReadyEvents() ?? []
+            for event in events { self.onEditingEvent?(binding.input, event) }
             if case .rejected = outcome { self.restoreAcceptedText(binding) }
             self.drainSemanticWrite(inputID)
         }
