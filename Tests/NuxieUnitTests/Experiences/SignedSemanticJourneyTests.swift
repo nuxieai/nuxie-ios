@@ -223,6 +223,15 @@ final class SignedSemanticJourneyTests: XCTestCase {
         let selected = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Annual plan" })
         XCTAssertTrue(selected.accessibilityTraits.contains(.selected))
         XCTAssertEqual(selected.accessibilityValue, "1")
+        for (index, expectedValue) in ["0", "1"].enumerated() {
+            XCTAssertTrue(selected.accessibilityActivate())
+            try await waitUntil("Checkbox activation must publish its changed checked state") {
+                selected.accessibilityValue == expectedValue
+            }
+            try await waitUntil("Each toggle must emit exactly one accepted authored event") {
+                observer.accepted.flatMap(\.emissions).filter { $0.name == "plan_toggled" }.count == index + 1
+            }
+        }
         let heading = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Choose your plan" })
         XCTAssertTrue(heading.accessibilityTraits.contains(.header))
         let mixed = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Optional extras" })
@@ -265,6 +274,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
         // Allow queued frames to expose late duplicates before checking the entire transaction sequence.
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(observer.accepted.map { $0.emissions.map(\.name) }, [
+            ["plan_toggled"], ["plan_toggled"],
             ["seat_increased"], ["seat_decreased"], [JourneyResponseControlNames.responseSet],
         ])
     }
