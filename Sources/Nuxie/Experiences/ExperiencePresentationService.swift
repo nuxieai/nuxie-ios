@@ -316,7 +316,8 @@ final class ExperiencePresentationService {
         trackExperienceShown(
             properties: journeyExperienceProperties(
                 experienceVersionId: experienceVersionId,
-                context: journeyContext
+                context: journeyContext,
+                deviceProperties: experienceViewController.textSizeDeviceProperties
             ),
             distinctId: journeyContext.owner.distinctId
         )
@@ -970,7 +971,8 @@ final class ExperiencePresentationService {
                 trackJourneyDismissal(
                     reason,
                     experienceVersionId: experienceVersionId,
-                    context: journeyContext
+                    context: journeyContext,
+                    deviceProperties: experienceViewController?.textSizeDeviceProperties ?? [:]
                 )
             }
         }
@@ -1060,7 +1062,8 @@ final class ExperiencePresentationService {
                 trackJourneyDismissal(
                     .hostDismissed,
                     experienceVersionId: presentation.experienceVersionId,
-                    context: journeyContext
+                    context: journeyContext,
+                    deviceProperties: viewController.textSizeDeviceProperties
                 )
             }
         }
@@ -1337,11 +1340,13 @@ final class ExperiencePresentationService {
     private func trackJourneyDismissal(
         _ reason: CloseReason,
         experienceVersionId: String,
-        context: JourneyPresentationContext
+        context: JourneyPresentationContext,
+        deviceProperties: [String: Any]
     ) {
         var properties = journeyExperienceProperties(
             experienceVersionId: experienceVersionId,
-            context: context
+            context: context,
+            deviceProperties: deviceProperties
         )
         switch reason {
         case .userDismissed:
@@ -1372,13 +1377,14 @@ final class ExperiencePresentationService {
 
     private func journeyExperienceProperties(
         experienceVersionId: String,
-        context: JourneyPresentationContext
+        context: JourneyPresentationContext,
+        deviceProperties: [String: Any]
     ) -> [String: Any] {
-        [
+        deviceProperties.merging([
             "journey_id": context.owner.journeyId,
             "experience_id": context.experienceId,
             "experience_version": experienceVersionId,
-        ]
+        ]) { _, identity in identity }
     }
 }
 

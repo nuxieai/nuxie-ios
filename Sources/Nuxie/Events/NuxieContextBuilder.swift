@@ -128,6 +128,9 @@ final class NuxieContextBuilder: Sendable {
         context["$screen_width"] = Float(screenInfo.0)
         context["$screen_height"] = Float(screenInfo.1)
         context["$screen_scale"] = Float(screenInfo.2)
+        context["$content_size_category"] = await MainActor.run {
+            UIApplication.shared.preferredContentSizeCategory.rawValue
+        }
         #elseif canImport(AppKit)
         let screenSize = await MainActor.run { NSScreen.main?.frame.size }
         if let screenSize {
