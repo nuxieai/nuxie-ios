@@ -310,6 +310,11 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         let artifact = try await prepared.artifactLoader(prepared.experience, nil, "screen_welcome")
         XCTAssertEqual(requests.value, 2)
         XCTAssertEqual(artifact.sceneBytes, sceneBytes)
+        let retained = try XCTUnwrap(artifact.payload.assets.first { $0.kind == .video })
+        XCTAssertNil(retained.bytes)
+        XCTAssertEqual(retained.fileURL, directory.appendingPathComponent(digest))
+        XCTAssertEqual(artifact.payload.renderPlan.videos.first?.sourceAssetKey, "asset:greeting")
+        XCTAssertNotNil(artifact.payload.videoFileLease)
         XCTAssertEqual(artifact.resourceMetrics.hashedBytes, videoBytes.count + sceneBytes.count * 2)
         XCTAssertEqual(artifact.resourceMetrics.duplicateHashBytes, sceneBytes.count)
         XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(digest)), videoBytes)
@@ -321,6 +326,10 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         let coldStore = JourneyReleaseAcquisitionStore(cacheDirectory: directory, urlSession: session)
         _ = try await coldStore.preparePresentation(release: release, delivery: snapshot.profile.delivery, productResolver: { _ in [] })
         XCTAssertEqual(requests.value, 2)
+        let evictionStore = JourneyReleaseAcquisitionStore(cacheDirectory: directory, maximumCacheBytes: 0, urlSession: session)
+        try await evictionStore.enforceCacheBudget(protecting: [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(retained.fileURL).path))
+        XCTAssertNotNil(artifact.payload.videoFileLease)
     }
 
     func testCanonicalProfileAcquiresRenderedArtifactsBeforePublishingAuthority() async throws {

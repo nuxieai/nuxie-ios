@@ -1,7 +1,7 @@
 import Foundation
 
 struct AuthenticatedRuntimeAsset: Equatable, Sendable {
-    enum Kind: Equatable, Sendable { case image, font }
+    enum Kind: Equatable, Sendable { case image, font, video }
 
     let kind: Kind
     let riveAssetID: UInt32
@@ -11,6 +11,7 @@ struct AuthenticatedRuntimeAsset: Equatable, Sendable {
     let sha256: String
     let required: Bool
     let bytes: Data?
+    var fileURL: URL? = nil
 }
 
 /// The sole renderer input produced by descriptor authentication and acquisition.
@@ -22,6 +23,7 @@ struct AuthenticatedRuntimePayload: Sendable {
     let definition: ExperienceDefinition?
     let sceneBytes: Data
     let assets: [AuthenticatedRuntimeAsset]
+    let videoFileLease: JourneyReleaseVideoFileLease?
 
     init(
         authenticatedKeyID: String,
@@ -30,7 +32,8 @@ struct AuthenticatedRuntimePayload: Sendable {
         journey: JourneyDocument,
         definition: ExperienceDefinition? = nil,
         sceneBytes: Data,
-        assets: [AuthenticatedRuntimeAsset]
+        assets: [AuthenticatedRuntimeAsset],
+        videoFileLease: JourneyReleaseVideoFileLease? = nil
     ) {
         self.authenticatedKeyID = authenticatedKeyID
         self.requiredCapabilities = requiredCapabilities
@@ -39,6 +42,7 @@ struct AuthenticatedRuntimePayload: Sendable {
         self.definition = definition
         self.sceneBytes = sceneBytes
         self.assets = assets
+        self.videoFileLease = videoFileLease
     }
 }
 

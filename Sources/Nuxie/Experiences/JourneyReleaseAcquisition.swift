@@ -166,6 +166,21 @@ final class PreparedJourneyArtifacts: @unchecked Sendable {
     }
 }
 
+/// Owns cached video files for every prepared or presented use, including pause.
+final class JourneyReleaseVideoFileLease: @unchecked Sendable {
+    private let root: URL
+    private let protectionID: UUID
+
+    fileprivate init(digests: Set<String>, root: URL) throws {
+        self.root = root
+        protectionID = try JourneyReleaseCacheProtectionRegistry.shared.register(digests, root: root)
+    }
+
+    deinit {
+        JourneyReleaseCacheProtectionRegistry.shared.unregister(protectionID, root: root)
+    }
+}
+
 struct AuthenticatedJourneyReleaseID: Codable, Equatable, Hashable, Sendable {
     let identity: JourneyReleaseIdentity
     let descriptorSHA256: String
@@ -305,6 +320,13 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let weight: String?
         let style: String?
         let format: String?
+        let sourceAssetKey: String?
+        let width: Int?
+        let height: Int?
+        let durationMs: Int?
+        let videoCodec: String?
+        let audioCodec: String?
+        let captionTracks: [NativeExperienceVideoAsset.CaptionTrack]?
         let required: Bool
         let artifact: Artifact?
 
@@ -321,6 +343,13 @@ private struct JourneyReleaseRenderDocument: Decodable {
             weight = try values.decodeIfPresent(String.self, forKey: .weight)
             style = try values.decodeIfPresent(String.self, forKey: .style)
             format = try values.decodeIfPresent(String.self, forKey: .format)
+            sourceAssetKey = try values.decodeIfPresent(String.self, forKey: .sourceAssetKey)
+            width = try values.decodeIfPresent(Int.self, forKey: .width)
+            height = try values.decodeIfPresent(Int.self, forKey: .height)
+            durationMs = try values.decodeIfPresent(Int.self, forKey: .durationMs)
+            videoCodec = try values.decodeIfPresent(String.self, forKey: .videoCodec)
+            audioCodec = try values.decodeIfPresent(String.self, forKey: .audioCodec)
+            captionTracks = try values.decodeIfPresent([NativeExperienceVideoAsset.CaptionTrack].self, forKey: .captionTracks)
             required = try values.decode(Bool.self, forKey: .required)
             // Authentication has already enforced the strict source union.
             artifact = kind == "font" && location == "system" ? nil : try Artifact(from: decoder)
@@ -328,6 +357,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case kind, location, riveAssetId, riveUniqueName, family, weight, style, format, required
+            case sourceAssetKey, width, height, durationMs, videoCodec, audioCodec, captionTracks
         }
     }
 
@@ -937,7 +967,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
 
         let runtimeAssets = try render.assets.compactMap { asset
             -> AuthenticatedRuntimeAsset? in
-            guard asset.kind == "image" || asset.kind == "font" else { return nil }
+            guard ["image", "font", "video"].contains(asset.kind) else { return nil }
             guard let artifact = asset.artifact else { return nil }
             guard let authoredID64 = asset.riveAssetId,
                   let authoredID = UInt32(exactly: authoredID64),
@@ -949,16 +979,24 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 throw JourneyReleaseAcquisitionError.requiredObjectUnavailable(artifact.key)
             }
             return AuthenticatedRuntimeAsset(
-                kind: asset.kind == "image" ? .image : .font,
+                kind: asset.kind == "video" ? .video : asset.kind == "image" ? .image : .font,
                 riveAssetID: authoredID,
                 riveUniqueName: uniqueName,
                 sourceKey: artifact.key,
                 contentType: artifact.contentType,
                 sha256: artifact.sha256,
                 required: asset.required,
-                bytes: object?.bytes
+                bytes: object?.bytes,
+                fileURL: asset.kind == "video" ? object?.url : nil
             )
         }
+        let videoDigests = Set(render.assets.filter { $0.kind == "video" }.compactMap { asset -> String? in
+            guard let artifact = asset.artifact, objectsByKey[artifact.key] != nil else { return nil }
+            return artifact.sha256
+        })
+        let videoLease = videoDigests.isEmpty ? nil : try JourneyReleaseVideoFileLease(
+            digests: videoDigests, root: cacheDirectory
+        )
         let payloadsByScreenID = try Dictionary(uniqueKeysWithValues: render.screens.map {
             screen in
             let renderPlan = try Self.runtimePlan(
@@ -973,7 +1011,8 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 journey: authority.journey,
                 definition: authority.definition,
                 sceneBytes: sceneBytes,
-                assets: runtimeAssets
+                assets: runtimeAssets,
+                videoFileLease: videoLease
             ))
         })
         return PreparedRuntimeRelease(
@@ -1530,6 +1569,20 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 riveAssetId: id, riveUniqueName: name, weight: weight, style: style
             )
         }
+        let videos = try render.assets.filter { $0.kind == "video" }.map { asset in
+            guard let artifact = asset.artifact, let id = asset.riveAssetId, let name = asset.riveUniqueName,
+                  let source = asset.sourceAssetKey, let width = asset.width, let height = asset.height,
+                  let duration = asset.durationMs, let codec = asset.videoCodec,
+                  let captions = asset.captionTracks else {
+                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(artifact.key)
+            }
+            return NativeExperienceVideoAsset(
+                location: .external(key: artifact.key), sourceAssetKey: source,
+                riveAssetId: id, riveUniqueName: name, sha256: artifact.sha256, sizeBytes: artifact.sizeBytes,
+                width: width, height: height, durationMs: duration, videoCodec: codec,
+                audioCodec: asset.audioCodec, captionTracks: captions, required: asset.required
+            )
+        }
         return NativeExperienceRenderPlan(
             identity: .init(
                 experienceId: identity.experienceId,
@@ -1628,6 +1681,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             },
             images: images,
             fonts: fonts,
+            videos: videos,
             systemFonts: systemFonts
         )
     }
