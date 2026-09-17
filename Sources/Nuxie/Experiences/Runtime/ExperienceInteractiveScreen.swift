@@ -323,10 +323,17 @@ struct ExperienceInteractiveTextFrame: Sendable {
     let geometry: NuxieNativeTextGeometryCapture
 }
 
+struct ExperienceInteractiveVideoCaption: Sendable, Equatable {
+    let componentID: Int
+    let language: String
+    let text: String
+}
+
 struct ExperienceInteractiveRenderedFrame: Sendable {
     let outcome: ExperienceInteractiveRenderOutcome
     let semantics: NuxieNativeSemanticCapture?
     let text: ExperienceInteractiveTextFrame?
+    let captions: [ExperienceInteractiveVideoCaption]?
 }
 
 struct ExperienceInteractiveRenderOutcome: Equatable, Sendable {
@@ -3512,6 +3519,7 @@ actor ExperienceInteractiveScreen {
         isOccluded: Bool = false,
         clearColor: UInt32 = 0,
         capturesSemantics: Bool,
+        capturesCaptions: Bool = false,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> ExperienceInteractiveRenderedFrame {
         let state: NuxieNativeDrawableState
@@ -3532,8 +3540,12 @@ actor ExperienceInteractiveScreen {
             } else {
                 semantics = nil
             }
+            let captions: [ExperienceInteractiveVideoCaption]?
+            if capturesCaptions, outcome.disposition == .presented {
+                captions = try await videoPlayback?.captions() ?? []
+            } else { captions = nil }
             return ExperienceInteractiveRenderedFrame(outcome: Self.renderOutcome(outcome), semantics: semantics,
-                text: outcome.disposition == .presented ? text : nil)
+                text: outcome.disposition == .presented ? text : nil, captions: captions)
         }
     }
 

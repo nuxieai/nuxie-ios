@@ -103,6 +103,17 @@ final class ExperienceVideoPlayback {
         }
     }
 
+    func captions() async throws -> [ExperienceInteractiveVideoCaption] {
+        var values: [ExperienceInteractiveVideoCaption] = []
+        for decoder in decoders where !decoder.disposed && !decoder.failed {
+            let caption = try await runtime.videoCaption(componentID: decoder.componentID)
+            if !caption.text.isEmpty {
+                values.append(.init(componentID: decoder.componentID, language: caption.language, text: caption.text))
+            }
+        }
+        return values
+    }
+
     /// Called after Luau/state-machine stepping and before drawing the scene.
     func tick() async throws -> Bool {
         var active = false

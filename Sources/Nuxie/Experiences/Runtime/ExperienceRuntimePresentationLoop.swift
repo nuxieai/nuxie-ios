@@ -376,11 +376,12 @@ extension ExperienceInteractiveScreen {
     nonisolated func presentationSession(
         onSemantics: (@MainActor @Sendable (NuxieNativeSemanticCapture) -> Void)? = nil,
         onTextFrame: (@MainActor @Sendable (ExperienceInteractiveTextFrame) -> Void)? = nil,
+        onCaptions: (@MainActor @Sendable ([ExperienceInteractiveVideoCaption]) -> Void)? = nil,
         onStep: @escaping @MainActor @Sendable ([ExperienceInteractiveEffect]) async -> Void
     ) -> ExperienceRuntimePresentationSession {
         let screen = self
         return ExperienceRuntimePresentationSession(artboardBounds: artboardBounds,
-            observesEveryPresentation: onSemantics != nil || onTextFrame != nil) { operation in
+            observesEveryPresentation: onSemantics != nil || onTextFrame != nil || onCaptions != nil) { operation in
             switch operation {
             case .copyMetalDevice:
                 if onSemantics != nil { try await screen.enableSemantics() }
@@ -417,14 +418,16 @@ extension ExperienceInteractiveScreen {
                     drawable: drawable,
                     isOccluded: isOccluded,
                     capturesSemantics: onSemantics != nil,
+                    capturesCaptions: onCaptions != nil,
                     completion: { completion.signalFromNative() }
                 )
-                if frame.semantics != nil || frame.text != nil {
+                if frame.semantics != nil || frame.text != nil || frame.captions != nil {
                     return .renderer(Self.presentationOutcome(frame.outcome)) {
                         // Install this frame's editor geometry before semantic
                         // admission enables fields and drains their initial writes.
                         if let text = frame.text { onTextFrame?(text) }
                         if let semantics = frame.semantics { onSemantics?(semantics) }
+                        if let captions = frame.captions { onCaptions?(captions) }
                     }
                 }
                 return .renderer(Self.presentationOutcome(frame.outcome))
