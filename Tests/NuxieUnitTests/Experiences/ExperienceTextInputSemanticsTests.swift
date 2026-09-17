@@ -19,6 +19,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             semanticTextWriter: { _, _, text, done in displayed.append(text); done(.accepted) },
             semanticCommitWriter: { id, _, text, done in pending.append((id, text, done)) },
             textWriter: { _, _, _ in XCTFail("Semantic input bypassed captured owner") })
+        presentField(on: bridge)
         _ = bridge.applySemantics(try capture(flags: 0, actions: 1 << 3))
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
         field.text = "静かな夜"
