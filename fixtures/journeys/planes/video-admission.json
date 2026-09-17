@@ -389,6 +389,93 @@
           "extra": 1
         }
       ]
+    },
+    {
+      "name": "video action signed target",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "play"
+        }
+      },
+      "videoElements": [
+        {
+          "artboardId": "frame",
+          "viewNodeId": "greeting",
+          "renderedNodeId": "greeting-copy",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "video action without signed target",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "play"
+        }
+      }
+    },
+    {
+      "name": "video action mismatched target",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "play"
+        }
+      },
+      "videoElements": [
+        {
+          "artboardId": "frame",
+          "viewNodeId": "other",
+          "renderedNodeId": "greeting-copy",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "video action lacks playback capability",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "play"
+        }
+      },
+      "videoElements": [
+        {
+          "artboardId": "frame",
+          "viewNodeId": "greeting",
+          "renderedNodeId": "greeting-copy",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ],
+      "capabilities": []
     }
   ]
 }
