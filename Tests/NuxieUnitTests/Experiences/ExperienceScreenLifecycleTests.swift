@@ -1,7 +1,29 @@
 import XCTest
+#if canImport(UIKit)
+import UIKit
+#endif
 @testable import Nuxie
 
 final class ExperienceScreenLifecycleTests: XCTestCase {
+    #if canImport(UIKit)
+    @MainActor
+    func testFontScaleUsesUncappedBodyMetricsFromScreenTraits() {
+        let standard = UITraitCollection(preferredContentSizeCategory: .large)
+        XCTAssertEqual(ExperienceScreenViewController.fontScale(for: standard), 1, accuracy: 0.0001)
+        let small = UITraitCollection(preferredContentSizeCategory: .extraSmall)
+        XCTAssertLessThan(ExperienceScreenViewController.fontScale(for: small), 1)
+        let accessible = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        let scale = ExperienceScreenViewController.fontScale(for: accessible)
+        XCTAssertGreaterThan(scale, 3)
+        XCTAssertEqual(
+            scale * 17,
+            53,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(ExperienceScreenViewController.fontScale(for: standard), 1, accuracy: 0.0001)
+    }
+    #endif
+
     func testSharedLifecycleVectors() throws {
         struct Fixture: Decodable {
             struct Step: Decodable {

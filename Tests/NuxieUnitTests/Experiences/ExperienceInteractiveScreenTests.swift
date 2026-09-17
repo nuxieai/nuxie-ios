@@ -2033,6 +2033,26 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
+    func testReservedFontScaleSuppressesOnlyRootChanges() {
+        let snapshot = NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: [
+                .init(id: 1, schemaIndex: 0, valueRange: 0..<1),
+                .init(id: 2, schemaIndex: 0, valueRange: 1..<2),
+            ],
+            values: [
+                .init(ownerInstanceID: 1, propertyIndex: 5, name: "fontScale", value: .number(1)),
+                .init(ownerInstanceID: 2, propertyIndex: 5, name: "fontScale", value: .number(1)),
+            ]
+        )
+        var filter = ExperienceInteractiveReservedChangeFilter(
+            snapshot: snapshot,
+            catalog: Self.reservedChangeCatalog
+        )
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 1, property: 5, value: .number(3.12))))
+        XCTAssertFalse(filter.shouldSuppress(Self.change(owner: 2, property: 5, value: .number(3.12))))
+    }
+
     func testReservedProjectionSuppressesSafeAreaDescendantsButPreservesPublicSibling() {
         let snapshot = NuxieNativeViewModelSnapshot(
             rootInstanceID: 1,
@@ -3135,7 +3155,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .init(
                 index: 0,
                 name: "Root",
-                propertyRange: 0..<5,
+                propertyRange: 0..<6,
                 authoredInstanceRange: 0..<0,
                 defaultAuthoredInstance: nil,
                 isGlobal: false
@@ -3143,7 +3163,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .init(
                 index: 1,
                 name: "Child",
-                propertyRange: 5..<6,
+                propertyRange: 6..<7,
                 authoredInstanceRange: 0..<0,
                 defaultAuthoredInstance: nil,
                 isGlobal: false
@@ -3188,6 +3208,14 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 name: "env",
                 kind: .viewModel,
                 referencedSchemaIndex: 1,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 5,
+                name: "fontScale",
+                kind: .number,
+                referencedSchemaIndex: nil,
                 enumLabels: []
             ),
             .init(
