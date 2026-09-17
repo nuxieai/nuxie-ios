@@ -1176,12 +1176,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 }
                 fields[run] = node
             }
-            // Rendering may recapture an unchanged tree before UIKit dispatches
-            // an action from the last presented frame. Keep that ownership only
-            // while both native revision fences and all copied associations match.
+            // A fresh presented frame can replace its native render revision
+            // without changing accessibility. Preserve UIKit intent while the
+            // tree and editor associations match, using the fresh native handle
+            // for execution and its normal revision/eligibility validation.
             let id: UUID
             if let previous = semanticCapture,
-               previous.tree.renderRevision == tree.renderRevision,
                previous.tree.treeVersion == tree.treeVersion,
                previous.tree.nodes == tree.nodes,
                previous.fields == fields {
@@ -1216,7 +1216,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         guard currentID == field.id else {
             throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "validate semantic text owner")
         }
-        return try artboard.setTextRuns([NuxieNativeTextRunMutation(name: name, text: text)])
+        let changed = try artboard.setTextRuns([NuxieNativeTextRunMutation(name: name, text: text)])
+        if changed { try retireSemanticCapture() }
+        return changed
     }
 
     func retireSemanticCapture() throws {
@@ -1231,6 +1233,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
         try requireOK(nux_player_queue_semantic_action(try player.require(), try capture.handle.require(),
             nodeID, action.rawValue), operation: "queue semantic action")
+        // A consumed intent must not regain ownership on the next frame even
+        // when its authored effect leaves the visible accessibility tree unchanged.
+        try retireSemanticCapture()
         // Exact semantic listeners may belong to a generated auxiliary player.
         // Consume their normal journals in the next ordinary occurrence step.
         auxiliaryPlayersNeedInitialStep = true

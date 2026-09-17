@@ -222,6 +222,13 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(unchanged.tree.treeVersion, first.tree.treeVersion)
         XCTAssertEqual(unchanged.id, first.id,
             "An unchanged presented capture must preserve queued UIKit action ownership")
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        let nextFrame = try await runtime.captureSemantics(textRuns: ["field/名前", "missing"])
+        XCTAssertNotEqual(nextFrame.tree.renderRevision, first.tree.renderRevision)
+        XCTAssertEqual(nextFrame.tree.treeVersion, first.tree.treeVersion)
+        XCTAssertEqual(nextFrame.id, first.id,
+            "A fresh frame with unchanged semantics must preserve accepted UIKit intent")
         let second = try await runtime.captureSemantics()
         XCTAssertNotEqual(first.id, second.id)
         do {
