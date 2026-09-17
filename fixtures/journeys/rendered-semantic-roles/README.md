@@ -14,5 +14,7 @@ The authored controls cover a level-two heading, ordinary Text, button, selected
 checked checkbox, required mixed checkbox, adjustable seats with an authored value,
 a secure editable password, disabled button, decoration, and repeated list items.
 Increase/decrease emit `seat_increased` and `seat_decreased`; password edits target
-the required `password` response field. Continue and checkbox have no authored
-activation action, so consumers must not invent one.
+the required `password` response field. Pointer clicks and semantic activation of
+Annual plan dispatch the same named `toggle_annual` script action. It changes the
+checked/selected state and visible label together, then emits `plan_toggled`.
+Continue has no authored activation action, so consumers must not invent one.

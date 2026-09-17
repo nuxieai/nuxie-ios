@@ -33,6 +33,26 @@ final class ExperienceRuntimePackageSmokeTests: XCTestCase {
         attachment.name = "signed-accessibility-qualification-host"
         attachment.lifetime = .keepAlways
         add(attachment)
+
+        let annualPlan = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Annual plan")).firstMatch
+        XCTAssertTrue(annualPlan.exists, app.debugDescription)
+        for (value, label) in [("0", "Not selected"), ("1", "Selected")] {
+            annualPlan.tap()
+            let changed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", value), object: annualPlan
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 10), .completed)
+            let toggledScreenshot = XCUIScreen.main.screenshot()
+            let toggledImage = try XCTUnwrap(toggledScreenshot.image.cgImage)
+            let toggledRecognition = VNRecognizeTextRequest()
+            toggledRecognition.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: toggledImage).perform([toggledRecognition])
+            let toggledText = (toggledRecognition.results ?? []).compactMap {
+                $0.topCandidates(1).first?.string
+            }.joined(separator: " ")
+            XCTAssertTrue(toggledText.contains(label), "Missing toggled state: \(toggledText)")
+        }
     }
 
     func testNativeTextFieldIsAccessibleAndEditableWithoutDiagnostics() throws {

@@ -7,10 +7,10 @@
       "data": {}
     },
     "document": {
-      "rootId": "root",
+      "rootId": "project_1",
       "nodes": [
         {
-          "id": "root",
+          "id": "project_1",
           "projectId": "project_1",
           "parentId": null,
           "kind": "root",
@@ -22,7 +22,7 @@
         {
           "id": "project_1::artboard_tree",
           "projectId": "project_1",
-          "parentId": "root",
+          "parentId": "project_1",
           "kind": "artboard_tree",
           "type": "artboard_tree",
           "data": {
@@ -33,7 +33,7 @@
         {
           "id": "project_1::journey_root",
           "projectId": "project_1",
-          "parentId": "root",
+          "parentId": "project_1",
           "kind": "journey_root",
           "type": "journey_root",
           "data": {
@@ -61,6 +61,13 @@
                 "width": 390,
                 "height": 844
               }
+            },
+            "viewModelDefaults": {
+              "viewModelId": "vm.accessibility",
+              "instanceId": "vmi.accessibility"
+            },
+            "screenScript": {
+              "assetId": "accessibility-controls"
             },
             "responseCaptures": [
               "password"
@@ -175,6 +182,51 @@
                   "backgroundColor": "#111827"
                 },
                 "checked": true
+              },
+              "propExpressions": {
+                "checked": {
+                  "kind": "Path",
+                  "root": "vm",
+                  "segments": [
+                    {
+                      "type": "prop",
+                      "name": "annualSelected"
+                    }
+                  ],
+                  "pathRef": {
+                    "kind": "ids",
+                    "pathIds": [
+                      101,
+                      1
+                    ]
+                  }
+                },
+                "selected": {
+                  "kind": "Path",
+                  "root": "vm",
+                  "segments": [
+                    {
+                      "type": "prop",
+                      "name": "annualSelected"
+                    }
+                  ],
+                  "pathRef": {
+                    "kind": "ids",
+                    "pathIds": [
+                      101,
+                      1
+                    ]
+                  }
+                }
+              }
+            },
+            "controlAction": {
+              "actionId": "toggle_annual",
+              "behavior": {
+                "kind": "script",
+                "emits": [
+                  "plan_toggled"
+                ]
               }
             }
           }
@@ -648,6 +700,25 @@
                   "fontSize": 16,
                   "color": "#ffffff"
                 }
+              },
+              "propExpressions": {
+                "children": {
+                  "kind": "Path",
+                  "root": "vm",
+                  "segments": [
+                    {
+                      "type": "prop",
+                      "name": "annualLabel"
+                    }
+                  ],
+                  "pathRef": {
+                    "kind": "ids",
+                    "pathIds": [
+                      101,
+                      2
+                    ]
+                  }
+                }
               }
             }
           }
@@ -743,6 +814,47 @@
           }
         },
         {
+          "id": "vm.accessibility",
+          "name": "Accessibility",
+          "projectId": "project_1",
+          "parentId": "project_1",
+          "kind": "view_model",
+          "type": "view_model",
+          "orderKey": "accessibility",
+          "data": {
+            "kind": "view_model",
+            "viewModelPathId": 101,
+            "properties": {
+              "annualSelected": {
+                "type": "boolean",
+                "propertyId": 1,
+                "defaultValue": true
+              },
+              "annualLabel": {
+                "type": "string",
+                "propertyId": 2,
+                "defaultValue": "Annual plan · Selected"
+              }
+            }
+          }
+        },
+        {
+          "id": "vmi.accessibility",
+          "name": "Default",
+          "projectId": "project_1",
+          "parentId": "vm.accessibility",
+          "kind": "view_model_instance",
+          "type": "view_model_instance",
+          "orderKey": "accessibility",
+          "data": {
+            "kind": "view_model_instance",
+            "values": {
+              "annualSelected": true,
+              "annualLabel": "Annual plan · Selected"
+            }
+          }
+        },
+        {
           "id": "screen_1::response_tree",
           "projectId": "project_1",
           "parentId": "screen_1",
@@ -778,6 +890,37 @@
               ]
             }
           }
+        },
+        {
+          "id": "project_1::experience_intent",
+          "projectId": "project_1",
+          "parentId": "project_1",
+          "kind": "experience_intent",
+          "type": "experience_intent",
+          "orderKey": "entry",
+          "data": {
+            "kind": "experience_intent",
+            "trigger": {
+              "type": "event",
+              "eventName": "$app_opened"
+            }
+          }
+        },
+        {
+          "id": "jac_c7211c385f5ab59408beee27a969af1183e8b4afdd699b357c72d72f1ca30fac",
+          "projectId": "project_1",
+          "parentId": "project_1::experience_intent",
+          "orderKey": "70726f6772616d:000000",
+          "name": "navigate",
+          "type": "journey_action",
+          "kind": "journey_action",
+          "data": {
+            "kind": "journey_action",
+            "action": {
+              "type": "navigate",
+              "screenId": "screen_1"
+            }
+          }
         }
       ]
     },
@@ -786,5 +929,14 @@
       "screenDesignSystems": []
     }
   },
-  "compiledScripts": []
+  "compiledScripts": [
+    {
+      "screenId": "screen_1",
+      "assetId": "accessibility-controls",
+      "protocol": "screen-actions",
+      "actionBytecodeBase64": {
+        "toggle_annual": "BwMsBHR5cGUGc3RyaW5nBWVycm9yFyBmaWVsZCBtdXN0IGJlIGEgc3RyaW5nABggZmllbGQgbXVzdCBub3QgYmUgZW1wdHkfIGZpZWxkIGV4Y2VlZHMgNDA5NiBVVEYtOCBieXRlcwVmaWVsZCpudXhpZS5lbWl0IG5hbWUgbXVzdCBiZSBhIG5vbi1lbXB0eSBzdHJpbmcDc3ViASQbbnV4aWUuZW1pdCByZXNlcnZlZCAkIGV2ZW50BXRhYmxlBXZhbHVlB2NvbW1hbmQEZW1pdBJudXhpZS5yZXNwb25zZS5zZXQPJHJlc3BvbnNlX3Vuc2V0DSRyZXNwb25zZV9zZXQUbnV4aWUucmVzcG9uc2UudW5zZXQDc2V0BXVuc2V0CHJlc3BvbnNlKW51eGllLnJlc3BvbnNlLnNldCBmaWVsZCBtdXN0IGJlIGEgc3RyaW5nKm51eGllLnJlc3BvbnNlLnNldCBmaWVsZCBtdXN0IG5vdCBiZSBlbXB0eTFudXhpZS5yZXNwb25zZS5zZXQgZmllbGQgZXhjZWVkcyA0MDk2IFVURi04IGJ5dGVzB3RyaWdnZXIJdmlld01vZGVsDmFubnVhbFNlbGVjdGVkCmdldEJvb2xlYW4LYW5udWFsTGFiZWwJZ2V0U3RyaW5nF0FubnVhbCBwbGFuIMK3IFNlbGVjdGVkG0FubnVhbCBwbGFuIMK3IE5vdCBzZWxlY3RlZAxwbGFuX3RvZ2dsZWQIc2VsZWN0ZWQNdG9nZ2xlX2FubnVhbAdhY3Rpb25zB3JlcXVpcmUFbnV4aWUNcGVyZm9ybUFjdGlvbh1zY3JlZW5fc2NyaXB0X2FjdGlvbnNfbWlzc2luZwhmdW5jdGlvbipzY3JlZW5fc2NyaXB0X2FjdGlvbl9taXNzaW5nOnRvZ2dsZV9hbm51YWwADgYCAAAAACBJKAADBgMAAAwCAQAAAABAFQICAlACBwACAAAADAIEAAAAMEAGBAEABQUFADEDBAUVAgIBUAAHAAYAAIAMAgQAAAAwQAYEAQAFBQcAMQMEBRUCAgE0AgAABAMAECADBwACAAAADAIEAAAAMEAGBAEABQUIADEDBAUVAgIBFgACAAkDAQQAAABAAwIDAwQAADBAAwQDBQMGAwcAAggBGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA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"
+      }
+    }
+  ]
 }
