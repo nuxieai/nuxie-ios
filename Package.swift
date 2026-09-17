@@ -35,6 +35,7 @@ let nuxieRuntimeBinaryTarget = makeNuxieRuntimeBinaryTarget()
 
 let package = Package(
     name: "Nuxie",
+    defaultLocalization: "en",
     platforms: [
         .iOS(.v15),
         .macOS(.v12)
@@ -72,7 +73,8 @@ let package = Package(
             resources: [
                 .process("PrivacyInfo.xcprivacy"),
                 .process("Resources/timezone-bundle.json"),
-                .process("Resources/LICENSE-unicode.txt")
+                .process("Resources/LICENSE-unicode.txt"),
+                .process("Resources/Accessibility")
             ],
             swiftSettings: [
                 // Phase 1 guardrail: surface data races as warnings now;

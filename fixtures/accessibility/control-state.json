@@ -12,7 +12,8 @@
       "mixed": false,
       "expandable": false,
       "expanded": false,
-      "iosValue": null
+      "iosValue": null,
+      "iosValueBefore18": null
     },
     {
       "id": "authored-toggle-off",
@@ -25,7 +26,8 @@
       "mixed": false,
       "expandable": false,
       "expanded": false,
-      "iosValue": "0"
+      "iosValue": "0",
+      "iosValueBefore18": "0"
     },
     {
       "id": "authored-toggle-on",
@@ -38,7 +40,8 @@
       "mixed": false,
       "expandable": false,
       "expanded": false,
-      "iosValue": "1"
+      "iosValue": "1",
+      "iosValueBefore18": "1"
     },
     {
       "id": "checkbox-on",
@@ -51,7 +54,8 @@
       "mixed": false,
       "expandable": false,
       "expanded": false,
-      "iosValue": "1"
+      "iosValue": "1",
+      "iosValueBefore18": "1"
     },
     {
       "id": "switch-off",
@@ -64,7 +68,8 @@
       "mixed": false,
       "expandable": false,
       "expanded": false,
-      "iosValue": "0"
+      "iosValue": "0",
+      "iosValueBefore18": "0"
     },
     {
       "id": "radio-on",
@@ -77,7 +82,8 @@
       "mixed": false,
       "expandable": false,
       "expanded": false,
-      "iosValue": "1"
+      "iosValue": "1",
+      "iosValueBefore18": "1"
     },
     {
       "id": "authored-checkable-mixed",
@@ -90,7 +96,8 @@
       "mixed": true,
       "expandable": false,
       "expanded": false,
-      "iosValue": null
+      "iosValue": "Mixed",
+      "iosValueBefore18": "Mixed"
     },
     {
       "id": "localized-value",
@@ -103,7 +110,8 @@
       "mixed": false,
       "expandable": false,
       "expanded": false,
-      "iosValue": "Activé"
+      "iosValue": "Activé",
+      "iosValueBefore18": "Activé"
     },
     {
       "id": "obscured-toggle",
@@ -116,7 +124,8 @@
       "mixed": false,
       "expandable": false,
       "expanded": false,
-      "iosValue": null
+      "iosValue": null,
+      "iosValueBefore18": null
     },
     {
       "id": "expanded",
@@ -129,7 +138,8 @@
       "mixed": false,
       "expandable": true,
       "expanded": true,
-      "iosValue": null
+      "iosValue": null,
+      "iosValueBefore18": "Expanded"
     },
     {
       "id": "collapsed",
@@ -142,7 +152,8 @@
       "mixed": false,
       "expandable": true,
       "expanded": false,
-      "iosValue": null
+      "iosValue": null,
+      "iosValueBefore18": "Collapsed"
     },
     {
       "id": "state-without-expandable",
@@ -155,7 +166,64 @@
       "mixed": false,
       "expandable": false,
       "expanded": false,
-      "iosValue": null
+      "iosValue": null,
+      "iosValueBefore18": null
+    },
+    {
+      "id": "mixed-with-value",
+      "role": 1,
+      "traits": 4,
+      "state": 8,
+      "value": "2 of 3",
+      "checkable": true,
+      "checked": false,
+      "mixed": true,
+      "expandable": false,
+      "expanded": false,
+      "iosValue": "2 of 3, Mixed",
+      "iosValueBefore18": "2 of 3, Mixed"
+    },
+    {
+      "id": "required-read-only",
+      "role": 6,
+      "traits": 0,
+      "state": 1056,
+      "value": "",
+      "checkable": false,
+      "checked": false,
+      "mixed": false,
+      "expandable": false,
+      "expanded": false,
+      "iosValue": "Required, Read only",
+      "iosValueBefore18": "Required, Read only"
+    },
+    {
+      "id": "required-toggle-on",
+      "role": 4,
+      "traits": 0,
+      "state": 48,
+      "value": "",
+      "checkable": true,
+      "checked": true,
+      "mixed": false,
+      "expandable": false,
+      "expanded": false,
+      "iosValue": "On, Required",
+      "iosValueBefore18": "On, Required"
+    },
+    {
+      "id": "expanded-required-with-value",
+      "role": 1,
+      "traits": 1,
+      "state": 33,
+      "value": "Details",
+      "checkable": false,
+      "checked": false,
+      "mixed": false,
+      "expandable": true,
+      "expanded": true,
+      "iosValue": "Details, Required",
+      "iosValueBefore18": "Details, Expanded, Required"
     }
   ]
 }

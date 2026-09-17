@@ -7,6 +7,7 @@ package struct NuxieNativeSemanticNode: Equatable, Sendable {
     package static let checked: UInt32 = 1 << 2
     package static let mixed: UInt32 = 1 << 3
     package static let toggled: UInt32 = 1 << 4
+    package static let required: UInt32 = 1 << 5
     package static let disabled: UInt32 = 1 << 6
     package static let readOnly: UInt32 = 1 << 10
     package static let hidden: UInt32 = 1 << 8
