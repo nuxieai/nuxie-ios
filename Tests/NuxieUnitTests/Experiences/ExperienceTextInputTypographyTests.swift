@@ -34,7 +34,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             let surface = UIView(frame: CGRect(x: 0, y: 0, width: size, height: size))
             var writes = 0
             var commits = 0
-            bridge.onCommitText = { _, _ in commits += 1 }
+            bridge.onAcceptedTextChange = { _, _ in commits += 1 }
             bridge.bind(screenID: "screen", renderPlan: plan(item, text: fixture.text), surfaceView: surface,
                 artboardBounds: CGRect(x: 0, y: 0, width: 400, height: 400),
                 textWriter: { _, _, done in writes += 1; done(.success(())) })

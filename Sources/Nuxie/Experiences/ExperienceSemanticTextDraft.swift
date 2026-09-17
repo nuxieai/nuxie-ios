@@ -1,7 +1,17 @@
 import Foundation
 
+enum ExperienceTextInputEventKind: Equatable {
+    case editingEnded
+    case returnPressed
+}
+
+struct ExperienceTextInputEvent: Equatable {
+    let kind: ExperienceTextInputEventKind
+    let text: String
+}
+
 /// Serializes one editor's native writes while retaining the latest user draft.
-/// A response becomes ready only after its text has been admitted by native code.
+/// Value notifications and lifecycle events wait for native admission.
 struct ExperienceSemanticTextDraft {
     struct Write: Equatable {
         let id: UUID
@@ -13,10 +23,11 @@ struct ExperienceSemanticTextDraft {
 
     private(set) var text: String
     private(set) var acceptedText: String
-    private var committedText: String
+    private var notifiedText: String
     private var captureID: UUID?
     private var inFlight: Write?
-    private var commitRequested = false
+    private var valueChangeRequested = false
+    private var pendingEvents: [ExperienceTextInputEventKind] = []
     private var isComposing = false
     private var needsInitialWrite: Bool
 
@@ -24,7 +35,7 @@ struct ExperienceSemanticTextDraft {
         self.needsInitialWrite = needsInitialWrite
         self.text = text
         acceptedText = text
-        committedText = text
+        notifiedText = text
     }
 
     mutating func replaceText(_ text: String, isComposing: Bool = false) {
@@ -40,9 +51,23 @@ struct ExperienceSemanticTextDraft {
         return write
     }
 
-    mutating func requestCommit() -> String? {
-        commitRequested = true
-        return takeReadyCommit()
+    mutating func requestValueChange() -> String? {
+        valueChangeRequested = true
+        return takeReadyValueChange()
+    }
+
+    /// Lifecycle events are deliberate, even when the value has not changed.
+    /// They wait for the same native admission as the value they accompany.
+    mutating func requestEvent(_ kind: ExperienceTextInputEventKind) -> [ExperienceTextInputEvent] {
+        pendingEvents.append(kind)
+        return takeReadyEvents()
+    }
+
+    mutating func takeReadyEvents() -> [ExperienceTextInputEvent] {
+        guard !isComposing, !needsInitialWrite, inFlight == nil, text == acceptedText else { return [] }
+        let events = pendingEvents.map { ExperienceTextInputEvent(kind: $0, text: acceptedText) }
+        pendingEvents.removeAll()
+        return events
     }
 
     mutating func finish(_ write: Write, outcome: Outcome) -> String? {
@@ -58,7 +83,7 @@ struct ExperienceSemanticTextDraft {
             withdraw()
             return nil
         }
-        return takeReadyCommit()
+        return takeReadyValueChange()
     }
 
     mutating func withdraw() {
@@ -69,14 +94,15 @@ struct ExperienceSemanticTextDraft {
         inFlight = nil
         text = acceptedText
         isComposing = false
-        commitRequested = false
+        valueChangeRequested = false
+        pendingEvents.removeAll()
     }
 
-    private mutating func takeReadyCommit() -> String? {
-        guard commitRequested, !isComposing, !needsInitialWrite, inFlight == nil, text == acceptedText else { return nil }
-        commitRequested = false
-        guard committedText != acceptedText else { return nil }
-        committedText = acceptedText
+    private mutating func takeReadyValueChange() -> String? {
+        guard valueChangeRequested, !isComposing, !needsInitialWrite, inFlight == nil, text == acceptedText else { return nil }
+        valueChangeRequested = false
+        guard notifiedText != acceptedText else { return nil }
+        notifiedText = acceptedText
         return acceptedText
     }
 }
