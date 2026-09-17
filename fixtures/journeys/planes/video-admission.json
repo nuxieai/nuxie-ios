@@ -1,0 +1,146 @@
+{
+  "videoAsset": {
+    "kind": "video",
+    "key": "assets/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sizeBytes": 1024,
+    "contentType": "video/mp4",
+    "sourceAssetKey": "asset:greeting",
+    "riveAssetId": 1,
+    "riveUniqueName": "video-greeting-1",
+    "width": 64,
+    "height": 32,
+    "durationMs": 2000,
+    "videoCodec": "avc1.42e01e",
+    "audioCodec": "mp4a.40.2",
+    "captionTracks": [
+      {
+        "streamIndex": 2,
+        "codec": "mov_text",
+        "language": "eng",
+        "title": "English"
+      }
+    ],
+    "required": true
+  },
+  "cases": [
+    {
+      "name": "audible captioned MP4",
+      "valid": true
+    },
+    {
+      "name": "silent video",
+      "valid": true,
+      "assetPatch": {
+        "audioCodec": null
+      }
+    },
+    {
+      "name": "legacy RIV cannot declare video",
+      "valid": false,
+      "renderer": "rive"
+    },
+    {
+      "name": "video capability required",
+      "valid": false,
+      "capabilities": []
+    },
+    {
+      "name": "provider URL",
+      "valid": false,
+      "assetPatch": {
+        "sourceAssetKey": "https://provider.example/clip.mp4"
+      }
+    },
+    {
+      "name": "invalid source identity",
+      "valid": false,
+      "assetPatch": {
+        "sourceAssetKey": "asset:bad/path"
+      }
+    },
+    {
+      "name": "wrong digest key",
+      "valid": false,
+      "assetPatch": {
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "name": "empty video",
+      "valid": false,
+      "assetPatch": {
+        "sizeBytes": 0
+      }
+    },
+    {
+      "name": "oversize video",
+      "valid": false,
+      "assetPatch": {
+        "sizeBytes": 33554433
+      }
+    },
+    {
+      "name": "unsupported audio",
+      "valid": false,
+      "assetPatch": {
+        "audioCodec": "opus"
+      }
+    },
+    {
+      "name": "unsupported video",
+      "valid": false,
+      "assetPatch": {
+        "videoCodec": "vp09.00.10.08"
+      }
+    },
+    {
+      "name": "invalid dimensions",
+      "valid": false,
+      "assetPatch": {
+        "width": 8193
+      }
+    },
+    {
+      "name": "unknown asset field",
+      "valid": false,
+      "assetPatch": {
+        "providerUrl": "https://provider.example/clip.mp4"
+      }
+    },
+    {
+      "name": "duplicate caption",
+      "valid": false,
+      "assetPatch": {
+        "captionTracks": [
+          {
+            "streamIndex": 2,
+            "codec": "mov_text",
+            "language": "eng",
+            "title": "English"
+          },
+          {
+            "streamIndex": 2,
+            "codec": "mov_text",
+            "language": "eng",
+            "title": "English"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unsupported captions",
+      "valid": false,
+      "assetPatch": {
+        "captionTracks": [
+          {
+            "streamIndex": 2,
+            "codec": "webvtt",
+            "language": null,
+            "title": null
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -275,6 +275,54 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         XCTAssertEqual(products.map(\.placementId), ["golden:monthly"])
     }
 
+    func testNuxVideoAcquisitionVerifiesOnceAndReusesOfflineFile() async throws {
+        let directory = temporaryDirectory()
+        defer { StubURLProtocol.reset(); removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let sceneBytes = Data("nux-scene".utf8)
+        let videoBytes = Data(repeating: 7, count: 200_000)
+        let digest = SHA256Provider.hexDigest(videoBytes)
+        let video: JourneyReleaseJSONValue = .object([
+            "kind": .string("video"), "key": .string("assets/sha256/\(digest).mp4"),
+            "sha256": .string(digest), "sizeBytes": .number(Double(videoBytes.count)),
+            "contentType": .string("video/mp4"), "required": .bool(true),
+            "sourceAssetKey": .string("asset:greeting"), "riveAssetId": .number(1),
+            "riveUniqueName": .string("video-greeting-1"), "width": .number(64), "height": .number(32),
+            "durationMs": .number(2000), "videoCodec": .string("avc1.42e01e"), "audioCodec": .null,
+            "captionTracks": .array([]),
+        ])
+        let snapshot = try replacingRenderedArtifact(try await authenticatedRenderedSnapshot(fixture),
+            sceneBytes: sceneBytes, renderer: "nux", assets: [video])
+        let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
+        let requests = JourneyArtifactRequestCounter()
+        StubURLProtocol.register(matcher: { _ in true }) { request in
+            requests.increment()
+            let isVideo = request.url?.pathExtension == "mp4"
+            let bytes = isVideo ? videoBytes : sceneBytes
+            return (HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Length": String(bytes.count), "Content-Type": isVideo ? "video/mp4" : "application/vnd.nuxie.scene"])!, bytes)
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let store = JourneyReleaseAcquisitionStore(cacheDirectory: directory, urlSession: session)
+        let prepared = try await store.preparePresentation(release: release, delivery: snapshot.profile.delivery, productResolver: { _ in [] })
+        let artifact = try await prepared.artifactLoader(prepared.experience, nil, "screen_welcome")
+        XCTAssertEqual(requests.value, 2)
+        XCTAssertEqual(artifact.sceneBytes, sceneBytes)
+        XCTAssertEqual(artifact.resourceMetrics.hashedBytes, videoBytes.count + sceneBytes.count * 2)
+        XCTAssertEqual(artifact.resourceMetrics.duplicateHashBytes, sceneBytes.count)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(digest)), videoBytes)
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: { _ in true }) { _ in
+            requests.increment()
+            throw URLError(.notConnectedToInternet)
+        }
+        let coldStore = JourneyReleaseAcquisitionStore(cacheDirectory: directory, urlSession: session)
+        _ = try await coldStore.preparePresentation(release: release, delivery: snapshot.profile.delivery, productResolver: { _ in [] })
+        XCTAssertEqual(requests.value, 2)
+    }
+
     func testCanonicalProfileAcquiresRenderedArtifactsBeforePublishingAuthority() async throws {
         let directory = temporaryDirectory()
         defer {

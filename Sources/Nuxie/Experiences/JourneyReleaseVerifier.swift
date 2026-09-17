@@ -454,13 +454,13 @@ struct JourneyReleaseVerifier: Sendable {
                 }
                 let size = Int(sizeNumber.doubleValue)
                 let maximum: Int
-                if key == "renders/sha256/\(digest).riv" {
+                if key == "renders/sha256/\(digest).riv" || key == "renders/sha256/\(digest).nux" {
                     maximum = JourneyReleaseLimits.rivArtifactBytes
                 } else if key == "screen-behavior/sha256/\(digest).bin" {
                     maximum = 4 * 1_024 * 1_024
                 } else if key.hasPrefix("assets/sha256/\(digest)."),
                           let fileExtension = key.split(separator: ".").last,
-                          ["png", "jpg", "webp", "ttf", "otf", "bin"]
+                          ["png", "jpg", "webp", "ttf", "otf", "bin", "mp4"]
                             .contains(String(fileExtension)) {
                     maximum = JourneyReleaseLimits.externalAssetBytes
                 } else {

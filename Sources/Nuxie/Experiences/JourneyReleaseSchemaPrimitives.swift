@@ -392,6 +392,12 @@ enum JourneyReleaseSchemaPrimitives {
            !capabilities.contains(where: { $0 as? String == "system-fonts" }) {
             try invalid("requirements.requiredCapabilities")
         }
+        if let render = root["render"] as? [String: Any],
+           let assets = render["assets"] as? [[String: Any]],
+           assets.contains(where: { $0["kind"] as? String == "video" }),
+           !(requirements["requiredCapabilities"] as? [String] ?? []).contains("video.playback.v1") {
+            try invalid("requirements.requiredCapabilities")
+        }
         let timezone = try object(
             requirements["timezoneData"],
             required: ["format", "revision", "sha256"],
@@ -898,20 +904,22 @@ enum JourneyReleaseSchemaPrimitives {
     }
 
     private static func validateRender(_ value: Any?) throws {
-        let render = try object(
-            value,
-            required: ["renderer", "riv", "screens", "transitions", "textInputs", "assets"],
-            path: "render"
-        )
-        guard render["renderer"] as? String == "rive" else { try invalid("render.renderer") }
-        try validateArtifact(render["riv"], path: "render.riv", includeKind: false)
+        let raw = try dictionary(value, path: "render")
+        guard let renderer = raw["renderer"] as? String, ["rive", "nux"].contains(renderer) else {
+            try invalid("render.renderer")
+        }
+        let sceneKey = renderer == "nux" ? "nux" : "riv"
+        let render = try object(value, required: ["renderer", sceneKey, "screens", "transitions", "textInputs", "assets"], path: "render")
+        try validateArtifact(render[sceneKey], path: "render.\(sceneKey)", includeKind: false)
         try validateArtifactSemantics(
-            render["riv"],
-            path: "render.riv",
-            expectedPrefix: "renders/sha256/",
-            expectedExtension: "riv",
-            expectedContentTypes: ["application/vnd.rive"]
+            render[sceneKey], path: "render.\(sceneKey)", expectedPrefix: "renders/sha256/",
+            expectedExtension: sceneKey,
+            expectedContentTypes: [renderer == "nux" ? "application/vnd.nuxie.scene" : "application/vnd.rive"]
         )
+        if renderer == "nux" {
+            let scene = try dictionary(render[sceneKey], path: "render.nux")
+            try integer(scene["sizeBytes"], minimum: 1, maximum: Double(JourneyReleaseLimits.rivArtifactBytes), path: "render.nux.sizeBytes")
+        }
         let screens = try array(render["screens"], path: "render.screens")
         guard (1...256).contains(screens.count) else { try invalid("render.screens") }
         let screenIDs = try screens.enumerated().map { index, item -> String in
@@ -1026,6 +1034,19 @@ enum JourneyReleaseSchemaPrimitives {
         try assets.enumerated().forEach { index, item in
             try validateRenderAsset(item, path: "render.assets[\(index)]")
         }
+        var nativeIDs = Set<Double>()
+        var nativeNames = Set<String>()
+        var videoSources = Set<String>()
+        for item in assets {
+            let asset = try dictionary(item, path: "render.assets")
+            if let id = asset["riveAssetId"] as? NSNumber, let name = asset["riveUniqueName"] as? String {
+                guard nativeIDs.insert(id.doubleValue).inserted, nativeNames.insert(name).inserted else { try invalid("render.assets") }
+            }
+            if asset["kind"] as? String == "video" {
+                guard renderer == "nux", let source = asset["sourceAssetKey"] as? String,
+                      videoSources.insert(source).inserted else { try invalid("render.assets") }
+            }
+        }
         let assetKeys = try assets.enumerated().map { index, value in
             let asset = try dictionary(value, path: "render.assets[\(index)]")
             if asset["kind"] as? String == "font", asset["location"] as? String == "system",
@@ -1069,6 +1090,34 @@ enum JourneyReleaseSchemaPrimitives {
             try integer(typed.object["width"], minimum: 1, maximum: 65_535, path: "\(path).width")
             try integer(typed.object["height"], minimum: 1, maximum: 65_535, path: "\(path).height")
             guard isJSONBoolean(typed.object["required"]) else { try invalid("\(path).required") }
+        case "video":
+            let asset = try object(typed.object, required: ["kind", "key", "sha256", "sizeBytes", "contentType", "sourceAssetKey", "riveAssetId", "riveUniqueName", "width", "height", "durationMs", "videoCodec", "audioCodec", "captionTracks", "required"], path: path)
+            try validateArtifactSemantics(asset, path: path, expectedPrefix: "assets/sha256/", expectedExtension: "mp4", expectedContentTypes: ["video/mp4"])
+            try integer(asset["sizeBytes"], minimum: 1, maximum: Double(JourneyReleaseLimits.externalAssetBytes), path: "\(path).sizeBytes")
+            try integer(asset["riveAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).riveAssetId")
+            try identifier(asset["riveUniqueName"], path: "\(path).riveUniqueName")
+            try boundedString(asset["sourceAssetKey"], minimum: 1, maximumUTF16: 128, path: "\(path).sourceAssetKey")
+            guard let source = asset["sourceAssetKey"] as? String,
+                  source.range(of: "^asset:[A-Za-z0-9_-]+$", options: .regularExpression) != nil else { try invalid("\(path).sourceAssetKey") }
+            for field in ["width", "height"] { try integer(asset[field], minimum: 1, maximum: 8192, path: "\(path).\(field)") }
+            try integer(asset["durationMs"], minimum: 1, maximum: 9_007_199_254_740_991, path: "\(path).durationMs")
+            guard let codec = asset["videoCodec"] as? String,
+                  codec.range(of: "^avc[13]\\.[0-9a-fA-F]{6}$", options: .regularExpression) != nil else { try invalid("\(path).videoCodec") }
+            guard asset["audioCodec"] is NSNull || asset["audioCodec"] as? String == "mp4a.40.2" else { try invalid("\(path).audioCodec") }
+            guard isJSONBoolean(asset["required"]) else { try invalid("\(path).required") }
+            let captions = try array(asset["captionTracks"], path: "\(path).captionTracks")
+            guard captions.count <= 16 else { try invalid("\(path).captionTracks") }
+            var previousIndex: Double = -1
+            for caption in captions {
+                let track = try object(caption, required: ["streamIndex", "codec", "language", "title"], path: "\(path).captionTracks")
+                try integer(track["streamIndex"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).captionTracks.streamIndex")
+                let index = (track["streamIndex"] as! NSNumber).doubleValue
+                guard index > previousIndex, track["codec"] as? String == "mov_text" else { try invalid("\(path).captionTracks") }
+                previousIndex = index
+                for (field, limit) in [("language", 128), ("title", 512)] where !(track[field] is NSNull) {
+                    try boundedString(track[field], minimum: 0, maximumUTF16: limit, path: "\(path).captionTracks.\(field)")
+                }
+            }
         case "font":
             if typed.object["location"] as? String == "system" {
                 _ = try object(

@@ -330,6 +330,39 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    func testNuxVideoAdmissionContract() throws {
+        let fixture = try golden(entryKey: "renderedEntry")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/video-admission.json")
+        let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        for item in try XCTUnwrap(corpus["cases"] as? [[String: Any]]) {
+            var root = original
+            var render = try XCTUnwrap(root["render"] as? [String: Any])
+            var scene = try XCTUnwrap(render.removeValue(forKey: "riv") as? [String: Any])
+            let renderer = item["renderer"] as? String ?? "nux"
+            let sceneField = renderer == "nux" ? "nux" : "riv"
+            scene["key"] = "renders/sha256/\(try XCTUnwrap(scene["sha256"] as? String)).\(sceneField)"
+            scene["contentType"] = renderer == "nux" ? "application/vnd.nuxie.scene" : "application/vnd.rive"
+            render["renderer"] = renderer
+            render[sceneField] = scene
+            var asset = try XCTUnwrap(corpus["videoAsset"] as? [String: Any])
+            asset.merge(item["assetPatch"] as? [String: Any] ?? [:]) { _, new in new }
+            render["assets"] = [asset]
+            root["render"] = render
+            var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+            requirements["requiredCapabilities"] = item["capabilities"] ?? ["video.playback.v1"]
+            root["requirements"] = requirements
+            let name = try XCTUnwrap(item["name"] as? String)
+            if item["valid"] as? Bool == true {
+                XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), name)
+            } else {
+                XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), name)
+            }
+        }
+    }
+
     func testSystemFontRequirementsAcceptEveryAuthoredWeightWithoutArtifactFields() throws {
         for weight in stride(from: 100, through: 900, by: 100) {
             let root = try systemFontRoot(weight: String(weight))
