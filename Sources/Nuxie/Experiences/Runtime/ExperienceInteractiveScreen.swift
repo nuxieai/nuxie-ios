@@ -4589,7 +4589,7 @@ private enum ExperienceInteractiveExternalFontRegistration {
     }
 }
 
-private enum ExperienceInteractiveAssetBinding {
+enum ExperienceInteractiveAssetBinding {
     private struct Key: Hashable {
         let kind: AuthenticatedRuntimeAsset.Kind
         let authoredID: UInt32
@@ -4647,7 +4647,7 @@ private enum ExperienceInteractiveAssetBinding {
             guard let declaration = declarations[key] else {
                 throw ExperienceInteractiveScreenError.assetContract(asset.riveUniqueName)
             }
-            let hasRequiredBytes = asset.bytes != nil
+            let hasRequiredBytes = (asset.kind == .video ? asset.fileURL?.isFileURL == true : asset.bytes != nil)
                 || (!declaration.isEmbedded && !asset.required)
             guard declaration.sourceKey == asset.sourceKey,
                   declaration.contentType == asset.contentType,
@@ -4675,6 +4675,12 @@ private enum ExperienceInteractiveAssetBinding {
                 kind = .image
             case .font:
                 kind = .font
+            case .video:
+                guard !descriptor.isEmbedded, !descriptor.hasContentsRecord,
+                      descriptor.requiredProviderFlags == 4 else {
+                    throw ExperienceInteractiveScreenError.assetContract("video requires an external playback provider")
+                }
+                kind = .video
             case .script, .shader:
                 guard descriptor.isEmbedded,
                       descriptor.hasContentsRecord,
@@ -4768,6 +4774,11 @@ private enum ExperienceInteractiveAssetBinding {
                 required: asset.required,
                 to: &result
             )
+        }
+        for asset in renderPlan.videos {
+            try append(kind: .video, riveAssetID: asset.riveAssetId, uniqueName: asset.riveUniqueName,
+                       location: asset.location, contentType: "video/mp4", sha256: asset.sha256,
+                       required: asset.required, to: &result)
         }
         return result
     }

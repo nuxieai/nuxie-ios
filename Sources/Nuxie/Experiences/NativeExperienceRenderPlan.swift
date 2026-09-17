@@ -24,6 +24,7 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
     let textInputs: [NativeExperienceTextInput]
     let images: [NativeExperienceImageAsset]
     let fonts: [NativeExperienceFontAsset]
+    var videos: [NativeExperienceVideoAsset] = []
     // Device requirements have no artifact metadata or downloaded object.
     let systemFonts: [NativeExperienceSystemFontRequirement]
 
@@ -31,7 +32,7 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
         identity: Identity, scene: Scene, entry: Entry,
         screens: [NativeExperienceScreen], transitions: [NativeExperienceTransition],
         textInputs: [NativeExperienceTextInput], images: [NativeExperienceImageAsset],
-        fonts: [NativeExperienceFontAsset], systemFonts: [NativeExperienceSystemFontRequirement] = []
+        fonts: [NativeExperienceFontAsset], videos: [NativeExperienceVideoAsset] = [], systemFonts: [NativeExperienceSystemFontRequirement] = []
     ) {
         self.identity = identity
         self.scene = scene
@@ -41,6 +42,7 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
         self.textInputs = textInputs
         self.images = images
         self.fonts = fonts
+        self.videos = videos
         self.systemFonts = systemFonts
     }
 }
@@ -167,4 +169,27 @@ struct NativeExperienceTextInput: Equatable, Sendable {
         guard event.kind == (actionEvent ?? .editingEnded), let declarativeActionId else { return nil }
         return .init(actionId: declarativeActionId, value: .string(event.text), componentId: viewNodeId)
     }
+}
+
+struct NativeExperienceVideoAsset: Equatable, Sendable {
+    struct CaptionTrack: Decodable, Equatable, Sendable {
+        let streamIndex: Int
+        let codec: String
+        let language: String?
+        let title: String?
+    }
+
+    let location: NativeExperienceAssetLocation
+    let sourceAssetKey: String
+    let riveAssetId: UInt64
+    let riveUniqueName: String
+    let sha256: String
+    let sizeBytes: Int
+    let width: Int
+    let height: Int
+    let durationMs: Int
+    let videoCodec: String
+    let audioCodec: String?
+    let captionTracks: [CaptionTrack]
+    let required: Bool
 }

@@ -83,6 +83,7 @@ package enum NuxieNativeFileAssetKind: UInt32, Equatable, Sendable {
     case blob = 3
     case script = 4
     case shader = 5
+    case video = 6
 }
 
 /// Product-neutral identity copied from the inert import's authored asset

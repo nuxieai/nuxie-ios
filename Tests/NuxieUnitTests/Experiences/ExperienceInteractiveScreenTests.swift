@@ -12,6 +12,38 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    func testVideoBindingRequiresExactSignedIdentityAndLocalFile() throws {
+        let digest = String(repeating: "b", count: 64)
+        let key = "assets/sha256/\(digest).mp4"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(digest)
+        let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:greeting",
+            riveAssetId: 1, riveUniqueName: "greeting-1", sha256: digest, sizeBytes: 100,
+            width: 64, height: 32, durationMs: 2000, videoCodec: "avc1.42e01e", audioCodec: nil,
+            captionTracks: [], required: true)
+        let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "experience", buildId: "build", appId: "app", environment: "test"),
+            scene: .init(key: "scene.nux", sha256: digest, sizeBytes: 1), entry: .init(screenId: "screen"),
+            screens: [], transitions: [], textInputs: [], images: [], fonts: [], videos: [video])
+        let catalog = [NuxieNativeFileAssetDescriptor(ordinal: 0, kind: .video, authoredID: 1,
+            name: "greeting", fileExtension: "mp4", isEmbedded: false, hasContentsRecord: false, requiredProviderFlags: 4)]
+        func asset(fileURL: URL?, id: UInt32 = 1, sourceKey: String? = nil, bytes: Data? = nil) -> AuthenticatedRuntimeAsset {
+            .init(kind: .video, riveAssetID: id, riveUniqueName: "greeting-1", sourceKey: sourceKey ?? key,
+                  contentType: "video/mp4", sha256: digest, required: true, bytes: bytes, fileURL: fileURL)
+        }
+        XCTAssertTrue(try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
+            authenticatedAssets: [asset(fileURL: url)], catalog: catalog).isEmpty,
+            "Video files must not be copied into the in-memory image/font provider")
+        for invalid in [asset(fileURL: nil), asset(fileURL: nil, bytes: Data([1])),
+                        asset(fileURL: URL(string: "https://provider.example/clip.mp4")),
+                        asset(fileURL: url, id: 2), asset(fileURL: url, sourceKey: "assets/another.mp4")] {
+            XCTAssertThrowsError(try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
+                authenticatedAssets: [invalid], catalog: catalog))
+        }
+        XCTAssertThrowsError(try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
+            authenticatedAssets: [asset(fileURL: url)], catalog: []))
+        XCTAssertThrowsError(try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
+            authenticatedAssets: [asset(fileURL: url)], catalog: catalog + catalog))
+    }
+
     func testSignedPurchaseComponentsKeepSourceAndAuthoredSelection() async throws {
         let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
         let payload = artifact.payload
