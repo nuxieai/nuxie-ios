@@ -44,6 +44,14 @@ product audio playback or external-audio delivery contract.
 
 ## Semantic bridge fixtures
 
+`scripted-text-commit.riv` is the real publisher output of the parent repository's
+`named_text_input_action_is_publishable` test. Its named TextInput action emits
+`name_committed` with the complete value and action ID. Regenerate it from the
+parent checkout with `NUXIE_TEXT_COMMIT_FIXTURE_OUTPUT` set to this file's absolute
+path when running that publisher test. The Swift adapter test checks capture
+ownership, commit discovery, Unicode/empty values and exactly-once script output
+through the rendered primary player and generated auxiliary interaction player.
+
 `semantic_text.riv` is the schema-generated runtime semantic text fixture,
 shared byte-for-byte with Android's device test asset (SHA-256
 `4e5cbeb29d08c54311b631d6fae83b3d132246670a3e574e24980b9570505f5f`).

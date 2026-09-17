@@ -802,6 +802,15 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.setSemanticTextRun(captureID: captureID, name: name, text: text) }
     }
 
+    /// Deliver an accepted whole-value edit to the captured field's authored listener.
+    /// This is a commit, not a display update or a keystroke insertion.
+    package func queueSemanticTextCommit(captureID: UUID, name: String, text: String) async throws {
+        let state = try requireState()
+        try await executor.call {
+            try state.queueSemanticTextCommit(captureID: captureID, name: name, text: text)
+        }
+    }
+
     package func setNumber(
         _ value: Float,
         path: String,
@@ -1225,6 +1234,21 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         let previous = semanticCapture
         semanticCapture = nil
         try previous?.handle.close()
+    }
+
+    func queueSemanticTextCommit(captureID: UUID, name: String, text: String) throws {
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "queue semantic text commit")
+        }
+        guard let field = capture.fields[name] else {
+            throw nativeFailure(status: NUX_STATUS_NOT_FOUND.rawValue, operation: "resolve semantic text commit owner")
+        }
+        let player = try self.player.require()
+        let snapshot = try capture.handle.require()
+        try requireOK(withStringView(text) {
+            nux_player_queue_semantic_text_commit(player, snapshot, field.id, $0)
+        }, operation: "queue semantic text commit")
+        auxiliaryPlayersNeedInitialStep = true
     }
 
     func queueSemanticAction(captureID: UUID, nodeID: UInt32, action: NuxieNativeSemanticAction) throws {
