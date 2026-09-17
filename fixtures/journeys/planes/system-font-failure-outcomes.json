@@ -1,0 +1,25 @@
+{
+  "eventName": "$experience_artifact_load_failed",
+  "outcomeCount": 1,
+  "failures": [
+    {
+      "iosFailure": "unsupportedRequest",
+      "androidReason": "UNSUPPORTED_REQUEST",
+      "code": "system_font.unsupported_request"
+    },
+    {
+      "iosFailure": "unavailableFace",
+      "androidReason": "FACE_UNAVAILABLE",
+      "code": "system_font.face_unavailable"
+    },
+    {
+      "iosFailure": "unavailableTables",
+      "code": "system_font.tables_unavailable"
+    },
+    {
+      "iosFailure": "unusableData",
+      "androidReason": "DATA_UNUSABLE",
+      "code": "system_font.data_unusable"
+    }
+  ]
+}
