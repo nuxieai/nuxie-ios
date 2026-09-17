@@ -134,4 +134,11 @@ struct NativeExperienceTextInput: Equatable, Sendable {
     let multiline: Bool?
     let maxLength: Int?
     let responseFieldKey: String?
+    var actionEvent: ExperienceTextInputEventKind? = nil
+    var declarativeActionId: String? = nil
+
+    func declarativeInvocation(for event: ExperienceTextInputEvent) -> ScreenActionInvocation? {
+        guard event.kind == (actionEvent ?? .editingEnded), let declarativeActionId else { return nil }
+        return .init(actionId: declarativeActionId, value: .string(event.text), componentId: viewNodeId)
+    }
 }

@@ -7,6 +7,27 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testAuthoredInputActionChoosesOneEventAndUsesAcceptedValue() throws {
+        for selectedEvent in [ExperienceTextInputEventKind.editingEnded, .returnPressed] {
+            var input = makePlan().textInputs[0]
+            input.actionEvent = selectedEvent
+            input.declarativeActionId = "save-name"
+            let events: [ExperienceTextInputEvent] = [
+                .init(kind: .returnPressed, text: "Alice"),
+                .init(kind: .editingEnded, text: "Alice"),
+            ]
+            XCTAssertEqual(events.compactMap { input.declarativeInvocation(for: $0) }, [
+                .init(actionId: "save-name", value: .string("Alice"), componentId: "v"),
+            ])
+            input.declarativeActionId = nil
+            XCTAssertTrue(events.compactMap { input.declarativeInvocation(for: $0) }.isEmpty)
+        }
+        var defaultInput = makePlan().textInputs[0]
+        defaultInput.declarativeActionId = "save-name"
+        XCTAssertNil(defaultInput.declarativeInvocation(for: .init(kind: .returnPressed, text: "Alice")))
+        XCTAssertNotNil(defaultInput.declarativeInvocation(for: .init(kind: .editingEnded, text: "Alice")))
+    }
+
     func testMultilineReturnInsertsNewlineWithoutAnEditingEvent() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
