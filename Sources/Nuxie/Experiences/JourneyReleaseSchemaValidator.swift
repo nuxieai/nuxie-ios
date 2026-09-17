@@ -26,6 +26,21 @@ enum JourneyReleaseSchemaValidator {
         }
         let products = try Set(array(root["products"]).map { try identifier(dictionary($0)["id"]) })
         let leg = try dictionary(root["leg"])
+        for value in try array(leg["steps"]) {
+            let step = try dictionary(value)
+            guard step["kind"] as? String == "action",
+                  let action = step["action"] as? [String: Any],
+                  action["type"] as? String == "video" else { continue }
+            let target = try dictionary(action["target"])
+            let render = try dictionary(root["render"])
+            let requirements = try dictionary(root["requirements"])
+            guard (requirements["requiredCapabilities"] as? [String] ?? []).contains("video.playback.v1"),
+                  let elements = render["videoElements"] as? [[String: Any]],
+                  elements.contains(where: {
+                      $0["artboardId"] as? String == target["artboardId"] as? String &&
+                      $0["viewNodeId"] as? String == target["viewNodeId"] as? String
+                  }) else { throw invalid }
+        }
         let gate = try dictionary(leg["entitlementGate"])
         for product in try array(gate["products"]) {
             guard products.contains(try identifier(dictionary(product)["productId"])) else { throw invalid }
@@ -216,7 +231,7 @@ enum JourneyReleaseSchemaValidator {
                   !eventName.hasPrefix("$") else {
                 throw invalid
             }
-        case .delay, .navigate, .back, .requestNotifications,
+        case .delay, .navigate, .back, .video, .requestNotifications,
              .requestPermission, .requestTracking, .openLink, .dismiss,
              .updateCustomer, .milestone, .submitResponse, .appAction, .exit:
             try Common.validateCanonicalJourneyAction(action, path: "leg.action", screenIDs: screens, placementIDs: placements)

@@ -525,6 +525,7 @@ enum JourneyReleaseSchemaPrimitives {
         let optional: Set<String>
         switch type {
         case "navigate": required = ["type", "screenId"]; optional = ["transition"]
+        case "video": required = ["type", "target", "command"]; optional = []
         case "back": required = ["type"]; optional = ["steps", "transition"]
         case "delay": required = ["type", "durationMs"]; optional = []
         case "time_window": required = ["type", "startTime", "endTime", "timezone", "daysOfWeek", "onInside"]; optional = []
@@ -556,6 +557,30 @@ enum JourneyReleaseSchemaPrimitives {
         if let reason = action["reason"] { try boundedString(reason, minimum: 0, maximumUTF16: 256, path: "\(path).reason") }
         switch type {
         case "back": if let steps = action["steps"] { try integer(steps, minimum: 1, maximum: 256, path: "\(path).steps") }
+        case "video":
+            let target = try object(action["target"], required: ["artboardId", "viewNodeId"], path: "\(path).target")
+            try identifier(target["artboardId"], path: "\(path).target.artboardId")
+            try identifier(target["viewNodeId"], path: "\(path).target.viewNodeId")
+            let command = try dictionary(action["command"], path: "\(path).command")
+            switch command["type"] as? String {
+            case "play", "pause":
+                _ = try object(command, required: ["type"], path: "\(path).command")
+            case "seek":
+                _ = try object(command, required: ["type", "seconds"], path: "\(path).command")
+                try finiteNumber(command["seconds"], minimum: 0, maximum: Double.greatestFiniteMagnitude, path: "\(path).command.seconds")
+            case "rate":
+                _ = try object(command, required: ["type", "rate"], path: "\(path).command")
+                try finiteNumber(command["rate"], minimum: 0, maximum: Double(Float.greatestFiniteMagnitude), path: "\(path).command.rate")
+                guard (command["rate"] as! NSNumber).doubleValue > 0 else { try invalid("\(path).command.rate") }
+            case "volume":
+                _ = try object(command, required: ["type", "volume"], path: "\(path).command")
+                try finiteNumber(command["volume"], minimum: 0, maximum: 1, path: "\(path).command.volume")
+            case "mute", "loop":
+                let field = command["type"] as? String == "mute" ? "muted" : "enabled"
+                _ = try object(command, required: ["type", field], path: "\(path).command")
+                guard isJSONBoolean(command[field]) else { try invalid("\(path).command.\(field)") }
+            default: try invalid("\(path).command.type")
+            }
         case "delay": try integer(action["durationMs"], minimum: 0, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).durationMs")
         case "time_window":
             try timeOfDay(action["startTime"], path: "\(path).startTime")

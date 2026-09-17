@@ -332,6 +332,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         cachedControllersByScreenId.values.forEach { $0.layoutTextInputs() }
     }
 
+    func applyVideoCommand(_ action: JourneyVideoAction) async -> Bool {
+        guard let activeScreenId, let controller = cachedControllersByScreenId[activeScreenId] else { return false }
+        return await controller.applyVideoCommand(action)
+    }
+
     /// Re-reads each cached screen's own view insets and pushes them into
     /// that screen's bound view-model instance. Screens read their own view
     /// (not the host's) so modal sheets and pushed screens resolve their own

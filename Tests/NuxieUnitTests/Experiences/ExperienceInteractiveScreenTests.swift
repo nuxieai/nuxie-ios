@@ -91,10 +91,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
             riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: media.count,
             width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: [.init(streamIndex: 2, codec: "mov_text", language: "eng", title: nil)], required: true)
+        struct ExportedTargets: Decodable { let videoElements: [NativeExperienceVideoElement] }
+        let exportedTargets = try JSONDecoder().decode(ExportedTargets.self,
+            from: Data(contentsOf: directory.appendingPathComponent("inventory.json")))
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "video", buildId: "video", appId: "app", environment: "test"),
             scene: .init(key: "scene.nux", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
             entry: .init(screenId: "screen"), screens: [.init(screenId: "screen", artboardId: "screen", artboardName: "Video Frame", width: 320, height: 640, exit: nil)],
-            transitions: [], textInputs: [], images: [], fonts: [], videos: [video])
+            transitions: [], textInputs: [], images: [], fonts: [], videos: [video], videoElements: exportedTargets.videoElements)
         let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
             journey: JourneyDocument(screens: [.init(id: "screen")]), sceneBytes: scene,
             assets: [.init(kind: .video, riveAssetID: id, riveUniqueName: name, sourceKey: key, contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: url)])
@@ -103,7 +106,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertTrue(externalAssets.isEmpty, "Published external video must bind without an in-memory payload")
         let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
             pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: externalAssets, videoEnabled: true))
-        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
+        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, artboardId: "screen")
         defer { host.close(); Task { try? await runtime.close() } }
         let device = try await runtime.metalDevice().value
         let layer = CAMetalLayer()
@@ -143,14 +146,23 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertTrue(sawBlue, "Playback must advance to the decoded blue frame")
         XCTAssertEqual(phase, 4, "Two red/blue cycles must render across a runtime-owned loop seek: \(host.playbackDiagnostics)")
         let occurrences = try await runtime.videos()
-        let occurrence = try XCTUnwrap(occurrences.first)
-        try await runtime.videoCommand(componentID: occurrence.componentID, kind: 1, value: 0)
+        _ = try XCTUnwrap(occurrences.first)
+        func command(_ type: String, view: String = "clip-view") throws -> JourneyVideoAction {
+            try JourneyVideoAction(action: ["type": .string("video"),
+                "target": .object(["artboardId": .string("screen"), "viewNodeId": .string(view)]),
+                "command": .object(["type": .string(type)])])
+        }
+        do {
+            try await host.apply(command("pause", view: "missing"))
+            XCTFail("An unknown authored target must not control another video")
+        } catch {}
+        try await host.apply(command("pause"))
         _ = try await host.tick()
         var current = try await runtime.videos()
         var paused = try XCTUnwrap(current.first)
         XCTAssertFalse(paused.wantsPlay)
         XCTAssertEqual(paused.state, 3)
-        try await runtime.videoCommand(componentID: occurrence.componentID, kind: 0, value: 0)
+        try await host.apply(command("play"))
         _ = try await host.tick()
         try await host.setSuspended(reason: 2, enabled: true)
         current = try await runtime.videos()

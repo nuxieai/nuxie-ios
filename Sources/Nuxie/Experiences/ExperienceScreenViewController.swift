@@ -661,6 +661,19 @@ final class ExperienceScreenViewController: UIViewController {
         return .responseSet(field: fieldKey, value: .string(text))
     }
 
+    func applyVideoCommand(_ action: JourneyVideoAction) async -> Bool {
+        guard !isShuttingDown, runtimeFailure == nil,
+              let interactiveScreen, let presentationLoop else { return false }
+        return await withCheckedContinuation { continuation in
+            presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
+                try await interactiveScreen.applyVideoCommand(action)
+                return .work(requestsFrame: true)
+            }, completion: { result in
+                continuation.resume(returning: (try? result.get()) != nil)
+            })
+        }
+    }
+
     private func enqueueStateCommand(
         _ command: ExperienceInteractiveStateCommand,
         logFailure: Bool = true,

@@ -1041,6 +1041,14 @@ class ExperienceViewController: NuxiePlatformViewController {
         enqueueNativeRuntimeCommand(.viewModelSnapshot(snapshot, screenId: screenId))
     }
 
+    func applyJourneyVideoCommand(_ action: JourneyVideoAction) async -> Bool {
+        #if canImport(UIKit)
+        return await screenTransitionCoordinator?.applyVideoCommand(action) ?? false
+        #else
+        return false
+        #endif
+    }
+
     func applyViewModelValue(
         path: VmPathRef,
         value: Any,

@@ -12,6 +12,7 @@ enum JourneyActionType: String, Codable, Sendable {
 
     case navigate
     case back
+    case video
     case purchase
     case restore
     case requestNotifications = "request_notifications"
@@ -42,7 +43,7 @@ enum JourneyActionType: String, Codable, Sendable {
 
     var isPresentationOwned: Bool {
         switch self {
-        case .navigate, .back, .purchase, .restore, .requestNotifications,
+        case .navigate, .back, .video, .purchase, .restore, .requestNotifications,
              .requestPermission, .requestTracking, .openLink, .dismiss:
             return true
         default:
