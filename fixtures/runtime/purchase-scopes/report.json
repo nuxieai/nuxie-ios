@@ -1,0 +1,45 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 91,
+  "outputSizeBytes": 1905,
+  "outputSha256": "c3d6e19a151005228bac72f8959c3702db9d828d7ba88375fee62ebf4b299b82",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen",
+        "publishedName": "Purchase",
+        "role": "experience",
+        "width": 320,
+        "height": 100,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "plan",
+        "publishedName": "Plan card",
+        "role": "component",
+        "width": 140,
+        "height": 100,
+        "authoredOrder": 1
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen",
+        "artboardId": "screen",
+        "artboardName": "Purchase",
+        "width": 320,
+        "height": 100,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": []
+    },
+    "textInputs": []
+  }
+}
