@@ -255,6 +255,15 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         XCTAssertTrue(completion.isCompleted)
     }
 
+    func testPathReferenceRoundTripPreservesExplicitScope() throws {
+        for relative: Bool? in [nil, false, true] {
+            let reference = VmPathRef(path: "product.placementId", isRelative: relative)
+            let encoded = try JSONEncoder().encode(reference)
+            let decoded = try JSONDecoder().decode(VmPathRef.self, from: encoded)
+            XCTAssertEqual(decoded.isRelative, relative)
+        }
+    }
+
     func testRuntimeDelegateResolvesDynamicPurchasePlacementFromActiveScreenState() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let fixtureURL = URL(fileURLWithPath: #filePath)

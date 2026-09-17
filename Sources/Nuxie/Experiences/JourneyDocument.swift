@@ -199,9 +199,7 @@ struct VmPathRef: Codable, Equatable, Sendable {
         if let viewModelName {
             try container.encode(viewModelName, forKey: .viewModelName)
         }
-        if isRelative == true {
-            try container.encode(true, forKey: .isRelative)
-        }
+        try container.encodeIfPresent(isRelative, forKey: .isRelative)
     }
 
     var normalizedPath: String {

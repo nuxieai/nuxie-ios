@@ -60,6 +60,52 @@
         }
       },
       "expected": null
+    },
+    {
+      "name": "explicit absolute ignores occurrence",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId",
+          "isRelative": false
+        }
+      },
+      "expected": "golden:monthly",
+      "instanceId": "secondary"
+    },
+    {
+      "name": "explicit relative uses occurrence",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId",
+          "isRelative": true
+        }
+      },
+      "expected": "golden:secondary",
+      "instanceId": "secondary"
+    },
+    {
+      "name": "explicit relative requires occurrence",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId",
+          "isRelative": true
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "explicit absolute without occurrence",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId",
+          "isRelative": false
+        }
+      },
+      "expected": "golden:monthly"
     }
   ]
 }
