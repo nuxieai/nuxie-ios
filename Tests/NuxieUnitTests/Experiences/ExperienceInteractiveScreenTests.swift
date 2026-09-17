@@ -12,6 +12,87 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    @MainActor
+    func testPublishedVideoDecodesIntoMetalScene() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/video")
+        let scene = try Data(contentsOf: directory.appendingPathComponent("greeting.nux"))
+        let url = directory.appendingPathComponent("greeting.mp4")
+        let media = try Data(contentsOf: url)
+        let digest = SHA256Provider.hexDigest(media)
+        let key = "assets/sha256/\(digest).mp4"
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let authored = try XCTUnwrap(catalog.first { $0.kind == .video })
+        let id = try XCTUnwrap(authored.authoredID)
+        let name = "\(authored.name)-\(id)"
+        let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
+            riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: media.count,
+            width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: [], required: true)
+        let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "video", buildId: "video", appId: "app", environment: "test"),
+            scene: .init(key: "scene.nux", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
+            entry: .init(screenId: "screen"), screens: [.init(screenId: "screen", artboardId: "screen", artboardName: "Video Frame", width: 320, height: 640, exit: nil)],
+            transitions: [], textInputs: [], images: [], fonts: [], videos: [video])
+        let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
+            journey: JourneyDocument(screens: [.init(id: "screen")]), sceneBytes: scene,
+            assets: [.init(kind: .video, riveAssetID: id, riveUniqueName: name, sourceKey: key, contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: url)])
+        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
+            pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
+        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
+        defer { host.close(); Task { try? await runtime.close() } }
+        let device = try await runtime.metalDevice().value
+        let layer = CAMetalLayer()
+        layer.device = device
+        layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = false
+        layer.drawableSize = CGSize(width: 320, height: 640)
+        let stride = 1280
+        let buffer = try XCTUnwrap(device.makeBuffer(length: stride * 640, options: .storageModeShared))
+        var sawRed = false, sawBlue = false
+        var phase = 0
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline && phase < 4 {
+            _ = try await runtime.step(elapsedSeconds: 0.03)
+            _ = try await host.tick()
+            guard let drawable = layer.nextDrawable() else { XCTFail("Metal drawable unavailable"); break }
+            let completed = expectation(description: "video frame presented")
+            _ = try await runtime.render(drawable: .available(.init(drawable)),
+                readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
+            await fulfillment(of: [completed], timeout: 2)
+            let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
+            let offset = 80 * stride + 100 * 4
+            let red = pixels[offset + 2] > 180 && pixels[offset] < 70
+            let blue = pixels[offset] > 180 && pixels[offset + 2] < 70
+            sawRed = sawRed || red
+            sawBlue = sawBlue || blue
+            if (phase % 2 == 0 && red) || (phase % 2 == 1 && blue) { phase += 1 }
+            try await Task.sleep(nanoseconds: 30_000_000)
+        }
+        XCTAssertTrue(sawRed, "Decoded red frame must reach the composed Metal scene")
+        XCTAssertTrue(sawBlue, "Playback must advance to the decoded blue frame")
+        XCTAssertEqual(phase, 4, "Two red/blue cycles must render across a runtime-owned loop seek: \(host.playbackDiagnostics)")
+        let occurrences = try await runtime.videos()
+        let occurrence = try XCTUnwrap(occurrences.first)
+        try await runtime.videoCommand(componentID: occurrence.componentID, kind: 1, value: 0)
+        _ = try await host.tick()
+        var current = try await runtime.videos()
+        var paused = try XCTUnwrap(current.first)
+        XCTAssertFalse(paused.wantsPlay)
+        XCTAssertEqual(paused.state, 3)
+        try await runtime.videoCommand(componentID: occurrence.componentID, kind: 0, value: 0)
+        _ = try await host.tick()
+        try await host.setSuspended(reason: 2, enabled: true)
+        current = try await runtime.videos()
+        paused = try XCTUnwrap(current.first)
+        XCTAssertTrue(paused.wantsPlay, "Background suspension must preserve requested playback")
+        XCTAssertEqual(paused.state, 3)
+        try await host.setSuspended(reason: 2, enabled: false)
+        _ = try await host.tick()
+        current = try await runtime.videos()
+        XCTAssertTrue(current.first?.wantsPlay == true)
+        host.close()
+        try await runtime.close()
+    }
+
     func testVideoBindingRequiresExactSignedIdentityAndLocalFile() throws {
         let digest = String(repeating: "b", count: 64)
         let key = "assets/sha256/\(digest).mp4"
