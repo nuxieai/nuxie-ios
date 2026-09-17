@@ -257,26 +257,14 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
 
     func testRuntimeDelegateResolvesDynamicPurchasePlacementFromActiveScreenState() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/purchase-reference-scopes.json")
+        let scopes = try JSONDecoder().decode(PurchaseReferenceScopes.self, from: Data(contentsOf: fixtureURL))
         let snapshot = replacing(
             try await authenticatedRenderedSnapshot(fixture),
-            viewModelValues: [
-                [
-                    "viewModelName": .string("WelcomeModel"),
-                    "instanceId": .string("welcome"),
-                    "path": .string("product"),
-                    "value": .object([
-                        "placementId": .string("golden:yearly")
-                    ]),
-                ],
-                [
-                    "viewModelName": .string("WelcomeModel"),
-                    "instanceId": .string("secondary"),
-                    "path": .string("product"),
-                    "value": .object([
-                        "placementId": .string("golden:secondary")
-                    ]),
-                ],
-            ]
+            viewModelValues: scopes.values
         )
         let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
         let release = try XCTUnwrap(snapshot.releasesByDigest[
@@ -341,6 +329,14 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         XCTAssertEqual(initialPlacement, "golden:yearly")
         XCTAssertEqual(changedPlacement, "golden:monthly")
         XCTAssertEqual(secondaryPlacement, "golden:secondary")
+        for vector in scopes.cases {
+            let source = vector.instanceId.map {
+                ScreenEmissionSource(screenId: "screen_welcome", actionId: "purchase",
+                    componentId: "buy", instanceId: $0)
+            }
+            let resolved = await delegate.resolvePresentationString(vector.reference, source: source)
+            XCTAssertEqual(resolved, vector.expected, vector.name)
+        }
     }
 
     func testRuntimeDelegateForwardsRendererOpenLinksFromTheActiveScreen() async throws {
@@ -1004,5 +1000,17 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             events.routedEvents.last?.properties["outcome"] as? String,
             "products_unavailable"
         )
+    }
+}
+
+private struct PurchaseReferenceScopes: Decodable {
+    let values: [[String: JourneyReleaseJSONValue]]
+    let cases: [Case]
+
+    struct Case: Decodable {
+        let name: String
+        let reference: JourneyReleaseJSONValue
+        let instanceId: String?
+        let expected: String?
     }
 }

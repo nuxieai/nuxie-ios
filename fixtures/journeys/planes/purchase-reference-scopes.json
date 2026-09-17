@@ -1,0 +1,65 @@
+{
+  "values": [
+    {
+      "viewModelName": "WelcomeModel",
+      "instanceId": "welcome",
+      "path": "product",
+      "value": {
+        "placementId": "golden:yearly"
+      }
+    },
+    {
+      "viewModelName": "WelcomeModel",
+      "instanceId": "secondary",
+      "path": "product",
+      "value": {
+        "placementId": "golden:secondary"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "changed root",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId"
+        }
+      },
+      "expected": "golden:monthly"
+    },
+    {
+      "name": "explicit root model",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId",
+          "viewModelName": "WelcomeModel"
+        }
+      },
+      "expected": "golden:monthly"
+    },
+    {
+      "name": "secondary occurrence",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId"
+        }
+      },
+      "instanceId": "secondary",
+      "expected": "golden:secondary"
+    },
+    {
+      "name": "missing model",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId",
+          "viewModelName": "MissingModel"
+        }
+      },
+      "expected": null
+    }
+  ]
+}
