@@ -1,4 +1,5 @@
 import XCTest
+import Vision
 
 final class ExperienceRuntimePackageSmokeTests: XCTestCase {
     /// Installed-app client coverage; this does not simulate VoiceOver gestures.
@@ -16,7 +17,19 @@ final class ExperienceRuntimePackageSmokeTests: XCTestCase {
         for identifier in ["nuxie-current-fixture", "nuxie-runtime-status", "nuxie-safe-area-probe"] {
             XCTAssertFalse(app.descendants(matching: .any)[identifier].exists)
         }
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        let screenshot = XCUIScreen.main.screenshot()
+        let image = try XCTUnwrap(screenshot.image.cgImage)
+        let recognition = VNRecognizeTextRequest()
+        recognition.recognitionLevel = .accurate
+        try VNImageRequestHandler(cgImage: image).perform([recognition])
+        let visibleText = (recognition.results ?? []).compactMap {
+            $0.topCandidates(1).first?.string
+        }.joined(separator: " ")
+        for label in ["Continue", "Annual plan", "Selected", "Seats", "Unavailable", "Optional extras", "Mixed"] {
+            XCTAssertTrue(visibleText.contains(label), "Missing rendered text: \(label). Recognized: \(visibleText)")
+        }
+        XCTAssertGreaterThan(app.staticTexts["Choose your plan"].frame.minY, 50)
+        let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = "signed-accessibility-qualification-host"
         attachment.lifetime = .keepAlways
         add(attachment)
