@@ -120,14 +120,14 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         XCTAssertFalse(element.accessibilityTraits.contains(.selected))
     }
 
-    func testToggleFallbackDoesNotInventMixedOrObscuredValues() {
+    func testToggleFallbackDescribesMixedAndDoesNotExposeObscuredValues() {
         let container = UIView()
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
         for flag in [NuxieNativeSemanticNode.mixed, NuxieNativeSemanticNode.obscured] {
             element.update(captureID: UUID(), node: node(actions: 1,
                 flags: flag | NuxieNativeSemanticNode.toggled, role: NuxieNativeSemanticRole.switchControl.rawValue),
                 frameInContainer: .zero, traits: .button) { _, _, _ in false }
-            XCTAssertNil(element.accessibilityValue)
+            XCTAssertEqual(element.accessibilityValue, flag == NuxieNativeSemanticNode.mixed ? "Mixed" : nil)
         }
         element.update(captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.selected),
             frameInContainer: .zero, traits: .button) { _, _, _ in false }
@@ -164,6 +164,7 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
             let expandable: Bool
             let expanded: Bool
             let iosValue: String?
+            let iosValueBefore18: String?
         }
         struct Suite: Decodable { let schemaVersion: Int; let cases: [Vector] }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -177,7 +178,13 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
             element.update(captureID: UUID(), node: node(actions: 1, flags: vector.state,
                 role: vector.role, semanticTraits: vector.traits, value: vector.value),
                 frameInContainer: .zero, traits: .button) { _, _, _ in false }
-            XCTAssertEqual(element.accessibilityValue, vector.iosValue, vector.id)
+            let expectedValue: String?
+            if #available(iOS 18.0, *) { expectedValue = vector.iosValue } else { expectedValue = vector.iosValueBefore18 }
+            XCTAssertEqual(element.accessibilityValue, expectedValue, vector.id)
+            XCTAssertEqual(ExperienceAccessibilityStateDescription.value(
+                for: node(actions: 1, flags: vector.state, role: vector.role,
+                          semanticTraits: vector.traits, value: vector.value), supportsExpandedStatus: false),
+                vector.iosValueBefore18, vector.id)
             if #available(iOS 17.0, *) {
                 XCTAssertEqual(element.accessibilityTraits.contains(.toggleButton), vector.checkable, vector.id)
             }
@@ -186,6 +193,16 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
                     : (vector.expanded ? .expanded : .collapsed), vector.id)
             }
         }
+    }
+
+    func testStateWordsResolveFromPackagedFrenchLocalization() throws {
+        let path = try XCTUnwrap(ExperienceAccessibilityStateDescription.resourceBundle.path(forResource: "fr", ofType: "lproj"))
+        let bundle = try XCTUnwrap(Bundle(path: path))
+        let value = ExperienceAccessibilityStateDescription.value(
+            for: node(actions: 1, flags: NuxieNativeSemanticNode.mixed | NuxieNativeSemanticNode.required,
+                      semanticTraits: NuxieNativeSemanticTrait.checkable),
+            supportsExpandedStatus: false, bundle: bundle)
+        XCTAssertEqual(value, "Mixte, Obligatoire")
     }
 
     private func node(actions: UInt32, flags: UInt32 = 0, role: UInt32 = 1,

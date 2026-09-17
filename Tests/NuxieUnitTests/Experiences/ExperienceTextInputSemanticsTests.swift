@@ -122,6 +122,38 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         bridge.clear()
     }
 
+    func testNativeFieldStateLabelsPreserveNativeValuesAndAuthoredInputName() throws {
+        for (secure, multiline) in [(false, false), (true, false), (false, true)] {
+            let bridge = ExperienceTextInputOverlayBridge()
+            let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+            bridge.bind(screenID: "screen", renderPlan: makePlan(secure: secure, multiline: multiline),
+                surfaceView: view, artboardBounds: view.bounds) { _, _, done in done(.success(())) }
+            presentField(on: bridge)
+            let obscured = secure ? NuxieNativeSemanticNode.obscured : 0
+            let initial = bridge.applySemantics(try capture(flags: obscured))
+            let control = try XCTUnwrap(initial[1])
+            let nativeValue = control.accessibilityValue
+            let flags = obscured | NuxieNativeSemanticNode.required | NuxieNativeSemanticNode.readOnly
+            let updated = bridge.applySemantics(try capture(flags: flags))
+            XCTAssertTrue(updated[1] === control)
+            XCTAssertEqual(control.accessibilityLabel, "Your name, Required, Read only")
+            XCTAssertEqual(control.accessibilityUserInputLabels, ["Your name"])
+            XCTAssertEqual(control.accessibilityValue, nativeValue, "State must not replace native or secure text values")
+            if let field = control as? UITextField {
+                XCTAssertEqual(field.text, "saved")
+                XCTAssertFalse(bridge.textField(field, shouldChangeCharactersIn: NSRange(location: 0, length: 0), replacementString: "blocked"))
+            } else {
+                let textView = try XCTUnwrap(control as? UITextView)
+                XCTAssertEqual(textView.text, "saved")
+                XCTAssertFalse(textView.isEditable)
+            }
+            _ = bridge.applySemantics(try capture(flags: obscured))
+            XCTAssertEqual(control.accessibilityLabel, "Your name", "Removed state must not linger")
+            XCTAssertEqual(control.accessibilityValue, nativeValue)
+            bridge.clear()
+        }
+    }
+
     func testSemanticWritesCoalesceRetryAndCommitOnlyAcceptedText() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))

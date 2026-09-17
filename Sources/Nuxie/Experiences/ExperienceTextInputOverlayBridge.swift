@@ -358,7 +358,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 textView.isEditable = editable
                 textView.isSelectable = allowsInteraction(binding)
             }
-            binding.control.view.accessibilityLabel = node?.label
+            binding.control.view.accessibilityLabel = node.map { ExperienceAccessibilityStateDescription.fieldLabel(for: $0) }
+            binding.control.view.accessibilityUserInputLabels = node.flatMap { $0.label.isEmpty ? nil : [$0.label] }
             binding.control.view.accessibilityHint = node?.hint
             if !editable {
                 restoreAcceptedText(binding)
