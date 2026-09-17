@@ -171,6 +171,35 @@ struct ExperienceInteractiveStateCompiler {
         throw ExperienceInteractiveScreenError.stateContract(path)
     }
 
+    /// Resolve generated input state from the authenticated runtime catalog.
+    /// Ordinary response-bound inputs have no control entry and keep their
+    /// existing response path; a malformed scripted entry is an error.
+    func scriptedInputCommitPaths(
+        nodeID: String,
+        rootSchemaIndex: Int
+    ) throws -> (value: String, commit: String)? {
+        guard catalog.properties.contains(where: {
+            $0.schemaIndex == rootSchemaIndex && $0.name == "controls"
+        }) else { return nil }
+        let controls = try property(at: "controls", startingWith: rootSchemaIndex)
+        guard controls.kind == .viewModel, let controlsSchema = controls.referencedSchemaIndex else {
+            throw ExperienceInteractiveScreenError.stateContract("generated controls is not a view model")
+        }
+        guard catalog.properties.contains(where: {
+            $0.schemaIndex == controlsSchema && $0.name == nodeID
+        }) else { return nil }
+        guard !nodeID.isEmpty, !nodeID.contains("/") else {
+            throw ExperienceInteractiveScreenError.stateContract("generated input identity is not a path segment")
+        }
+        let valuePath = "controls/\(nodeID)/value"
+        let commitPath = "controls/\(nodeID)/commit"
+        guard try property(at: valuePath, startingWith: rootSchemaIndex).kind == .string,
+              try property(at: commitPath, startingWith: rootSchemaIndex).kind == .trigger else {
+            throw ExperienceInteractiveScreenError.stateContract("generated input has invalid value/commit types")
+        }
+        return (valuePath, commitPath)
+    }
+
     func normalizeFlattenedEnvelopes(
         _ values: [ExperienceInteractiveStateCommand.Value]
     ) throws -> [ExperienceInteractiveStateCommand.Value] {

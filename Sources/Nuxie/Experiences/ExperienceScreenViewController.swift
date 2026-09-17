@@ -713,25 +713,35 @@ final class ExperienceScreenViewController: UIViewController {
 
     private func configureTextInputCallbacks() {
         textInputOverlayBridge.onCommitText = { [weak self] input, text in
-            guard let self,
-                  let draft = Self.responseSetDraft(for: input, text: text) else { return }
+            guard let self, let interactiveScreen = self.interactiveScreen,
+                  let loop = self.presentationLoop else { return }
             let originatingRun = self.delegate?.screenEmissionRun(for: self)
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                await self.delegate?.experienceScreenViewController(
-                    self,
-                    didEmitScreenEmission: .effects(
-                        source: ScreenEmissionSource(
-                            screenId: input.screenId,
-                            actionId: "text_input:\(input.inputId)",
-                            componentId: input.inputId,
-                            instanceId: nil
+            loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                let result = try await interactiveScreen.commitTextInput(inputID: input.inputId, value: text)
+                return .work(requestsFrame: result != nil) { [weak self] in
+                    guard let self, self.semanticInputIsEligible else { return }
+                    if let result {
+                        await self.deliverStep(effects: result.effects)
+                        return
+                    }
+                    guard let draft = Self.responseSetDraft(for: input, text: text) else { return }
+                    await self.delegate?.experienceScreenViewController(
+                        self,
+                        didEmitScreenEmission: .effects(
+                            source: ScreenEmissionSource(
+                                screenId: input.screenId,
+                                actionId: "text_input:\(input.inputId)",
+                                componentId: input.inputId,
+                                instanceId: nil
+                            ),
+                            drafts: [draft]
                         ),
-                        drafts: [draft]
-                    ),
-                    originatingRun: originatingRun
-                )
-            }
+                        originatingRun: originatingRun
+                    )
+                }
+            }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { [weak self] result in
+                if case .failure(let error) = result { self?.logRejectedState(error) }
+            })
         }
     }
 

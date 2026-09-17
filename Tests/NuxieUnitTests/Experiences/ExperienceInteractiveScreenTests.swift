@@ -2399,6 +2399,54 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertFalse(filter.shouldSuppress(Self.change(owner: 2, property: 1, value: .number(11))))
     }
 
+    func testScriptedInputCommitResolvesOnlyItsGeneratedControl() throws {
+        let compiler = ExperienceInteractiveStateCompiler(
+            catalog: Self.scriptedInputCatalog(), policy: .liveCommand
+        )
+        let first = try XCTUnwrap(compiler.scriptedInputCommitPaths(nodeID: "name", rootSchemaIndex: 0))
+        XCTAssertEqual(first.value, "controls/name/value")
+        XCTAssertEqual(first.commit, "controls/name/commit")
+        let second = try XCTUnwrap(compiler.scriptedInputCommitPaths(nodeID: "other", rootSchemaIndex: 0))
+        XCTAssertEqual(second.value, "controls/other/value")
+        XCTAssertEqual(second.commit, "controls/other/commit")
+        XCTAssertNil(try compiler.scriptedInputCommitPaths(nodeID: "ordinary", rootSchemaIndex: 0))
+        XCTAssertNil(try compiler.scriptedInputCommitPaths(nodeID: "name", rootSchemaIndex: 2))
+    }
+
+    func testScriptedInputCommitRejectsMalformedControlInsteadOfFallingBack() {
+        let compiler = ExperienceInteractiveStateCompiler(
+            catalog: Self.scriptedInputCatalog(commitKind: .string), policy: .liveCommand
+        )
+        XCTAssertThrowsError(try compiler.scriptedInputCommitPaths(nodeID: "name", rootSchemaIndex: 0))
+    }
+
+    private static func scriptedInputCatalog(
+        commitKind: NuxieNativeViewModelPropertyKind = .trigger
+    ) -> NuxieNativeViewModelCatalog {
+        NuxieNativeViewModelCatalog(
+            schemas: [
+                .init(index: 0, name: "Root", propertyRange: 0..<1,
+                      authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: false),
+                .init(index: 1, name: "Controls", propertyRange: 1..<3,
+                      authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: false),
+                .init(index: 2, name: "Input", propertyRange: 3..<5,
+                      authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: false),
+            ],
+            properties: [
+                .init(schemaIndex: 0, index: 0, name: "controls", kind: .viewModel,
+                      referencedSchemaIndex: 1, enumLabels: []),
+                .init(schemaIndex: 1, index: 0, name: "name", kind: .viewModel,
+                      referencedSchemaIndex: 2, enumLabels: []),
+                .init(schemaIndex: 1, index: 1, name: "other", kind: .viewModel,
+                      referencedSchemaIndex: 2, enumLabels: []),
+                .init(schemaIndex: 2, index: 0, name: "value", kind: .string,
+                      referencedSchemaIndex: nil, enumLabels: []),
+                .init(schemaIndex: 2, index: 1, name: "commit", kind: commitKind,
+                      referencedSchemaIndex: nil, enumLabels: []),
+            ], authoredInstances: []
+        )
+    }
+
     func testReservedProjectionAllowsCatalogWithoutReservedRoots() {
         let catalog = NuxieNativeViewModelCatalog(
             schemas: [.init(
