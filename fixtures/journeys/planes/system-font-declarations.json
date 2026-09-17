@@ -1,0 +1,592 @@
+{
+  "description": "Shared strict Journey font source declarations. Cases replace render.assets and requirements.requiredCapabilities in the rendered release fixture. No font files are included.",
+  "cases": [
+    {
+      "name": "system-weight-100",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "100",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "system-weight-200",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "200",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "system-weight-300",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "300",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "system-weight-400",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "system-weight-500",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "500",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "system-weight-600",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "600",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "system-weight-700",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "700",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "system-weight-800",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "800",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "system-weight-900",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "900",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "reject-key-assets/font.ttf",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1",
+          "key": "assets/font.ttf"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-sizeBytes-100",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1",
+          "sizeBytes": 100
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-contentType-font/ttf",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1",
+          "contentType": "font/ttf"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-format-ttf",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1",
+          "format": "ttf"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-family-Roboto",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "Roboto",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-weight-450",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "450",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-weight-400",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": 400,
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-style-italic",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "italic",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-required-False",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": false,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-required-1",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": 1,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "reject-location-device",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "device",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "missing-capability",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [],
+      "valid": false
+    },
+    {
+      "name": "duplicate-identity",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        },
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "cdn",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "cdn",
+          "family": "Roboto",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 2,
+          "riveUniqueName": "roboto-2",
+          "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 100,
+          "contentType": "font/ttf",
+          "format": "ttf"
+        }
+      ],
+      "requiredCapabilities": [],
+      "valid": true
+    },
+    {
+      "name": "mixed",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "cdn",
+          "family": "Roboto",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 2,
+          "riveUniqueName": "roboto-2",
+          "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 100,
+          "contentType": "font/ttf",
+          "format": "ttf"
+        },
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": true
+    },
+    {
+      "name": "unsorted-mixed",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "system",
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 1,
+          "riveUniqueName": "system-400-1"
+        },
+        {
+          "kind": "font",
+          "location": "cdn",
+          "family": "Roboto",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 2,
+          "riveUniqueName": "roboto-2",
+          "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 100,
+          "contentType": "font/ttf",
+          "format": "ttf"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "cdn-system-family",
+      "assets": [
+        {
+          "kind": "font",
+          "location": "cdn",
+          "family": " system ",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 2,
+          "riveUniqueName": "roboto-2",
+          "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 100,
+          "contentType": "font/ttf",
+          "format": "ttf"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    },
+    {
+      "name": "cdn-missing-location",
+      "assets": [
+        {
+          "kind": "font",
+          "family": "Roboto",
+          "weight": "400",
+          "style": "normal",
+          "required": true,
+          "riveAssetId": 2,
+          "riveUniqueName": "roboto-2",
+          "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sizeBytes": 100,
+          "contentType": "font/ttf",
+          "format": "ttf"
+        }
+      ],
+      "requiredCapabilities": [
+        "system-fonts"
+      ],
+      "valid": false
+    }
+  ]
+}
