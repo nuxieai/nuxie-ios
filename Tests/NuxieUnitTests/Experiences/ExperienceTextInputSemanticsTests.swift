@@ -7,6 +7,39 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testModalWithdrawalRejectsLateNativeEditAndRestoresBackgroundEditor() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
+        window.rootViewController = UIViewController()
+        window.rootViewController?.view.addSubview(view)
+        window.makeKeyAndVisible()
+        var writes: [String] = []
+        bridge.bind(screenID: "screen", renderPlan: makePlan(), surfaceView: view, artboardBounds: view.bounds,
+            semanticTextWriter: { _, _, text, done in writes.append(text); done(.accepted) },
+            textWriter: { _, _, _ in XCTFail("Expected semantic writer") })
+        defer { bridge.clear(); window.isHidden = true }
+        presentField(on: bridge)
+        let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
+        for scope in [NuxieNativeSemanticModalScope.active(2), .unresolved] {
+            _ = bridge.applySemantics(try capture(flags: 0))
+            XCTAssertTrue(field.isEnabled)
+            XCTAssertTrue(field.becomeFirstResponder())
+            XCTAssertTrue(field.isFirstResponder)
+            let count = writes.count
+            XCTAssertTrue(bridge.applySemantics(try capture(flags: 0, modalScope: scope)).isEmpty)
+            XCTAssertFalse(field.isEnabled)
+            XCTAssertTrue(field.isHidden)
+            XCTAssertFalse(field.isFirstResponder)
+            field.text = "late"
+            bridge.flushTextChange(for: field)
+            XCTAssertEqual(field.text, "saved")
+            XCTAssertEqual(writes.count, count)
+        }
+        _ = bridge.applySemantics(try capture(flags: 0))
+        XCTAssertTrue(field.isEnabled)
+    }
+
     func testAuthoredInputActionChoosesOneEventAndUsesAcceptedValue() throws {
         for selectedEvent in [ExperienceTextInputEventKind.editingEnded, .returnPressed] {
             var input = makePlan().textInputs[0]
@@ -417,12 +450,16 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         return plan
     }
 
-    private func capture(flags: UInt32) throws -> NuxieNativeSemanticCapture {
+    private func capture(flags: UInt32, modalScope: NuxieNativeSemanticModalScope = .none) throws -> NuxieNativeSemanticCapture {
         let node = NuxieNativeSemanticNode(id: 1, parentID: nil, siblingIndex: 0,
             role: NuxieNativeSemanticRole.textField.rawValue, stateFlags: flags, traitFlags: 0,
             headingLevel: 0, actions: 0, bounds: .zero, label: "Your name", value: "", hint: "Enter name")
+        let modal = NuxieNativeSemanticNode(id: 2, parentID: nil, siblingIndex: 1,
+            role: NuxieNativeSemanticRole.dialog.rawValue, stateFlags: NuxieNativeSemanticNode.modal,
+            traitFlags: 0, headingLevel: 0, actions: 0, bounds: .zero, label: "Dialog", value: "", hint: "")
         return NuxieNativeSemanticCapture(id: UUID(), tree: try NuxieNativeSemanticTree(
-            renderRevision: 1, treeVersion: 1, nodes: [node]), fieldsByTextRun: ["run": node])
+            renderRevision: 1, treeVersion: 1, nodes: modalScope == .none ? [node] : [node, modal],
+            modalScope: modalScope), fieldsByTextRun: ["run": node])
     }
 }
 #endif

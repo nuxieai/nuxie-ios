@@ -3,6 +3,21 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeSemanticTreeTests: XCTestCase {
+    func testCaptureWithdrawsEditorsOutsideActiveModalAndRestoresAfterDismissal() throws {
+        let background = node(id: 1, role: 6)
+        let modal = node(id: 2, flags: NuxieNativeSemanticNode.modal, role: 14)
+        let field = node(id: 3, parent: 2, role: 6)
+        let hidden = node(id: 4, parent: 2, flags: NuxieNativeSemanticNode.hidden, role: 6)
+        let fields = ["background": background, "dialog": field, "hidden": hidden]
+        for (scope, expected) in [(NuxieNativeSemanticModalScope.active(2), Set(["dialog"])),
+                                  (.unresolved, Set<String>()), (.none, Set(["background", "dialog"]))] {
+            let tree = try NuxieNativeSemanticTree(renderRevision: 1, treeVersion: 1,
+                nodes: [field, background, hidden, modal], modalScope: scope)
+            let capture = NuxieNativeSemanticCapture(id: UUID(), tree: tree, fieldsByTextRun: fields)
+            XCTAssertEqual(Set(capture.fieldsByTextRun.keys), expected)
+        }
+    }
+
     func testDisabledAncestorProjectsToChildBeforeParentAndReenablesFromFreshCapture() throws {
         let child = node(id: UInt32.max, parent: 1)
         let parent = node(id: 1, flags: 64)

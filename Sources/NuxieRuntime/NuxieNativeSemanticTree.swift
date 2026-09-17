@@ -79,6 +79,26 @@ package struct NuxieNativeSemanticTree: Sendable {
     package let modalScope: NuxieNativeSemanticModalScope
     package let nodes: [NuxieNativeSemanticNode]
 
+    /// Native editors obey the same captured modal boundary as drawn controls.
+    package var exposedNodeIDs: Set<UInt32> {
+        switch modalScope {
+        case .none:
+            return Set(nodes.filter { $0.stateFlags & NuxieNativeSemanticNode.hidden == 0 }.map(\.id))
+        case .unresolved:
+            return []
+        case .active(let id):
+            let children = Dictionary(grouping: nodes, by: \.parentID)
+            var pending = nodes.filter { $0.id == id }
+            var exposed: Set<UInt32> = []
+            while let node = pending.popLast() {
+                guard node.stateFlags & NuxieNativeSemanticNode.hidden == 0 else { continue }
+                exposed.insert(node.id)
+                pending.append(contentsOf: children[node.id] ?? [])
+            }
+            return exposed
+        }
+    }
+
     /// Authored depth-first order, independent of snapshot storage order.
     package var visibleReadingOrder: [NuxieNativeSemanticNode] {
         var children: [UInt32?: [(offset: Int, node: NuxieNativeSemanticNode)]] = [:]
@@ -177,7 +197,8 @@ package struct NuxieNativeSemanticCapture: Sendable {
     package init(id: UUID, tree: NuxieNativeSemanticTree, fieldsByTextRun: [String: NuxieNativeSemanticNode]) {
         self.id = id
         self.tree = tree
-        self.fieldsByTextRun = fieldsByTextRun
+        let exposed = tree.exposedNodeIDs
+        self.fieldsByTextRun = fieldsByTextRun.filter { exposed.contains($0.value.id) }
     }
 }
 

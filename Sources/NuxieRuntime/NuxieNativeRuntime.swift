@@ -1170,6 +1170,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             let tree = try NuxieNativeSemanticTree(renderRevision: info.render_revision,
                 treeVersion: info.tree_version, nodes: nodes, modalScope: modalScope)
             let byID = Dictionary(uniqueKeysWithValues: tree.nodes.map { ($0.id, $0) })
+            let exposed = tree.exposedNodeIDs
             var fields: [String: NuxieNativeSemanticNode] = [:]
             for run in textRuns {
                 var id: UInt32 = 0
@@ -1181,7 +1182,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 guard let node = byID[id], node.role == UInt32(NUX_SEMANTIC_ROLE_TEXT_FIELD) else {
                     throw NuxieNativeRuntimeError.invalidNativeValue("semantic text run has no captured field")
                 }
-                fields[run] = node
+                if exposed.contains(node.id) { fields[run] = node }
             }
             // A fresh presented frame can replace its native render revision
             // without changing accessibility. Preserve UIKit intent while the
