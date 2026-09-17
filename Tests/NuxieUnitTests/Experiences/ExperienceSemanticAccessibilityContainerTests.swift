@@ -297,6 +297,108 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
         XCTAssertEqual(view.accessibilityElements?.count, 0)
     }
 
+    func testModalExcludesBackgroundRetiresActionsAndRestoresInvoker() throws {
+        let view = UIView()
+        let field = UITextField()
+        view.addSubview(field)
+        var focused: AnyObject?
+        var moves: [String] = []
+        let container = ExperienceSemanticAccessibilityContainer(view: view,
+            focusedElement: { focused }, moveFocus: {
+                focused = $0
+                moves.append(($0 as? UIAccessibilityElement)?.accessibilityLabel ?? "field")
+            })
+        container.setActive(true)
+        let background = [node(1), node(2, order: 1, role: .textField)]
+        func publish(_ nodes: [NuxieNativeSemanticNode]) throws {
+            container.update(capture: try capture(nodes), nativeControls: [2: field], project: projection) { _, _, _ in true }
+        }
+        try publish(background)
+        let invoker = try XCTUnwrap(view.accessibilityElements?.first as? ExperienceSemanticAccessibilityElement)
+        let dialog = [node(10, order: 2, role: .dialog, flags: 1 << 11), node(11, parent: 10)]
+        try publish(background + dialog)
+        XCTAssertEqual(view.accessibilityElements?.compactMap { ($0 as? UIAccessibilityElement)?.accessibilityLabel }, ["10", "11"])
+        XCTAssertTrue(field.accessibilityElementsHidden)
+        XCTAssertFalse(invoker.accessibilityActivate(), "A retained background element cannot execute through the modal")
+        XCTAssertEqual(moves, ["1", "10"])
+        try publish(background + dialog)
+        XCTAssertEqual(moves, ["1", "10"], "Stable modal frames do not repeatedly move focus")
+        try publish(background)
+        XCTAssertEqual(moves, ["1", "10", "1"])
+        XCTAssertFalse(field.accessibilityElementsHidden)
+    }
+
+    func testNestedModalRestoresParentThenOriginalInvoker() throws {
+        let view = UIView()
+        var focused: AnyObject?
+        let container = ExperienceSemanticAccessibilityContainer(view: view,
+            focusedElement: { focused }, moveFocus: { focused = $0 })
+        container.setActive(true)
+        func publish(_ nodes: [NuxieNativeSemanticNode]) throws {
+            container.update(capture: try capture(nodes), nativeControls: [:], project: projection) { _, _, _ in true }
+        }
+        let background = [node(1)]
+        let outer = [node(10, order: 1, role: .dialog, flags: 1 << 11), node(11, parent: 10)]
+        let inner = [node(20, parent: 10, order: 1, role: .alertDialog, flags: 1 << 11), node(21, parent: 20)]
+        try publish(background)
+        try publish(background + outer)
+        focused = view.accessibilityElements?.last as AnyObject?
+        try publish(background + outer + inner)
+        XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "20")
+        XCTAssertEqual(view.accessibilityElements?.count, 2)
+        try publish(background + outer)
+        XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "11")
+        try publish(background)
+        XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "1")
+    }
+
+    func testModalClosePreservesShellFocusAndRestoresNativeExclusionState() throws {
+        let view = UIView()
+        let field = UITextField()
+        field.accessibilityElementsHidden = true
+        let shell = UIButton()
+        var focused: AnyObject?
+        let container = ExperienceSemanticAccessibilityContainer(view: view,
+            focusedElement: { focused }, moveFocus: { focused = $0 })
+        container.setActive(true)
+        func publish(_ nodes: [NuxieNativeSemanticNode]) throws {
+            container.update(capture: try capture(nodes), nativeControls: [2: field], project: projection) { _, _, _ in true }
+        }
+        let background = [node(1), node(2, role: .textField)]
+        try publish(background)
+        try publish(background + [node(10, order: 1, role: .dialog, flags: 1 << 11)])
+        focused = shell
+        try publish(background)
+        XCTAssertTrue(focused === shell)
+        XCTAssertTrue(field.accessibilityElementsHidden, "Restore the prior native setting instead of blindly exposing the field")
+    }
+
+    func testRemovedInvokerFallsBackAndHiddenModalDoesNotIsolate() throws {
+        let view = UIView()
+        var focused: AnyObject?
+        let container = ExperienceSemanticAccessibilityContainer(view: view,
+            focusedElement: { focused }, moveFocus: { focused = $0 })
+        container.setActive(true)
+        func publish(_ nodes: [NuxieNativeSemanticNode]) throws {
+            container.update(capture: try capture(nodes), nativeControls: [:], project: projection) { _, _, _ in true }
+        }
+        try publish([node(1), node(2, order: 1)])
+        try publish([node(2), node(10, order: 1, role: .dialog, flags: 1 << 11)])
+        try publish([node(2), node(10, role: .dialog, flags: (1 << 11) | NuxieNativeSemanticNode.hidden)])
+        XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "2")
+        XCTAssertEqual(view.accessibilityElements?.count, 1)
+    }
+
+    func testDisjointModalScopesDoNotGuessVisualStackingFromReadingOrder() throws {
+        let view = UIView()
+        let container = ExperienceSemanticAccessibilityContainer(view: view)
+        container.setActive(true)
+        let nodes = [node(1), node(10, role: .dialog, flags: 1 << 11),
+            node(20, order: 1, role: .dialog, flags: 1 << 11)]
+        container.update(capture: try capture(nodes), nativeControls: [:], project: projection) { _, _, _ in true }
+        XCTAssertEqual(view.accessibilityElements?.count, 0)
+    }
+
     private func projection(_ node: NuxieNativeSemanticNode) -> ExperienceSemanticAccessibilityContainer.Projection? {
         .init(frame: node.bounds, traits: .button)
     }

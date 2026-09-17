@@ -19,6 +19,16 @@ final class ExperienceSemanticAccessibilityContainer {
     private var objects: [UInt32: AnyObject] = [:]
     private var order: [UInt32] = []
     private var preferredFocusID: UInt32?
+    private struct ModalFrame {
+        let id: UInt32
+        let returnFocusID: UInt32?
+    }
+    private struct ExcludedControl {
+        weak var view: UIView?
+        let wasHidden: Bool
+    }
+    private var modalFrames: [ModalFrame] = []
+    private var excludedControls: [ObjectIdentifier: ExcludedControl] = [:]
     private var isActive = false
     private enum FocusIntent { case initial, restore, navigation, none }
     private var focusIntent: FocusIntent = .initial
@@ -72,11 +82,29 @@ final class ExperienceSemanticAccessibilityContainer {
         let focusedID = rememberFocus()
         let focusedObject = focusedID.flatMap { objects[$0] }
         let oldPosition = focusedID.flatMap { order.firstIndex(of: $0) }
+        let scope = modalScope(capture.tree.visibleReadingOrder)
+        let modalChanged = modalFrames.map(\.id) != scope.path
+        let currentFocus = focusedElement()
+        let mayMoveModalFocus = focusedID != nil || currentFocus == nil
+            || currentFocus === withdrawnFocus || focusIntent == .initial || focusIntent == .navigation
+        var modalReturnID: UInt32?
+        if modalChanged {
+            let common = zip(modalFrames.map(\.id), scope.path).prefix { $0 == $1 }.count
+            if common < modalFrames.count { modalReturnID = modalFrames[common].returnFocusID }
+            modalFrames = Array(modalFrames.prefix(common))
+            for id in scope.path.dropFirst(common) {
+                modalFrames.append(ModalFrame(id: id,
+                    returnFocusID: modalFrames.count == common ? focusedID ?? modalReturnID : nil))
+            }
+            // Entering a new dialog starts at its first represented node.
+            if common < scope.path.count { modalReturnID = nil }
+        }
+        updateExcludedControls(nativeControls, allowedIDs: Set(scope.nodes.map(\.id)))
         var next: [UInt32: ExperienceSemanticAccessibilityElement] = [:]
         var ordered: [Any] = []
         var nextObjects: [UInt32: AnyObject] = [:]
         var nextOrder: [UInt32] = []
-        for node in capture.tree.visibleReadingOrder {
+        for node in scope.nodes {
             guard let projection = project(node) else { continue }
             if node.role == NuxieNativeSemanticRole.textField.rawValue {
                 // An editable semantic node is represented exclusively by its real control.
@@ -116,6 +144,10 @@ final class ExperienceSemanticAccessibilityContainer {
             // scene was unavailable. Do not steal that focus on restoration.
             focusIntent = .none
         }
+        if modalChanged, mayMoveModalFocus {
+            preferredFocusID = modalReturnID
+            focusIntent = .navigation
+        }
         guard focusIntent != .none, ExperienceSemanticAccessibilityElement.allowsInteraction(in: view),
               let targetID = preferredFocusID.flatMap({ objects[$0] == nil ? nil : $0 }) ?? order.first,
               let target = objects[targetID] else { return }
@@ -130,10 +162,54 @@ final class ExperienceSemanticAccessibilityContainer {
         focusIntent = .initial
         withdrawnFocus = nil
         preferredFocusID = nil
+        modalFrames.removeAll()
         removeElements()
     }
 
+    /// Nested modal scopes follow semantic ancestry. Disjoint simultaneous modals
+    /// cannot be ordered by this ABI, so exposure waits for an unambiguous scope.
+    private func modalScope(_ ordered: [NuxieNativeSemanticNode])
+        -> (nodes: [NuxieNativeSemanticNode], path: [UInt32]) {
+        let isModal: (NuxieNativeSemanticNode) -> Bool = {
+            $0.stateFlags & NuxieNativeSemanticNode.modal != 0
+                && ($0.role == NuxieNativeSemanticRole.dialog.rawValue
+                    || $0.role == NuxieNativeSemanticRole.alertDialog.rawValue)
+        }
+        guard let modal = ordered.last(where: isModal) else { return (ordered, []) }
+        let byID = Dictionary(uniqueKeysWithValues: ordered.map { ($0.id, $0) })
+        var path: [UInt32] = []
+        var current: NuxieNativeSemanticNode? = modal
+        while let node = current {
+            if isModal(node) { path.append(node.id) }
+            current = node.parentID.flatMap { byID[$0] }
+        }
+        let modalIDs = Set(ordered.filter(isModal).map(\.id))
+        guard Set(path) == modalIDs else { return ([], []) }
+        var descendants: Set<UInt32> = [modal.id]
+        let nodes = ordered.filter { node in
+            if node.parentID.map({ descendants.contains($0) }) == true { descendants.insert(node.id) }
+            return descendants.contains(node.id)
+        }
+        return (nodes, path.reversed())
+    }
+
+    private func updateExcludedControls(_ controls: [UInt32: UIView], allowedIDs: Set<UInt32>) {
+        let excluded = Dictionary(uniqueKeysWithValues: controls.filter { !allowedIDs.contains($0.key) }
+            .map { (ObjectIdentifier($0.value), $0.value) })
+        for (id, saved) in excludedControls where excluded[id] == nil {
+            saved.view?.accessibilityElementsHidden = saved.wasHidden
+            excludedControls.removeValue(forKey: id)
+        }
+        for (id, control) in excluded {
+            if excludedControls[id] == nil {
+                excludedControls[id] = ExcludedControl(view: control, wasHidden: control.accessibilityElementsHidden)
+            }
+            control.accessibilityElementsHidden = true
+        }
+    }
+
     private func removeElements() {
+        updateExcludedControls([:], allowedIDs: [])
         for element in elements.values { element.retire() }
         elements.removeAll()
         objects.removeAll()

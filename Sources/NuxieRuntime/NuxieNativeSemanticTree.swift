@@ -11,6 +11,7 @@ package struct NuxieNativeSemanticNode: Equatable, Sendable {
     package static let disabled: UInt32 = 1 << 6
     package static let readOnly: UInt32 = 1 << 10
     package static let hidden: UInt32 = 1 << 8
+    package static let modal: UInt32 = 1 << 11
     package static let obscured: UInt32 = 1 << 12
 
     package let id: UInt32
