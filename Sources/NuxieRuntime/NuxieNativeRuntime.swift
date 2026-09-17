@@ -68,11 +68,13 @@ package enum NuxieNativePlayerSelection: Equatable, Sendable {
 /// to command names or payloads.
 package enum NuxieNativeImportMode: Equatable, Sendable {
     case portable
+    case videoInspection
     case trustedHostCommands(moduleName: String)
     case configured(
         moduleName: String,
         expectedAssets: [NuxieNativeFileAssetDescriptor],
-        externalAssets: [Int: Data]
+        externalAssets: [Int: Data],
+        videoEnabled: Bool = false
     )
 }
 
@@ -306,7 +308,7 @@ package enum NuxieNativeTextGeometryCapture: Equatable, Sendable {
 }
 
 package struct NuxieNativePlayerStepResult: Equatable, Sendable {
-    package let keepGoing: Bool
+    package var keepGoing: Bool
     package let pointerHits: [NuxieNativePointerHit]
     package let stateChanges: [(layerIndex: Int, coreType: UInt32, globalID: UInt32?)]
     package let events: [NuxieNativeEvent]
@@ -633,7 +635,7 @@ package actor NuxieNativeRuntime {
     /// Copies the authored asset catalog through the script-inert import path.
     /// Product code can authenticate and bind its assets before opening the
     /// configured runtime that installs script and Apple platform hooks.
-    package static func inspectAssets(bytes: Data) async throws
+    package static func inspectAssets(bytes: Data, videoEnabled: Bool = true) async throws
         -> [NuxieNativeFileAssetDescriptor]
     {
         let executor = NuxieRuntimePinnedThreadExecutor()
@@ -650,7 +652,7 @@ package actor NuxieNativeRuntime {
                         executor: executor,
                         renderer: renderer,
                         bytes: bytes,
-                        importMode: .portable
+                        importMode: videoEnabled ? .videoInspection : .portable
                     )
                 } catch {
                     try? renderer.close()
@@ -1517,6 +1519,7 @@ private enum NuxieNativeAppleAssetImporter {
         moduleName: String,
         expectedAssets: [NuxieNativeFileAssetDescriptor],
         externalAssets: [Int: Data],
+        videoEnabled: Bool,
         outFile: inout OpaquePointer?,
         outResult: inout OpaquePointer?
     ) throws -> UInt32 {
@@ -1567,7 +1570,12 @@ private enum NuxieNativeAppleAssetImporter {
                         config.asset_hooks = hooksPointer
                         config.expected_assets = assetsPointer.baseAddress
                         config.expected_asset_count = assetsPointer.count
-                        return bytes.withUnsafeBytes { rawBytes in
+                        var video = NuxVideoPlaybackCapabilities()
+                        video.struct_size = UInt32(MemoryLayout<NuxVideoPlaybackCapabilities>.size)
+                        video.playback_available = 1
+                        return withUnsafePointer(to: &video) { videoPointer in
+                            if videoEnabled { config.video_playback = videoPointer }
+                            return bytes.withUnsafeBytes { rawBytes in
                             nux_product_file_import_configured(
                                 renderer,
                                 rawBytes.bindMemory(to: UInt8.self).baseAddress,
@@ -1576,6 +1584,7 @@ private enum NuxieNativeAppleAssetImporter {
                                 &outFile,
                                 &outResult
                             )
+                            }
                         }
                     }
                 }
@@ -1599,10 +1608,15 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
         var result: OpaquePointer?
         let status: UInt32
         switch importMode {
-        case .portable:
+        case .portable, .videoInspection:
             var config = NuxFileImportConfig()
             config.struct_size = UInt32(MemoryLayout<NuxFileImportConfig>.size)
-            status = bytes.withUnsafeBytes { storage in
+            var video = NuxVideoPlaybackCapabilities()
+            video.struct_size = UInt32(MemoryLayout<NuxVideoPlaybackCapabilities>.size)
+            video.playback_available = 1
+            status = withUnsafePointer(to: &video) { videoPointer in
+                if importMode == .videoInspection { config.video_playback = videoPointer }
+                return bytes.withUnsafeBytes { storage in
                 nux_file_import_metal(
                     renderer,
                     storage.bindMemory(to: UInt8.self).baseAddress,
@@ -1611,6 +1625,7 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
                     &file,
                     &result
                 )
+            }
             }
         case .trustedHostCommands(let moduleName):
             var host = makeHostCommandImportConfig()
@@ -1632,13 +1647,14 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
                     }
                 }
             }
-        case .configured(let moduleName, let expectedAssets, let externalAssets):
+        case .configured(let moduleName, let expectedAssets, let externalAssets, let videoEnabled):
             status = try NuxieNativeAppleAssetImporter.importFile(
                 renderer: renderer,
                 bytes: bytes,
                 moduleName: moduleName,
                 expectedAssets: expectedAssets,
                 externalAssets: externalAssets,
+                videoEnabled: videoEnabled,
                 outFile: &file,
                 outResult: &result
             )
@@ -2989,6 +3005,107 @@ private func copyRendererOutcome(_ view: NuxRendererOutcome) throws
         pixelHeight: view.pixel_height,
         drawCalls: view.draw_calls
     )
+}
+
+package struct NuxieNativeVideoOccurrence: Sendable {
+    package let componentID: Int
+    package let assetID: UInt32
+    package let generation: UInt64
+    package let sourceKey: String
+    package let contentType: String
+    package let embedded: Bool
+    package let state: UInt32
+    package let wantsPlay: Bool
+    package let audioPolicy: UInt32
+}
+
+package struct NuxieNativeVideoAction: Sendable {
+    package let kind: UInt32
+    package let value: Double
+    package let generation: UInt64
+}
+
+private final class NuxieVideoOccurrenceCollector {
+    var values: [NuxieNativeVideoOccurrence] = []
+    var error: Error?
+}
+private final class NuxieVideoActionCollector {
+    var values: [NuxieNativeVideoAction] = []
+}
+
+extension NuxieNativeRuntime {
+    package func videos() async throws -> [NuxieNativeVideoOccurrence] {
+        let state = try requireState()
+        return try await executor.call {
+            let collector = NuxieVideoOccurrenceCollector()
+            try requireOK(nux_player_visit_videos(try state.player.require(), { context, pointer in
+                guard let context, let pointer else { return }
+                let collector = Unmanaged<NuxieVideoOccurrenceCollector>.fromOpaque(context).takeUnretainedValue()
+                let value = pointer.pointee
+                do {
+                    collector.values.append(.init(componentID: value.component_id, assetID: value.asset_id,
+                        generation: value.generation, sourceKey: try copyString(value.source_key, label: "video source"),
+                        contentType: try copyString(value.content_type, label: "video content type"),
+                        embedded: value.embedded_bytes.len > 0, state: value.state, wantsPlay: value.wants_play != 0,
+                        audioPolicy: value.audio_policy))
+                } catch { collector.error = error }
+            }, Unmanaged.passUnretained(collector).toOpaque()), operation: "visit video occurrences")
+            if let error = collector.error { throw error }
+            return collector.values
+        }
+    }
+
+    package func videoCommand(componentID: Int, kind: UInt32, value: Double, reason: UInt32 = 0) async throws {
+        let state = try requireState()
+        try await executor.call {
+            try requireOK(nux_player_video_command(try state.player.require(), componentID, kind, value, reason), operation: "video command")
+        }
+    }
+
+    package func videoStep(componentID: Int, observation: UInt32, generation: UInt64, value: Double = 0) async throws -> [NuxieNativeVideoAction] {
+        let state = try requireState()
+        return try await executor.call {
+            let collector = NuxieVideoActionCollector()
+            try requireOK(nux_player_video_step(try state.player.require(), componentID, observation, generation, value,
+                { context, pointer in
+                    guard let context, let pointer else { return }
+                    let collector = Unmanaged<NuxieVideoActionCollector>.fromOpaque(context).takeUnretainedValue()
+                    let value = pointer.pointee
+                    collector.values.append(.init(kind: value.kind, value: value.value, generation: value.generation))
+                }, Unmanaged.passUnretained(collector).toOpaque()), operation: "step video")
+            return collector.values
+        }
+    }
+
+    package func videoPresent(componentID: Int, generation: UInt64, seconds: Double, width: UInt32, height: UInt32, rgba: Data) async throws {
+        guard width > 0, height > 0, width <= 8192, height <= 8192,
+              rgba.count == Int(width) * Int(height) * 4 else {
+            throw NuxieNativeRuntimeError.invalidNativeValue("invalid video frame dimensions")
+        }
+        let state = try requireState()
+        try await executor.call {
+            try rgba.withUnsafeBytes { storage in
+                var frame = NuxVideoFrame()
+                frame.struct_size = UInt32(MemoryLayout<NuxVideoFrame>.size)
+                frame.generation = generation
+                frame.presentation_seconds = seconds
+                frame.width = width
+                frame.height = height
+                frame.row_bytes = width * 4
+                frame.pixels = NuxByteView(data: storage.bindMemory(to: UInt8.self).baseAddress, len: storage.count)
+                try requireOK(nux_player_video_present_metal(try state.renderer.require(), try state.player.require(), componentID, &frame), operation: "present video frame")
+            }
+        }
+    }
+
+    package func videoClock(componentID: Int, generation: UInt64, seconds: Double, rate: Double, playing: Bool, available: Bool) async throws {
+        let state = try requireState()
+        try await executor.call {
+            var sample = NuxVideoClockSample(generation: generation, seconds: seconds, rate: rate,
+                playing: playing ? 1 : 0, available: available ? 1 : 0)
+            try requireOK(nux_player_video_report_clock(try state.player.require(), componentID, CACurrentMediaTime(), &sample), operation: "report video clock")
+        }
+    }
 }
 
 #endif

@@ -1,0 +1,32 @@
+{
+  "screens": [
+    {
+      "id": "screen",
+      "artboardId": "screen",
+      "artboardName": "Video Frame",
+      "width": 320,
+      "height": 640
+    }
+  ],
+  "transitions": [],
+  "textInputs": [],
+  "assets": [
+    {
+      "kind": "video",
+      "key": "assets/sha256/f0a65563c100506c0f98c138e8be1ae333c9879bb77237fbada60bddcfa78669.mp4",
+      "sha256": "f0a65563c100506c0f98c138e8be1ae333c9879bb77237fbada60bddcfa78669",
+      "sizeBytes": 22065,
+      "contentType": "video/mp4",
+      "sourceAssetKey": "asset:clip",
+      "riveAssetId": 0,
+      "riveUniqueName": "video-clip-5afb4ece-0",
+      "width": 64,
+      "height": 32,
+      "durationMs": 2022,
+      "videoCodec": "avc1.42c00a",
+      "audioCodec": "mp4a.40.2",
+      "captionTracks": [],
+      "required": true
+    }
+  ]
+}

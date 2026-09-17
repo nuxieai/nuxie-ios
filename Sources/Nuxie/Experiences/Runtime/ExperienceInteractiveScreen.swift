@@ -1575,7 +1575,8 @@ actor ExperienceInteractivePreparation {
         let importMode = NuxieNativeImportMode.configured(
             moduleName: "nuxie",
             expectedAssets: catalog,
-            externalAssets: binding.bytes
+            externalAssets: binding.bytes,
+            videoEnabled: !payload.renderPlan.videos.isEmpty
         )
         let preparedFile: NuxieNativePreparedFile
         do {
@@ -1664,6 +1665,7 @@ actor ExperienceInteractivePreparation {
 /// screen actor and copied Swift values.
 actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
+    private let videoPlayback: ExperienceVideoPlayback?
     private let fontScope: ExperienceRuntimeFontScope
     nonisolated let artboardBounds: CGRect
     private let operationGate = ExperienceInteractiveOperationGate()
@@ -1696,6 +1698,7 @@ actor ExperienceInteractiveScreen {
 
     private init(
         runtime: NuxieNativeRuntime,
+        videoPlayback: ExperienceVideoPlayback?,
         fontScope: ExperienceRuntimeFontScope,
         artboardBounds: CGRect,
         controlActionIds: Set<String>,
@@ -1714,6 +1717,7 @@ actor ExperienceInteractiveScreen {
         trackedLists: ExperienceInteractiveTrackedListPlanner
     ) {
         self.runtime = runtime
+        self.videoPlayback = videoPlayback
         self.fontScope = fontScope
         self.artboardBounds = artboardBounds
         self.controlActionIds = controlActionIds
@@ -1733,6 +1737,11 @@ actor ExperienceInteractiveScreen {
             snapshot: latestSnapshot,
             catalog: viewModelCatalog
         )
+    }
+
+    deinit {
+        let videoPlayback = videoPlayback
+        Task { @MainActor in videoPlayback?.close() }
     }
 
     /// Opens exactly one screen from Swift-owned authenticated bytes. Asset
@@ -1850,8 +1859,17 @@ actor ExperienceInteractiveScreen {
             fontScope.close()
             throw error
         }
+        let videoPlayback: ExperienceVideoPlayback?
+        do {
+            videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
+        } catch {
+            try? await runtime.close()
+            fontScope.close()
+            throw error
+        }
         return ExperienceInteractiveScreen(
             runtime: runtime,
+            videoPlayback: videoPlayback,
             fontScope: fontScope,
             artboardBounds: CGRect(
                 x: 0,
@@ -1889,13 +1907,17 @@ actor ExperienceInteractiveScreen {
         let nativePointers = pointers.map(Self.nativePointer)
         let runtime = runtime
         return try await operationGate.withLock { [self] in
-            let result = try await runtime.step(
+            var result = try await runtime.step(
                 inputs: nativeInputs,
                 pointers: nativePointers,
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID,
                 textRunNames: capturesTextLayout ? textInputs.values.filter(\.editable).map(\.riveTextRunName).sorted() : []
             )
+            if let videoPlayback {
+                let videoActive = try await videoPlayback.tick()
+                result.keepGoing = result.keepGoing || videoActive
+            }
             await captureTextFrame(result, requested: capturesTextLayout)
             // Discover generated state on newly materialized components
             // before projecting this frame's changes. Native effects have
@@ -3501,6 +3523,7 @@ actor ExperienceInteractiveScreen {
         let runtime = runtime
         let textRuns = textInputs.values.filter(\.editable).map(\.riveTextRunName).sorted()
         return try await operationGate.withLock { [self] in
+            try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
             let outcome = try await runtime.render(drawable: state, clearColor: clearColor, completion: completion)
             let semantics: NuxieNativeSemanticCapture?
@@ -3521,6 +3544,7 @@ actor ExperienceInteractiveScreen {
         defer { fontScope.close() }
         try await operationGate.withLock { [self] in
             await discardTextFrame()
+            await videoPlayback?.close()
             try await runtime.close()
         }
     }
