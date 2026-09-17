@@ -192,42 +192,6 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             "Copied geometry survives later mutations, step-result frees and runtime close")
     }
 
-    func testPublishedTextCommitExecutesNamedScriptExactlyOnce() async throws {
-        let scene = try fixture(named: "scripted-text-commit", extension: "riv")
-        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
-        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Paywall",
-            player: .defaultSceneWithInputStateMachine("Generated Nuxie Pressable Interaction"),
-            pixelWidth: 64, pixelHeight: 64,
-            importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: [:]))
-        defer { Task { try? await runtime.close() } }
-        try await runtime.enableSemantics()
-        _ = try await runtime.step(elapsedSeconds: 0)
-        for value in ["Evening calm", "", "  静かな夜  "] {
-            _ = try await render(runtime)
-            let capture = try await runtime.captureSemantics(textRuns: ["cta Run"])
-            let field = try XCTUnwrap(capture.fieldsByTextRun["cta Run"])
-            XCTAssertEqual(field.label, "Plan name")
-            XCTAssertEqual(field.actions, 1 << 3)
-            try await runtime.queueSemanticTextCommit(captureID: capture.id, name: "cta Run", text: value)
-            do {
-                try await runtime.queueSemanticTextCommit(captureID: capture.id, name: "cta Run", text: value)
-                XCTFail("A consumed capture must not dispatch the commit twice")
-            } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
-                XCTAssertEqual(diagnostic.status, .handleMismatch)
-            }
-            let result = try await runtime.step(elapsedSeconds: 0)
-            XCTAssertEqual(result.hostCommands.map(\.name), ["name_committed"])
-            guard case .object(let payload) = try XCTUnwrap(result.hostCommands.first).value else {
-                return XCTFail("Expected the script's whole-value invocation payload")
-            }
-            XCTAssertEqual(payload.first(where: { $0.key == "value" })?.value, .string(value))
-            XCTAssertEqual(payload.first(where: { $0.key == "actionId" })?.value, .string("name_changed"))
-            let next = try await runtime.step(elapsedSeconds: 0)
-            XCTAssertTrue(next.hostCommands.isEmpty)
-        }
-        try await runtime.close()
-    }
-
     func testPresentedSemanticCaptureCopiesUnicodeAndRejectsRetiredCaptureActions() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "semantic_text", extension: "riv"), importMode: .portable)
@@ -298,14 +262,6 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         _ = try await runtime.step(elapsedSeconds: 0)
         _ = try await render(runtime)
         let capture = try await runtime.captureSemantics(textRuns: ["field/名前"])
-        for name in ["missing", "field/名前"] {
-            do {
-                try await runtime.queueSemanticTextCommit(captureID: capture.id, name: name, text: "Alice")
-                XCTFail("A missing field or field without an authored commit listener must reject dispatch")
-            } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
-                XCTAssertEqual(diagnostic.status, .notFound)
-            }
-        }
         let changed = try await runtime.setSemanticTextRun(captureID: capture.id, name: "field/名前", text: Data("Alice".utf8))
         XCTAssertTrue(changed)
         _ = try await runtime.step(elapsedSeconds: 0)
@@ -321,12 +277,6 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             name: "field/名前", text: Data("Bob".utf8))
         XCTAssertTrue(replacementChanged)
         try await runtime.retireSemanticCapture()
-        do {
-            try await runtime.queueSemanticTextCommit(captureID: replacement.id, name: "field/名前", text: "late")
-            XCTFail("Retired editor ownership must reject commit dispatch")
-        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
-            XCTAssertEqual(diagnostic.status, .handleMismatch)
-        }
         do {
             _ = try await runtime.setSemanticTextRun(captureID: replacement.id, name: "field/名前", text: Data("late".utf8))
             XCTFail("Retired editor ownership must reject mutation")

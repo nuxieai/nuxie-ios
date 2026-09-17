@@ -2,62 +2,6 @@ import XCTest
 @testable import Nuxie
 
 final class ExperienceSemanticTextDraftTests: XCTestCase {
-    func testScriptCommitWaitsForDisplayAcceptanceAndRetriesWithFreshCapture() throws {
-        var draft = ExperienceSemanticTextDraft(text: "saved")
-        draft.present(captureID: UUID(), commitsThroughNative: true)
-        draft.replaceText("静かな夜")
-        let display = try XCTUnwrap(draft.takeWrite())
-        XCTAssertFalse(display.isCommit)
-        XCTAssertNil(draft.requestCommit())
-        XCTAssertNil(draft.finish(display, outcome: .accepted))
-        let commit = try XCTUnwrap(draft.takeWrite())
-        XCTAssertTrue(commit.isCommit)
-        XCTAssertEqual(commit.text, "静かな夜")
-        XCTAssertNil(draft.finish(commit, outcome: .staleCapture))
-        XCTAssertNil(draft.takeWrite())
-        let replacement = UUID()
-        draft.present(captureID: replacement, commitsThroughNative: true)
-        let retry = try XCTUnwrap(draft.takeWrite())
-        XCTAssertTrue(retry.isCommit)
-        XCTAssertEqual(retry.captureID, replacement)
-        XCTAssertEqual(draft.finish(retry, outcome: .accepted), "静かな夜")
-        XCTAssertNil(draft.requestCommit())
-        XCTAssertNil(draft.takeWrite(), "Repeated blur/submit must not dispatch again")
-    }
-
-    func testScriptCommitDoesNotRunForTypingOrCompositionAndWithdrawalFencesCompletion() throws {
-        var draft = ExperienceSemanticTextDraft(text: "")
-        draft.present(captureID: UUID(), commitsThroughNative: true)
-        draft.replaceText("한", isComposing: true)
-        let display = try XCTUnwrap(draft.takeWrite())
-        XCTAssertNil(draft.finish(display, outcome: .accepted))
-        XCTAssertNil(draft.takeWrite(), "Typing alone must not run the script")
-        XCTAssertNil(draft.requestCommit())
-        XCTAssertNil(draft.takeWrite(), "IME marked text is not a committed edit")
-        draft.replaceText("한")
-        let commit = try XCTUnwrap(draft.takeWrite())
-        XCTAssertTrue(commit.isCommit)
-        draft.withdraw()
-        XCTAssertNil(draft.finish(commit, outcome: .accepted))
-        XCTAssertNil(draft.takeWrite())
-    }
-
-    func testRejectedScriptCommitCanBeRequestedAgain() throws {
-        var draft = ExperienceSemanticTextDraft(text: "saved")
-        draft.present(captureID: UUID(), commitsThroughNative: true)
-        draft.replaceText("")
-        let display = try XCTUnwrap(draft.takeWrite())
-        _ = draft.finish(display, outcome: .accepted)
-        XCTAssertNil(draft.requestCommit())
-        let commit = try XCTUnwrap(draft.takeWrite())
-        XCTAssertNil(draft.finish(commit, outcome: .rejected))
-        draft.present(captureID: UUID(), commitsThroughNative: true)
-        XCTAssertNil(draft.requestCommit())
-        let retry = try XCTUnwrap(draft.takeWrite())
-        XCTAssertTrue(retry.isCommit)
-        XCTAssertEqual(draft.finish(retry, outcome: .accepted), "")
-    }
-
     func testRapidTypingCoalescesAndCommitWaitsForLatestNativeAcceptance() throws {
         var draft = ExperienceSemanticTextDraft(text: "saved")
         draft.present(captureID: UUID())

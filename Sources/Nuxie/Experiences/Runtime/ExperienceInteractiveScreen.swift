@@ -3387,21 +3387,6 @@ actor ExperienceInteractiveScreen {
         }
     }
 
-    func commitSemanticText(captureID: UUID, inputID: String, value: String) async throws {
-        guard let input = textInputs[inputID] else {
-            throw ExperienceInteractiveScreenError.textInputNotFound(inputID)
-        }
-        guard input.editable else {
-            throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
-        }
-        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
-        let runtime = runtime
-        try await operationGate.withLock {
-            try await runtime.queueSemanticTextCommit(captureID: captureID,
-                name: input.riveTextRunName, text: limited)
-        }
-    }
-
     func metalDevice() async throws -> ExperienceInteractiveMetalDevice {
         ExperienceInteractiveMetalDevice(value: try await runtime.metalDevice().value)
     }

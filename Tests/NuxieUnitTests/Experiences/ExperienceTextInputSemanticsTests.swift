@@ -7,40 +7,6 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
-    func testScriptedInputCommitsOnceThroughFreshSemanticCapture() throws {
-        let bridge = ExperienceTextInputOverlayBridge()
-        let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-        var pending: [(UUID, String, @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)] = []
-        var commits: [String] = []
-        var displayed: [String] = []
-        bridge.onCommitText = { _, text in commits.append(text) }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true),
-            surfaceView: view, artboardBounds: view.bounds,
-            semanticTextWriter: { _, _, text, done in displayed.append(text); done(.accepted) },
-            semanticCommitWriter: { id, _, text, done in pending.append((id, text, done)) },
-            textWriter: { _, _, _ in XCTFail("Semantic input bypassed captured owner") })
-        presentField(on: bridge)
-        _ = bridge.applySemantics(try capture(flags: 0, actions: 1 << 3))
-        let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
-        field.text = "静かな夜"
-        bridge.commitTextIfChanged(for: field)
-        XCTAssertEqual(displayed, ["", ""], "Secure text is not copied to the rendered text run")
-        XCTAssertEqual(pending.count, 1)
-        XCTAssertEqual(pending[0].1, "静かな夜", "The script receives the actual committed value")
-        XCTAssertTrue(commits.isEmpty)
-        pending.removeFirst().2(.staleCapture)
-        XCTAssertTrue(pending.isEmpty)
-        let fresh = try capture(flags: 0, actions: 1 << 3)
-        _ = bridge.applySemantics(fresh)
-        XCTAssertEqual(pending.count, 1)
-        XCTAssertEqual(pending[0].0, fresh.id)
-        pending.removeFirst().2(.accepted)
-        XCTAssertEqual(commits, ["静かな夜"])
-        bridge.commitTextIfChanged(for: field)
-        XCTAssertTrue(pending.isEmpty)
-        bridge.clear()
-    }
-
     func testDisabledSemanticFieldRejectsLateEditsAndRestoresEditing() throws {
         let plan = makePlan()
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
@@ -349,10 +315,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         return plan
     }
 
-    private func capture(flags: UInt32, actions: UInt32 = 0) throws -> NuxieNativeSemanticCapture {
+    private func capture(flags: UInt32) throws -> NuxieNativeSemanticCapture {
         let node = NuxieNativeSemanticNode(id: 1, parentID: nil, siblingIndex: 0,
             role: NuxieNativeSemanticRole.textField.rawValue, stateFlags: flags, traitFlags: 0,
-            headingLevel: 0, actions: actions, bounds: .zero, label: "Your name", value: "", hint: "Enter name")
+            headingLevel: 0, actions: 0, bounds: .zero, label: "Your name", value: "", hint: "Enter name")
         return NuxieNativeSemanticCapture(id: UUID(), tree: try NuxieNativeSemanticTree(
             renderRevision: 1, treeVersion: 1, nodes: [node]), fieldsByTextRun: ["run": node])
     }
