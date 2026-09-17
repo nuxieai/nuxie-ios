@@ -297,6 +297,18 @@
               "accessibilityRole": "button",
               "accessibilityLabel": "Choose plan"
             }
+          },
+          "controlAction": {
+            "actionId": "buy",
+            "behavior": {
+              "kind": "declarative",
+              "program": [
+                {
+                  "type": "emit",
+                  "eventName": "purchase_requested"
+                }
+              ]
+            }
           }
         }
       },
