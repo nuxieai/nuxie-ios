@@ -292,7 +292,11 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
             "captionTracks": .array([]),
         ])
         let snapshot = try replacingRenderedArtifact(try await authenticatedRenderedSnapshot(fixture),
-            sceneBytes: sceneBytes, renderer: "nux", assets: [video])
+            sceneBytes: sceneBytes, renderer: "nux", assets: [video], videoElements: [.object([
+                "artboardId": .string("welcome"), "viewNodeId": .string("greeting"),
+                "renderedNodeId": .string("greeting-instance"), "componentId": .number(7),
+                "readinessTimeoutSeconds": .number(2.5), "optional": .bool(false),
+            ])])
         let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
         let requests = JourneyArtifactRequestCounter()
         StubURLProtocol.register(matcher: { _ in true }) { request in
@@ -314,6 +318,10 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         XCTAssertNil(retained.bytes)
         XCTAssertEqual(retained.fileURL, directory.appendingPathComponent(digest))
         XCTAssertEqual(artifact.payload.renderPlan.videos.first?.sourceAssetKey, "asset:greeting")
+        XCTAssertEqual(artifact.payload.renderPlan.videoElements, [.init(
+            artboardId: "welcome", viewNodeId: "greeting", renderedNodeId: "greeting-instance",
+            componentId: 7, readinessTimeoutSeconds: 2.5, optional: false
+        )])
         XCTAssertNotNil(artifact.payload.videoFileLease)
         XCTAssertEqual(artifact.resourceMetrics.hashedBytes, videoBytes.count + sceneBytes.count * 2)
         XCTAssertEqual(artifact.resourceMetrics.duplicateHashBytes, sceneBytes.count)

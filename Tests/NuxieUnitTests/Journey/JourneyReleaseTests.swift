@@ -350,6 +350,7 @@ final class JourneyReleaseTests: XCTestCase {
             var asset = try XCTUnwrap(corpus["videoAsset"] as? [String: Any])
             asset.merge(item["assetPatch"] as? [String: Any] ?? [:]) { _, new in new }
             render["assets"] = [asset]
+            if let elements = item["videoElements"] { render["videoElements"] = elements }
             root["render"] = render
             var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
             requirements["requiredCapabilities"] = item["capabilities"] ?? ["video.playback.v1"]

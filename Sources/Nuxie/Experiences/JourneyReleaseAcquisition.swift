@@ -365,7 +365,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
     let scene: Artifact
 
     private enum CodingKeys: String, CodingKey {
-        case renderer, riv, nux, screens, transitions, textInputs, assets
+        case renderer, riv, nux, screens, transitions, textInputs, assets, videoElements
     }
 
     init(from decoder: Decoder) throws {
@@ -380,11 +380,13 @@ private struct JourneyReleaseRenderDocument: Decodable {
         transitions = try fields.decode([Transition].self, forKey: .transitions)
         textInputs = try fields.decode([TextInput].self, forKey: .textInputs)
         assets = try fields.decode([Asset].self, forKey: .assets)
+        videoElements = try fields.decodeIfPresent([NativeExperienceVideoElement].self, forKey: .videoElements) ?? []
     }
     let screens: [Screen]
     let transitions: [Transition]
     let textInputs: [TextInput]
     let assets: [Asset]
+    let videoElements: [NativeExperienceVideoElement]
 }
 
 private struct JourneyReleaseProvenanceDocument: Decodable {
@@ -1682,6 +1684,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             images: images,
             fonts: fonts,
             videos: videos,
+            videoElements: render.videoElements,
             systemFonts: systemFonts
         )
     }

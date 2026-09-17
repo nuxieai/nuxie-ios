@@ -262,6 +262,7 @@ struct JourneyReleaseVerifier: Sendable {
             case "assets", "images", "fonts": maximum = JourneyReleaseLimits.assetCount
             case "transitions": maximum = JourneyReleaseLimits.transitionCount
             case "textInputs": maximum = JourneyReleaseLimits.textInputCount
+            case "videoElements": maximum = JourneyReleaseLimits.videoElementCount
             case "requiredCapabilities":
                 maximum = JourneyReleaseLimits.requiredCapabilityCount
             default: maximum = nil
