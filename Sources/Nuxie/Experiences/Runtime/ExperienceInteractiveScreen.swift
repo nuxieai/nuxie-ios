@@ -950,6 +950,7 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
         "safeArea",
         "screen",
         "nuxieTextInputs",
+        "fontScale",
     ]
 
     private let rootInstanceID: UInt64

@@ -140,6 +140,7 @@ final class ExperienceScreenViewController: UIViewController {
     private var contentHidden = false
     private var semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
     private var controllerIsVisible = false
+    private var lastPushedFontScale: Double?
     private var lastPushedSafeAreaInsets: ExperienceSafeAreaInsets?
     private var lifecycleState: ExperienceScreenLifecycleState
     private var lifecycleWritesUnavailable = false
@@ -187,6 +188,18 @@ final class ExperienceScreenViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(contentSizeCategoryDidChange),
+            name: UIContentSizeCategory.didChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(contentSizeCategoryDidChange),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
         view.backgroundColor = .clear
         view.clipsToBounds = true
         view.accessibilityIdentifier = "nuxie-screen-controller-\(screenId)"
@@ -230,6 +243,38 @@ final class ExperienceScreenViewController: UIViewController {
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
         syncSafeAreaInsets()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        syncFontScale()
+    }
+
+    @objc private func contentSizeCategoryDidChange() {
+        syncFontScale()
+    }
+
+    static func fontScale(for traits: UITraitCollection) -> Double {
+        Double(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize / 17)
+    }
+
+    private func syncFontScale(force: Bool = false) {
+        guard isViewLoaded,
+              let viewModelName = journeyScreen?.defaultViewModelName else { return }
+        let scale = Self.fontScale(for: traitCollection)
+        guard force || scale != lastPushedFontScale else { return }
+        let command = ExperienceInteractiveStateCommand.snapshot([
+            .init(
+                viewModelName: viewModelName,
+                instanceID: journeyScreen?.defaultInstanceId,
+                instanceName: nil,
+                path: "fontScale",
+                value: .number(scale)
+            ),
+        ])
+        if enqueueStateCommand(command, logFailure: false) {
+            lastPushedFontScale = scale
+        }
     }
 
     func mountInteractiveScreen() async throws {
@@ -296,6 +341,7 @@ final class ExperienceScreenViewController: UIViewController {
             }
         )
         presentationLoop = loop
+        syncFontScale(force: true)
         loop.setPresentationVisible(controllerIsVisible && !contentHidden)
 
         do {
@@ -604,7 +650,7 @@ final class ExperienceScreenViewController: UIViewController {
               runtimeFailure == nil,
               let interactiveScreen,
               let presentationLoop else { return false }
-        presentationLoop.enqueue(
+        return presentationLoop.enqueue(
             ExperienceRuntimePresentationQueuedWork {
                 let result = try await interactiveScreen.applyStateCommand(command)
                 return .work(requestsFrame: requestsFrame) { [weak self] in
@@ -618,7 +664,6 @@ final class ExperienceScreenViewController: UIViewController {
                 completion?(result)
             }
         )
-        return true
     }
 
     private func enqueueJourneyStateCommand(
@@ -929,6 +974,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func updatePresentationVisibility() {
+        if controllerIsVisible && !contentHidden { syncFontScale() }
         if requiresSceneSemantics {
             semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
         }
@@ -1068,6 +1114,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     deinit {
         let loop = presentationLoop
+        NotificationCenter.default.removeObserver(self)
         Task { @MainActor in
             await loop?.shutdown()
         }
