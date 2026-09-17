@@ -1,0 +1,689 @@
+{
+  "version": 1,
+  "project": {
+    "id": "purchase",
+    "data": {}
+  },
+  "document": {
+    "rootId": "root",
+    "nodes": [
+      {
+        "id": "root",
+        "projectId": "purchase",
+        "parentId": null,
+        "kind": "root",
+        "type": "root",
+        "orderKey": "000",
+        "data": {
+          "kind": "root"
+        }
+      },
+      {
+        "id": "purchase::artboard_tree",
+        "projectId": "purchase",
+        "parentId": "root",
+        "kind": "artboard_tree",
+        "type": "artboard_tree",
+        "orderKey": "001",
+        "data": {
+          "kind": "artboard_tree",
+          "version": 1
+        }
+      },
+      {
+        "id": "purchase::journey_root",
+        "projectId": "purchase",
+        "parentId": "root",
+        "kind": "journey_root",
+        "type": "journey_root",
+        "orderKey": "002",
+        "data": {
+          "kind": "journey_root",
+          "version": 1
+        }
+      },
+      {
+        "id": "PurchaseRoot",
+        "projectId": "purchase",
+        "parentId": "root",
+        "kind": "view_model",
+        "type": "view_model",
+        "orderKey": "003",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 100,
+          "properties": {
+            "first": {
+              "type": "viewModel",
+              "propertyId": 1,
+              "viewModelId": "Plan"
+            },
+            "second": {
+              "type": "viewModel",
+              "propertyId": 2,
+              "viewModelId": "Plan"
+            },
+            "placementId": {
+              "type": "string",
+              "propertyId": 3,
+              "defaultValue": "root:yearly"
+            }
+          }
+        },
+        "name": "PurchaseRoot"
+      },
+      {
+        "id": "Plan",
+        "projectId": "purchase",
+        "parentId": "root",
+        "kind": "view_model",
+        "type": "view_model",
+        "orderKey": "004",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 101,
+          "properties": {
+            "placementId": {
+              "type": "string",
+              "propertyId": 1,
+              "defaultValue": "plan:default"
+            }
+          }
+        },
+        "name": "Plan"
+      },
+      {
+        "id": "plan.first",
+        "projectId": "purchase",
+        "parentId": "Plan",
+        "kind": "view_model_instance",
+        "type": "view_model_instance",
+        "orderKey": "005",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "placementId": "plan:monthly"
+          }
+        },
+        "name": "plan.first"
+      },
+      {
+        "id": "plan.second",
+        "projectId": "purchase",
+        "parentId": "Plan",
+        "kind": "view_model_instance",
+        "type": "view_model_instance",
+        "orderKey": "006",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "placementId": "plan:annual"
+          }
+        },
+        "name": "plan.second"
+      },
+      {
+        "id": "purchase.root",
+        "projectId": "purchase",
+        "parentId": "PurchaseRoot",
+        "kind": "view_model_instance",
+        "type": "view_model_instance",
+        "orderKey": "007",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "first": {
+              "vmInstanceId": "plan.first"
+            },
+            "second": {
+              "vmInstanceId": "plan.second"
+            },
+            "placementId": "root:yearly"
+          }
+        },
+        "name": "purchase.root"
+      },
+      {
+        "id": "screen",
+        "projectId": "purchase",
+        "parentId": "purchase::artboard_tree",
+        "kind": "artboard",
+        "type": "artboard",
+        "orderKey": "008",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "dimensions": {
+              "width": 320,
+              "height": 150
+            }
+          },
+          "viewModelDefaults": {
+            "viewModelId": "PurchaseRoot",
+            "instanceId": "purchase.root"
+          }
+        },
+        "name": "Purchase"
+      },
+      {
+        "id": "screen.tree",
+        "projectId": "purchase",
+        "parentId": "screen",
+        "kind": "view_tree",
+        "type": "view_tree",
+        "orderKey": "009",
+        "data": {
+          "kind": "view_tree"
+        }
+      },
+      {
+        "id": "plan",
+        "projectId": "purchase",
+        "parentId": "purchase::artboard_tree",
+        "kind": "artboard",
+        "type": "artboard",
+        "orderKey": "010",
+        "data": {
+          "kind": "artboard",
+          "isComponent": true,
+          "canvas": {
+            "dimensions": {
+              "width": 140,
+              "height": 100
+            }
+          },
+          "viewModelDefaults": {
+            "viewModelId": "Plan",
+            "instanceId": "plan.first"
+          }
+        },
+        "name": "Plan card"
+      },
+      {
+        "id": "plan.tree",
+        "projectId": "purchase",
+        "parentId": "plan",
+        "kind": "view_tree",
+        "type": "view_tree",
+        "orderKey": "011",
+        "data": {
+          "kind": "view_tree"
+        }
+      },
+      {
+        "id": "first",
+        "projectId": "purchase",
+        "parentId": "screen.tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "012",
+        "data": {
+          "kind": "view",
+          "viewKind": "component",
+          "componentArtboardId": "plan",
+          "childVmRefPath": "vm.first",
+          "dataBindings": [],
+          "inputBindings": [],
+          "initialOverrides": [],
+          "view": {
+            "id": "first",
+            "type": "View",
+            "props": {
+              "style": {
+                "x": 10,
+                "y": 10,
+                "width": 140,
+                "height": 80
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "second",
+        "projectId": "purchase",
+        "parentId": "screen.tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "013",
+        "data": {
+          "kind": "view",
+          "viewKind": "component",
+          "componentArtboardId": "plan",
+          "childVmRefPath": "vm.second",
+          "dataBindings": [],
+          "inputBindings": [],
+          "initialOverrides": [],
+          "view": {
+            "id": "second",
+            "type": "View",
+            "props": {
+              "style": {
+                "x": 170,
+                "y": 10,
+                "width": 140,
+                "height": 80
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "buy",
+        "projectId": "purchase",
+        "parentId": "plan.tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "014",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "buy",
+            "type": "View",
+            "systemId": "Pressable",
+            "props": {
+              "style": {
+                "x": 0,
+                "y": 0,
+                "width": 140,
+                "height": 50,
+                "backgroundColor": "#2457d6"
+              },
+              "pressedStyle": {
+                "backgroundColor": "#163783"
+              },
+              "accessibilityRole": "button",
+              "accessibilityLabel": "Choose plan"
+            }
+          },
+          "controlAction": {
+            "actionId": "buy",
+            "behavior": {
+              "kind": "declarative",
+              "program": [
+                {
+                  "type": "emit",
+                  "eventName": "purchase_requested"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "buy.interactions",
+        "projectId": "purchase",
+        "parentId": "buy",
+        "kind": "interaction_tree",
+        "type": "interaction_tree",
+        "orderKey": "015",
+        "data": {
+          "kind": "interaction_tree"
+        }
+      },
+      {
+        "id": "buy.press",
+        "projectId": "purchase",
+        "parentId": "buy.interactions",
+        "kind": "interaction",
+        "type": "interaction",
+        "orderKey": "016",
+        "data": {
+          "kind": "interaction",
+          "enabled": true,
+          "trigger": {
+            "type": "press"
+          }
+        }
+      },
+      {
+        "id": "buy.purchase",
+        "projectId": "purchase",
+        "parentId": "buy.press",
+        "kind": "interaction_action",
+        "type": "interaction_action",
+        "orderKey": "017",
+        "data": {
+          "kind": "interaction_action",
+          "action": {
+            "type": "purchase",
+            "placementId": {
+              "ref": {
+                "kind": "path",
+                "path": [
+                  "placementId"
+                ],
+                "viewModelName": "Plan",
+                "isRelative": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "select",
+        "projectId": "purchase",
+        "parentId": "plan.tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "018",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "select",
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "x": 0,
+                "y": 50,
+                "width": 140,
+                "height": 30,
+                "backgroundColor": "#14806b"
+              },
+              "accessibilityRole": "button",
+              "accessibilityLabel": "Select lifetime plan"
+            }
+          }
+        }
+      },
+      {
+        "id": "plan.animations",
+        "projectId": "purchase",
+        "parentId": "plan",
+        "kind": "animation_tree",
+        "type": "animation_tree",
+        "orderKey": "019",
+        "data": {
+          "kind": "animation_tree"
+        }
+      },
+      {
+        "id": "plan.selection",
+        "projectId": "purchase",
+        "parentId": "plan.animations",
+        "kind": "state_machine",
+        "type": "state_machine",
+        "orderKey": "020",
+        "data": {
+          "kind": "state_machine",
+          "name": "Plan selection",
+          "instantiateOnNestedOccurrence": true,
+          "listeners": [
+            {
+              "id": "select.listener",
+              "targetObjectKey": "select",
+              "listenerType": "click",
+              "actions": [
+                {
+                  "id": "select.placement",
+                  "type": "viewModelChange",
+                  "ref": {
+                    "viewModelPathIds": [
+                      101
+                    ],
+                    "propertyId": 1
+                  },
+                  "value": "plan:lifetime"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "plan.selection.layer",
+        "projectId": "purchase",
+        "parentId": "plan.selection",
+        "kind": "state_machine_layer",
+        "type": "state_machine_layer",
+        "orderKey": "021",
+        "data": {
+          "kind": "state_machine_layer"
+        }
+      },
+      {
+        "id": "plan.selection.entry",
+        "projectId": "purchase",
+        "parentId": "plan.selection.layer",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "orderKey": "022",
+        "data": {
+          "kind": "layer_state",
+          "type": "entry"
+        }
+      },
+      {
+        "id": "plan.selection.any",
+        "projectId": "purchase",
+        "parentId": "plan.selection.layer",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "orderKey": "023",
+        "data": {
+          "kind": "layer_state",
+          "type": "any"
+        }
+      },
+      {
+        "id": "plan.selection.exit",
+        "projectId": "purchase",
+        "parentId": "plan.selection.layer",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "orderKey": "024",
+        "data": {
+          "kind": "layer_state",
+          "type": "exit"
+        }
+      },
+      {
+        "id": "details",
+        "projectId": "purchase",
+        "parentId": "purchase::artboard_tree",
+        "kind": "artboard",
+        "type": "artboard",
+        "orderKey": "025",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "dimensions": {
+              "width": 320,
+              "height": 150
+            }
+          },
+          "viewModelDefaults": {
+            "viewModelId": "PurchaseRoot",
+            "instanceId": "purchase.root"
+          }
+        },
+        "name": "Details"
+      },
+      {
+        "id": "details.tree",
+        "projectId": "purchase",
+        "parentId": "details",
+        "kind": "view_tree",
+        "type": "view_tree",
+        "orderKey": "026",
+        "data": {
+          "kind": "view_tree"
+        }
+      },
+      {
+        "id": "continue",
+        "projectId": "purchase",
+        "parentId": "screen.tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "027",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "continue",
+            "type": "View",
+            "systemId": "Pressable",
+            "props": {
+              "style": {
+                "x": 10,
+                "y": 100,
+                "width": 300,
+                "height": 40,
+                "backgroundColor": "#2457d6"
+              },
+              "pressedStyle": {
+                "backgroundColor": "#163783"
+              },
+              "accessibilityRole": "button",
+              "accessibilityLabel": "continue"
+            }
+          },
+          "controlAction": {
+            "actionId": "continue",
+            "behavior": {
+              "kind": "declarative",
+              "program": [
+                {
+                  "type": "emit",
+                  "eventName": "details_requested"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "continue.interactions",
+        "projectId": "purchase",
+        "parentId": "continue",
+        "kind": "interaction_tree",
+        "type": "interaction_tree",
+        "orderKey": "028",
+        "data": {
+          "kind": "interaction_tree"
+        }
+      },
+      {
+        "id": "continue.press",
+        "projectId": "purchase",
+        "parentId": "continue.interactions",
+        "kind": "interaction",
+        "type": "interaction",
+        "orderKey": "029",
+        "data": {
+          "kind": "interaction",
+          "enabled": true,
+          "trigger": {
+            "type": "press"
+          }
+        }
+      },
+      {
+        "id": "continue.navigate",
+        "projectId": "purchase",
+        "parentId": "continue.press",
+        "kind": "interaction_action",
+        "type": "interaction_action",
+        "orderKey": "030",
+        "data": {
+          "kind": "interaction_action",
+          "action": {
+            "type": "navigate",
+            "screenId": "details"
+          }
+        }
+      },
+      {
+        "id": "return",
+        "projectId": "purchase",
+        "parentId": "details.tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "031",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "return",
+            "type": "View",
+            "systemId": "Pressable",
+            "props": {
+              "style": {
+                "x": 10,
+                "y": 100,
+                "width": 300,
+                "height": 40,
+                "backgroundColor": "#2457d6"
+              },
+              "pressedStyle": {
+                "backgroundColor": "#163783"
+              },
+              "accessibilityRole": "button",
+              "accessibilityLabel": "return"
+            }
+          },
+          "controlAction": {
+            "actionId": "return",
+            "behavior": {
+              "kind": "declarative",
+              "program": [
+                {
+                  "type": "emit",
+                  "eventName": "return_requested"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "return.interactions",
+        "projectId": "purchase",
+        "parentId": "return",
+        "kind": "interaction_tree",
+        "type": "interaction_tree",
+        "orderKey": "032",
+        "data": {
+          "kind": "interaction_tree"
+        }
+      },
+      {
+        "id": "return.press",
+        "projectId": "purchase",
+        "parentId": "return.interactions",
+        "kind": "interaction",
+        "type": "interaction",
+        "orderKey": "033",
+        "data": {
+          "kind": "interaction",
+          "enabled": true,
+          "trigger": {
+            "type": "press"
+          }
+        }
+      },
+      {
+        "id": "return.navigate",
+        "projectId": "purchase",
+        "parentId": "return.press",
+        "kind": "interaction_action",
+        "type": "interaction_action",
+        "orderKey": "034",
+        "data": {
+          "kind": "interaction_action",
+          "action": {
+            "type": "navigate",
+            "screenId": "screen"
+          }
+        }
+      }
+    ]
+  },
+  "designSystem": {}
+}
