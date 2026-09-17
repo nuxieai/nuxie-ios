@@ -1000,11 +1000,17 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             .appendingPathComponent("fixtures/runtime/scripted-input")
         let bytes = try Data(contentsOf: fixtureDirectory.appendingPathComponent("screen.riv"))
         let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+        let fontBytes = try Data(contentsOf: fixtureDirectory
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Tests/ExperienceRuntimeHostApp/Fixtures/font-converter/assets/sha256/" +
+                "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1.ttf"))
+        let externalFonts = Dictionary(uniqueKeysWithValues: assets.filter { $0.kind == .font }
+            .map { ($0.ordinal, fontBytes) })
         let runtime = try await NuxieNativeRuntime.open(
             bytes: bytes, artboardName: "Paywall",
             player: .defaultSceneWithInputStateMachine("Generated Nuxie Pressable Interaction"),
             pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: true,
-            importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: [:])
+            importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: externalFonts)
         )
         defer { Task { try? await runtime.close() } }
         let root = try await runtime.rootViewModelReference()
