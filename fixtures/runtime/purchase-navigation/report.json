@@ -1,0 +1,62 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 210,
+  "outputSizeBytes": 4081,
+  "outputSha256": "b26f972d380ef9fa4791ae9205b9e61bfb212b84a34c6f6a65e876b2a1bc6504",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen",
+        "publishedName": "Purchase",
+        "role": "experience",
+        "width": 320,
+        "height": 150,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "plan",
+        "publishedName": "Plan card",
+        "role": "component",
+        "width": 140,
+        "height": 100,
+        "authoredOrder": 1
+      },
+      {
+        "sourceArtboardId": "details",
+        "publishedName": "Details",
+        "role": "experience",
+        "width": 320,
+        "height": 150,
+        "authoredOrder": 2
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen",
+        "artboardId": "screen",
+        "artboardName": "Purchase",
+        "width": 320,
+        "height": 150,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      },
+      {
+        "screenId": "details",
+        "artboardId": "details",
+        "artboardName": "Details",
+        "width": 320,
+        "height": 150,
+        "authoredOrder": 1,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": []
+    },
+    "textInputs": []
+  }
+}
