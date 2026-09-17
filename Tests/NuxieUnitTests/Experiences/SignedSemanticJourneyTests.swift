@@ -216,6 +216,8 @@ final class SignedSemanticJourneyTests: XCTestCase {
         ].sorted())
         let field = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Password" } as? UITextField)
         XCTAssertTrue(field.isSecureTextEntry)
+        XCTAssertEqual(field.attributedPlaceholder?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
+                       field.textColor)
         XCTAssertEqual(field.text, "")
         XCTAssertEqual(elements.filter { $0 is UITextField }.count, 1)
         let selected = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Annual plan" })

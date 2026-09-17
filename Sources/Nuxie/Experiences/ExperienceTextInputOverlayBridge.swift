@@ -585,6 +585,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             attributes[.kern] = CGFloat(style.letterSpacing)
             attributes[.paragraphStyle] = paragraph
             field.defaultTextAttributes = attributes
+            // Secure text is drawn by UIKit, including its placeholder. Keep
+            // the authored contrast instead of UIKit's translucent default.
+            if secure, let placeholder = field.placeholder {
+                field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: attributes)
+            }
         case .textView(let textView):
             textView.font = font
             textView.textAlignment = alignment

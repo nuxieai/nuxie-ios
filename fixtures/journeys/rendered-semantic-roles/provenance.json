@@ -1,14 +1,14 @@
 {
-  "publisherSourceCommit": "b172c73b10b184309a4ac3f4d118b2f9a1b2aadc",
+  "publisherSourceCommit": "43d983920ed8a887e43c0cb605e20f83a047979e",
   "keyId": "TEST_ONLY_DEV_KEYPAIR",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "sourceSnapshotSha256": "442c4b170353a2f5408ee2d8edfb0e33eadc99aa4ef75bea1eb74eabdee96d0f",
-  "publishSnapshotSha256": "75fda1d3ae25dfcfd6f0f534475f3e1bb591720fb224bcb879456b0b01839d48",
-  "descriptorSha256": "16b3898d7241ae30f197ab709f6b8624d5c1fc2bf4b4779c60d68f44d777952e",
+  "sourceSnapshotSha256": "08e852ec38e484dfeedab880a65a2170ec730a68fbaf7e5f35eaf09ec6bb5055",
+  "publishSnapshotSha256": "7365d2ddaf7e784bc3221c44e7bf9305998f60b154ee7ff673ca1f393d7ec0fb",
+  "descriptorSha256": "219b6d98715398bb0ac711b847da46b0d88905fe983d2896099fb0ef5fa7e6f6",
   "qualification": "Production release compiler output inside a test-signed candidate descriptor; SDK and screen-reader qualification remain separate.",
   "descriptorRefresh": {
     "script": "scripts/refresh-signed-fixtures.mjs",
     "reason": "Explicit CDN font source declarations; published render and asset bytes unchanged",
-    "previousDescriptorSha256": "d9d6c7b15dca806029e166256ee1672a10253e489b777bc5665b96845ee2b5d0"
+    "previousDescriptorSha256": "1ae94aa7aefca3fa71e533365d49fa9dc6a9f643cc37633fa22ec4662e488532"
   }
 }

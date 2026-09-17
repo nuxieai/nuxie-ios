@@ -106,7 +106,7 @@
                 "accessibilityLabel": "Choose your plan",
                 "style": {
                   "x": 24,
-                  "y": 24,
+                  "y": 64,
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827",
@@ -140,7 +140,7 @@
                 "accessibilityLabel": "Continue",
                 "style": {
                   "x": 24,
-                  "y": 88,
+                  "y": 128,
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827"
@@ -169,7 +169,7 @@
                 "selected": true,
                 "style": {
                   "x": 24,
-                  "y": 152,
+                  "y": 192,
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827"
@@ -198,7 +198,7 @@
                 "accessibilityLabel": "Seats",
                 "style": {
                   "x": 24,
-                  "y": 216,
+                  "y": 256,
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827"
@@ -231,14 +231,14 @@
                 "accessibilityLabel": "Password",
                 "style": {
                   "x": 24,
-                  "y": 280,
+                  "y": 320,
                   "width": 342,
                   "height": 48,
-                  "backgroundColor": "#111827",
+                  "backgroundColor": "#ffffff",
                   "fontFamily": "Nuxie Editor",
                   "fontWeight": "400",
                   "fontSize": 18,
-                  "color": "#ffffff"
+                  "color": "#111827"
                 }
               },
               "propExpressions": {
@@ -284,7 +284,7 @@
                 "disabled": true,
                 "style": {
                   "x": 24,
-                  "y": 344,
+                  "y": 384,
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827"
@@ -310,7 +310,7 @@
               "props": {
                 "style": {
                   "x": 24,
-                  "y": 408,
+                  "y": 448,
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827"
@@ -367,9 +367,9 @@
                 "accessibilityRole": "listitem",
                 "accessibilityLabel": "Plan option",
                 "style": {
-                  "x": 24,
+                  "x": 16,
                   "y": 0,
-                  "width": 342,
+                  "width": 310,
                   "height": 48,
                   "backgroundColor": "#111827",
                   "fontFamily": "Nuxie Editor",
@@ -399,7 +399,7 @@
               "props": {
                 "style": {
                   "x": 24,
-                  "y": 472,
+                  "y": 512,
                   "width": 342,
                   "height": 48
                 }
@@ -425,7 +425,7 @@
               "props": {
                 "style": {
                   "x": 24,
-                  "y": 536,
+                  "y": 576,
                   "width": 342,
                   "height": 48
                 }
@@ -552,7 +552,7 @@
                 "required": true,
                 "style": {
                   "x": 24,
-                  "y": 600,
+                  "y": 640,
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827"
@@ -579,13 +579,163 @@
                 "children": "Choose the options that suit you.",
                 "style": {
                   "x": 24,
-                  "y": 664,
+                  "y": 704,
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827",
                   "fontFamily": "Nuxie Editor",
                   "fontWeight": "400",
                   "fontSize": 18,
+                  "color": "#ffffff"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "continue_visible_label",
+          "projectId": "project_1",
+          "parentId": "continue",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "a",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "continue_visible_label",
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "children": "Continue",
+                "style": {
+                  "x": 16,
+                  "y": 12,
+                  "width": 310,
+                  "height": 28,
+                  "fontFamily": "Nuxie Editor",
+                  "fontWeight": "400",
+                  "fontSize": 16,
+                  "color": "#ffffff"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "selected_visible_label",
+          "projectId": "project_1",
+          "parentId": "selected",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "a",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "selected_visible_label",
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "children": "Annual plan · Selected",
+                "style": {
+                  "x": 16,
+                  "y": 12,
+                  "width": 310,
+                  "height": 28,
+                  "fontFamily": "Nuxie Editor",
+                  "fontWeight": "400",
+                  "fontSize": 16,
+                  "color": "#ffffff"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "amount_visible_label",
+          "projectId": "project_1",
+          "parentId": "amount",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "a",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "amount_visible_label",
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "children": "Seats: 3",
+                "style": {
+                  "x": 16,
+                  "y": 12,
+                  "width": 310,
+                  "height": 28,
+                  "fontFamily": "Nuxie Editor",
+                  "fontWeight": "400",
+                  "fontSize": 16,
+                  "color": "#ffffff"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "disabled_visible_label",
+          "projectId": "project_1",
+          "parentId": "disabled",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "a",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "disabled_visible_label",
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "children": "Unavailable",
+                "style": {
+                  "x": 16,
+                  "y": 12,
+                  "width": 310,
+                  "height": 28,
+                  "fontFamily": "Nuxie Editor",
+                  "fontWeight": "400",
+                  "fontSize": 16,
+                  "color": "#ffffff"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "mixed_visible_label",
+          "projectId": "project_1",
+          "parentId": "mixed",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "a",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "mixed_visible_label",
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "children": "Optional extras · Mixed (required)",
+                "style": {
+                  "x": 16,
+                  "y": 12,
+                  "width": 310,
+                  "height": 28,
+                  "fontFamily": "Nuxie Editor",
+                  "fontWeight": "400",
+                  "fontSize": 16,
                   "color": "#ffffff"
                 }
               }

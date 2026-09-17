@@ -55,3 +55,15 @@ isolation, validation announcements, meaningful media, alternative inputs,
 transition/lifecycle cases, and the other agreed journeys require their own
 signed-fixture evidence before capability admission. Font and scaling work is
 owned separately and is not a qualification gate in this program.
+
+### Visible fixture regression
+
+The first physical-device review exposed unlabeled visual rectangles despite a
+populated accessibility tree. Publisher candidate `43d983920e` adds visible child
+Text to the named controls and moves content below the status bar. These children
+must remain grouped under their named accessibility controls. The installed-app
+smoke now uses Vision OCR on its screenshot to check the actual rendered labels,
+and checks the heading position; it failed on the previous fixture and passed on
+the replacement. Secure UIKit placeholders also use the authored foreground
+color instead of the translucent system default. This is contrast handling, not
+font scaling work.
