@@ -1,9 +1,9 @@
 {
-  "publisherSourceCommit": "fcd3f2dc02d184940179c3787304f4e6bcddf95d",
+  "publisherSourceCommit": "67ffe5759fec72872a9c8a2277ce54b8dd9d2c2c",
   "keyId": "TEST_ONLY_DEV_KEYPAIR",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
   "sourceSnapshotSha256": "53daae7e67cb838cd6bcc4077d5bbb53f5aebeec0c4c21087ea8297f7c6fd4ca",
   "publishSnapshotSha256": "75fba33ad4711572aa2efe59f7cc704de7a46600ecfadfbffdb8d715be40189b",
-  "descriptorSha256": "bd3463776e6c943d38dc1c953d87fedf8dd377e73d87104cb6ca51e1587b5241",
+  "descriptorSha256": "274d97ff83ffc70d4ee4522bbd3b668b66c76bb61d0dc1335e4e72ba53df57ae",
   "qualification": "Production release compiler output inside a test-signed candidate descriptor; SDK and screen-reader qualification remain separate."
 }

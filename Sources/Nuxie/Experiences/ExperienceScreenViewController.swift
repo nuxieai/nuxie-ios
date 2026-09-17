@@ -128,7 +128,7 @@ final class ExperienceScreenViewController: UIViewController {
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
     private var requiresSceneSemantics: Bool {
-        artifact.payload.requiredCapabilities.contains("scene-semantics-v1")
+        artifact.payload.requiredCapabilities.contains("experience-accessibility")
     }
     private lazy var semanticContainer = ExperienceSemanticAccessibilityContainer(view: surfaceView)
 
