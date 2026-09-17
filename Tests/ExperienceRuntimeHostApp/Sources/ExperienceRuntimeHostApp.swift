@@ -14,6 +14,9 @@ struct NuxieExperienceRuntimeHostApp: App {
 
 private struct ExperienceRuntimeHostView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
+        if ProcessInfo.processInfo.arguments.contains("--nuxie-accessibility-qualification") {
+            return UINavigationController(rootViewController: AccessibilityJourneyHostViewController())
+        }
         let configuration = ExperienceRuntimeHostConfiguration.current()
         let list = ExperienceRuntimeFixtureListViewController(configuration: configuration)
         let navigation = UINavigationController(rootViewController: list)

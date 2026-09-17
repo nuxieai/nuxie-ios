@@ -160,7 +160,10 @@ final class NuxieCore: @unchecked Sendable {
     )
     let journeyProfiles = JourneyProfileCatalog(
       authorizationKeys: authorizationKeys,
-      supportedRuntime: JourneyReleaseRuntime.current,
+      supportedRuntime: JourneyReleaseRuntime.supported(
+        environment: configuration.environment,
+        testing: internalConfiguration
+      ),
       highWaterStore: highWaterStore
     )
     let profileStorageScope = ProfileStorageScope(

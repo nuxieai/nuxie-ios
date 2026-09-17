@@ -1,12 +1,31 @@
 #if canImport(UIKit) && NUXIE_HOSTED_INPUT_TESTS
 import UIKit
 import XCTest
-@_spi(Testing) @testable import Nuxie
+@_spi(Testing) @_spi(Companion) @testable import Nuxie
 @testable import NuxieTestSupport
 
 /// Hosted UIKit activation, not a claim of VoiceOver traversal qualification.
 @MainActor
 final class SignedSemanticJourneyTests: XCTestCase {
+    func testQualificationAdmissionIsExplicitAndDevelopmentOnly() {
+        var testing = NuxieTestingOverrides()
+        for environment in [Environment.development, .staging, .production] {
+            let supported = JourneyReleaseRuntime.supported(
+                environment: environment,
+                testing: NuxieInternalConfiguration(testingOverrides: testing)
+            )
+            XCTAssertFalse(supported.supportedCapabilities.contains("experience-accessibility"))
+        }
+        testing.qualifyExperienceAccessibility = true
+        for environment in [Environment.staging, .production] {
+            let supported = JourneyReleaseRuntime.supported(
+                environment: environment,
+                testing: NuxieInternalConfiguration(testingOverrides: testing)
+            )
+            XCTAssertFalse(supported.supportedCapabilities.contains("experience-accessibility"))
+        }
+    }
+
     func testSignedSemanticActivationPersistsResponsesBeforeAuthoredNavigation() async throws {
         try await exercise(.success)
     }
@@ -63,12 +82,12 @@ final class SignedSemanticJourneyTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .unsupportedCapabilities(["experience-accessibility"]))
         }
-        let current = JourneyReleaseRuntime.current
-        let candidate = JourneyReleaseSupportedRuntime(currentSdkVersion: current.currentSdkVersion,
-            supportedRuntimeRevisions: current.supportedRuntimeRevisions, supportedLuauRevisions: current.supportedLuauRevisions,
-            sceneFormat: current.sceneFormat, timezoneDataRevision: current.timezoneDataRevision,
-            timezoneDataSHA256: current.timezoneDataSHA256,
-            supportedCapabilities: current.supportedCapabilities.union(["experience-accessibility"]))
+        var testing = NuxieTestingOverrides()
+        testing.qualifyExperienceAccessibility = true
+        let candidate = JourneyReleaseRuntime.supported(
+            environment: .development,
+            testing: NuxieInternalConfiguration(testingOverrides: testing)
+        )
         let catalog = JourneyProfileCatalog(authorizationKeys: keys, supportedRuntime: candidate,
             highWaterStore: InMemoryJourneyReleaseHighWaterStore())
         let prepared = try await catalog.prepare(profile, authority: authority)

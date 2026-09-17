@@ -66,6 +66,10 @@ public struct NuxieTestingOverrides: Sendable {
     /// The production default is false, including when XCTest is attached.
     public var suppressBackgroundWork = false
 
+    /// Admits the candidate Experience accessibility contract in development
+    /// qualification hosts. Staging and production ignore this testing option.
+    public var qualifyExperienceAccessibility = false
+
     /// Enables accessibility diagnostics used by presentation qualification hosts.
     public var presentationDiagnosticsEnabled = false
 
@@ -88,6 +92,7 @@ struct NuxieInternalConfiguration: Sendable {
     let urlSession: URLSession?
     let suppressBackgroundWork: Bool
     let presentationDiagnosticsEnabled: Bool
+    let qualifyExperienceAccessibility: Bool
 
     init(testingOverrides: NuxieTestingOverrides = .init()) {
         apiEndpointOverride = testingOverrides.apiEndpoint
@@ -102,6 +107,7 @@ struct NuxieInternalConfiguration: Sendable {
         urlSession = testingOverrides.urlSession
         suppressBackgroundWork = testingOverrides.suppressBackgroundWork
         presentationDiagnosticsEnabled = testingOverrides.presentationDiagnosticsEnabled
+        qualifyExperienceAccessibility = testingOverrides.qualifyExperienceAccessibility
     }
 }
 

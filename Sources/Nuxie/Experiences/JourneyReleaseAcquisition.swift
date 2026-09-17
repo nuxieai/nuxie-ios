@@ -172,6 +172,24 @@ struct AuthenticatedJourneyReleaseID: Codable, Equatable, Hashable, Sendable {
 }
 
 struct JourneyReleaseRuntime {
+    static func supported(
+        environment: Environment,
+        testing: NuxieInternalConfiguration
+    ) -> JourneyReleaseSupportedRuntime {
+        guard environment == .development, testing.qualifyExperienceAccessibility else {
+            return current
+        }
+        return JourneyReleaseSupportedRuntime(
+            currentSdkVersion: current.currentSdkVersion,
+            supportedRuntimeRevisions: current.supportedRuntimeRevisions,
+            supportedLuauRevisions: current.supportedLuauRevisions,
+            sceneFormat: current.sceneFormat,
+            timezoneDataRevision: current.timezoneDataRevision,
+            timezoneDataSHA256: current.timezoneDataSHA256,
+            supportedCapabilities: current.supportedCapabilities.union(["experience-accessibility"])
+        )
+    }
+
     /// Derived from the runtime module's authoritative build metadata.
     static let current = JourneyReleaseSupportedRuntime(
         currentSdkVersion: SDKVersion.current,
