@@ -1,6 +1,6 @@
 {
-  "generatorCheckoutCommit": "2e7270ecb8200d6f4e22d8b9b08bf5536cba9b7e",
-  "descriptorSha256": "dc7ff052477170386511c6fc61df2c91b76599a3786c109f001fb260dbbb23da",
+  "generatorCheckoutCommit": "bfcdf1aa66116b8943843ea1dceff042f314bf13",
+  "descriptorSha256": "c4e065a3baa9fef91b7c76d745651a1c667a303eb6d5a57ec405ad13d25bd983",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
   "qualification": "Test-authored signed Journey over production-publisher render bytes; not a full production release qualification."
 }

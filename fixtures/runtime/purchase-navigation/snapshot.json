@@ -67,6 +67,14 @@
               "type": "string",
               "propertyId": 3,
               "defaultValue": "root:yearly"
+            },
+            "plans": {
+              "type": "list",
+              "propertyId": 4,
+              "itemType": {
+                "type": "viewModel",
+                "viewModelId": "Plan"
+              }
             }
           }
         },
@@ -138,7 +146,15 @@
             "second": {
               "vmInstanceId": "plan.second"
             },
-            "placementId": "root:yearly"
+            "placementId": "root:yearly",
+            "plans": [
+              {
+                "vmInstanceId": "plan.first"
+              },
+              {
+                "vmInstanceId": "plan.second"
+              }
+            ]
           }
         },
         "name": "purchase.root"
