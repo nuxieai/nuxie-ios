@@ -1868,7 +1868,7 @@ actor ExperienceInteractiveScreen {
         }
         let videoPlayback: ExperienceVideoPlayback?
         do {
-            videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
+            videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, artboardId: manifestScreen.artboardId)
         } catch {
             try? await runtime.close()
             fontScope.close()
@@ -2608,6 +2608,13 @@ actor ExperienceInteractiveScreen {
         return try await gate.withLock { [self] in
             try await applyStateCommandLocked(command, correlationID: correlationID)
         }
+    }
+
+    func applyVideoCommand(_ action: JourneyVideoAction) async throws {
+        guard let videoPlayback else {
+            throw ExperienceInteractiveScreenError.stateContract("screen has no video playback host")
+        }
+        try await videoPlayback.apply(action)
     }
 
     private func applyStateCommandLocked(

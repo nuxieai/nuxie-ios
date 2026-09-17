@@ -48,17 +48,20 @@ final class ExperienceVideoPlayback {
 
     private let runtime: NuxieNativeRuntime
     private let lease: JourneyReleaseVideoFileLease?
+    private let targets: [NativeExperienceVideoElement]
     private var decoders: [Decoder] = []
     private var observers: [NSObjectProtocol] = []
     private var suspensionReasons: Set<UInt32> = []
 
-    private init(runtime: NuxieNativeRuntime, lease: JourneyReleaseVideoFileLease?) {
+    private init(runtime: NuxieNativeRuntime, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement]) {
         self.runtime = runtime
         self.lease = lease
+        self.targets = targets
     }
 
-    static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload) async throws -> ExperienceVideoPlayback {
-        let host = ExperienceVideoPlayback(runtime: runtime, lease: payload.videoFileLease)
+    static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload, artboardId: String) async throws -> ExperienceVideoPlayback {
+        let host = ExperienceVideoPlayback(runtime: runtime, lease: payload.videoFileLease,
+            targets: payload.renderPlan.videoElements.filter { $0.artboardId == artboardId })
         do {
             var captionCache: [String: [NuxieNativeVideoCaptionCue]] = [:]
             for occurrence in try await runtime.videos() {
@@ -112,6 +115,18 @@ final class ExperienceVideoPlayback {
             }
         }
         return values
+    }
+
+    func apply(_ action: JourneyVideoAction) async throws {
+        let matches = targets.filter { $0.artboardId == action.artboardId && $0.viewNodeId == action.viewNodeId }
+        let live = Set(try await runtime.videos().map(\.componentID))
+        guard !matches.isEmpty, matches.allSatisfy({ live.contains(Int($0.componentId)) }) else {
+            throw ExperienceInteractiveScreenError.stateContract("video target is not mounted in this screen")
+        }
+        for target in matches {
+            try await runtime.videoCommand(componentID: Int(target.componentId),
+                kind: action.commandKind, value: action.commandValue)
+        }
     }
 
     /// Called after Luau/state-machine stepping and before drawing the scene.
