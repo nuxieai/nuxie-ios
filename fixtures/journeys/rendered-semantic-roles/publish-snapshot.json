@@ -115,7 +115,8 @@
                   "fontSize": 18,
                   "color": "#ffffff"
                 },
-                "children": "Choose your plan"
+                "children": "Choose your plan",
+                "accessibilityHeadingLevel": 2
               }
             }
           }
@@ -172,7 +173,8 @@
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827"
-                }
+                },
+                "checked": true
               }
             }
           }
@@ -200,7 +202,8 @@
                   "width": 342,
                   "height": 48,
                   "backgroundColor": "#111827"
-                }
+                },
+                "accessibilityValue": "3 seats"
               }
             }
           }
@@ -526,6 +529,67 @@
           "data": {
             "kind": "layer_state",
             "type": "exit"
+          }
+        },
+        {
+          "id": "mixed",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "j",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "mixed",
+              "type": "View",
+              "systemId": "Pressable",
+              "props": {
+                "accessibilityRole": "checkbox",
+                "accessibilityLabel": "Optional extras",
+                "mixed": true,
+                "required": true,
+                "style": {
+                  "x": 24,
+                  "y": 600,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "description",
+          "projectId": "project_1",
+          "parentId": "screen_1::view_tree",
+          "kind": "view",
+          "type": "view",
+          "orderKey": "k",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "id": "description",
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "children": "Choose the options that suit you.",
+                "style": {
+                  "x": 24,
+                  "y": 664,
+                  "width": 342,
+                  "height": 48,
+                  "backgroundColor": "#111827",
+                  "fontFamily": "Nuxie Editor",
+                  "fontWeight": "400",
+                  "fontSize": 18,
+                  "color": "#ffffff"
+                }
+              }
+            }
           }
         },
         {

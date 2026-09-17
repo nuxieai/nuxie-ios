@@ -193,6 +193,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
         let elements = semanticElements(in: view)
         XCTAssertEqual(elements.compactMap(\.accessibilityLabel).sorted(), [
             "Annual plan", "Choose your plan", "Continue", "Password", "Plan option", "Plan option", "Seats", "Unavailable",
+            "Optional extras", "Choose the options that suit you.",
         ].sorted())
         let field = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Password" } as? UITextField)
         XCTAssertTrue(field.isSecureTextEntry)
@@ -200,6 +201,12 @@ final class SignedSemanticJourneyTests: XCTestCase {
         XCTAssertEqual(elements.filter { $0 is UITextField }.count, 1)
         let selected = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Annual plan" })
         XCTAssertTrue(selected.accessibilityTraits.contains(.selected))
+        XCTAssertEqual(selected.accessibilityValue, "1")
+        let heading = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Choose your plan" })
+        XCTAssertTrue(heading.accessibilityTraits.contains(.header))
+        let mixed = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Optional extras" })
+        XCTAssertEqual(mixed.accessibilityValue, "Mixed, Required")
+        XCTAssertFalse(mixed.accessibilityTraits.contains(.selected))
         let disabled = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Unavailable" })
         XCTAssertTrue(disabled.accessibilityTraits.contains(.notEnabled))
         XCTAssertFalse(disabled.accessibilityActivate())
@@ -207,6 +214,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
         XCTAssertEqual(Set(repeated.map(ObjectIdentifier.init)).count, 2)
         let seats = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Seats" } as? ExperienceSemanticAccessibilityElement)
         XCTAssertTrue(seats.accessibilityTraits.contains(.adjustable))
+        XCTAssertEqual(seats.accessibilityValue, "3 seats")
         let initialCaptureID = try XCTUnwrap(seats.captureID)
         seats.accessibilityIncrement()
         try await waitUntil("The authored increment must reach the Journey emission boundary") {

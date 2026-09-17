@@ -10,7 +10,8 @@ until platform qualification is complete. Generator tests verify secure-value
 redaction, response binding, native geometry paths, and font identity. The fixture
 alone does not prove native adapter behavior or VoiceOver/TalkBack qualification.
 
-The authored controls cover text, button, selected checkbox, adjustable seats,
+The authored controls cover a level-two heading, ordinary Text, button, selected
+checked checkbox, required mixed checkbox, adjustable seats with an authored value,
 a secure editable password, disabled button, decoration, and repeated list items.
 Increase/decrease emit `seat_increased` and `seat_decreased`; password edits target
 the required `password` response field. Continue and checkbox have no authored
