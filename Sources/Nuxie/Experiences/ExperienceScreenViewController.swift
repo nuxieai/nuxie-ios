@@ -127,6 +127,7 @@ final class ExperienceScreenViewController: UIViewController {
     private let screen: NativeExperienceScreen
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
+    private let videoCaptionOverlay = ExperienceVideoCaptionOverlay()
     private var requiresSceneSemantics: Bool {
         artifact.payload.requiredCapabilities.contains("experience-accessibility")
     }
@@ -217,6 +218,15 @@ final class ExperienceScreenViewController: UIViewController {
             surfaceView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             surfaceView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             surfaceView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        videoCaptionOverlay.translatesAutoresizingMaskIntoConstraints = false
+        videoCaptionOverlay.isHidden = contentHidden
+        view.addSubview(videoCaptionOverlay)
+        NSLayoutConstraint.activate([
+            videoCaptionOverlay.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            videoCaptionOverlay.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            videoCaptionOverlay.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
         ])
 
         // Fixture hosts own any qualification-only badge overlays.
@@ -314,10 +324,19 @@ final class ExperienceScreenViewController: UIViewController {
         } else {
             textConsumer = nil
         }
+        let captionConsumer: (@MainActor @Sendable ([ExperienceInteractiveVideoCaption]) -> Void)?
+        if artifact.renderPlan.videos.isEmpty { captionConsumer = nil }
+        else {
+            captionConsumer = { [weak self] captions in
+                guard let self, !self.isShuttingDown, self.runtimeFailure == nil else { return }
+                self.videoCaptionOverlay.update(captions)
+            }
+        }
         let loop = ExperienceRuntimePresentationLoop(
             session: interactive.presentationSession(
                 onSemantics: semanticConsumer,
-                onTextFrame: textConsumer
+                onTextFrame: textConsumer,
+                onCaptions: captionConsumer
             ) { [weak self] effects in
                 await self?.deliverStep(effects: effects)
             },
@@ -391,6 +410,8 @@ final class ExperienceScreenViewController: UIViewController {
             self.semanticContainer.clear()
             self.semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
             self.textInputOverlayBridge.clear()
+            self.videoCaptionOverlay.update([])
+            self.videoCaptionOverlay.isHidden = true
             await loop?.shutdown()
             self.isShuttingDown = false
         }
@@ -1012,12 +1033,16 @@ final class ExperienceScreenViewController: UIViewController {
         if requiresSceneSemantics {
             semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
         }
+        videoCaptionOverlay.isHidden = !controllerIsVisible || contentHidden || runtimeFailure != nil
+        if videoCaptionOverlay.isHidden { videoCaptionOverlay.update([]) }
         presentationLoop?.setPresentationVisible(controllerIsVisible && !contentHidden)
     }
 
     private func handleTerminalFailure(_ error: Error) {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         runtimeFailure = error
+        videoCaptionOverlay.update([])
+        videoCaptionOverlay.isHidden = true
         if requiresSceneSemantics { semanticContainer.clear() }
         finishExitWaiters()
         surfaceView.isHidden = true
