@@ -1160,8 +1160,15 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                     hint: try copyString(node.hint, label: "semantic hint")
                 ))
             }
+            let modalScope: NuxieNativeSemanticModalScope
+            switch info.modal_scope {
+            case UInt32(NUX_SEMANTIC_MODAL_NONE): modalScope = .none
+            case UInt32(NUX_SEMANTIC_MODAL_ACTIVE): modalScope = .active(info.modal_node_id)
+            case UInt32(NUX_SEMANTIC_MODAL_UNRESOLVED): modalScope = .unresolved
+            default: throw NuxieNativeRuntimeError.invalidNativeValue("unknown semantic modal scope")
+            }
             let tree = try NuxieNativeSemanticTree(renderRevision: info.render_revision,
-                treeVersion: info.tree_version, nodes: nodes)
+                treeVersion: info.tree_version, nodes: nodes, modalScope: modalScope)
             let byID = Dictionary(uniqueKeysWithValues: tree.nodes.map { ($0.id, $0) })
             var fields: [String: NuxieNativeSemanticNode] = [:]
             for run in textRuns {
@@ -1184,6 +1191,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             if let previous = semanticCapture,
                previous.tree.treeVersion == tree.treeVersion,
                previous.tree.nodes == tree.nodes,
+               previous.tree.modalScope == tree.modalScope,
                previous.fields == fields {
                 id = previous.id
             } else {

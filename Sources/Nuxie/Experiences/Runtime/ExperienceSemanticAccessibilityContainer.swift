@@ -82,19 +82,23 @@ final class ExperienceSemanticAccessibilityContainer {
         let focusedID = rememberFocus()
         let focusedObject = focusedID.flatMap { objects[$0] }
         let oldPosition = focusedID.flatMap { order.firstIndex(of: $0) }
-        let scope = modalScope(capture.tree.visibleReadingOrder)
+        let scope = modalScope(capture.tree)
         let modalChanged = modalFrames.map(\.id) != scope.path
         let currentFocus = focusedElement()
         let mayMoveModalFocus = focusedID != nil || currentFocus == nil
             || currentFocus === withdrawnFocus || focusIntent == .initial || focusIntent == .navigation
+        let pendingReturnID = focusIntent == .restore
+            && (currentFocus == nil || currentFocus === withdrawnFocus) ? preferredFocusID : nil
         var modalReturnID: UInt32?
         if modalChanged {
             let common = zip(modalFrames.map(\.id), scope.path).prefix { $0 == $1 }.count
-            if common < modalFrames.count { modalReturnID = modalFrames[common].returnFocusID }
+            let replacingModal = common < modalFrames.count
+            if replacingModal { modalReturnID = modalFrames[common].returnFocusID }
+            let returnFocusID = replacingModal ? modalReturnID : focusedID ?? pendingReturnID
             modalFrames = Array(modalFrames.prefix(common))
             for id in scope.path.dropFirst(common) {
                 modalFrames.append(ModalFrame(id: id,
-                    returnFocusID: modalFrames.count == common ? focusedID ?? modalReturnID : nil))
+                    returnFocusID: modalFrames.count == common ? returnFocusID : nil))
             }
             // Entering a new dialog starts at its first represented node.
             if common < scope.path.count { modalReturnID = nil }
@@ -166,25 +170,30 @@ final class ExperienceSemanticAccessibilityContainer {
         removeElements()
     }
 
-    /// Nested modal scopes follow semantic ancestry. Disjoint simultaneous modals
-    /// cannot be ordered by this ABI, so exposure waits for an unambiguous scope.
-    private func modalScope(_ ordered: [NuxieNativeSemanticNode])
+    /// Runtime selection follows paint order; traversal within its subtree keeps
+    /// authored reading order. Preserve return focus while resolution is withheld.
+    private func modalScope(_ tree: NuxieNativeSemanticTree)
         -> (nodes: [NuxieNativeSemanticNode], path: [UInt32]) {
+        let ordered = tree.visibleReadingOrder
+        let activeID: UInt32
+        switch tree.modalScope {
+        case .none: return (ordered, [])
+        case .unresolved: return ([], modalFrames.map(\.id))
+        case .active(let id): activeID = id
+        }
         let isModal: (NuxieNativeSemanticNode) -> Bool = {
             $0.stateFlags & NuxieNativeSemanticNode.modal != 0
                 && ($0.role == NuxieNativeSemanticRole.dialog.rawValue
                     || $0.role == NuxieNativeSemanticRole.alertDialog.rawValue)
         }
-        guard let modal = ordered.last(where: isModal) else { return (ordered, []) }
         let byID = Dictionary(uniqueKeysWithValues: ordered.map { ($0.id, $0) })
+        guard let modal = byID[activeID] else { return ([], modalFrames.map(\.id)) }
         var path: [UInt32] = []
         var current: NuxieNativeSemanticNode? = modal
         while let node = current {
             if isModal(node) { path.append(node.id) }
             current = node.parentID.flatMap { byID[$0] }
         }
-        let modalIDs = Set(ordered.filter(isModal).map(\.id))
-        guard Set(path) == modalIDs else { return ([], []) }
         var descendants: Set<UInt32> = [modal.id]
         let nodes = ordered.filter { node in
             if node.parentID.map({ descendants.contains($0) }) == true { descendants.insert(node.id) }

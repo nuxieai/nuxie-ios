@@ -81,12 +81,32 @@ final class NuxieNativeSemanticTreeTests: XCTestCase {
         XCTAssertEqual(result.nodes[0].hint, "Votre nom")
     }
 
+    func testModalScopeRequiresAVisibleModalAndPreservesFullIdentity() throws {
+        let id = UInt32.max
+        let modal = node(id: id, flags: NuxieNativeSemanticNode.modal, role: 14)
+        let result = try NuxieNativeSemanticTree(renderRevision: 1, treeVersion: 1,
+            nodes: [modal], modalScope: .active(id))
+        XCTAssertEqual(result.modalScope, .active(id))
+        for nodes in [[], [node(id: id)],
+            [node(id: id, flags: NuxieNativeSemanticNode.modal | NuxieNativeSemanticNode.hidden, role: 14)],
+            [node(id: 1, flags: NuxieNativeSemanticNode.hidden),
+             node(id: id, parent: 1, flags: NuxieNativeSemanticNode.modal, role: 14)]] {
+            XCTAssertThrowsError(try NuxieNativeSemanticTree(renderRevision: 1, treeVersion: 1,
+                nodes: nodes, modalScope: .active(id))) {
+                XCTAssertEqual($0 as? NuxieNativeSemanticTreeError, .invalidModalIdentity(id))
+            }
+        }
+        let unresolved = try NuxieNativeSemanticTree(renderRevision: 1, treeVersion: 1,
+            nodes: [modal], modalScope: .unresolved)
+        XCTAssertEqual(unresolved.modalScope, .unresolved)
+    }
+
     private func tree(_ nodes: [NuxieNativeSemanticNode]) throws -> NuxieNativeSemanticTree {
         try NuxieNativeSemanticTree(renderRevision: 7, treeVersion: 9, nodes: nodes)
     }
 
-    private func node(id: UInt32, parent: UInt32? = nil, flags: UInt32 = 0, order: UInt32 = 0) -> NuxieNativeSemanticNode {
-        NuxieNativeSemanticNode(id: id, parentID: parent, siblingIndex: order, role: 6,
+    private func node(id: UInt32, parent: UInt32? = nil, flags: UInt32 = 0, order: UInt32 = 0, role: UInt32 = 6) -> NuxieNativeSemanticNode {
+        NuxieNativeSemanticNode(id: id, parentID: parent, siblingIndex: order, role: role,
             stateFlags: flags, traitFlags: 0, headingLevel: 0, actions: 0,
             bounds: CGRect(x: 0, y: 0, width: 100, height: 30),
             label: "Prénom 👋", value: "private fixture value", hint: "Votre nom")

@@ -61,6 +61,14 @@ package enum NuxieNativeSemanticTreeError: Error, Equatable {
     case duplicateIdentity(UInt32)
     case missingAncestor(UInt32)
     case cyclicHierarchy
+    case invalidModalIdentity(UInt32)
+}
+
+/// Modal selection is copied from the runtime's rendered occurrence order.
+package enum NuxieNativeSemanticModalScope: Equatable, Sendable {
+    case none
+    case active(UInt32)
+    case unresolved
 }
 
 /// One copied presented revision. Both native editors and drawn controls receive
@@ -68,6 +76,7 @@ package enum NuxieNativeSemanticTreeError: Error, Equatable {
 package struct NuxieNativeSemanticTree: Sendable {
     package let renderRevision: UInt64
     package let treeVersion: UInt64
+    package let modalScope: NuxieNativeSemanticModalScope
     package let nodes: [NuxieNativeSemanticNode]
 
     /// Authored depth-first order, independent of snapshot storage order.
@@ -95,7 +104,8 @@ package struct NuxieNativeSemanticTree: Sendable {
     package init(
         renderRevision: UInt64,
         treeVersion: UInt64,
-        nodes: [NuxieNativeSemanticNode]
+        nodes: [NuxieNativeSemanticNode],
+        modalScope: NuxieNativeSemanticModalScope = .none
     ) throws {
         guard nodes.count <= 16_384 else { throw NuxieNativeSemanticTreeError.tooManyNodes }
         var byID: [UInt32: NuxieNativeSemanticNode] = [:]
@@ -132,6 +142,16 @@ package struct NuxieNativeSemanticTree: Sendable {
                 inheritedStates[item.id] = inherited
             }
         }
+        if case .active(let id) = modalScope {
+            guard let modal = byID[id],
+                  inheritedStates[id, default: 0] & NuxieNativeSemanticNode.hidden == 0,
+                  modal.stateFlags & NuxieNativeSemanticNode.modal != 0,
+                  modal.role == NuxieNativeSemanticRole.dialog.rawValue
+                    || modal.role == NuxieNativeSemanticRole.alertDialog.rawValue else {
+                throw NuxieNativeSemanticTreeError.invalidModalIdentity(id)
+            }
+        }
+        self.modalScope = modalScope
         self.renderRevision = renderRevision
         self.treeVersion = treeVersion
         self.nodes = nodes.map { node in

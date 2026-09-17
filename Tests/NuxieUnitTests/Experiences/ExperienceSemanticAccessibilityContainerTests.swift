@@ -42,6 +42,59 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
         }
     }
 
+    func testSharedModalFocusScenarios() throws {
+        struct Node: Decodable { let id: UInt32; let parent: UInt32?; let role: UInt32; let flags: UInt32 }
+        struct Step: Decodable {
+            let scope: String
+            let nodes: [UInt32]
+            let activeModal: UInt32?
+            let expectedExposed: [UInt32]
+            let expectedFocus: UInt32?
+            let focusAfter: UInt32?
+            let clearFocusAfter: Bool?
+        }
+        struct Scenario: Decodable { let id: String; let steps: [Step] }
+        struct Suite: Decodable { let schemaVersion: Int; let nodes: [Node]; let cases: [Scenario] }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let suite = try JSONDecoder().decode(Suite.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/accessibility/modal-focus.json")))
+        XCTAssertEqual(suite.schemaVersion, 1)
+        for scenario in suite.cases {
+            let view = UIView()
+            var focused: AnyObject?
+            let container = ExperienceSemanticAccessibilityContainer(view: view,
+                focusedElement: { focused }, moveFocus: { focused = $0 })
+            container.setActive(true)
+            for step in scenario.steps {
+                let nodes = try step.nodes.enumerated().map { index, id in
+                    let definition = try XCTUnwrap(suite.nodes.first { $0.id == id })
+                    return node(id, parent: definition.parent, order: UInt32(index),
+                        role: try XCTUnwrap(NuxieNativeSemanticRole(rawValue: definition.role)), flags: definition.flags)
+                }
+                let scope: NuxieNativeSemanticModalScope
+                switch step.scope {
+                case "none": scope = .none
+                case "active": scope = .active(try XCTUnwrap(step.activeModal))
+                case "unresolved": scope = .unresolved
+                default: XCTFail("Unknown shared scope: \(step.scope)"); continue
+                }
+                container.update(capture: try capture(nodes, modalScope: scope), nativeControls: [:],
+                    project: projection) { _, _, _ in true }
+                XCTAssertEqual(view.accessibilityElements?.compactMap { ($0 as? UIAccessibilityElement)?.accessibilityLabel },
+                    step.expectedExposed.map(String.init), scenario.id)
+                if let expected = step.expectedFocus {
+                    XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, String(expected), scenario.id)
+                }
+                if let target = step.focusAfter {
+                    focused = try XCTUnwrap(view.accessibilityElements?.compactMap { $0 as? UIAccessibilityElement }
+                        .first { $0.accessibilityLabel == String(target) })
+                }
+                if step.clearFocusAfter == true { focused = nil }
+            }
+        }
+    }
+
     func testReadingOrderMixesNativeFieldOnceAndPreservesDrawnIdentity() throws {
         let view = UIView()
         let field = UITextField()
@@ -310,18 +363,18 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
             })
         container.setActive(true)
         let background = [node(1), node(2, order: 1, role: .textField)]
-        func publish(_ nodes: [NuxieNativeSemanticNode]) throws {
-            container.update(capture: try capture(nodes), nativeControls: [2: field], project: projection) { _, _, _ in true }
+        func publish(_ nodes: [NuxieNativeSemanticNode], scope: NuxieNativeSemanticModalScope = .none) throws {
+            container.update(capture: try capture(nodes, modalScope: scope), nativeControls: [2: field], project: projection) { _, _, _ in true }
         }
         try publish(background)
         let invoker = try XCTUnwrap(view.accessibilityElements?.first as? ExperienceSemanticAccessibilityElement)
         let dialog = [node(10, order: 2, role: .dialog, flags: 1 << 11), node(11, parent: 10)]
-        try publish(background + dialog)
+        try publish(background + dialog, scope: .active(10))
         XCTAssertEqual(view.accessibilityElements?.compactMap { ($0 as? UIAccessibilityElement)?.accessibilityLabel }, ["10", "11"])
         XCTAssertTrue(field.accessibilityElementsHidden)
         XCTAssertFalse(invoker.accessibilityActivate(), "A retained background element cannot execute through the modal")
         XCTAssertEqual(moves, ["1", "10"])
-        try publish(background + dialog)
+        try publish(background + dialog, scope: .active(10))
         XCTAssertEqual(moves, ["1", "10"], "Stable modal frames do not repeatedly move focus")
         try publish(background)
         XCTAssertEqual(moves, ["1", "10", "1"])
@@ -334,19 +387,19 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
         let container = ExperienceSemanticAccessibilityContainer(view: view,
             focusedElement: { focused }, moveFocus: { focused = $0 })
         container.setActive(true)
-        func publish(_ nodes: [NuxieNativeSemanticNode]) throws {
-            container.update(capture: try capture(nodes), nativeControls: [:], project: projection) { _, _, _ in true }
+        func publish(_ nodes: [NuxieNativeSemanticNode], scope: NuxieNativeSemanticModalScope = .none) throws {
+            container.update(capture: try capture(nodes, modalScope: scope), nativeControls: [:], project: projection) { _, _, _ in true }
         }
         let background = [node(1)]
         let outer = [node(10, order: 1, role: .dialog, flags: 1 << 11), node(11, parent: 10)]
         let inner = [node(20, parent: 10, order: 1, role: .alertDialog, flags: 1 << 11), node(21, parent: 20)]
         try publish(background)
-        try publish(background + outer)
+        try publish(background + outer, scope: .active(10))
         focused = view.accessibilityElements?.last as AnyObject?
-        try publish(background + outer + inner)
+        try publish(background + outer + inner, scope: .active(20))
         XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "20")
         XCTAssertEqual(view.accessibilityElements?.count, 2)
-        try publish(background + outer)
+        try publish(background + outer, scope: .active(10))
         XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "11")
         try publish(background)
         XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "1")
@@ -361,12 +414,12 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
         let container = ExperienceSemanticAccessibilityContainer(view: view,
             focusedElement: { focused }, moveFocus: { focused = $0 })
         container.setActive(true)
-        func publish(_ nodes: [NuxieNativeSemanticNode]) throws {
-            container.update(capture: try capture(nodes), nativeControls: [2: field], project: projection) { _, _, _ in true }
+        func publish(_ nodes: [NuxieNativeSemanticNode], scope: NuxieNativeSemanticModalScope = .none) throws {
+            container.update(capture: try capture(nodes, modalScope: scope), nativeControls: [2: field], project: projection) { _, _, _ in true }
         }
         let background = [node(1), node(2, role: .textField)]
         try publish(background)
-        try publish(background + [node(10, order: 1, role: .dialog, flags: 1 << 11)])
+        try publish(background + [node(10, order: 1, role: .dialog, flags: 1 << 11)], scope: .active(10))
         focused = shell
         try publish(background)
         XCTAssertTrue(focused === shell)
@@ -379,33 +432,76 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
         let container = ExperienceSemanticAccessibilityContainer(view: view,
             focusedElement: { focused }, moveFocus: { focused = $0 })
         container.setActive(true)
-        func publish(_ nodes: [NuxieNativeSemanticNode]) throws {
-            container.update(capture: try capture(nodes), nativeControls: [:], project: projection) { _, _, _ in true }
+        func publish(_ nodes: [NuxieNativeSemanticNode], scope: NuxieNativeSemanticModalScope = .none) throws {
+            container.update(capture: try capture(nodes, modalScope: scope), nativeControls: [:], project: projection) { _, _, _ in true }
         }
         try publish([node(1), node(2, order: 1)])
-        try publish([node(2), node(10, order: 1, role: .dialog, flags: 1 << 11)])
+        try publish([node(2), node(10, order: 1, role: .dialog, flags: 1 << 11)], scope: .active(10))
         try publish([node(2), node(10, role: .dialog, flags: (1 << 11) | NuxieNativeSemanticNode.hidden)])
         XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "2")
         XCTAssertEqual(view.accessibilityElements?.count, 1)
     }
 
-    func testDisjointModalScopesDoNotGuessVisualStackingFromReadingOrder() throws {
+    func testDisjointModalsUseRuntimeSelectionAndRestoreOriginalInvoker() throws {
+        for scopes: [UInt32] in [[10, 20], [10, 20, 10]] {
+            let view = UIView()
+            var focused: AnyObject?
+            let container = ExperienceSemanticAccessibilityContainer(view: view,
+                focusedElement: { focused }, moveFocus: { focused = $0 })
+            container.setActive(true)
+            let background = [node(1), node(3, order: 1)]
+            container.update(capture: try capture(background), nativeControls: [:], project: projection) { _, _, _ in true }
+            focused = view.accessibilityElements?[1] as AnyObject?
+            let nodes = background + [node(10, role: .dialog, flags: 1 << 11), node(11, parent: 10),
+                node(20, order: 1, role: .dialog, flags: 1 << 11), node(21, parent: 20)]
+            for id in scopes {
+                container.update(capture: try capture(nodes, modalScope: .active(id)),
+                    nativeControls: [:], project: projection) { _, _, _ in true }
+                XCTAssertEqual(view.accessibilityElements?.compactMap { ($0 as? UIAccessibilityElement)?.accessibilityLabel },
+                    [String(id), String(id + 1)])
+            }
+            container.update(capture: try capture(background), nativeControls: [:], project: projection) { _, _, _ in true }
+            XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "3")
+        }
+    }
+
+    func testUnresolvedScopeWithdrawsExposureAndPreservesInvokerAcrossResolution() throws {
         let view = UIView()
-        let container = ExperienceSemanticAccessibilityContainer(view: view)
+        let field = UITextField()
+        var focused: AnyObject?
+        let container = ExperienceSemanticAccessibilityContainer(view: view,
+            focusedElement: { focused }, moveFocus: { focused = $0 })
         container.setActive(true)
-        let nodes = [node(1), node(10, role: .dialog, flags: 1 << 11),
-            node(20, order: 1, role: .dialog, flags: 1 << 11)]
-        container.update(capture: try capture(nodes), nativeControls: [:], project: projection) { _, _, _ in true }
+        let background = [node(1), node(3, order: 1), node(2, order: 2, role: .textField)]
+        let dialog = [node(10, order: 1, role: .dialog, flags: 1 << 11)]
+        func publish(_ nodes: [NuxieNativeSemanticNode], _ scope: NuxieNativeSemanticModalScope) throws {
+            container.update(capture: try capture(nodes, modalScope: scope), nativeControls: [2: field],
+                project: projection) { _, _, _ in true }
+        }
+        try publish(background, .none)
+        focused = view.accessibilityElements?[1] as AnyObject?
+        let invoker = try XCTUnwrap(focused as? ExperienceSemanticAccessibilityElement)
+        try publish(background + dialog, .unresolved)
         XCTAssertEqual(view.accessibilityElements?.count, 0)
+        XCTAssertTrue(field.accessibilityElementsHidden)
+        XCTAssertFalse(invoker.accessibilityActivate())
+        focused = nil // VoiceOver can release a withdrawn element before resolution.
+        try publish(background + dialog, .active(10))
+        XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "10")
+        try publish(background + dialog, .unresolved)
+        XCTAssertEqual(view.accessibilityElements?.count, 0)
+        try publish(background, .none)
+        XCTAssertEqual((focused as? UIAccessibilityElement)?.accessibilityLabel, "3")
+        XCTAssertFalse(field.accessibilityElementsHidden)
     }
 
     private func projection(_ node: NuxieNativeSemanticNode) -> ExperienceSemanticAccessibilityContainer.Projection? {
         .init(frame: node.bounds, traits: .button)
     }
 
-    private func capture(_ nodes: [NuxieNativeSemanticNode]) throws -> NuxieNativeSemanticCapture {
+    private func capture(_ nodes: [NuxieNativeSemanticNode], modalScope: NuxieNativeSemanticModalScope = .none) throws -> NuxieNativeSemanticCapture {
         NuxieNativeSemanticCapture(id: UUID(), tree: try NuxieNativeSemanticTree(
-            renderRevision: 1, treeVersion: 1, nodes: nodes), fieldsByTextRun: [:])
+            renderRevision: 1, treeVersion: 1, nodes: nodes, modalScope: modalScope), fieldsByTextRun: [:])
     }
 
     private func node(_ id: UInt32, parent: UInt32? = nil, order: UInt32 = 0,
