@@ -375,7 +375,16 @@ struct ExperiencePresentationTraceContext: Sendable {
         max(0, (end.monotonicTime - start.monotonicTime) * 1_000)
     }
 
+    static func systemFontFailureCode(for error: Error) -> String? {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        return (error as? ExperienceInteractiveScreenError)?.systemFontFailureCode
+        #else
+        return nil
+        #endif
+    }
+
     static func errorCode(for error: Error) -> String {
+        if let code = systemFontFailureCode(for: error) { return code }
         if let error = error as? JourneyReleaseAcquisitionError {
             return error.contractCode
         }

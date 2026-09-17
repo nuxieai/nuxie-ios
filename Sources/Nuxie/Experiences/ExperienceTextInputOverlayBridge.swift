@@ -234,6 +234,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var textValuesByInputID: [String: String] = [:]
     private var notifiedTextByInputID: [String: String] = [:]
     private var fontSHA256ByRiveUniqueName: [String: String] = [:]
+    private var systemFontWeightsByRiveUniqueName: [String: String] = [:]
     private var failedInputIDs = Set<String>()
     private var semanticFields: [String: NuxieNativeSemanticNode]?
     private var activeBuildID: String?
@@ -284,6 +285,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         if semanticTextWriter != nil { semanticFields = [:] }
         fontSHA256ByRiveUniqueName = renderPlan.fonts.reduce(into: [:]) {
             $0[$1.riveUniqueName] = $1.sha256
+        }
+        systemFontWeightsByRiveUniqueName = renderPlan.systemFonts.reduce(into: [:]) {
+            $0[$1.riveUniqueName] = $1.weight
         }
 
         let declared = renderPlan.textInputs.filter {
@@ -554,6 +558,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         let font = Self.font(
             for: style,
             contentSHA256: fontSHA256ByRiveUniqueName[style.fontAssetRiveUniqueName],
+            systemWeight: systemFontWeightsByRiveUniqueName[style.fontAssetRiveUniqueName],
             size: fontSize
         )
         let color = UIColor(nuxieARGB: style.color)
@@ -854,8 +859,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private static func font(
         for style: NativeExperienceTextInput.Style,
         contentSHA256: String?,
+        systemWeight: String?,
         size: CGFloat
     ) -> UIFont {
+        if let systemWeight, let weight = Int(systemWeight) {
+            return .systemFont(ofSize: size, weight: ExperienceRuntimeSystemFontProvider.uiWeight(weight))
+        }
         if let contentSHA256,
            let font = ExperienceRuntimeFontRegistry.font(
                forRiveUniqueName: style.fontAssetRiveUniqueName,

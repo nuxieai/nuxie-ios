@@ -24,6 +24,32 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
     let textInputs: [NativeExperienceTextInput]
     let images: [NativeExperienceImageAsset]
     let fonts: [NativeExperienceFontAsset]
+    // Device requirements have no artifact metadata or downloaded object.
+    let systemFonts: [NativeExperienceSystemFontRequirement]
+
+    init(
+        identity: Identity, scene: Scene, entry: Entry,
+        screens: [NativeExperienceScreen], transitions: [NativeExperienceTransition],
+        textInputs: [NativeExperienceTextInput], images: [NativeExperienceImageAsset],
+        fonts: [NativeExperienceFontAsset], systemFonts: [NativeExperienceSystemFontRequirement] = []
+    ) {
+        self.identity = identity
+        self.scene = scene
+        self.entry = entry
+        self.screens = screens
+        self.transitions = transitions
+        self.textInputs = textInputs
+        self.images = images
+        self.fonts = fonts
+        self.systemFonts = systemFonts
+    }
+}
+
+struct NativeExperienceSystemFontRequirement: Equatable, Sendable {
+    let riveAssetId: UInt64
+    let riveUniqueName: String
+    let weight: String
+    let style: String
 }
 
 struct NativeExperienceScreen: Equatable, Sendable {

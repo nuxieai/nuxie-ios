@@ -306,6 +306,155 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    func testSharedSystemFontDeclarationCorpus() throws {
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/system-font-declarations.json")
+        let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        for item in try XCTUnwrap(corpus["cases"] as? [[String: Any]]) {
+            var root = try systemFontRoot()
+            var render = try XCTUnwrap(root["render"] as? [String: Any])
+            var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+            render["assets"] = item["assets"]
+            requirements["requiredCapabilities"] = item["requiredCapabilities"]
+            root["render"] = render
+            root["requirements"] = requirements
+            let name = try XCTUnwrap(item["name"] as? String)
+            if item["valid"] as? Bool == true {
+                XCTAssertNoThrow(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root), name)
+            } else {
+                XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root), name)
+            }
+        }
+    }
+
+    func testSystemFontRequirementsAcceptEveryAuthoredWeightWithoutArtifactFields() throws {
+        for weight in stride(from: 100, through: 900, by: 100) {
+            let root = try systemFontRoot(weight: String(weight))
+            XCTAssertNoThrow(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root))
+        }
+    }
+
+    func testSystemFontRequirementsRejectInvalidSourcesAndMissingCapability() throws {
+        let invalidFields: [[String: Any]] = [
+            ["key": "assets/font.ttf"], ["sha256": String(repeating: "a", count: 64)],
+            ["sizeBytes": 12], ["contentType": "font/ttf"], ["format": "ttf"],
+            ["family": "Roboto"], ["weight": "450"], ["style": "italic"],
+            ["required": false], ["required": 1], ["location": "device"],
+        ]
+        for fields in invalidFields {
+            var root = try systemFontRoot()
+            var render = try XCTUnwrap(root["render"] as? [String: Any])
+            var assets = try XCTUnwrap(render["assets"] as? [[String: Any]])
+            assets[0].merge(fields) { _, replacement in replacement }
+            render["assets"] = assets
+            root["render"] = render
+            XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root), "\(fields)")
+        }
+        var root = try systemFontRoot()
+        var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        requirements["requiredCapabilities"] = [] as [String]
+        root["requirements"] = requirements
+        XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root))
+    }
+
+    func testSystemFontDeclarationsUseUniqueSortedSemanticIdentity() throws {
+        var root = try systemFontRoot()
+        var render = try XCTUnwrap(root["render"] as? [String: Any])
+        let first = try XCTUnwrap((render["assets"] as? [[String: Any]])?.first)
+        var second = first
+        second["riveUniqueName"] = "system-700-2"
+        second["riveAssetId"] = 2
+        second["weight"] = "700"
+        render["assets"] = [first, second]
+        root["render"] = render
+        XCTAssertNoThrow(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root))
+        for assets in [[second, first], [first, first]] {
+            render["assets"] = assets
+            root["render"] = render
+            XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root))
+        }
+    }
+
+    func testCDNFontRequiresSourceAndCannotMasqueradeAsSystem() throws {
+        var root = try systemFontRoot()
+        var render = try XCTUnwrap(root["render"] as? [String: Any])
+        let digest = String(repeating: "a", count: 64)
+        let font: [String: Any] = [
+            "kind": "font", "location": "cdn", "family": "Roboto", "weight": "400",
+            "style": "normal", "required": true, "riveAssetId": 1, "riveUniqueName": "roboto-1",
+            "key": "assets/sha256/\(digest).ttf", "sha256": digest, "sizeBytes": 100,
+            "contentType": "font/ttf", "format": "ttf",
+        ]
+        render["assets"] = [font]
+        root["render"] = render
+        XCTAssertNoThrow(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root))
+        for family in ["System", " system ", "SYSTEM"] {
+            var invalid = font
+            invalid["family"] = family
+            render["assets"] = [invalid]
+            root["render"] = render
+            XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root))
+        }
+        var missingSource = font
+        missingSource.removeValue(forKey: "location")
+        render["assets"] = [missingSource]
+        root["render"] = render
+        XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root))
+    }
+
+    func testSignedSystemFontRequiresConsumerCapability() throws {
+        let root = try systemFontRoot()
+        let envelope = try sign(JSONSerialization.data(withJSONObject: root))
+        let fixture = try golden(entryKey: "renderedEntry")
+        let requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
+        let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
+        let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
+        for supportsSystem in [false, true] {
+            let supported = JourneyReleaseSupportedRuntime(
+                currentSdkVersion: try XCTUnwrap(requirements["minimumSdkVersion"] as? String),
+                supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
+                supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
+                sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
+                timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
+                timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
+                supportedCapabilities: supportsSystem ? ["system-fonts"] : []
+            )
+            let authenticate = {
+                try JourneyReleaseVerifier().authenticateJourney(
+                    envelopeBytes: JSONEncoder().encode(envelope), authorizationKeys: [self.key(self.signingKey.publicKey.rawRepresentation)],
+                    expectedIdentity: fixture.identity, expectedLegId: String(repeating: "a", count: 64),
+                    supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0)
+                )
+            }
+            if supportsSystem {
+                XCTAssertNoThrow(try authenticate())
+            } else {
+                XCTAssertThrowsError(try authenticate()) { error in
+                    XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .unsupportedCapabilities(["system-fonts"]))
+                }
+            }
+        }
+    }
+
+    private func systemFontRoot(weight: String = "400") throws -> [String: Any] {
+        let fixture = try golden(entryKey: "renderedEntry")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        var render = try XCTUnwrap(root["render"] as? [String: Any])
+        render["assets"] = [[
+            "kind": "font", "location": "system", "family": "System",
+            "weight": weight, "style": "normal", "required": true,
+            "riveAssetId": 1, "riveUniqueName": "system-400-1",
+        ]]
+        root["render"] = render
+        var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        requirements["requiredCapabilities"] = ["system-fonts"]
+        root["requirements"] = requirements
+        return root
+    }
+
     private func authenticate(_ envelope: JourneyReleaseEnvelope, key publicKey: Data,
                               identity: JourneyReleaseIdentity, legId: String = String(repeating: "a", count: 64), minimum: Int = 0) throws -> AuthenticatedJourneyRelease {
         try JourneyReleaseVerifier().authenticateJourney(

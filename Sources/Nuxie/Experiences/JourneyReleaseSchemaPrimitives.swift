@@ -382,10 +382,16 @@ enum JourneyReleaseSchemaPrimitives {
             }
             previous = current
         }
-        _ = try array(
+        let capabilities = try array(
             requirements["requiredCapabilities"],
             path: "requirements.requiredCapabilities"
         )
+        let render = root["render"] as? [String: Any]
+        let assets = render?["assets"] as? [[String: Any]] ?? []
+        if assets.contains(where: { $0["kind"] as? String == "font" && $0["location"] as? String == "system" }),
+           !capabilities.contains(where: { $0 as? String == "system-fonts" }) {
+            try invalid("requirements.requiredCapabilities")
+        }
         let timezone = try object(
             requirements["timezoneData"],
             required: ["format", "revision", "sha256"],
@@ -1022,6 +1028,10 @@ enum JourneyReleaseSchemaPrimitives {
         }
         let assetKeys = try assets.enumerated().map { index, value in
             let asset = try dictionary(value, path: "render.assets[\(index)]")
+            if asset["kind"] as? String == "font", asset["location"] as? String == "system",
+               let name = asset["riveUniqueName"] as? String {
+                return "system-font:\(name)"
+            }
             guard let key = asset["key"] as? String else { try invalid("render.assets[\(index)].key") }
             return key
         }
@@ -1060,9 +1070,29 @@ enum JourneyReleaseSchemaPrimitives {
             try integer(typed.object["height"], minimum: 1, maximum: 65_535, path: "\(path).height")
             guard isJSONBoolean(typed.object["required"]) else { try invalid("\(path).required") }
         case "font":
+            if typed.object["location"] as? String == "system" {
+                _ = try object(
+                    typed.object,
+                    required: ["kind", "location", "riveAssetId", "riveUniqueName", "family", "weight", "style", "required"],
+                    path: path
+                )
+                try enumeration(typed.object["family"], values: ["System"], path: "\(path).family")
+                try enumeration(typed.object["weight"], values: ["100", "200", "300", "400", "500", "600", "700", "800", "900"], path: "\(path).weight")
+                try enumeration(typed.object["style"], values: ["normal"], path: "\(path).style")
+                try integer(typed.object["riveAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).riveAssetId")
+                try identifier(typed.object["riveUniqueName"], path: "\(path).riveUniqueName")
+                guard isJSONBoolean(typed.object["required"]), typed.object["required"] as? Bool == true else {
+                    try invalid("\(path).required")
+                }
+                return
+            }
+            try enumeration(typed.object["location"], values: ["cdn"], path: "\(path).location")
+            guard (typed.object["family"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "system" else {
+                try invalid("\(path).family")
+            }
             _ = try object(
                 typed.object,
-                required: ["kind", "key", "sha256", "sizeBytes", "contentType", "riveAssetId", "riveUniqueName", "family", "weight", "style", "format", "required"],
+                required: ["kind", "location", "key", "sha256", "sizeBytes", "contentType", "riveAssetId", "riveUniqueName", "family", "weight", "style", "format", "required"],
                 path: path
             )
             guard let contentType = typed.object["contentType"] as? String,

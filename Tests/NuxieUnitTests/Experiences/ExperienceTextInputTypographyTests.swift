@@ -21,6 +21,32 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         }
     }
 
+    func testAuthenticatedSystemInputsUseNativeWeightAtCapturedSize() throws {
+        let weights: [(String, UIFont.Weight)] = [("100", .ultraLight), ("200", .thin), ("300", .light),
+            ("400", .regular), ("500", .medium), ("600", .semibold), ("700", .bold), ("800", .heavy), ("900", .black)]
+        for (weight, nativeWeight) in weights {
+            let bridge = ExperienceTextInputOverlayBridge()
+            defer { bridge.clear() }
+            let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+            let item = Fixture.Case(name: weight, fontSize: 23, lineHeight: -1, containScale: 1,
+                geometryScale: 1, expectedFontSize: 23, expectedBaselineDistance: nil)
+            bridge.bind(screenID: "screen", renderPlan: plan(item, text: "System input", systemWeight: weight),
+                surfaceView: surface, artboardBounds: surface.bounds,
+                textWriter: { _, _, completion in completion(.success(())) })
+            let transform = CGAffineTransform(translationX: 10, y: 20)
+            bridge.update(frame: .init(snapshot: .init(rootInstanceID: 1, instances: [], values: []),
+                geometry: .captured(["run": .init(renderRevision: 1, worldTransform: transform,
+                    contentTransform: transform, textBounds: .zero,
+                    layout: .init(transform: transform, bounds: CGRect(x: 0, y: 0, width: 240, height: 180)), firstBaseline: nil)])))
+            let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextView }.first)
+            let actual = try XCTUnwrap(editor.font)
+            let expected = UIFont.systemFont(ofSize: 23, weight: nativeWeight)
+            XCTAssertEqual(actual.fontDescriptor, expected.fontDescriptor, weight)
+            XCTAssertEqual(actual.pointSize, 23)
+            XCTAssertFalse(editor.isHidden)
+        }
+    }
+
     func testSharedMultilineBaselinesAndRestyling() throws {
         let path = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -720,18 +746,19 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         return result
     }
 
-    private func plan(_ item: Fixture.Case, text: String, prefix: String = "", multiline: Bool = true, secure: Bool = false) -> NativeExperienceRenderPlan {
+    private func plan(_ item: Fixture.Case, text: String, prefix: String = "", multiline: Bool = true, secure: Bool = false, systemWeight: String? = nil) -> NativeExperienceRenderPlan {
         let input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",
             viewNodeId: "v", renderedNodeId: "r", riveTextObjectKey: "text", riveTextRunObjectKey: "run",
             riveTextName: "text", riveTextRunName: "run", value: text, placeholder: nil, editable: true,
             geometry: .init(xPath: "\(prefix)x", yPath: "\(prefix)y", widthPath: "\(prefix)w", heightPath: "\(prefix)h", rotationPath: "\(prefix)r",
                 scaleXPath: "\(prefix)sx", scaleYPath: "\(prefix)sy"),
-            style: .init(fontFamily: "system", fontWeight: "normal", fontStyle: "normal", fontSize: item.fontSize,
-                lineHeight: item.lineHeight, letterSpacing: 0, color: 0, fontAssetRiveUniqueName: "", textAlign: nil),
+            style: .init(fontFamily: systemWeight == nil ? "system" : "System", fontWeight: systemWeight ?? "normal", fontStyle: "normal", fontSize: item.fontSize,
+                lineHeight: item.lineHeight, letterSpacing: 0, color: 0, fontAssetRiveUniqueName: systemWeight == nil ? "" : "system-1", textAlign: nil),
             keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: nil, responseFieldKey: "answer")
         return NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "b", appId: "a", environment: "test"),
             scene: .init(key: "scene", sha256: "", sizeBytes: 0), entry: .init(screenId: "screen"),
-            screens: [], transitions: [], textInputs: [input], images: [], fonts: [])
+            screens: [], transitions: [], textInputs: [input], images: [], fonts: [],
+            systemFonts: systemWeight.map { [.init(riveAssetId: 1, riveUniqueName: "system-1", weight: $0, style: "normal")] } ?? [])
     }
 }
 #endif

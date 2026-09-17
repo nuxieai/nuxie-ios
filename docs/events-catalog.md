@@ -38,6 +38,13 @@ Leg lifecycle and milestone facts carry `journey_id`, `experience_id`, `experien
 
 `$customer_updated` and `$app_action_requested` include the authenticated release and leg identity. An authored send-event action emits its authored application event directly; the SDK does not wrap it in another reserved event.
 
+System font preparation failures add an `error_code` to `$experience_artifact_load_failed`
+and, when the presentation closes with that failure, `$experience_errored`. The same
+code appears in the presentation trace: `system_font.unsupported_request`,
+`system_font.face_unavailable`, `system_font.tables_unavailable`, or
+`system_font.data_unusable`. These identify SDK provider failures; unrelated native
+import failures retain their existing diagnostics rather than being attributed to fonts.
+
 ## Purchases, permissions, lifecycle, and features
 
 | Family | Events | Capture path |
