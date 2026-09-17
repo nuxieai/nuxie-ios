@@ -12,12 +12,72 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    func testEmbeddedCaptionTrackIsReadFromVerifiedFile() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/video")
+        let url = directory.appendingPathComponent("captions.mp4")
+        let cues = try await ExperienceVideoCaptions.read(url: url,
+            track: .init(streamIndex: 2, codec: "mov_text", language: "eng", title: nil))
+        XCTAssertEqual(cues.map(\.text), ["Hello 👋", "Welcome"])
+        XCTAssertEqual(cues.count, 2)
+        XCTAssertEqual(cues[0].startSeconds, 0, accuracy: 0.001)
+        XCTAssertEqual(cues[0].endSeconds, 0.9, accuracy: 0.001)
+        XCTAssertEqual(cues[1].startSeconds, 1, accuracy: 0.001)
+        XCTAssertEqual(cues[1].endSeconds, 1.9, accuracy: 0.001)
+        for index in [0, 1, 3] {
+            do {
+                _ = try await ExperienceVideoCaptions.read(url: url,
+                    track: .init(streamIndex: index, codec: "mov_text", language: "eng", title: nil))
+                XCTFail("An absent or non-text stream must not be admitted as captions")
+            } catch {}
+        }
+    }
+
+    func testVideoCaptionsFollowSeekAndRejectInvalidReplacement() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/video")
+        let scene = try Data(contentsOf: directory.appendingPathComponent("greeting.nux"))
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
+            pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
+        defer { Task { try? await runtime.close() } }
+        let videos = try await runtime.videos()
+        let video = try XCTUnwrap(videos.first)
+        try await runtime.videoSetCaptions(componentID: video.componentID, language: "en", cues: [
+            .init(startSeconds: 0, endSeconds: 1, text: "Hello 👋"),
+            .init(startSeconds: 1, endSeconds: 2, text: "Welcome"),
+        ])
+        var caption = try await runtime.videoCaption(componentID: video.componentID)
+        XCTAssertEqual(caption.language, "en")
+        XCTAssertEqual(caption.text, "Hello 👋")
+        do {
+            try await runtime.videoSetCaptions(componentID: video.componentID, language: "fr", cues: [
+                .init(startSeconds: .nan, endSeconds: 1, text: "Invalid"),
+            ])
+            XCTFail("Invalid cue must be rejected atomically")
+        } catch {}
+        caption = try await runtime.videoCaption(componentID: video.componentID)
+        XCTAssertEqual(caption.language, "en")
+        XCTAssertEqual(caption.text, "Hello 👋")
+        for (seconds, expected) in [(1.0, "Welcome"), (0.0, "Hello 👋"), (2.0, "")] {
+            try await runtime.videoCommand(componentID: video.componentID, kind: 2, value: seconds)
+            _ = try await runtime.videoStep(componentID: video.componentID, observation: 0, generation: video.generation)
+            caption = try await runtime.videoCaption(componentID: video.componentID)
+            XCTAssertEqual(caption.text, expected)
+        }
+        try await runtime.videoSetCaptions(componentID: video.componentID, language: "", cues: [])
+        caption = try await runtime.videoCaption(componentID: video.componentID)
+        XCTAssertEqual(caption.language, "")
+        XCTAssertEqual(caption.text, "")
+        try await runtime.close()
+    }
+
     @MainActor
     func testPublishedVideoDecodesIntoMetalScene() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/video")
         let scene = try Data(contentsOf: directory.appendingPathComponent("greeting.nux"))
-        let url = directory.appendingPathComponent("greeting.mp4")
+        let url = directory.appendingPathComponent("captions.mp4")
         let media = try Data(contentsOf: url)
         let digest = SHA256Provider.hexDigest(media)
         let key = "assets/sha256/\(digest).mp4"
@@ -27,7 +87,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let name = "\(authored.name)-\(id)"
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
             riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: media.count,
-            width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: [], required: true)
+            width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: [.init(streamIndex: 2, codec: "mov_text", language: "eng", title: nil)], required: true)
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "video", buildId: "video", appId: "app", environment: "test"),
             scene: .init(key: "scene.nux", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
             entry: .init(screenId: "screen"), screens: [.init(screenId: "screen", artboardId: "screen", artboardName: "Video Frame", width: 320, height: 640, exit: nil)],
@@ -48,11 +108,16 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let stride = 1280
         let buffer = try XCTUnwrap(device.makeBuffer(length: stride * 640, options: .storageModeShared))
         var sawRed = false, sawBlue = false
+        var seenCaptions: Set<String> = []
+        let videoOccurrences = try await runtime.videos()
+        let videoComponent = try XCTUnwrap(videoOccurrences.first).componentID
         var phase = 0
         let deadline = Date().addingTimeInterval(12)
         while Date() < deadline && phase < 4 {
             _ = try await runtime.step(elapsedSeconds: 0.03)
             _ = try await host.tick()
+            let caption = try await runtime.videoCaption(componentID: videoComponent)
+            if !caption.text.isEmpty { seenCaptions.insert(caption.text) }
             guard let drawable = layer.nextDrawable() else { XCTFail("Metal drawable unavailable"); break }
             let completed = expectation(description: "video frame presented")
             _ = try await runtime.render(drawable: .available(.init(drawable)),
@@ -67,6 +132,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             if (phase % 2 == 0 && red) || (phase % 2 == 1 && blue) { phase += 1 }
             try await Task.sleep(nanoseconds: 30_000_000)
         }
+        XCTAssertEqual(seenCaptions, ["Hello 👋", "Welcome"], "Authenticated file captions must follow native playback")
         XCTAssertTrue(sawRed, "Decoded red frame must reach the composed Metal scene")
         XCTAssertTrue(sawBlue, "Playback must advance to the decoded blue frame")
         XCTAssertEqual(phase, 4, "Two red/blue cycles must render across a runtime-owned loop seek: \(host.playbackDiagnostics)")
