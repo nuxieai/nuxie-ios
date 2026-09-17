@@ -3025,6 +3025,28 @@ package struct NuxieNativeVideoAction: Sendable {
     package let generation: UInt64
 }
 
+package struct NuxieNativeVideoCaptionCue: Sendable {
+    package let startSeconds: Double
+    package let endSeconds: Double
+    package let text: String
+
+    package init(startSeconds: Double, endSeconds: Double, text: String) {
+        self.startSeconds = startSeconds
+        self.endSeconds = endSeconds
+        self.text = text
+    }
+}
+
+package struct NuxieNativeVideoCaption: Sendable, Equatable {
+    package let language: String
+    package let text: String
+}
+
+private final class NuxieVideoCaptionCollector {
+    var value: NuxieNativeVideoCaption?
+    var error: Error?
+}
+
 private final class NuxieVideoOccurrenceCollector {
     var values: [NuxieNativeVideoOccurrence] = []
     var error: Error?
@@ -3095,6 +3117,55 @@ extension NuxieNativeRuntime {
                 frame.pixels = NuxByteView(data: storage.bindMemory(to: UInt8.self).baseAddress, len: storage.count)
                 try requireOK(nux_player_video_present_metal(try state.renderer.require(), try state.player.require(), componentID, &frame), operation: "present video frame")
             }
+        }
+    }
+
+    package func videoSetCaptions(componentID: Int, language: String, cues: [NuxieNativeVideoCaptionCue]) async throws {
+        // Bound before allocating the borrowed C copies as well as in the runtime.
+        guard language.utf8.count <= 256, cues.count <= 100_000 else {
+            throw NuxieNativeRuntimeError.invalidNativeValue("caption track exceeds limits")
+        }
+        var bytes = 0
+        for cue in cues {
+            let count = cue.text.utf8.count
+            guard count <= 8 * 1024 * 1024 - bytes else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("caption text exceeds limits")
+            }
+            bytes += count
+        }
+        let state = try requireState()
+        try await executor.call {
+            let storage = NuxieNativeBorrowedStorage()
+            let native = cues.map { cue in
+                NuxVideoCaptionCue(start_seconds: cue.startSeconds, end_seconds: cue.endSeconds,
+                    text: storage.stringView(cue.text))
+            }
+            try withExtendedLifetime(storage) {
+                try native.withUnsafeBufferPointer { buffer in
+                    try requireOK(nux_player_video_set_captions(try state.player.require(), componentID,
+                        storage.stringView(language), buffer.baseAddress, buffer.count), operation: "set video captions")
+                }
+            }
+        }
+    }
+
+    package func videoCaption(componentID: Int) async throws -> NuxieNativeVideoCaption {
+        let state = try requireState()
+        return try await executor.call {
+            let collector = NuxieVideoCaptionCollector()
+            try requireOK(nux_player_video_caption(try state.player.require(), componentID, { context, language, text in
+                guard let context else { return }
+                let collector = Unmanaged<NuxieVideoCaptionCollector>.fromOpaque(context).takeUnretainedValue()
+                do {
+                    collector.value = .init(language: try copyString(language, label: "caption language"),
+                        text: try copyString(text, label: "caption text"))
+                } catch { collector.error = error }
+            }, Unmanaged.passUnretained(collector).toOpaque()), operation: "read video caption")
+            if let error = collector.error { throw error }
+            guard let value = collector.value else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("missing caption callback")
+            }
+            return value
         }
     }
 

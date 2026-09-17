@@ -60,6 +60,7 @@ final class ExperienceVideoPlayback {
     static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload) async throws -> ExperienceVideoPlayback {
         let host = ExperienceVideoPlayback(runtime: runtime, lease: payload.videoFileLease)
         do {
+            var captionCache: [String: [NuxieNativeVideoCaptionCue]] = [:]
             for occurrence in try await runtime.videos() {
                 // An omitted scene MIME is resolved by the signed retained inventory.
                 guard !occurrence.embedded,
@@ -79,6 +80,17 @@ final class ExperienceVideoPlayback {
                 let duration = try await asset.load(.duration).seconds
                 guard playable, duration.isFinite, duration > 0 else {
                     throw ExperienceInteractiveScreenError.assetContract("video is not playable on this device")
+                }
+                if let track = declaration.captionTracks.first {
+                    let key = "\(declaration.sha256):\(track.streamIndex)"
+                    let cues: [NuxieNativeVideoCaptionCue]
+                    if let cached = captionCache[key] { cues = cached }
+                    else {
+                        cues = try await ExperienceVideoCaptions.read(url: url, track: track)
+                        captionCache[key] = cues
+                    }
+                    try await runtime.videoSetCaptions(componentID: occurrence.componentID,
+                        language: track.language ?? "", cues: cues)
                 }
                 host.decoders.append(Decoder(componentID: occurrence.componentID, generation: occurrence.generation, audioPolicy: occurrence.audioPolicy,
                     asset: asset, duration: duration))
