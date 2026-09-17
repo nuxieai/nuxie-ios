@@ -1,0 +1,102 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 150,
+  "outputSizeBytes": 2942,
+  "outputSha256": "7aa13dce483116aeeaee0273d2141f31e8d0d95c71385516c8f82b8beb777ec7",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen",
+        "publishedName": "Purchase",
+        "role": "experience",
+        "width": 320,
+        "height": 100,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "plan",
+        "publishedName": "Plan card",
+        "role": "component",
+        "width": 140,
+        "height": 100,
+        "authoredOrder": 1
+      },
+      {
+        "sourceArtboardId": "archive-image",
+        "publishedName": "Archive image",
+        "role": "experience",
+        "width": 4,
+        "height": 2,
+        "authoredOrder": 2
+      },
+      {
+        "sourceArtboardId": "archive-alternative",
+        "publishedName": "Archive image",
+        "role": "experience",
+        "width": 4,
+        "height": 2,
+        "authoredOrder": 3
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen",
+        "artboardId": "screen",
+        "artboardName": "Purchase",
+        "width": 320,
+        "height": 100,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      },
+      {
+        "screenId": "archive-image",
+        "artboardId": "archive-image",
+        "artboardName": "Archive image",
+        "width": 4,
+        "height": 2,
+        "authoredOrder": 1,
+        "reportedEventNames": []
+      },
+      {
+        "screenId": "archive-alternative",
+        "artboardId": "archive-alternative",
+        "artboardName": "Archive image",
+        "width": 4,
+        "height": 2,
+        "authoredOrder": 2,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [
+        {
+          "sourceAssetKey": "https://example.test/archive.png",
+          "riveAssetId": 0,
+          "riveUniqueName": "image-archive-alternative-a233d65e-0",
+          "path": "assets/sha256/d39025e0a27e2c6251d563eae7dfacfa3db232cbd5c15780933d3d6cee715a61.png",
+          "sha256": "d39025e0a27e2c6251d563eae7dfacfa3db232cbd5c15780933d3d6cee715a61",
+          "contentType": "image/png",
+          "width": 4,
+          "height": 2,
+          "required": true
+        },
+        {
+          "sourceAssetKey": "https://example.test/archive.png",
+          "riveAssetId": 1,
+          "riveUniqueName": "image-archive-image-2a87bbc8-1",
+          "path": "assets/sha256/d39025e0a27e2c6251d563eae7dfacfa3db232cbd5c15780933d3d6cee715a61.png",
+          "sha256": "d39025e0a27e2c6251d563eae7dfacfa3db232cbd5c15780933d3d6cee715a61",
+          "contentType": "image/png",
+          "width": 4,
+          "height": 2,
+          "required": true
+        }
+      ],
+      "fonts": []
+    },
+    "textInputs": []
+  }
+}

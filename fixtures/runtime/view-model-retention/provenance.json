@@ -1,0 +1,9 @@
+{
+  "generatorCheckoutCommit": "4d99e7462801cb4bc63b33fdf0dc7074c983be2a",
+  "generatorSha256": "e799b0c2bd7b6bb43dd1c81e97eaced6ac152c73657f365a3da2d59eab86d661",
+  "sourceSnapshotSha256": "bdae9c28ca7ff26410741be30fdc03846613f7b6d019d0442f1d4fa11cd02660",
+  "publisherWasmSha256": "318fedacc59d9516f6c1680f9e2a4367c82690609a4aeefcc2518d541af8d33d",
+  "renderSha256": "7aa13dce483116aeeaee0273d2141f31e8d0d95c71385516c8f82b8beb777ec7",
+  "imageSha256": "d39025e0a27e2c6251d563eae7dfacfa3db232cbd5c15780933d3d6cee715a61",
+  "qualification": "Published scalar/resource graph; restoration requires separate native executing tests."
+}
