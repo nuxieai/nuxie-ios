@@ -834,6 +834,63 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(after, before)
     }
 
+    func testGeneratedInputCommitUsesExistingViewModelBatchAndListener() async throws {
+        let fixtureDirectory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/scripted-input")
+        let bytes = try Data(contentsOf: fixtureDirectory.appendingPathComponent("screen.riv"))
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: bytes, artboardName: "Paywall",
+            player: .defaultSceneWithInputStateMachine("Generated Nuxie Pressable Interaction"),
+            pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: true,
+            importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: [:])
+        )
+        defer { Task { try? await runtime.close() } }
+        let root = try await runtime.rootViewModelReference()
+        func value(_ control: String) async throws -> Data {
+            let snapshot = try await runtime.snapshot()
+            func child(_ owner: UInt64, _ name: String) throws -> UInt64 {
+                guard case .referencedInstance(let id) = snapshot.values.first(where: {
+                    $0.ownerInstanceID == owner && $0.name == name
+                })?.value else { throw ScriptedInputFixtureError.missingValue }
+                return id
+            }
+            let controls = try child(root.rawValue, "controls")
+            let input = try child(controls, control)
+            guard case .bytes(let value) = snapshot.values.first(where: {
+                $0.ownerInstanceID == input && $0.name == "value"
+            })?.value else { throw ScriptedInputFixtureError.missingValue }
+            return value
+        }
+        _ = try await runtime.step(elapsedSeconds: 0)
+        for text in ["Evening ease", "", "静かな夜", "静かな夜"] {
+            _ = try await runtime.mutateViewModel([
+                .setString(instance: root, path: "controls/cta/value", value: Data(text.utf8)),
+            ])
+            _ = try await runtime.step(elapsedSeconds: 0)
+            let edited = try await value("cta")
+            XCTAssertEqual(edited, Data(text.utf8), "Editing alone must not submit")
+            _ = try await runtime.mutateViewModel([
+                .setString(instance: root, path: "controls/cta/value", value: Data(text.utf8)),
+                .fireTrigger(instance: root, path: "controls/cta/commit"),
+            ])
+            let afterMutation = try await value("cta")
+            _ = try await runtime.step(elapsedSeconds: 0)
+            let committed = try await value("cta")
+            XCTAssertEqual(String(decoding: committed, as: UTF8.self), "committed:\(text)",
+                "after mutation: \(String(decoding: afterMutation, as: UTF8.self))")
+            _ = try await runtime.step(elapsedSeconds: 0)
+            let settled = try await value("cta")
+            let other = try await value("second-input")
+            XCTAssertEqual(settled, committed, "An advance must not replay the commit")
+            XCTAssertEqual(other, Data("untouched".utf8))
+        }
+    }
+
+    private enum ScriptedInputFixtureError: Error { case missingValue }
+
     func testTrustedScriptedFixtureReturnsGenericCommandsInAuthoredOrder() async throws {
         let scene = try descriptorSceneFixture()
         let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
