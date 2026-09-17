@@ -9,6 +9,16 @@
     }
   ],
   "transitions": [],
+  "videoElements": [
+    {
+      "artboardId": "screen",
+      "viewNodeId": "clip-view",
+      "renderedNodeId": "clip-view",
+      "componentId": 5,
+      "readinessTimeoutSeconds": 5,
+      "optional": false
+    }
+  ],
   "textInputs": [],
   "assets": [
     {
