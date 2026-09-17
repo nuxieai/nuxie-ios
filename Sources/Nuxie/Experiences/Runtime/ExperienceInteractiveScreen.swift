@@ -953,8 +953,7 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
         "fontScale",
     ]
 
-    private let rootInstanceID: UInt64
-    private let rootPropertyIndexes: Set<Int>
+    private let reservedPropertyIndexesByOwner: [UInt64: Set<Int>]
     private var reservedInstanceIDs: Set<UInt64>
 
     init(
@@ -966,12 +965,10 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
               let root = snapshot.instances.first(where: {
                   $0.id == snapshot.rootInstanceID
               }) else {
-            rootInstanceID = 0
-            rootPropertyIndexes = []
+            reservedPropertyIndexesByOwner = [:]
             reservedInstanceIDs = previous?.reservedInstanceIDs ?? []
             return
         }
-        rootInstanceID = snapshot.rootInstanceID
         let reservedRootPropertyIndexes: Set<Int> = Set(
             catalog.properties.compactMap { property -> Int? in
                 guard property.schemaIndex == root.schemaIndex,
@@ -981,13 +978,28 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
                 return property.index
             }
         )
-        rootPropertyIndexes = reservedRootPropertyIndexes
+        // Layout feedback belongs to each component occurrence, including
+        // instances outside the root's authored child graph. Its generated
+        // child is private wherever it appears; environment names remain
+        // reserved only on the screen root.
+        var generatedIndexesBySchema: [Int: Set<Int>] = [:]
+        for property in catalog.properties
+            where property.name == "nuxieLayoutPaint" && property.kind == .viewModel {
+            generatedIndexesBySchema[property.schemaIndex, default: []].insert(property.index)
+        }
+        var indexesByOwner: [UInt64: Set<Int>] = [:]
+        for instance in snapshot.instances {
+            if let indexes = generatedIndexesBySchema[instance.schemaIndex] {
+                indexesByOwner[instance.id] = indexes
+            }
+        }
+        indexesByOwner[snapshot.rootInstanceID, default: []].formUnion(reservedRootPropertyIndexes)
+        reservedPropertyIndexesByOwner = indexesByOwner
 
         var reserved: Set<UInt64> = []
         var pending: [UInt64] = snapshot.values
             .filter {
-                $0.ownerInstanceID == snapshot.rootInstanceID
-                    && reservedRootPropertyIndexes.contains($0.propertyIndex)
+                indexesByOwner[$0.ownerInstanceID]?.contains($0.propertyIndex) == true
             }
             .flatMap { Self.childInstanceIDs(in: $0.value) }
         while let owner = pending.popLast() {
@@ -1002,9 +1014,9 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
     mutating func shouldSuppress(
         _ change: ExperienceInteractiveViewModelChange
     ) -> Bool {
-        let isReservedRootProperty = change.ownerInstanceID == rootInstanceID
-            && rootPropertyIndexes.contains(change.propertyIndex)
-        guard isReservedRootProperty
+        let isReservedProperty = reservedPropertyIndexesByOwner[change.ownerInstanceID]?
+            .contains(change.propertyIndex) == true
+        guard isReservedProperty
                 || reservedInstanceIDs.contains(change.ownerInstanceID) else {
             return false
         }
@@ -1848,12 +1860,11 @@ actor ExperienceInteractiveScreen {
                 textRunNames: capturesTextLayout ? textInputs.values.filter(\.editable).map(\.riveTextRunName).sorted() : []
             )
             await captureTextFrame(result, requested: capturesTextLayout)
-            let projected = await projectStep(result, correlationID: correlationID)
-            // Native step effects have committed. Topology is a recoverable
-            // cache and must never turn that committed operation into a
-            // product-visible failure that drops its exactly-once effects.
+            // Discover generated state on newly materialized components
+            // before projecting this frame's changes. Native effects have
+            // committed: a recoverable topology failure must not discard them.
             try? await refreshTrackedTopology()
-            return projected
+            return await projectStep(result, correlationID: correlationID)
         }
     }
 

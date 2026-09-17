@@ -2220,6 +2220,54 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )))
     }
 
+    func testReservedProjectionSuppressesLayoutPaintOnRootAndComponentModels() {
+        let catalog = NuxieNativeViewModelCatalog(
+            schemas: [
+                .init(index: 0, name: "RootOrComponent", propertyRange: 0..<2,
+                      authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: false),
+                .init(index: 1, name: "Paint", propertyRange: 2..<3,
+                      authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: false),
+            ],
+            properties: [
+                .init(schemaIndex: 0, index: 0, name: "nuxieLayoutPaint", kind: .viewModel,
+                      referencedSchemaIndex: 1, enumLabels: []),
+                .init(schemaIndex: 0, index: 1, name: "content", kind: .number,
+                      referencedSchemaIndex: nil, enumLabels: []),
+                .init(schemaIndex: 1, index: 0, name: "width", kind: .number,
+                      referencedSchemaIndex: nil, enumLabels: []),
+            ], authoredInstances: []
+        )
+        let snapshot = NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: [
+                .init(id: 1, schemaIndex: 0, valueRange: 0..<2),
+                // A component occurrence need not be a root VM child.
+                .init(id: 2, schemaIndex: 0, valueRange: 2..<4),
+                .init(id: 10, schemaIndex: 1, valueRange: 4..<5),
+                .init(id: 20, schemaIndex: 1, valueRange: 5..<6),
+            ],
+            values: [
+                .init(ownerInstanceID: 1, propertyIndex: 0, name: "nuxieLayoutPaint", value: .referencedInstance(10)),
+                .init(ownerInstanceID: 1, propertyIndex: 1, name: "content", value: .number(7)),
+                .init(ownerInstanceID: 2, propertyIndex: 0, name: "nuxieLayoutPaint", value: .referencedInstance(20)),
+                .init(ownerInstanceID: 2, propertyIndex: 1, name: "content", value: .number(8)),
+                .init(ownerInstanceID: 10, propertyIndex: 0, name: "width", value: .number(100)),
+                .init(ownerInstanceID: 20, propertyIndex: 0, name: "width", value: .number(200)),
+            ]
+        )
+        var filter = ExperienceInteractiveReservedChangeFilter(snapshot: snapshot, catalog: catalog)
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 10, property: 0, value: .number(120))))
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 20, property: 0, value: .number(240))))
+        XCTAssertFalse(filter.shouldSuppress(Self.change(owner: 1, property: 1, value: .number(9))))
+        XCTAssertFalse(filter.shouldSuppress(Self.change(owner: 2, property: 1, value: .number(10))))
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 2, property: 0, value: .referencedInstance(30))))
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 30, property: 0, value: .number(260))))
+        filter = ExperienceInteractiveReservedChangeFilter(snapshot: nil, catalog: catalog, preserving: filter)
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 20, property: 0, value: .number(280))))
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 30, property: 0, value: .number(300))))
+        XCTAssertFalse(filter.shouldSuppress(Self.change(owner: 2, property: 1, value: .number(11))))
+    }
+
     func testReservedProjectionAllowsCatalogWithoutReservedRoots() {
         let catalog = NuxieNativeViewModelCatalog(
             schemas: [.init(
