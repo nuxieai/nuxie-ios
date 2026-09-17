@@ -43,6 +43,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         defer { Task { try? await runtime.close() } }
         let videos = try await runtime.videos()
         let video = try XCTUnwrap(videos.first)
+        XCTAssertEqual(video.componentName, "Video")
+        XCTAssertEqual(video.priority, 0)
+        XCTAssertEqual(video.readiness, 0)
         try await runtime.videoSetCaptions(componentID: video.componentID, language: "en", cues: [
             .init(startSeconds: 0, endSeconds: 1, text: "Hello 👋"),
             .init(startSeconds: 1, endSeconds: 2, text: "Welcome"),

@@ -6,8 +6,8 @@ let localRuntimePath = ".artifacts/NuxieRuntime.xcframework"
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let localRuntimeURL = packageRoot.appendingPathComponent(localRuntimePath)
 let releasedRuntimeBaseURL = "https://github.com/nuxieai/nuxie-runtime/releases/download"
-let releasedRuntimeURL = releasedRuntimeBaseURL + "/apple-runtime-v0.10.3/NuxieRuntime.xcframework.zip"
-let releasedRuntimeChecksum = "82432f10c56de96406e03d06b23ea34b10dc12680dd0107e4047630ac98510f7"
+let releasedRuntimeURL = releasedRuntimeBaseURL + "/apple-runtime-v0.10.4/NuxieRuntime.xcframework.zip"
+let releasedRuntimeChecksum = "4f9ff283a5efa6ba2b038868f218000ff3619500940290fdd19b9ad3eeeaccd4"
 
 func makeNuxieRuntimeBinaryTarget() -> Target {
     let localRuntimeSelection = ProcessInfo.processInfo.environment["NUXIE_RUNTIME_USE_LOCAL"]
@@ -35,7 +35,6 @@ let nuxieRuntimeBinaryTarget = makeNuxieRuntimeBinaryTarget()
 
 let package = Package(
     name: "Nuxie",
-    defaultLocalization: "en",
     platforms: [
         .iOS(.v15),
         .macOS(.v12)
@@ -73,8 +72,7 @@ let package = Package(
             resources: [
                 .process("PrivacyInfo.xcprivacy"),
                 .process("Resources/timezone-bundle.json"),
-                .process("Resources/LICENSE-unicode.txt"),
-                .process("Resources/Accessibility")
+                .process("Resources/LICENSE-unicode.txt")
             ],
             swiftSettings: [
                 // Phase 1 guardrail: surface data races as warnings now;
