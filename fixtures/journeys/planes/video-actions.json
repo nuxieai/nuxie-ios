@@ -1,0 +1,360 @@
+{
+  "cases": [
+    {
+      "name": "valid 0 play",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "play"
+        }
+      },
+      "kind": 0,
+      "value": 0
+    },
+    {
+      "name": "valid 1 pause",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "pause"
+        }
+      },
+      "kind": 1,
+      "value": 0
+    },
+    {
+      "name": "valid 2 seek",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "seek",
+          "seconds": 0
+        }
+      },
+      "kind": 2,
+      "value": 0
+    },
+    {
+      "name": "valid 3 seek",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "seek",
+          "seconds": 12.5
+        }
+      },
+      "kind": 2,
+      "value": 12.5
+    },
+    {
+      "name": "valid 4 rate",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "rate",
+          "rate": 0.5
+        }
+      },
+      "kind": 3,
+      "value": 0.5
+    },
+    {
+      "name": "valid 5 volume",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "volume",
+          "volume": 0
+        }
+      },
+      "kind": 4,
+      "value": 0
+    },
+    {
+      "name": "valid 6 volume",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "volume",
+          "volume": 1
+        }
+      },
+      "kind": 4,
+      "value": 1
+    },
+    {
+      "name": "valid 7 mute",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "mute",
+          "muted": true
+        }
+      },
+      "kind": 5,
+      "value": 1
+    },
+    {
+      "name": "valid 8 loop",
+      "valid": true,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "loop",
+          "enabled": false
+        }
+      },
+      "kind": 9,
+      "value": 0
+    },
+    {
+      "name": "invalid 0 seek",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "seek",
+          "seconds": -1
+        }
+      }
+    },
+    {
+      "name": "invalid 1 seek",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "seek",
+          "seconds": "1"
+        }
+      }
+    },
+    {
+      "name": "invalid 2 rate",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "rate",
+          "rate": 0
+        }
+      }
+    },
+    {
+      "name": "invalid 3 rate",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "rate",
+          "rate": 1e+39
+        }
+      }
+    },
+    {
+      "name": "invalid 4 volume",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "volume",
+          "volume": 1.1
+        }
+      }
+    },
+    {
+      "name": "invalid 5 volume",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "volume",
+          "volume": -0.1
+        }
+      }
+    },
+    {
+      "name": "invalid 6 mute",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "mute",
+          "muted": 1
+        }
+      }
+    },
+    {
+      "name": "invalid 7 loop",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "loop",
+          "enabled": "true"
+        }
+      }
+    },
+    {
+      "name": "invalid 8 play",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "play",
+          "seconds": 1
+        }
+      }
+    },
+    {
+      "name": "invalid 9 suspend",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "suspend",
+          "enabled": false
+        }
+      }
+    },
+    {
+      "name": "invalid 10 source",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "source",
+          "url": "https://provider.test/video"
+        }
+      }
+    },
+    {
+      "name": "invalid target 0",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "name": "Greeting"
+        },
+        "command": {
+          "type": "play"
+        }
+      }
+    },
+    {
+      "name": "invalid target 1",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "componentId": 7
+        },
+        "command": {
+          "type": "play"
+        }
+      }
+    },
+    {
+      "name": "invalid target 2",
+      "valid": false,
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "play"
+        }
+      }
+    }
+  ]
+}
