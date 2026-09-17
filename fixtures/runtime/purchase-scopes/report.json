@@ -2,9 +2,9 @@
   "majorVersion": 7,
   "minorVersion": 3,
   "fileId": 1,
-  "recordCount": 103,
-  "outputSizeBytes": 2079,
-  "outputSha256": "5f2937cb3c00b4a4e965d1b350a3e71a61db144923caad73e21b6cf2c2a341ce",
+  "recordCount": 104,
+  "outputSizeBytes": 2100,
+  "outputSha256": "3af98c008b2218fea5e350b9b2610baecec4aa39469bffd01c6f82fc82646632",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
