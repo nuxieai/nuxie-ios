@@ -141,6 +141,254 @@
           }
         ]
       }
+    },
+    {
+      "name": "video target policy",
+      "valid": true,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "same slot in distinct artboards",
+      "valid": true,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        },
+        {
+          "artboardId": "component",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "distinct players with one authored view",
+      "valid": true,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        },
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip:second",
+          "componentId": 9,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "duplicate video target",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        },
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 9,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "duplicate video slot",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        },
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "second",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "null video targets",
+      "valid": false,
+      "videoElements": null
+    },
+    {
+      "name": "zero slot",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 0,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "negative slot",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": -1,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "fractional slot",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 1.5,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "oversized slot",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 4294967296,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "string slot",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": "7",
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "negative timeout",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": -1,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "excessive timeout",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 61,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "boolean timeout",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": false,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "string optional",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": "false"
+        }
+      ]
+    },
+    {
+      "name": "unknown target property",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false,
+          "extra": 1
+        }
+      ]
     }
   ]
 }
