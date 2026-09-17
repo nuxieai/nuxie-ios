@@ -237,6 +237,7 @@ package struct NuxieNativeEvent: Equatable, Sendable {
     package let target: String
     package let delay: Float
     package let properties: [NuxieNativeEventProperty]
+    package let sourceViewModelInstanceID: UInt64?
 }
 
 package indirect enum NuxieNativeHostValue: Equatable, Sendable {
@@ -2158,6 +2159,13 @@ private final class NuxieNativePlayerStepResultHandle {
                     value: value
                 )
             }
+            var sourceInstanceID: UInt64 = 0
+            let sourceStatus = nux_player_step_result_event_view_model_instance(
+                result, index, &sourceInstanceID
+            )
+            if sourceStatus != NUX_STATUS_NOT_FOUND.rawValue {
+                try requireOK(sourceStatus, operation: "read player event source")
+            }
             return NuxieNativeEvent(
                 localIndex: view.event_local_index,
                 coreType: view.event_core_type,
@@ -2165,7 +2173,9 @@ private final class NuxieNativePlayerStepResultHandle {
                 url: try copyString(view.url, label: "event URL"),
                 target: try copyString(view.target, label: "event target"),
                 delay: view.seconds_delay,
-                properties: properties
+                properties: properties,
+                sourceViewModelInstanceID: sourceStatus == NUX_STATUS_NOT_FOUND.rawValue
+                    ? nil : sourceInstanceID
             )
         }
         let hostCommands = try (0..<info.host_command_count).map { index in

@@ -42,6 +42,7 @@ struct ExperienceInteractiveReportedEvent: Equatable, Sendable {
     let target: String
     let delay: Float
     let properties: [ExperienceInteractiveField]
+    var sourceRejection: String? = nil
 }
 
 enum ExperienceInteractiveViewModelValue: Equatable, Sendable {
@@ -410,6 +411,9 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         _ event: ExperienceInteractiveReportedEvent,
         controlActionIds: Set<String>
     ) -> ExperienceInteractiveEffectKind {
+        if let reason = event.sourceRejection {
+            return .rejectedHostCommand(name: event.name, reason: reason)
+        }
         guard event.name == "Nuxie Interaction" else {
             return controlActionIds.contains(event.name)
                 ? .controlAction(actionId: event.name, event: event)
@@ -1864,7 +1868,9 @@ actor ExperienceInteractiveScreen {
             // before projecting this frame's changes. Native effects have
             // committed: a recoverable topology failure must not discard them.
             try? await refreshTrackedTopology()
-            return await projectStep(result, correlationID: correlationID)
+            let eventSnapshot = result.events.contains { $0.sourceViewModelInstanceID != nil }
+                ? try? await runtime.snapshot() : nil
+            return await projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
         }
     }
 
@@ -1882,10 +1888,18 @@ actor ExperienceInteractiveScreen {
 
     private func projectStep(
         _ result: NuxieNativePlayerStepResult,
+        eventSnapshot: NuxieNativeViewModelSnapshot?,
         correlationID: UInt64
     ) -> ExperienceInteractiveStepResult {
         let effects = router.project(
-            reportedEvents: result.events.map(Self.reportedEvent),
+            reportedEvents: result.events.map { event in
+                ExperienceInteractiveEventSource.project(
+                    Self.reportedEvent(event), nativeID: event.sourceViewModelInstanceID,
+                    rootID: eventSnapshot?.rootInstanceID,
+                    liveIDs: Set(eventSnapshot?.instances.map(\.id) ?? []),
+                    identities: viewModelsByIdentity
+                )
+            },
             viewModelChanges: publishableViewModelChanges(result.viewModelChanges),
             hostCommands: result.hostCommands.map(Self.hostCommand),
             controlActionIds: controlActionIds,

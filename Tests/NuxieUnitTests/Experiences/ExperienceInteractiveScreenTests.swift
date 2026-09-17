@@ -9,6 +9,73 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    func testSignedPurchaseComponentsKeepSourceAndAuthoredSelection() async throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/rendered-purchase-scopes")
+        let entry = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: fixture.appendingPathComponent("release-entry.json"))) as? [String: Any])
+        let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
+        let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
+        let profile: [String: Any] = [
+            "schemaVersion": "nuxie.journey-plane-profile.v1", "status": "ok",
+            "delivery": ["renderBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/",
+                         "assetBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/"],
+            "features": [], "facts": ["properties": [:], "memberships": [:], "assignments": [:]],
+            "armedLegs": [[
+                "reference": [
+                    "experienceId": try XCTUnwrap(locator["experienceId"]),
+                    "versionId": try XCTUnwrap(locator["experienceVersionId"]),
+                    "legId": try XCTUnwrap(locator["legId"]),
+                    "descriptorSha256": try XCTUnwrap(envelope["descriptorSha256"]),
+                ],
+                "binding": ["type": "new"],
+                "entryCondition": ["type": "app_foregrounded"],
+                "context": ["event": [:], "responses": [:]],
+            ]], "releases": [entry],
+        ]
+        let payload = try await authenticatedFixturePayload(at: fixture,
+            profileBytes: JSONSerialization.data(withJSONObject: profile))
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload,
+            pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await screen.close() } }
+        _ = try await screen.step(elapsedSeconds: 0)
+        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
+        func tap(_ x: Float, _ y: Float) async throws -> [ExperienceInteractiveEffect] {
+            let down = try await screen.step(pointers: [.init(kind: .down, x: x, y: y)], elapsedSeconds: 0)
+            let up = try await screen.step(pointers: [.init(kind: .up, x: x, y: y, timestamp: 0.1)], elapsedSeconds: 0)
+            let settled = try await screen.step(elapsedSeconds: 0.016)
+            return down.effects + up.effects + settled.effects
+        }
+        for (x, expected) in [(Float(80), "plan.first"), (240, "plan.second")] {
+            let effects = try await tap(x, 30)
+            let controls = effects.compactMap { effect -> ExperienceInteractiveReportedEvent? in
+                guard case .controlAction(let actionId, let event) = effect.kind else { return nil }
+                XCTAssertEqual(actionId, "buy")
+                return event
+            }
+            XCTAssertEqual(controls.count, 1, "Expected exactly one purchase control: \(effects)")
+            XCTAssertEqual(controls.first?.properties.first { $0.key == "instanceId" }?.value,
+                .string(expected))
+        }
+        let selection = try await tap(240, 65)
+        XCTAssertFalse(selection.contains {
+            if case .controlAction = $0.kind { return true }
+            if case .responseSet = $0.kind { return true }
+            return false
+        })
+        let snapshot = try await screen.snapshot()
+        for (alias, expected) in [("plan.first", "plan:monthly"), ("plan.second", "plan:lifetime")] {
+            let reference = try await screen.viewModel(named: "Plan", instanceID: alias)
+            let value = snapshot.values.first {
+                $0.ownerInstanceID == reference.rawValue && $0.name == "placementId"
+            }
+            XCTAssertEqual(value?.value, .bytes(Data(expected.utf8)))
+        }
+        try await screen.close()
+    }
+
     func testSemanticFrameCaptureIsOnlyReturnedForPresentedScreen() async throws {
         let fixture = try await twoScreenStatePayload()
         let preparation = try await ExperienceInteractivePreparation.prepare(payload: fixture.payload)
@@ -3311,10 +3378,11 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     private func authenticatedFixturePayload(
-        at fixture: URL
+        at fixture: URL,
+        profileBytes suppliedProfileBytes: Data? = nil
     ) async throws -> AuthenticatedRuntimePayload {
         StubURLProtocol.reset()
-        let profileBytes = try Data(
+        let profileBytes = try suppliedProfileBytes ?? Data(
             contentsOf: fixture.appendingPathComponent("profile.json")
         )
         let profile = try JourneyPlaneProfile.decode(profileBytes)
