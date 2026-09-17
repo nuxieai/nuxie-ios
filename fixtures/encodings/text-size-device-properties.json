@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "android": {
+    "property": "$font_scale",
+    "values": [
+      1,
+      2,
+      0.85,
+      3.12,
+      1
+    ]
+  },
+  "ios": {
+    "property": "$content_size_category",
+    "default": "UICTContentSizeCategoryL",
+    "accessibilityMaximum": "UICTContentSizeCategoryAccessibilityXXXL"
+  },
+  "precedence": "Presentation properties override dynamic application context."
+}
