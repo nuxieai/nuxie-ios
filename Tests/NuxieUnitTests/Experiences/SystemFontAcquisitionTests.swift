@@ -188,6 +188,7 @@ final class SystemFontAcquisitionTests: XCTestCase {
                     try await verifyProviderFailureMount(
                         acquired: acquired,
                         experience: presentation.experience,
+                        release: release, delivery: profile.delivery,
                         payload: replacingSystemFonts(acquired.payload, [invalid]),
                         expected: .systemFontPreparation(name, .unsupportedRequest)
                     )
@@ -200,6 +201,8 @@ final class SystemFontAcquisitionTests: XCTestCase {
     private func verifyProviderFailureMount(
         acquired: AcquiredExperienceArtifact,
         experience: Experience,
+        release: AuthenticatedJourneyRelease,
+        delivery: JourneyReleaseDelivery,
         payload: AuthenticatedRuntimePayload,
         expected: ExperienceInteractiveScreenError
     ) async throws {
@@ -258,13 +261,36 @@ final class SystemFontAcquisitionTests: XCTestCase {
             experience: experience, artifactLoader: { _, _, _ in artifact }, eventLog: eventLog,
             transactionService: transactions, productService: products, systemEventSink: sink
         )
-        experienceController.loadViewIfNeeded()
+        let experiences = MockExperienceService()
+        experiences.defaultMockViewController = experienceController
+        let windows = MockWindowProvider()
+        let service = ExperiencePresentationService(windowProvider: windows, experiences: experiences, eventLog: eventLog)
+        let recorder = FontFailurePresentationRecorder()
+        let reservation = try XCTUnwrap(service.reserveJourneyPresentation(ownerDistinctId: "font-failure-owner"))
+        let result = await service.presentJourney(JourneyPresentationRequest(
+            release: release, delivery: delivery, screenId: screen.screenId,
+            owner: .init(journeyId: "font-failure-journey", distinctId: "font-failure-owner"),
+            reservation: reservation, onEmissionBatch: { _ in true },
+            onPresentationRevealed: { _ in recorder.revealCount += 1 },
+            onOutcome: { outcome, _ in recorder.outcomes.append(outcome); return true }
+        ))
+        XCTAssertEqual(result, .shown, "The recovery shell remains present before content reveal")
         await fulfillment(of: [failed], timeout: 5)
         XCTAssertFalse(experienceController.errorView.isHidden)
         XCTAssertTrue(experienceController.loadingView.isHidden)
         XCTAssertTrue(experienceController.children.isEmpty, "Failed mounting must remove child screens")
-        await experienceController.shutdownRuntime()
-        await experienceController.shutdownRuntime()
+        XCTAssertTrue(service.isExperiencePresented)
+        XCTAssertEqual(recorder.revealCount, 0)
+        XCTAssertTrue(recorder.outcomes.isEmpty)
+        await service.dismissCurrentExperienceFromHost()
+        await service.dismissCurrentExperienceFromHost()
+        XCTAssertFalse(service.isExperiencePresented)
+        XCTAssertNil(service.currentExperienceViewController)
+        XCTAssertEqual(recorder.outcomes, [.dismissed])
+        XCTAssertEqual(windows.createdWindows.count, 1)
+        XCTAssertTrue(try XCTUnwrap(windows.createdWindows.first).destroyCalled)
+        let next = try XCTUnwrap(service.reserveJourneyPresentation(ownerDistinctId: "font-failure-owner"))
+        next.release()
         let failures = eventLog.trackedEvents.filter { $0.name == JourneyEvents.experienceArtifactLoadFailed }
         XCTAssertEqual(failures.count, 1)
         XCTAssertEqual(failures.first?.properties?["error_code"] as? String, "system_font.unsupported_request")
@@ -281,4 +307,10 @@ final class SystemFontAcquisitionTests: XCTestCase {
             journey: payload.journey, definition: payload.definition, sceneBytes: payload.sceneBytes, assets: payload.assets)
     }
 }
+@MainActor
+private final class FontFailurePresentationRecorder {
+    var revealCount = 0
+    var outcomes: [JourneySurfaceOutcome] = []
+}
+
 #endif
