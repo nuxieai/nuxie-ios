@@ -288,7 +288,7 @@
                 "x": 0,
                 "y": 0,
                 "width": 140,
-                "height": 80,
+                "height": 50,
                 "backgroundColor": "#2457d6"
               },
               "pressedStyle": {
@@ -360,6 +360,125 @@
               }
             }
           }
+        }
+      },
+      {
+        "id": "select",
+        "projectId": "purchase",
+        "parentId": "plan.tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "018",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "select",
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "x": 0,
+                "y": 50,
+                "width": 140,
+                "height": 30,
+                "backgroundColor": "#14806b"
+              },
+              "accessibilityRole": "button",
+              "accessibilityLabel": "Select lifetime plan"
+            }
+          }
+        }
+      },
+      {
+        "id": "plan.animations",
+        "projectId": "purchase",
+        "parentId": "plan",
+        "kind": "animation_tree",
+        "type": "animation_tree",
+        "orderKey": "019",
+        "data": {
+          "kind": "animation_tree"
+        }
+      },
+      {
+        "id": "plan.selection",
+        "projectId": "purchase",
+        "parentId": "plan.animations",
+        "kind": "state_machine",
+        "type": "state_machine",
+        "orderKey": "020",
+        "data": {
+          "kind": "state_machine",
+          "name": "Plan selection",
+          "instantiateOnNestedOccurrence": true,
+          "listeners": [
+            {
+              "id": "select.listener",
+              "targetObjectKey": "select",
+              "listenerType": "click",
+              "actions": [
+                {
+                  "id": "select.placement",
+                  "type": "viewModelChange",
+                  "ref": {
+                    "viewModelPathIds": [
+                      101
+                    ],
+                    "propertyId": 1
+                  },
+                  "value": "plan:lifetime"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "plan.selection.layer",
+        "projectId": "purchase",
+        "parentId": "plan.selection",
+        "kind": "state_machine_layer",
+        "type": "state_machine_layer",
+        "orderKey": "021",
+        "data": {
+          "kind": "state_machine_layer"
+        }
+      },
+      {
+        "id": "plan.selection.entry",
+        "projectId": "purchase",
+        "parentId": "plan.selection.layer",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "orderKey": "022",
+        "data": {
+          "kind": "layer_state",
+          "type": "entry"
+        }
+      },
+      {
+        "id": "plan.selection.any",
+        "projectId": "purchase",
+        "parentId": "plan.selection.layer",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "orderKey": "023",
+        "data": {
+          "kind": "layer_state",
+          "type": "any"
+        }
+      },
+      {
+        "id": "plan.selection.exit",
+        "projectId": "purchase",
+        "parentId": "plan.selection.layer",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "orderKey": "024",
+        "data": {
+          "kind": "layer_state",
+          "type": "exit"
         }
       }
     ]
