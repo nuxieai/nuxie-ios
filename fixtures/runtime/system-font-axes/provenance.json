@@ -1,0 +1,79 @@
+{
+  "generatorSourceSha256": "b12983f9392cc7c9e7218f345129249a153a8305203ee27cbee517f7e1756f26",
+  "referenceSha256": "2bfd40dc72e6759e248f82a52a40d551338979fffc9b5c070e685b4b7ad19e66",
+  "scenes": [
+    {
+      "name": "regular",
+      "weight": "400",
+      "sha256": "fde10b909e2e5d5696779f69c6b409a3ae712513c0d306ed4c2cc3d29de2f362",
+      "fonts": [
+        {
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "riveAssetId": 0,
+          "riveUniqueName": "font-system-400-normal-6cda3de3-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "optical-control",
+      "authoredSize": 32,
+      "baselineOpsz": 32,
+      "controlOpsz": 17,
+      "baselineSha256": "fde10b909e2e5d5696779f69c6b409a3ae712513c0d306ed4c2cc3d29de2f362",
+      "sha256": "470fbe7732939bdf6676c569ccf31f2beed552c2a156048c4525d14e892836fe",
+      "qualification": "Test-only axis mutation; verify baseline renders identically to publisher scene before comparing control"
+    },
+    {
+      "name": "bold",
+      "weight": "700",
+      "sha256": "2df53f009c34817f1c13ef995e274c6439bd96605d3791875527d65ec27a325b",
+      "fonts": [
+        {
+          "family": "System",
+          "weight": "700",
+          "style": "normal",
+          "riveAssetId": 0,
+          "riveUniqueName": "font-system-700-normal-42d2e562-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "mixed",
+      "sha256": "f5d0a695d9695643760fb96f2ea5ab837ada9352706c3545eb8373dbd70f03e8",
+      "fonts": [
+        {
+          "family": "Roboto",
+          "weight": "400",
+          "style": "normal",
+          "riveAssetId": 0,
+          "riveUniqueName": "font-roboto-400-normal-544ed647-0",
+          "location": "cdn",
+          "sha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1",
+          "sizeBytes": 2208,
+          "contentType": "font/ttf",
+          "format": "ttf",
+          "required": true
+        },
+        {
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "riveAssetId": 1,
+          "riveUniqueName": "font-system-400-normal-6cda3de3-1",
+          "location": "system",
+          "required": true
+        }
+      ],
+      "cdnFontSha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1"
+    }
+  ],
+  "publisherSourceCommit": "a9927b66d210cf64566114614529d81367d1eb3e",
+  "runtimeSourceCommit": "944ad4b77662fc0de467f1e16242555eb3ea1350",
+  "generatorBinarySha256": "6918885acc6230ba7eb9e0286a439d7d3151ad7932459c98f7f87894f229890f"
+}
