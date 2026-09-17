@@ -106,6 +106,31 @@
         }
       },
       "expected": "golden:monthly"
+    },
+    {
+      "name": "relative rejects detached occurrence",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId",
+          "isRelative": true
+        }
+      },
+      "instanceId": "retired",
+      "expected": null
+    },
+    {
+      "name": "relative rejects conflicting model",
+      "reference": {
+        "ref": {
+          "kind": "path",
+          "path": "product.placementId",
+          "isRelative": true,
+          "viewModelName": "OtherModel"
+        }
+      },
+      "instanceId": "secondary",
+      "expected": null
     }
   ]
 }

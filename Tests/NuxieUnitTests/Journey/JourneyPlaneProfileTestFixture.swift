@@ -16,7 +16,7 @@ struct JourneyPlaneProfileTestFixture {
         )
     }
 
-    static func load(entryKey: String = "entry") throws -> Self {
+    static func load(entryKey: String = "entry", journeyEntryPath: String? = nil) throws -> Self {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -27,7 +27,14 @@ struct JourneyPlaneProfileTestFixture {
             JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL))
                 as? [String: Any]
         )
-        let entry = try XCTUnwrap(releaseFixture[entryKey] as? [String: Any])
+        let entry: [String: Any]
+        if let journeyEntryPath {
+            let url = fixtureURL.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(journeyEntryPath)
+            entry = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        } else {
+            entry = try XCTUnwrap(releaseFixture[entryKey] as? [String: Any])
+        }
         let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
         let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
         let root: [String: Any] = [

@@ -255,6 +255,36 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         XCTAssertTrue(completion.isCompleted)
     }
 
+    func testSignedPurchaseScopeChoosesTheDeclaredInstance() async throws {
+        for (directory, expected) in [("rendered-purchase-scopes", "plan:lifetime"),
+                                      ("rendered-purchase-absolute", "plan:monthly")] {
+            let fixture = try JourneyPlaneProfileTestFixture.load(journeyEntryPath: "\(directory)/release-entry.json")
+            let snapshot = try await authenticatedRenderedSnapshot(fixture)
+            let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+            let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+            let reference = try XCTUnwrap(release.descriptor.leg.steps.first { $0.id == "purchase" }?.action?["placementId"])
+            let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
+                screenId: "screen", owner: .init(journeyId: "journey", distinctId: "customer"),
+                reservation: nil, onEmissionBatch: { _ in true }, onOutcome: { _, _ in true })
+            let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
+            let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
+            await delegate.experienceViewController(controller, didChangeScreen: "screen")
+            await delegate.experienceViewController(controller, didEmitViewModelChange:
+                ExperienceRendererViewModelChange(path: VmPathRef(viewModelName: "Plan", path: "placementId"),
+                    value: "plan:lifetime", source: "runtime", screenId: "screen",
+                    instanceId: "plan.second", isTrigger: false))
+            let selected = await delegate.resolvePresentationString(reference, source:
+                ScreenEmissionSource(screenId: "screen", actionId: "buy", componentId: "buy", instanceId: "plan.second"))
+            XCTAssertEqual(selected, expected, directory)
+            let ambiguous = JourneyReleaseJSONValue.object(["ref": .object([
+                "kind": .string("path"), "path": .string("placementId"),
+                "viewModelName": .string("Plan"), "isRelative": .bool(false),
+            ])])
+            let ambiguousSelection = await delegate.resolvePresentationString(ambiguous)
+            XCTAssertNil(ambiguousSelection, "Two Plan instances have no unique absolute model selection")
+        }
+    }
+
     func testPathReferenceRoundTripPreservesExplicitScope() throws {
         for relative: Bool? in [nil, false, true] {
             let reference = VmPathRef(path: "product.placementId", isRelative: relative)

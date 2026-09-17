@@ -620,11 +620,10 @@ final class JourneyRuntimeDelegate {
             payload: nil,
             context: nil,
             lookup: { [viewModelState] path in
-                if path.isRelative == true && instanceId == nil { return nil }
-                return viewModelState?.getValue(
+                viewModelState?.getPurchaseValue(
                     path: path,
                     screenId: screenId,
-                    instanceId: path.isRelative == false ? nil : instanceId
+                    instanceId: instanceId
                 )
             }
         )
