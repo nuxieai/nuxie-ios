@@ -1,6 +1,9 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
 import QuartzCore
+#if canImport(UIKit)
+import UIKit
+#endif
 import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieRuntime
@@ -10,33 +13,8 @@ import XCTest
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
     func testSignedPurchaseComponentsKeepSourceAndAuthoredSelection() async throws {
-        let fixture = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("fixtures/journeys/rendered-purchase-scopes")
-        let entry = try XCTUnwrap(JSONSerialization.jsonObject(with:
-            Data(contentsOf: fixture.appendingPathComponent("release-entry.json"))) as? [String: Any])
-        let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
-        let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
-        let profile: [String: Any] = [
-            "schemaVersion": "nuxie.journey-plane-profile.v1", "status": "ok",
-            "delivery": ["renderBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/",
-                         "assetBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/"],
-            "features": [], "facts": ["properties": [:], "memberships": [:], "assignments": [:]],
-            "armedLegs": [[
-                "reference": [
-                    "experienceId": try XCTUnwrap(locator["experienceId"]),
-                    "versionId": try XCTUnwrap(locator["experienceVersionId"]),
-                    "legId": try XCTUnwrap(locator["legId"]),
-                    "descriptorSha256": try XCTUnwrap(envelope["descriptorSha256"]),
-                ],
-                "binding": ["type": "new"],
-                "entryCondition": ["type": "app_foregrounded"],
-                "context": ["event": [:], "responses": [:]],
-            ]], "releases": [entry],
-        ]
-        let payload = try await authenticatedFixturePayload(at: fixture,
-            profileBytes: JSONSerialization.data(withJSONObject: profile))
+        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let payload = artifact.payload
         let screen = try await ExperienceInteractiveScreen.open(payload: payload,
             pixelWidth: 320, pixelHeight: 100)
         defer { Task { try? await screen.close() } }
@@ -75,6 +53,92 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
         try await screen.close()
     }
+
+    private func purchaseFixtureArtifact(navigation: Bool) async throws -> (Experience, LoadedExperienceArtifact) {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(navigation ? "fixtures/journeys/rendered-purchase-navigation" : "fixtures/journeys/rendered-purchase-scopes")
+        let entry = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: fixture.appendingPathComponent("release-entry.json"))) as? [String: Any])
+        let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
+        let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
+        let descriptorBytes = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))
+        try JourneyReleaseSchemaValidator.validate(try XCTUnwrap(JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any]))
+        let profile: [String: Any] = [
+            "schemaVersion": "nuxie.journey-plane-profile.v1", "status": "ok",
+            "delivery": ["renderBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/",
+                         "assetBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/"],
+            "features": [], "facts": ["properties": [:], "memberships": [:], "assignments": [:]],
+            "armedLegs": [[
+                "reference": [
+                    "experienceId": try XCTUnwrap(locator["experienceId"]),
+                    "versionId": try XCTUnwrap(locator["experienceVersionId"]),
+                    "legId": try XCTUnwrap(locator["legId"]),
+                    "descriptorSha256": try XCTUnwrap(envelope["descriptorSha256"]),
+                ],
+                "binding": ["type": "new"],
+                "entryCondition": ["type": "app_foregrounded"],
+                "context": ["event": [:], "responses": [:]],
+            ]], "releases": [entry],
+        ]
+        return try await authenticatedFixtureArtifact(at: fixture,
+            profileBytes: JSONSerialization.data(withJSONObject: profile))
+    }
+
+    #if canImport(UIKit)
+    @MainActor
+    func testSignedPurchaseSelectionSurvivesScreenNavigation() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: true)
+        let host = UIViewController()
+        host.view.frame = CGRect(x: 0, y: 0, width: 320, height: 150)
+        let delegate = PurchaseNavigationDelegate()
+        let coordinator = ExperienceScreenTransitionCoordinator(
+            experience: experience, artifact: artifact, initialScreenID: "screen",
+            hostViewController: host, screenDelegate: delegate,
+            onPresentedScreenDismissed: { _, _ in }, onScreenHidden: { _, _ in },
+            onScreenActive: { _ in }, onProductsResolved: { _ in },
+            onProductsUnavailable: { _ in }, onRuntimeFailure: { _, error in
+                XCTFail("Navigation runtime failure: \(error)")
+            })
+        addTeardownBlock { await coordinator.tearDown() }
+        try await coordinator.install()
+        _ = await coordinator.activateInitialScreen()
+        func interactiveScreen() throws -> ExperienceInteractiveScreen {
+            let navigation = try XCTUnwrap(host.children.first as? UINavigationController)
+            let controller = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
+            // Observe the renderer owned by the real navigation hierarchy; no replacement renderer.
+            return try XCTUnwrap(Mirror(reflecting: controller).children.first {
+                $0.label == "interactiveScreen"
+            }?.value as? ExperienceInteractiveScreen)
+        }
+        let initial = try interactiveScreen()
+        try await initial.resize(pixelWidth: 320, pixelHeight: 150)
+        for _ in 0..<20 { _ = try await initial.step(elapsedSeconds: 0.016) }
+        _ = try await initial.step(pointers: [.init(kind: .down, x: 240, y: 65)], elapsedSeconds: 0)
+        _ = try await initial.step(pointers: [.init(kind: .up, x: 240, y: 65, timestamp: 0.1)], elapsedSeconds: 0)
+        func selection(_ screen: ExperienceInteractiveScreen) async throws -> ExperienceInteractiveViewModelValue? {
+            let reference = try await screen.viewModel(named: "Plan", instanceID: "plan.second")
+            return try await screen.snapshot().values.first {
+                $0.ownerInstanceID == reference.rawValue && $0.name == "placementId"
+            }?.value
+        }
+        let before = try await selection(initial)
+        XCTAssertEqual(before, .bytes(Data("plan:lifetime".utf8)))
+        for destination in ["details", "screen"] {
+            let navigated = expectation(description: "Navigate to \(destination)")
+            XCTAssertTrue(coordinator.navigate(to: destination, transition: nil) { _, screenID in
+                XCTAssertEqual(screenID, destination)
+                navigated.fulfill()
+            })
+            await fulfillment(of: [navigated], timeout: 10)
+        }
+        let returned = try interactiveScreen()
+        let after = try await selection(returned)
+        XCTAssertEqual(after, .bytes(Data("plan:lifetime".utf8)))
+        await coordinator.tearDown()
+    }
+    #endif
 
     func testSemanticFrameCaptureIsOnlyReturnedForPresentedScreen() async throws {
         let fixture = try await twoScreenStatePayload()
@@ -3381,6 +3445,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         at fixture: URL,
         profileBytes suppliedProfileBytes: Data? = nil
     ) async throws -> AuthenticatedRuntimePayload {
+        try await authenticatedFixtureArtifact(at: fixture, profileBytes: suppliedProfileBytes).1.payload
+    }
+
+    private func authenticatedFixtureArtifact(
+        at fixture: URL,
+        profileBytes suppliedProfileBytes: Data? = nil
+    ) async throws -> (Experience, LoadedExperienceArtifact) {
         StubURLProtocol.reset()
         let profileBytes = try suppliedProfileBytes ?? Data(
             contentsOf: fixture.appendingPathComponent("profile.json")
@@ -3444,11 +3515,11 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             pinnedArtifacts: nil,
             productResolver: { _ in [] }
         )
-        return try await presentation.artifactLoader(
+        return (presentation.experience, LoadedExperienceArtifact(acquired: try await presentation.artifactLoader(
             presentation.experience,
             nil,
             screenID
-        ).payload
+        )))
     }
 
     private func exerciseExternalAssetFixture(named name: String) async throws {
@@ -3907,4 +3978,21 @@ private extension Data {
         Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
     }
 }
+#if canImport(UIKit)
+@MainActor
+private final class PurchaseNavigationDelegate: ExperienceScreenViewControllerDelegate {
+    func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
+    func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController,
+        didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?) async {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController,
+        didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController,
+        didRequestOpenLink request: ExperienceRendererOpenLinkRequest) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController,
+        didPresentDrawable drawable: ExperienceRuntimePresentedDrawable, frameNumber: UInt64) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController,
+        didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}
+}
+#endif
 #endif
