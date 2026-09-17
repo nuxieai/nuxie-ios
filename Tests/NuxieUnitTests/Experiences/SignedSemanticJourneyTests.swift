@@ -145,7 +145,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
             await journeys.onAppBecameActive()
             try await waitUntil("Signed controls must reach the UIKit accessibility container") {
                 observer.revealed && (scenario == .roles
-                    ? self.semanticElements(in: presentations.currentExperienceViewController?.view).count == 8
+                    ? self.semanticElements(in: presentations.currentExperienceViewController?.view).count == 10
                     : self.button(in: presentations.currentExperienceViewController?.view) != nil)
             }
             if scenario == .roles {
