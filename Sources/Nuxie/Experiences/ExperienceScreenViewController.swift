@@ -773,6 +773,22 @@ final class ExperienceScreenViewController: UIViewController {
                 height: screen.height
             ),
             semanticTextWriter: semanticWriter,
+            semanticCommitWriter: { [weak self] captureID, inputID, text, completion in
+                loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                    do {
+                        try await interactiveScreen.commitSemanticText(
+                            captureID: captureID, inputID: inputID, value: text)
+                        return .work(requestsFrame: true) { completion(.accepted) }
+                    } catch NuxieNativeRuntimeError.callFailed(let diagnostic)
+                        where diagnostic.status == .handleMismatch {
+                        return .work(requestsFrame: true) { completion(.staleCapture) }
+                    } catch {
+                        return .work(requestsFrame: false) { completion(.rejected) }
+                    }
+                }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { result in
+                    if case .failure = result { completion(.rejected) }
+                })
+            },
             textWriter: { inputID, text, completion in
                 loop.enqueue(
                     ExperienceRuntimePresentationQueuedWork {

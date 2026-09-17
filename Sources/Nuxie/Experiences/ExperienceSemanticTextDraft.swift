@@ -7,6 +7,7 @@ struct ExperienceSemanticTextDraft {
         let id: UUID
         let captureID: UUID
         let text: String
+        let isCommit: Bool
     }
 
     enum Outcome: Sendable { case accepted, staleCapture, rejected }
@@ -19,6 +20,7 @@ struct ExperienceSemanticTextDraft {
     private var commitRequested = false
     private var isComposing = false
     private var needsInitialWrite: Bool
+    private var commitsThroughNative = false
 
     init(text: String, needsInitialWrite: Bool = false) {
         self.needsInitialWrite = needsInitialWrite
@@ -31,11 +33,17 @@ struct ExperienceSemanticTextDraft {
         self.text = text
         self.isComposing = isComposing
     }
-    mutating func present(captureID: UUID) { self.captureID = captureID }
+    mutating func present(captureID: UUID, commitsThroughNative: Bool = false) {
+        self.captureID = captureID
+        self.commitsThroughNative = commitsThroughNative
+    }
 
     mutating func takeWrite() -> Write? {
-        guard inFlight == nil, (needsInitialWrite || text != acceptedText), let captureID else { return nil }
-        let write = Write(id: UUID(), captureID: captureID, text: text)
+        guard inFlight == nil, let captureID else { return nil }
+        let needsDisplayWrite = needsInitialWrite || text != acceptedText
+        guard needsDisplayWrite || (commitsThroughNative && commitRequested && !isComposing
+            && text != committedText) else { return nil }
+        let write = Write(id: UUID(), captureID: captureID, text: text, isCommit: !needsDisplayWrite)
         inFlight = write
         return write
     }
@@ -50,6 +58,11 @@ struct ExperienceSemanticTextDraft {
         inFlight = nil
         switch outcome {
         case .accepted:
+            if write.isCommit {
+                committedText = write.text
+                if text == write.text { commitRequested = false }
+                return write.text
+            }
             acceptedText = write.text
             needsInitialWrite = false
         case .staleCapture:
@@ -73,7 +86,8 @@ struct ExperienceSemanticTextDraft {
     }
 
     private mutating func takeReadyCommit() -> String? {
-        guard commitRequested, !isComposing, !needsInitialWrite, inFlight == nil, text == acceptedText else { return nil }
+        guard !commitsThroughNative, commitRequested, !isComposing, !needsInitialWrite,
+              inFlight == nil, text == acceptedText else { return nil }
         commitRequested = false
         guard committedText != acceptedText else { return nil }
         committedText = acceptedText

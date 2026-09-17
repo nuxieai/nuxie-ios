@@ -222,6 +222,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var artboardBounds: CGRect = .zero
     private var textWriter: TextWriter?
     private var semanticTextWriter: SemanticTextWriter?
+    private var semanticCommitWriter: SemanticTextWriter?
     private var semanticDrafts: [String: ExperienceSemanticTextDraft] = [:]
     private var bindingsByInputID: [String: Binding] = [:]
     private var runtimeGeometryByRun: [String: NuxieNativeTextRunGeometry] = [:]
@@ -268,6 +269,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         surfaceView: UIView,
         artboardBounds: CGRect,
         semanticTextWriter: SemanticTextWriter? = nil,
+        semanticCommitWriter: SemanticTextWriter? = nil,
         textWriter: @escaping TextWriter
     ) {
         if activeBuildID != renderPlan.identity.buildId {
@@ -280,6 +282,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         self.artboardBounds = artboardBounds
         self.textWriter = textWriter
         self.semanticTextWriter = semanticTextWriter
+        self.semanticCommitWriter = semanticCommitWriter
         if semanticTextWriter != nil { semanticFields = [:] }
         fontSHA256ByRiveUniqueName = renderPlan.fonts.reduce(into: [:]) {
             $0[$1.riveUniqueName] = $1.sha256
@@ -347,7 +350,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             let node = unique[inputID]
             let editable = allowsEditing(binding)
             if editable {
-                semanticDrafts[inputID]?.present(captureID: capture.id)
+                semanticDrafts[inputID]?.present(captureID: capture.id,
+                    commitsThroughNative: semanticCommitWriter != nil && (node?.actions ?? 0) & (1 << 3) != 0)
             } else {
                 semanticDrafts[inputID]?.withdraw()
             }
@@ -408,6 +412,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         semanticFields = nil
         semanticDrafts.removeAll()
         semanticTextWriter = nil
+        semanticCommitWriter = nil
         runtimeGeometryByRun.removeAll()
         metricsByInputID.removeAll()
         invalidMetricIDs.removeAll()
@@ -646,6 +651,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             if let text = semanticDrafts[binding.input.inputId]?.requestCommit() {
                 commitSemanticText(text, input: binding.input)
             }
+            drainSemanticWrite(binding.input.inputId)
             return
         }
         let text = binding.control.text
@@ -709,11 +715,16 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private func drainSemanticWrite(_ inputID: String) {
-        guard !hidden, let writer = semanticTextWriter,
+        guard !hidden, let displayWriter = semanticTextWriter,
               let binding = bindingsByInputID[inputID], allowsEditing(binding),
               let write = semanticDrafts[inputID]?.takeWrite() else { return }
         let currentGeneration = generation
-        let rendered = binding.input.secureTextEntry == true ? "" : write.text
+        guard let writer = write.isCommit ? semanticCommitWriter : displayWriter else {
+            _ = semanticDrafts[inputID]?.finish(write, outcome: .rejected)
+            restoreAcceptedText(binding)
+            return
+        }
+        let rendered = !write.isCommit && binding.input.secureTextEntry == true ? "" : write.text
         writer(write.captureID, inputID, rendered) { [weak self] outcome in
             guard let self, self.generation == currentGeneration else { return }
             guard self.allowsEditing(binding) else {
