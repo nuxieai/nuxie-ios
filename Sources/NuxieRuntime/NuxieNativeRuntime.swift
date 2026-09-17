@@ -3017,6 +3017,9 @@ package struct NuxieNativeVideoOccurrence: Sendable {
     package let state: UInt32
     package let wantsPlay: Bool
     package let audioPolicy: UInt32
+    package let componentName: String
+    package let priority: UInt32
+    package let readiness: UInt32
 }
 
 package struct NuxieNativeVideoAction: Sendable {
@@ -3063,13 +3066,20 @@ extension NuxieNativeRuntime {
             try requireOK(nux_player_visit_videos(try state.player.require(), { context, pointer in
                 guard let context, let pointer else { return }
                 let collector = Unmanaged<NuxieVideoOccurrenceCollector>.fromOpaque(context).takeUnretainedValue()
+                guard pointer.pointee.struct_size >= MemoryLayout<NuxVideoInfo>.size,
+                      collector.values.count < 65_536 else {
+                    collector.error = NuxieNativeRuntimeError.invalidNativeValue("invalid video occurrence record")
+                    return
+                }
                 let value = pointer.pointee
                 do {
                     collector.values.append(.init(componentID: value.component_id, assetID: value.asset_id,
                         generation: value.generation, sourceKey: try copyString(value.source_key, label: "video source"),
                         contentType: try copyString(value.content_type, label: "video content type"),
                         embedded: value.embedded_bytes.len > 0, state: value.state, wantsPlay: value.wants_play != 0,
-                        audioPolicy: value.audio_policy))
+                        audioPolicy: value.audio_policy,
+                        componentName: try copyString(value.component_name, label: "video component name"),
+                        priority: value.priority, readiness: value.readiness))
                 } catch { collector.error = error }
             }, Unmanaged.passUnretained(collector).toOpaque()), operation: "visit video occurrences")
             if let error = collector.error { throw error }
