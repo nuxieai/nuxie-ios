@@ -95,8 +95,11 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
             journey: JourneyDocument(screens: [.init(id: "screen")]), sceneBytes: scene,
             assets: [.init(kind: .video, riveAssetID: id, riveUniqueName: name, sourceKey: key, contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: url)])
+        let externalAssets = try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
+            authenticatedAssets: payload.assets, catalog: catalog)
+        XCTAssertTrue(externalAssets.isEmpty, "Published external video must bind without an in-memory payload")
         let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
-            pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
+            pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: externalAssets, videoEnabled: true))
         let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
         defer { host.close(); Task { try? await runtime.close() } }
         let device = try await runtime.metalDevice().value
