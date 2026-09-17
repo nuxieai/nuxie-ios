@@ -66,6 +66,27 @@ enum BoundedFileIO {
         )
     }
 
+    /// Consumes an owned download in the cache filesystem without copying it.
+    /// A failed verification leaves both paths untouched.
+    static func promoteVerified(
+        from temporaryURL: URL,
+        to destinationURL: URL,
+        expectedSize: Int,
+        expectedSHA256: String,
+        maximumBytes: Int
+    ) throws -> BoundedFileDigest {
+        let digest = try inspect(at: temporaryURL, maximumBytes: maximumBytes)
+        guard digest.byteCount == expectedSize else {
+            throw BoundedFileVerificationError.sizeMismatch(expected: expectedSize, actual: digest.byteCount)
+        }
+        guard digest.sha256 == expectedSHA256 else {
+            throw BoundedFileVerificationError.sha256Mismatch(expected: expectedSHA256, actual: digest.sha256)
+        }
+        try Task.checkCancellation()
+        try publish(temporaryURL: temporaryURL, to: destinationURL)
+        return digest
+    }
+
     private static func copy(
         from sourceURL: URL,
         to destinationURL: URL,
@@ -143,6 +164,7 @@ enum BoundedFileIO {
         var hasher = SHA256()
         var byteCount = 0
         while true {
+            try Task.checkCancellation()
             let remainingBytes = maximumBytes - byteCount
             let readCount = remainingBytes >= chunkBytes
                 ? chunkBytes

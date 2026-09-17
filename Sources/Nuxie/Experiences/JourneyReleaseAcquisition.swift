@@ -332,7 +332,25 @@ private struct JourneyReleaseRenderDocument: Decodable {
     }
 
     let renderer: String
-    let riv: Artifact
+    let scene: Artifact
+
+    private enum CodingKeys: String, CodingKey {
+        case renderer, riv, nux, screens, transitions, textInputs, assets
+    }
+
+    init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        renderer = try fields.decode(String.self, forKey: .renderer)
+        switch renderer {
+        case "nux": scene = try fields.decode(Artifact.self, forKey: .nux)
+        case "rive": scene = try fields.decode(Artifact.self, forKey: .riv)
+        default: throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(renderer)
+        }
+        screens = try fields.decode([Screen].self, forKey: .screens)
+        transitions = try fields.decode([Transition].self, forKey: .transitions)
+        textInputs = try fields.decode([TextInput].self, forKey: .textInputs)
+        assets = try fields.decode([Asset].self, forKey: .assets)
+    }
     let screens: [Screen]
     let transitions: [Transition]
     let textInputs: [TextInput]
@@ -629,7 +647,7 @@ final class JourneyReleaseCacheProtectionRegistry: @unchecked Sendable {
 actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
     private struct ObjectResult {
         let url: URL
-        let bytes: Data
+        let bytes: Data?
         let downloaded: Bool
         let resourceMetrics: JourneyReleaseResourceMetrics
     }
@@ -783,11 +801,6 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             JourneyReleaseRenderDocument.self,
             from: authority.render
         )
-        guard render.renderer == "rive" else {
-            throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(
-                render.renderer
-            )
-        }
         let journeyArtifacts = try JSONDecoder().decode(
             [JourneyReleaseScreenBehaviorArtifactDocument].self,
             from: JSONEncoder().encode(authority.screenBehaviors)
@@ -799,7 +812,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             )
         }
         let requirements = try uniqueArtifacts(
-            [ArtifactRequirement(artifact: render.riv, required: true)]
+            [ArtifactRequirement(artifact: render.scene, required: true)]
                 + render.assets.compactMap { asset in
                     asset.artifact.map { ArtifactRequirement(artifact: $0, required: asset.required) }
                 }
@@ -916,9 +929,9 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             let artifact = requirement.artifact
             objectsByKey[artifact.key] = objectsByDigest[artifact.sha256]
         }
-        guard let scene = objectsByKey[render.riv.key] else {
+        guard let scene = objectsByKey[render.scene.key], let sceneBytes = scene.bytes else {
             throw JourneyReleaseAcquisitionError.requiredObjectUnavailable(
-                render.riv.key
+                render.scene.key
             )
         }
 
@@ -959,7 +972,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 renderPlan: renderPlan,
                 journey: authority.journey,
                 definition: authority.definition,
-                sceneBytes: scene.bytes,
+                sceneBytes: sceneBytes,
                 assets: runtimeAssets
             ))
         })
@@ -1047,10 +1060,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             var rejectedCacheMetrics = JourneyReleaseResourceMetrics.zero
             if FileManager.default.fileExists(atPath: destination.path) {
                 do {
-                    let read = try BoundedFileIO.read(
-                        at: destination,
-                        maximumBytes: Self.limit(for: artifact)
-                    )
+                    let read = try Self.readAcquiredObject(at: destination, artifact: artifact)
                     do {
                         try Self.verify(read.digest, artifact: artifact)
                         try? FileManager.default.setAttributes(
@@ -1062,17 +1072,17 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                             bytes: read.data,
                             downloaded: false,
                             resourceMetrics: Self.objectResourceMetrics(
-                                byteCount: read.data.count,
+                                byteCount: read.digest.byteCount,
                                 passCount: 1
                             )
                         )
                     } catch {
                         rejectedCacheMetrics = JourneyReleaseResourceMetrics(
-                            readBytes: read.data.count,
-                            hashedBytes: read.data.count,
+                            readBytes: read.digest.byteCount,
+                            hashedBytes: read.digest.byteCount,
                             parsedBytes: 0,
-                            duplicateReadBytes: read.data.count,
-                            duplicateHashBytes: read.data.count,
+                            duplicateReadBytes: read.digest.byteCount,
+                            duplicateHashBytes: read.digest.byteCount,
                             duplicateParseBytes: 0,
                             preloadBytes: 0,
                             unusedPreloadBytes: 0
@@ -1080,6 +1090,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                         throw error
                     }
                 } catch {
+                    if error is CancellationError { throw error }
                     try? FileManager.default.removeItem(at: destination)
                 }
             }
@@ -1087,17 +1098,14 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             if let pinnedURL = pinnedArtifacts?.objectURLsBySHA256[
                 artifact.sha256
             ] {
-                let read = try BoundedFileIO.read(
-                    at: pinnedURL,
-                    maximumBytes: Self.limit(for: artifact)
-                )
+                let read = try Self.readAcquiredObject(at: pinnedURL, artifact: artifact)
                 try Self.verify(read.digest, artifact: artifact)
                 return ObjectResult(
                     url: pinnedURL,
                     bytes: read.data,
                     downloaded: false,
                     resourceMetrics: Self.objectResourceMetrics(
-                        byteCount: read.data.count,
+                        byteCount: read.digest.byteCount,
                         passCount: 1
                     )
                 )
@@ -1143,13 +1151,19 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     )
                 }
                 do {
-                    _ = try BoundedFileIO.copyVerified(
-                        from: download.temporaryURL,
-                        to: destination,
-                        expectedSize: artifact.sizeBytes,
-                        expectedSHA256: artifact.sha256,
-                        maximumBytes: Self.limit(for: artifact)
-                    )
+                    if artifact.contentType == "video/mp4" {
+                        _ = try BoundedFileIO.promoteVerified(
+                            from: download.temporaryURL, to: destination,
+                            expectedSize: artifact.sizeBytes, expectedSHA256: artifact.sha256,
+                            maximumBytes: Self.limit(for: artifact)
+                        )
+                    } else {
+                        _ = try BoundedFileIO.copyVerified(
+                            from: download.temporaryURL, to: destination,
+                            expectedSize: artifact.sizeBytes, expectedSHA256: artifact.sha256,
+                            maximumBytes: Self.limit(for: artifact)
+                        )
+                    }
                     resourceMetrics = resourceMetrics.adding(
                         Self.objectResourceMetrics(
                             byteCount: download.byteCount,
@@ -1183,17 +1197,20 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                         actual: actual
                     )
                 }
+                if artifact.contentType == "video/mp4" {
+                    return ObjectResult(url: destination, bytes: nil, downloaded: true, resourceMetrics: resourceMetrics)
+                }
                 let read = try BoundedFileIO.read(
                     at: destination,
                     maximumBytes: Self.limit(for: artifact)
                 )
                 resourceMetrics = resourceMetrics.adding(
                     JourneyReleaseResourceMetrics(
-                        readBytes: read.data.count,
-                        hashedBytes: read.data.count,
+                        readBytes: read.digest.byteCount,
+                        hashedBytes: read.digest.byteCount,
                         parsedBytes: 0,
-                        duplicateReadBytes: read.data.count,
-                        duplicateHashBytes: read.data.count,
+                        duplicateReadBytes: read.digest.byteCount,
+                        duplicateHashBytes: read.digest.byteCount,
                         duplicateParseBytes: 0,
                         preloadBytes: 0,
                         unusedPreloadBytes: 0
@@ -1217,6 +1234,17 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         }
         try? await enforceCacheBudget(protecting: protectedDigests)
         return result
+    }
+
+    private nonisolated static func readAcquiredObject(
+        at url: URL,
+        artifact: JourneyReleaseRenderDocument.Artifact
+    ) throws -> (data: Data?, digest: BoundedFileDigest) {
+        if artifact.contentType == "video/mp4" {
+            return (nil, try BoundedFileIO.inspect(at: url, maximumBytes: limit(for: artifact)))
+        }
+        let read = try BoundedFileIO.read(at: url, maximumBytes: limit(for: artifact))
+        return (read.data, read.digest)
     }
 
     func enforceCacheBudget(protecting protectedDigests: Set<String>) async throws {
@@ -1426,7 +1454,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             id: identity.experienceId,
             versionId: identity.experienceVersionId,
             buildId: identity.buildId,
-            artifactContentHash: render.riv.sha256,
+            artifactContentHash: render.scene.sha256,
             authenticatedReleaseID: .init(
                 identity: identity,
                 descriptorSHA256: release.descriptorSHA256
@@ -1510,9 +1538,9 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 environment: identity.environment
             ),
             scene: .init(
-                key: render.riv.key,
-                sha256: render.riv.sha256,
-                sizeBytes: render.riv.sizeBytes
+                key: render.scene.key,
+                sha256: render.scene.sha256,
+                sizeBytes: render.scene.sizeBytes
             ),
             entry: .init(screenId: initialScreenID),
             screens: render.screens.map {

@@ -987,7 +987,9 @@ extension JourneyTestCase {
 
     func replacingRenderedArtifact(
         _ snapshot: JourneyProfileCatalog.Snapshot,
-        sceneBytes: Data
+        sceneBytes: Data,
+        renderer: String = "rive",
+        assets: [JourneyReleaseJSONValue] = []
     ) throws -> JourneyProfileCatalog.Snapshot {
         let originalArm = try XCTUnwrap(snapshot.profile.armedLegs.first)
         let originalRelease = try XCTUnwrap(snapshot.releasesByDigest[
@@ -996,13 +998,16 @@ extension JourneyTestCase {
         let originalDescriptor = originalRelease.descriptor
         var render = try XCTUnwrap(originalDescriptor.render)
         let sceneSHA256 = SHA256Provider.hexDigest(sceneBytes)
-        render["riv"] = .object([
-            "contentType": .string("application/vnd.rive"),
-            "key": .string("renders/sha256/\(sceneSHA256).riv"),
+        let sceneExtension = renderer == "nux" ? "nux" : "riv"
+        render.removeValue(forKey: "riv")
+        render["renderer"] = .string(renderer)
+        render[sceneExtension] = .object([
+            "contentType": .string(renderer == "nux" ? "application/vnd.nuxie.scene" : "application/vnd.rive"),
+            "key": .string("renders/sha256/\(sceneSHA256).\(sceneExtension)"),
             "sha256": .string(sceneSHA256),
             "sizeBytes": .number(Double(sceneBytes.count)),
         ])
-        render["assets"] = .array([])
+        render["assets"] = .array(assets)
         let descriptor = JourneyReleaseDescriptor(
             schemaVersion: originalDescriptor.schemaVersion,
             identity: originalDescriptor.identity,
