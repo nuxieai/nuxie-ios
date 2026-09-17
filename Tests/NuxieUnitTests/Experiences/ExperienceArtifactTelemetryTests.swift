@@ -51,14 +51,24 @@ private actor InteractiveDismissalSuspension {
 final class ExperienceArtifactTelemetryTests: XCTestCase {
     #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
     @MainActor
-    func testSystemFontFailuresKeepDistinctCodesInTraceAndLoadOutcome() {
-        let cases: [(ExperienceInteractiveScreenError, String)] = [
-            (.systemFontPreparation("font-1", .unsupportedRequest), "system_font.unsupported_request"),
-            (.systemFontPreparation("font-1", .unavailableFace), "system_font.face_unavailable"),
-            (.systemFontPreparation("font-1", .unavailableTables), "system_font.tables_unavailable"),
-            (.systemFontPreparation("font-1", .unusableData), "system_font.data_unusable"),
-        ]
-        for (error, code) in cases {
+    func testSystemFontFailuresKeepDistinctCodesInTraceAndLoadOutcome() throws {
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/system-font-failure-outcomes.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let cases = try XCTUnwrap(fixture["failures"] as? [[String: String]])
+        let eventName = try XCTUnwrap(fixture["eventName"] as? String)
+        let outcomeCount = try XCTUnwrap(fixture["outcomeCount"] as? Int)
+        for item in cases {
+            let error: ExperienceInteractiveScreenError
+            switch item["iosFailure"] {
+            case "unsupportedRequest": error = .systemFontPreparation("font-1", .unsupportedRequest)
+            case "unavailableFace": error = .systemFontPreparation("font-1", .unavailableFace)
+            case "unavailableTables": error = .systemFontPreparation("font-1", .unavailableTables)
+            case "unusableData": error = .systemFontPreparation("font-1", .unusableData)
+            default: throw NSError(domain: "Unexpected system-font fixture case", code: 1)
+            }
+            let code = try XCTUnwrap(item["code"])
             let log = MockEventLog()
             let model = ExperienceViewModel(
                 experience: makeExperience(id: "system-font", versionId: "system-font-v1"),
@@ -78,8 +88,8 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
             XCTAssertEqual(failed.first?.1, "preparation")
             model.handleLoadingFailed(error)
             model.handleLoadingFailed(error)
-            let outcomes = log.trackedEvents.filter { $0.name == JourneyEvents.experienceArtifactLoadFailed }
-            XCTAssertEqual(outcomes.count, 1)
+            let outcomes = log.trackedEvents.filter { $0.name == eventName }
+            XCTAssertEqual(outcomes.count, outcomeCount)
             XCTAssertEqual(outcomes.first?.properties?["error_code"] as? String, code)
             XCTAssertEqual(model.currentState, .error)
         }

@@ -281,6 +281,11 @@
         "source": "ExperienceArtifactSource raw value",
         "type": "String"
       },
+      "error_code": {
+        "required": false,
+        "source": "typed System font preparation failure",
+        "type": "String"
+      },
       "error_message": {
         "required": false,
         "source": "artifact load error description",
@@ -395,6 +400,11 @@
     "lane": "processCapture",
     "persists": true,
     "properties": {
+      "error_code": {
+        "required": false,
+        "source": "typed System font preparation failure",
+        "type": "String"
+      },
       "error_message": {
         "required": false,
         "source": "presentation error localizedDescription",
