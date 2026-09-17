@@ -461,6 +461,8 @@ targets:
           - Fixtures/semantic_text.riv
       - path: fixtures/journeys/rendered-semantic-screen-control
         type: folder
+      - path: fixtures/journeys/rendered-semantic-screen-control-condition
+        type: folder
       - path: fixtures/journeys/rendered-semantic-screen-control-error
         type: folder
       - path: fixtures/journeys/rendered-semantic-roles

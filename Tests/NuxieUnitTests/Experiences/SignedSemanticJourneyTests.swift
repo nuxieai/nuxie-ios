@@ -19,7 +19,12 @@ final class SignedSemanticJourneyTests: XCTestCase {
         try await exercise(.roles)
     }
 
+    func testSignedConditionReadsResponseAndEventFromTheSameNativeEmission() async throws {
+        try await exercise(.condition)
+    }
+
     private enum Scenario: String {
+        case condition = "rendered-semantic-screen-control-condition"
         case roles = "rendered-semantic-roles"
         case success = "rendered-semantic-screen-control"
         case scriptFailure = "rendered-semantic-screen-control-error"
@@ -150,7 +155,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 let button = try XCTUnwrap(button(in: presentations.currentExperienceViewController?.view))
                 XCTAssertTrue(button.accessibilityTraits.contains(.button))
                 XCTAssertTrue(button.accessibilityActivate())
-                if scenario == .success {
+                if scenario == .success || scenario == .condition {
                     try await waitUntil("Authored navigation must follow durable emission admission") { observer.navigationResponses != nil && observer.accepted.count == 1 }
                     XCTAssertEqual(observer.navigationResponses?["selection"], .string("pro"))
                     XCTAssertEqual(observer.accepted.first?.emissions.map(\.name), [JourneyResponseControlNames.responseSet, "script_control_activated"])
