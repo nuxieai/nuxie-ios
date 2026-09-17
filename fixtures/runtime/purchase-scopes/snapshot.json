@@ -299,6 +299,56 @@
             }
           }
         }
+      },
+      {
+        "id": "buy.interactions",
+        "projectId": "purchase",
+        "parentId": "buy",
+        "kind": "interaction_tree",
+        "type": "interaction_tree",
+        "orderKey": "015",
+        "data": {
+          "kind": "interaction_tree"
+        }
+      },
+      {
+        "id": "buy.press",
+        "projectId": "purchase",
+        "parentId": "buy.interactions",
+        "kind": "interaction",
+        "type": "interaction",
+        "orderKey": "016",
+        "data": {
+          "kind": "interaction",
+          "enabled": true,
+          "trigger": {
+            "type": "press"
+          }
+        }
+      },
+      {
+        "id": "buy.purchase",
+        "projectId": "purchase",
+        "parentId": "buy.press",
+        "kind": "interaction_action",
+        "type": "interaction_action",
+        "orderKey": "017",
+        "data": {
+          "kind": "interaction_action",
+          "action": {
+            "type": "purchase",
+            "placementId": {
+              "ref": {
+                "kind": "path",
+                "path": [
+                  "placementId"
+                ],
+                "viewModelName": "Plan",
+                "isRelative": true
+              }
+            }
+          }
+        }
       }
     ]
   },
