@@ -264,6 +264,14 @@ extension ExperienceRuntimeDelegate {
 
 /// ExperienceViewController - displays native experience content with loading and error states.
 class ExperienceViewController: NuxiePlatformViewController {
+    var textSizeDeviceProperties: [String: Any] {
+        #if canImport(UIKit)
+        return ["$content_size_category": traitCollection.preferredContentSizeCategory.rawValue]
+        #else
+        return [:]
+        #endif
+    }
+
     private enum NativeRuntimeCommand {
         case viewModelSnapshot(ExperienceViewModelSnapshot, screenId: String?)
         case viewModelValue(path: VmPathRef, value: Any, screenId: String?, instanceId: String?)

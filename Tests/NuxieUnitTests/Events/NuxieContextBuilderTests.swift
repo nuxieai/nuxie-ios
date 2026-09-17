@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 import Quick
 import Nimble
 @testable import Nuxie
@@ -55,6 +58,10 @@ final class NuxieContextBuilderTests: AsyncSpec {
                     expect(enriched["$os_name"]).toNot(beNil())
                     expect(enriched["$os_version"]).toNot(beNil())
                     
+                    #if canImport(UIKit)
+                    let category = await MainActor.run { UIApplication.shared.preferredContentSizeCategory.rawValue }
+                    expect(enriched["$content_size_category"] as? String).to(equal(category))
+                    #endif
                     // Layer 2: Dynamic Context
                     expect(enriched["$locale"]).toNot(beNil())
                     expect(enriched["$timezone"]).toNot(beNil())

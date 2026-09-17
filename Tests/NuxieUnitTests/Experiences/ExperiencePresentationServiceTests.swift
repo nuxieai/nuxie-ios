@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 import Quick
 import Nimble
 @testable import Nuxie
@@ -338,6 +341,18 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         mockExperienceVersionId: versionID,
                         mockScreenId: screenID
                     )
+                    #if canImport(UIKit)
+                    let contractURL = URL(fileURLWithPath: #filePath)
+                        .deletingLastPathComponent().deletingLastPathComponent()
+                        .deletingLastPathComponent().deletingLastPathComponent()
+                        .appendingPathComponent("fixtures/encodings/text-size-device-properties.json")
+                    let contract = try JSONSerialization.jsonObject(with: Data(contentsOf: contractURL)) as! [String: Any]
+                    let ios = contract["ios"] as! [String: String]
+                    let property = ios["property"]!
+                    if #available(iOS 17.0, tvOS 17.0, *) {
+                        controller.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
+                    }
+                    #endif
                     mockExperienceService.mockViewControllers[versionID] = controller
                     let release = makeJourneyRelease(
                         versionId: versionID,
@@ -366,6 +381,13 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(service.currentExperienceViewController)
                         .to(beIdenticalTo(controller))
 
+                    #if canImport(UIKit)
+                    if #available(iOS 17.0, tvOS 17.0, *) {
+                        let shown = mockEventLog.trackedEvents.last { $0.name == JourneyEvents.experienceShown }
+                        expect(shown?.properties?[property] as? String).to(equal(ios["accessibilityMaximum"]))
+                        controller.traitOverrides.preferredContentSizeCategory = .large
+                    }
+                    #endif
                     await service.dismissCurrentExperienceFromHost()
 
                     expect(service.isExperiencePresented).to(beFalse())
@@ -380,6 +402,11 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let dismissal = mockEventLog.trackedEvents.last {
                         $0.name == JourneyEvents.experienceDismissed
                     }
+                    #if canImport(UIKit)
+                    if #available(iOS 17.0, tvOS 17.0, *) {
+                        expect(dismissal?.properties?[property] as? String).to(equal(ios["default"]))
+                    }
+                    #endif
                     expect(dismissal?.properties?["reason"] as? String).to(equal("host"))
                     expect(dismissal?.properties?["journey_id"] as? String)
                         .to(equal("journey-owner"))
