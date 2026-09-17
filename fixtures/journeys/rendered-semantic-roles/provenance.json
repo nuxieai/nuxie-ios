@@ -4,6 +4,11 @@
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
   "sourceSnapshotSha256": "442c4b170353a2f5408ee2d8edfb0e33eadc99aa4ef75bea1eb74eabdee96d0f",
   "publishSnapshotSha256": "75fda1d3ae25dfcfd6f0f534475f3e1bb591720fb224bcb879456b0b01839d48",
-  "descriptorSha256": "d9d6c7b15dca806029e166256ee1672a10253e489b777bc5665b96845ee2b5d0",
-  "qualification": "Production release compiler output inside a test-signed candidate descriptor; SDK and screen-reader qualification remain separate."
+  "descriptorSha256": "16b3898d7241ae30f197ab709f6b8624d5c1fc2bf4b4779c60d68f44d777952e",
+  "qualification": "Production release compiler output inside a test-signed candidate descriptor; SDK and screen-reader qualification remain separate.",
+  "descriptorRefresh": {
+    "script": "scripts/refresh-signed-fixtures.mjs",
+    "reason": "Explicit CDN font source declarations; published render and asset bytes unchanged",
+    "previousDescriptorSha256": "d9d6c7b15dca806029e166256ee1672a10253e489b777bc5665b96845ee2b5d0"
+  }
 }
