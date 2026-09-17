@@ -239,6 +239,36 @@ final class SystemFontAcquisitionTests: XCTestCase {
         await controller.shutdownInteractiveScreen()
         await controller.shutdownInteractiveScreen()
         XCTAssertEqual(controller.lifecyclePhase, .hidden)
+
+        let eventLog = MockEventLog()
+        let failed = expectation(description: "real controller records provider failure")
+        eventLog.capturedEventObserver = { event in
+            if event.name == JourneyEvents.experienceArtifactLoadFailed { failed.fulfill() }
+        }
+        let products = MockProductService()
+        let sink = DiscardingSystemEventSink()
+        let transactions = TransactionService(
+            productService: products, transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: MockFactory.shared.dateProvider,
+            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "test-api-key")),
+            eventSink: sink
+        )
+        let experienceController = ExperienceViewController(
+            experience: experience, artifactLoader: { _, _, _ in artifact }, eventLog: eventLog,
+            transactionService: transactions, productService: products, systemEventSink: sink
+        )
+        experienceController.loadViewIfNeeded()
+        await fulfillment(of: [failed], timeout: 5)
+        XCTAssertFalse(experienceController.errorView.isHidden)
+        XCTAssertTrue(experienceController.loadingView.isHidden)
+        XCTAssertTrue(experienceController.children.isEmpty, "Failed mounting must remove child screens")
+        await experienceController.shutdownRuntime()
+        await experienceController.shutdownRuntime()
+        let failures = eventLog.trackedEvents.filter { $0.name == JourneyEvents.experienceArtifactLoadFailed }
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertEqual(failures.first?.properties?["error_code"] as? String, "system_font.unsupported_request")
+        XCTAssertFalse(eventLog.trackedEvents.contains { $0.name == JourneyEvents.experienceArtifactLoadSucceeded })
     }
 
     private func replacingSystemFonts(_ payload: AuthenticatedRuntimePayload, _ fonts: [NativeExperienceSystemFontRequirement]) -> AuthenticatedRuntimePayload {
