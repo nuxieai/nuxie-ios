@@ -8,6 +8,69 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeRuntimeTests: XCTestCase {
+    func testPublishedFontScalePolicyAfterOneStep() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/font-scale-policy")
+        struct Case: Decodable { let scale: Float; let expected: [String: Float] }
+        struct Fixture: Decodable { let fontScalePath: String; let cases: [Case] }
+        struct Provenance: Decodable { let fontSha256: String }
+        let fixture = try JSONDecoder().decode(Fixture.self,
+            from: Data(contentsOf: directory.appendingPathComponent("cases.json")))
+        let provenance = try JSONDecoder().decode(Provenance.self,
+            from: Data(contentsOf: directory.appendingPathComponent("provenance.json")))
+        let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let font = try XCTUnwrap(assets.first { $0.kind == .font })
+        let fontBytes = try Data(contentsOf: directory.appendingPathComponent("\(provenance.fontSha256).otf"))
+        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Paywall",
+            player: .defaultScene, pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: true,
+            importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
+                externalAssets: [font.ordinal: fontBytes]))
+        defer { Task { try? await runtime.close() } }
+        let root = try await runtime.rootViewModelReference()
+        var baselinePixels: Data?
+        for (index, item) in fixture.cases.enumerated() {
+            _ = try await runtime.mutateViewModel([
+                .setNumber(instance: root, path: fixture.fontScalePath, value: item.scale)
+            ])
+            let step = try await runtime.step(elapsedSeconds: 0,
+                textRunNames: ["bound Run", "fixed Run", "natural Run"])
+            guard case .captured(let fields) = step.textGeometry else {
+                return XCTFail("Expected same-frame text geometry: \(step.textGeometry)")
+            }
+            XCTAssertEqual(fields.count, 3)
+            XCTAssertEqual(Set(fields.values.map(\.renderRevision)).count, 1)
+            let snapshot = try await runtime.snapshot()
+            for (name, expected) in item.expected {
+                let value = try XCTUnwrap(snapshot.values.first {
+                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == name
+                })
+                guard case .number(let actual) = value.value else {
+                    return XCTFail("Expected numeric metric: \(name)")
+                }
+                XCTAssertEqual(actual, expected, accuracy: 0.0001, "\(name) at scale \(item.scale)")
+            }
+            for name in ["bound Run", "fixed Run", "natural Run"] {
+                let geometry = try XCTUnwrap(fields[name])
+                let size: CGFloat = name == "fixed Run" ? 18 : 18 * CGFloat(item.scale)
+                XCTAssertEqual(try XCTUnwrap(geometry.firstBaseline), 1929 / 2048 * size, accuracy: 0.001)
+            }
+            let frame = try await renderPixels(runtime, width: 390, height: 844)
+            XCTAssertEqual(frame.outcome.disposition, .presented)
+            if let baselinePixels {
+                let fixedRange = (264 * 390 * 4)..<(484 * 390 * 4)
+                XCTAssertEqual(frame.pixels.subdata(in: fixedRange), baselinePixels.subdata(in: fixedRange))
+                if index == fixture.cases.count - 1 {
+                    XCTAssertEqual(frame.pixels, baselinePixels, "Reset restores the original rendered frame")
+                } else {
+                    XCTAssertNotEqual(frame.pixels, baselinePixels, "System scaling changes rendered text")
+                }
+            } else { baselinePixels = frame.pixels }
+        }
+        try await runtime.close()
+    }
+
     func testPublishedTextStyleMetricsReverseBindAfterOneStep() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

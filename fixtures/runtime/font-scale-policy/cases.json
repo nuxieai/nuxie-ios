@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "fontScalePath": "fontScale",
+  "cases": [
+    {
+      "scale": 1,
+      "expected": {
+        "observedFontSize": 18,
+        "observedLineHeight": 24,
+        "fixedFontSize": 18,
+        "fixedLineHeight": 24,
+        "naturalFontSize": 18,
+        "naturalLineHeight": -1
+      }
+    },
+    {
+      "scale": 2,
+      "expected": {
+        "observedFontSize": 36,
+        "observedLineHeight": 48,
+        "fixedFontSize": 18,
+        "fixedLineHeight": 24,
+        "naturalFontSize": 36,
+        "naturalLineHeight": -1
+      }
+    },
+    {
+      "scale": 0.5,
+      "expected": {
+        "observedFontSize": 9.0,
+        "observedLineHeight": 12.0,
+        "fixedFontSize": 18,
+        "fixedLineHeight": 24,
+        "naturalFontSize": 9.0,
+        "naturalLineHeight": -1
+      }
+    },
+    {
+      "scale": 3.12,
+      "expected": {
+        "observedFontSize": 56.160000000000004,
+        "observedLineHeight": 74.88,
+        "fixedFontSize": 18,
+        "fixedLineHeight": 24,
+        "naturalFontSize": 56.160000000000004,
+        "naturalLineHeight": -1
+      }
+    },
+    {
+      "scale": 1,
+      "expected": {
+        "observedFontSize": 18,
+        "observedLineHeight": 24,
+        "fixedFontSize": 18,
+        "fixedLineHeight": 24,
+        "naturalFontSize": 18,
+        "naturalLineHeight": -1
+      }
+    }
+  ]
+}

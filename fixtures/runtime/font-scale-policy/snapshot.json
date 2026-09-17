@@ -1,0 +1,406 @@
+{
+  "version": 1,
+  "project": {
+    "id": "project_1",
+    "data": {}
+  },
+  "document": {
+    "rootId": "root",
+    "nodes": [
+      {
+        "id": "root",
+        "projectId": "project_1",
+        "parentId": null,
+        "kind": "root",
+        "type": "root",
+        "data": {
+          "kind": "root"
+        }
+      },
+      {
+        "id": "project_1::artboard_tree",
+        "projectId": "project_1",
+        "parentId": "root",
+        "kind": "artboard_tree",
+        "type": "artboard_tree",
+        "data": {
+          "kind": "artboard_tree",
+          "version": 1
+        }
+      },
+      {
+        "id": "project_1::journey_root",
+        "projectId": "project_1",
+        "parentId": "root",
+        "kind": "journey_root",
+        "type": "journey_root",
+        "data": {
+          "kind": "journey_root",
+          "version": 1
+        }
+      },
+      {
+        "id": "screen_1",
+        "projectId": "project_1",
+        "parentId": "project_1::artboard_tree",
+        "orderKey": "a",
+        "kind": "artboard",
+        "type": "artboard",
+        "name": "Paywall",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "dimensions": {
+              "width": 390,
+              "height": 844
+            }
+          },
+          "viewModelDefaults": {
+            "viewModelId": "metrics",
+            "instanceId": "metrics.default"
+          }
+        }
+      },
+      {
+        "id": "screen_1::view_tree",
+        "projectId": "project_1",
+        "parentId": "screen_1",
+        "kind": "view_tree",
+        "type": "view_tree",
+        "data": {
+          "kind": "view_tree"
+        }
+      },
+      {
+        "id": "screen_1::animation_tree",
+        "projectId": "project_1",
+        "parentId": "screen_1",
+        "kind": "animation_tree",
+        "type": "animation_tree",
+        "data": {
+          "kind": "animation_tree"
+        }
+      },
+      {
+        "id": "bound",
+        "projectId": "project_1",
+        "parentId": "screen_1::view_tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "0",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "bound",
+            "type": "View",
+            "systemId": "TextInput",
+            "props": {
+              "value": "Alpha\nBravo\nCharlie",
+              "editable": true,
+              "multiline": true,
+              "style": {
+                "x": 24,
+                "y": 24,
+                "width": 342,
+                "height": 220,
+                "fontFamily": "Fixture Sans",
+                "fontWeight": "400",
+                "fontSize": 18,
+                "lineHeight": 24,
+                "color": "#ffffff",
+                "scaling": "system"
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "fixed",
+        "projectId": "project_1",
+        "parentId": "screen_1::view_tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "1",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "fixed",
+            "type": "View",
+            "systemId": "TextInput",
+            "props": {
+              "value": "Alpha\nBravo\nCharlie",
+              "editable": true,
+              "multiline": true,
+              "style": {
+                "x": 24,
+                "y": 264,
+                "width": 342,
+                "height": 220,
+                "fontFamily": "Fixture Sans",
+                "fontWeight": "400",
+                "fontSize": 18,
+                "lineHeight": 24,
+                "color": "#ffffff",
+                "scaling": "fixed"
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "metrics",
+        "projectId": "project_1",
+        "parentId": "root",
+        "orderKey": "metrics",
+        "kind": "view_model",
+        "type": "view_model",
+        "name": "metrics",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 101,
+          "properties": {
+            "observedFontSize": {
+              "type": "number",
+              "propertyId": 3,
+              "defaultValue": -999
+            },
+            "observedLineHeight": {
+              "type": "number",
+              "propertyId": 4,
+              "defaultValue": -999
+            },
+            "fixedFontSize": {
+              "type": "number",
+              "propertyId": 5,
+              "defaultValue": -999
+            },
+            "fixedLineHeight": {
+              "type": "number",
+              "propertyId": 6,
+              "defaultValue": -999
+            },
+            "naturalFontSize": {
+              "type": "number",
+              "propertyId": 7,
+              "defaultValue": -999
+            },
+            "naturalLineHeight": {
+              "type": "number",
+              "propertyId": 8,
+              "defaultValue": -999
+            }
+          }
+        }
+      },
+      {
+        "id": "metrics.default",
+        "projectId": "project_1",
+        "parentId": "metrics",
+        "orderKey": "metrics.default",
+        "kind": "view_model_instance",
+        "type": "view_model_instance",
+        "name": "metrics.default",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "observedFontSize": -999,
+            "observedLineHeight": -999,
+            "fixedFontSize": -999,
+            "fixedLineHeight": -999,
+            "naturalFontSize": -999,
+            "naturalLineHeight": -999
+          }
+        }
+      },
+      {
+        "id": "bind.observedFontSize",
+        "projectId": "project_1",
+        "parentId": "screen_1::animation_tree",
+        "orderKey": "bind.observedFontSize",
+        "kind": "data_bind",
+        "type": "data_bind",
+        "name": "bind.observedFontSize",
+        "data": {
+          "kind": "data_bind",
+          "source": {
+            "viewModelPathIds": [
+              101
+            ],
+            "propertyId": 3
+          },
+          "target": {
+            "kind": "keyedProperty",
+            "objectKey": "artboard/screen_1/bound/text-style",
+            "propertyKey": 274
+          },
+          "direction": "toSource"
+        }
+      },
+      {
+        "id": "bind.observedLineHeight",
+        "projectId": "project_1",
+        "parentId": "screen_1::animation_tree",
+        "orderKey": "bind.observedLineHeight",
+        "kind": "data_bind",
+        "type": "data_bind",
+        "name": "bind.observedLineHeight",
+        "data": {
+          "kind": "data_bind",
+          "source": {
+            "viewModelPathIds": [
+              101
+            ],
+            "propertyId": 4
+          },
+          "target": {
+            "kind": "keyedProperty",
+            "objectKey": "artboard/screen_1/bound/text-style",
+            "propertyKey": 370
+          },
+          "direction": "toSource"
+        }
+      },
+      {
+        "id": "bind.fixedFontSize",
+        "projectId": "project_1",
+        "parentId": "screen_1::animation_tree",
+        "orderKey": "bind.fixedFontSize",
+        "kind": "data_bind",
+        "type": "data_bind",
+        "name": "bind.fixedFontSize",
+        "data": {
+          "kind": "data_bind",
+          "source": {
+            "viewModelPathIds": [
+              101
+            ],
+            "propertyId": 5
+          },
+          "target": {
+            "kind": "keyedProperty",
+            "objectKey": "artboard/screen_1/fixed/text-style",
+            "propertyKey": 274
+          },
+          "direction": "toSource"
+        }
+      },
+      {
+        "id": "bind.fixedLineHeight",
+        "projectId": "project_1",
+        "parentId": "screen_1::animation_tree",
+        "orderKey": "bind.fixedLineHeight",
+        "kind": "data_bind",
+        "type": "data_bind",
+        "name": "bind.fixedLineHeight",
+        "data": {
+          "kind": "data_bind",
+          "source": {
+            "viewModelPathIds": [
+              101
+            ],
+            "propertyId": 6
+          },
+          "target": {
+            "kind": "keyedProperty",
+            "objectKey": "artboard/screen_1/fixed/text-style",
+            "propertyKey": 370
+          },
+          "direction": "toSource"
+        }
+      },
+      {
+        "id": "natural",
+        "projectId": "project_1",
+        "parentId": "screen_1::view_tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "2",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "natural",
+            "type": "View",
+            "systemId": "TextInput",
+            "props": {
+              "value": "Alpha\nBravo\nCharlie",
+              "editable": true,
+              "multiline": true,
+              "style": {
+                "x": 24,
+                "y": 504,
+                "width": 342,
+                "height": 220,
+                "fontFamily": "Fixture Sans",
+                "fontWeight": "400",
+                "fontSize": 18,
+                "lineHeight": -1,
+                "color": "#ffffff",
+                "scaling": "system"
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "bind.naturalFontSize",
+        "projectId": "project_1",
+        "parentId": "screen_1::animation_tree",
+        "orderKey": "bind.naturalFontSize",
+        "kind": "data_bind",
+        "type": "data_bind",
+        "name": "bind.naturalFontSize",
+        "data": {
+          "kind": "data_bind",
+          "source": {
+            "viewModelPathIds": [
+              101
+            ],
+            "propertyId": 7
+          },
+          "target": {
+            "kind": "keyedProperty",
+            "objectKey": "artboard/screen_1/natural/text-style",
+            "propertyKey": 274
+          },
+          "direction": "toSource"
+        }
+      },
+      {
+        "id": "bind.naturalLineHeight",
+        "projectId": "project_1",
+        "parentId": "screen_1::animation_tree",
+        "orderKey": "bind.naturalLineHeight",
+        "kind": "data_bind",
+        "type": "data_bind",
+        "name": "bind.naturalLineHeight",
+        "data": {
+          "kind": "data_bind",
+          "source": {
+            "viewModelPathIds": [
+              101
+            ],
+            "propertyId": 8
+          },
+          "target": {
+            "kind": "keyedProperty",
+            "objectKey": "artboard/screen_1/natural/text-style",
+            "propertyKey": 370
+          },
+          "direction": "toSource"
+        }
+      }
+    ]
+  },
+  "designSystem": {
+    "designSystems": [],
+    "screenDesignSystems": []
+  }
+}
