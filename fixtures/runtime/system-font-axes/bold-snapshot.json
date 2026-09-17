@@ -1,0 +1,241 @@
+{
+  "version": 1,
+  "project": {
+    "id": "proj_charfix",
+    "userId": "user_charfix",
+    "workspaceId": "ws_charfix",
+    "appId": null,
+    "name": "Characterization",
+    "thumbnailUrl": null,
+    "env": "live",
+    "deletedAt": null
+  },
+  "document": {
+    "rootId": "proj_charfix",
+    "nodes": [
+      {
+        "id": "proj_charfix",
+        "projectId": "proj_charfix",
+        "parentId": null,
+        "orderKey": null,
+        "kind": "root",
+        "name": "Characterization",
+        "data": {
+          "kind": "root",
+          "meta": {
+            "name": "Characterization"
+          }
+        },
+        "type": "root"
+      },
+      {
+        "id": "proj_charfix::artboard_tree",
+        "projectId": "proj_charfix",
+        "screenId": null,
+        "parentId": "proj_charfix",
+        "orderKey": "a0",
+        "name": "Artboard Tree",
+        "type": "artboard_tree",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "artboard_tree",
+        "data": {
+          "kind": "artboard_tree"
+        }
+      },
+      {
+        "id": "proj_charfix::experiment_tree",
+        "projectId": "proj_charfix",
+        "screenId": null,
+        "parentId": "proj_charfix",
+        "orderKey": "a1",
+        "name": "Experiment Tree",
+        "type": "experiment_tree",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "experiment_tree",
+        "data": {
+          "kind": "experiment_tree"
+        }
+      },
+      {
+        "id": "proj_charfix::journey_root",
+        "projectId": "proj_charfix",
+        "screenId": null,
+        "parentId": "proj_charfix",
+        "orderKey": "a2",
+        "name": "Journey Tree",
+        "type": "journey_root",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "journey_root",
+        "data": {
+          "kind": "journey_root",
+          "version": 1
+        }
+      },
+      {
+        "id": "proj_charfix::journey_canvas_tree",
+        "projectId": "proj_charfix",
+        "screenId": null,
+        "parentId": "proj_charfix",
+        "orderKey": "a3",
+        "name": "Journey Canvas Tree",
+        "type": "journey_canvas_tree",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "journey_canvas_tree",
+        "data": {
+          "kind": "journey_canvas_tree",
+          "version": 1
+        }
+      },
+      {
+        "id": "ab_one",
+        "projectId": "proj_charfix",
+        "screenId": null,
+        "parentId": "proj_charfix::artboard_tree",
+        "orderKey": "a0",
+        "name": "One",
+        "type": "artboard",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "artboard",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "dimensions": {
+              "width": 320,
+              "height": 640
+            }
+          }
+        }
+      },
+      {
+        "id": "ab_one::view_tree",
+        "projectId": "proj_charfix",
+        "screenId": "ab_one",
+        "parentId": "ab_one",
+        "orderKey": "a0",
+        "name": "View Tree",
+        "type": "view_tree",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "view_tree",
+        "data": {
+          "kind": "view_tree"
+        }
+      },
+      {
+        "id": "ab_one::animation_tree",
+        "projectId": "proj_charfix",
+        "screenId": "ab_one",
+        "parentId": "ab_one",
+        "orderKey": "a1",
+        "name": "Animation Tree",
+        "type": "animation_tree",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "animation_tree",
+        "data": {
+          "kind": "animation_tree"
+        }
+      },
+      {
+        "id": "ab_one::capability_tree",
+        "projectId": "proj_charfix",
+        "screenId": "ab_one",
+        "parentId": "ab_one",
+        "orderKey": "a2",
+        "name": "Capability Tree",
+        "type": "capability_tree",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "capability_tree",
+        "data": {
+          "kind": "capability_tree"
+        }
+      },
+      {
+        "id": "view_a",
+        "projectId": "proj_charfix",
+        "screenId": "ab_one",
+        "parentId": "ab_one::view_tree",
+        "orderKey": "a0",
+        "name": "Card",
+        "type": "view",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "view",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "x": 10,
+                "y": 20,
+                "width": 80,
+                "height": 40,
+                "opacity": 0.25,
+                "backgroundColor": "#112233"
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "text_a",
+        "projectId": "proj_charfix",
+        "screenId": "ab_one",
+        "parentId": "ab_one::view_tree",
+        "orderKey": "b0",
+        "name": "Label",
+        "type": "view",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "view",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "Text",
+            "text": "Hamburgefonts 0123",
+            "props": {
+              "style": {
+                "x": 8,
+                "y": 16,
+                "width": 304,
+                "height": 96,
+                "fontFamily": "System",
+                "fontWeight": "700",
+                "fontStyle": "normal",
+                "fontSize": 32,
+                "lineHeight": 40,
+                "color": "#ffffff"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "designSystem": {
+    "screenDesignSystems": [],
+    "designSystems": []
+  }
+}
