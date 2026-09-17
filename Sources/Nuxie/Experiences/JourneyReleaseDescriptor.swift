@@ -13,6 +13,7 @@ enum JourneyReleaseLimits {
     static let assetCount = 1_024
     static let transitionCount = 1_024
     static let textInputCount = 1_024
+    static let videoElementCount = 4_096
     static let rivArtifactBytes = 64 * 1_024 * 1_024
     static let externalAssetBytes = 32 * 1_024 * 1_024
     static let artifactAggregateBytes = 128 * 1_024 * 1_024

@@ -25,6 +25,7 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
     let images: [NativeExperienceImageAsset]
     let fonts: [NativeExperienceFontAsset]
     var videos: [NativeExperienceVideoAsset] = []
+    var videoElements: [NativeExperienceVideoElement] = []
     // Device requirements have no artifact metadata or downloaded object.
     let systemFonts: [NativeExperienceSystemFontRequirement]
 
@@ -32,7 +33,7 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
         identity: Identity, scene: Scene, entry: Entry,
         screens: [NativeExperienceScreen], transitions: [NativeExperienceTransition],
         textInputs: [NativeExperienceTextInput], images: [NativeExperienceImageAsset],
-        fonts: [NativeExperienceFontAsset], videos: [NativeExperienceVideoAsset] = [], systemFonts: [NativeExperienceSystemFontRequirement] = []
+        fonts: [NativeExperienceFontAsset], videos: [NativeExperienceVideoAsset] = [], videoElements: [NativeExperienceVideoElement] = [], systemFonts: [NativeExperienceSystemFontRequirement] = []
     ) {
         self.identity = identity
         self.scene = scene
@@ -43,6 +44,7 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
         self.images = images
         self.fonts = fonts
         self.videos = videos
+        self.videoElements = videoElements
         self.systemFonts = systemFonts
     }
 }
@@ -52,6 +54,16 @@ struct NativeExperienceSystemFontRequirement: Equatable, Sendable {
     let riveUniqueName: String
     let weight: String
     let style: String
+}
+
+/// Authored targets resolved to local component slots in this exact signed scene.
+struct NativeExperienceVideoElement: Decodable, Equatable, Sendable {
+    let artboardId: String
+    let viewNodeId: String
+    let renderedNodeId: String
+    let componentId: UInt32
+    let readinessTimeoutSeconds: Double
+    let optional: Bool
 }
 
 struct NativeExperienceScreen: Equatable, Sendable {

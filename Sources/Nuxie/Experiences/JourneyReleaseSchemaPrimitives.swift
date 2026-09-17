@@ -909,7 +909,28 @@ enum JourneyReleaseSchemaPrimitives {
             try invalid("render.renderer")
         }
         let sceneKey = renderer == "nux" ? "nux" : "riv"
-        let render = try object(value, required: ["renderer", sceneKey, "screens", "transitions", "textInputs", "assets"], path: "render")
+        let render = try object(value, required: ["renderer", sceneKey, "screens", "transitions", "textInputs", "assets"], optional: ["videoElements"], path: "render")
+        if let value = render["videoElements"] {
+            let elements = try array(value, path: "render.videoElements")
+            guard elements.count <= JourneyReleaseLimits.videoElementCount else { try invalid("render.videoElements") }
+            var targets = Set<[String]>()
+            var slots = Set<[String]>()
+            for (index, value) in elements.enumerated() {
+                let path = "render.videoElements[\(index)]"
+                guard renderer == "nux" else { try invalid(path) }
+                let element = try object(value, required: ["artboardId", "viewNodeId", "renderedNodeId", "componentId", "readinessTimeoutSeconds", "optional"], path: path)
+                for field in ["artboardId", "viewNodeId", "renderedNodeId"] {
+                    try identifier(element[field], path: "\(path).\(field)")
+                }
+                try integer(element["componentId"], minimum: 1, maximum: 4_294_967_295, path: "\(path).componentId")
+                try finiteNumber(element["readinessTimeoutSeconds"], minimum: 0, maximum: 60, path: "\(path).readinessTimeoutSeconds")
+                guard isJSONBoolean(element["optional"]) else { try invalid("\(path).optional") }
+                let artboard = element["artboardId"] as! String
+                let target = [artboard, element["renderedNodeId"] as! String]
+                let slot = [artboard, String((element["componentId"] as! NSNumber).uint64Value)]
+                guard targets.insert(target).inserted, slots.insert(slot).inserted else { try invalid(path) }
+            }
+        }
         try validateArtifact(render[sceneKey], path: "render.\(sceneKey)", includeKind: false)
         try validateArtifactSemantics(
             render[sceneKey], path: "render.\(sceneKey)", expectedPrefix: "renders/sha256/",

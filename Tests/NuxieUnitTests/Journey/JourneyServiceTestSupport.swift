@@ -989,7 +989,8 @@ extension JourneyTestCase {
         _ snapshot: JourneyProfileCatalog.Snapshot,
         sceneBytes: Data,
         renderer: String = "rive",
-        assets: [JourneyReleaseJSONValue] = []
+        assets: [JourneyReleaseJSONValue] = [],
+        videoElements: [JourneyReleaseJSONValue]? = nil
     ) throws -> JourneyProfileCatalog.Snapshot {
         let originalArm = try XCTUnwrap(snapshot.profile.armedLegs.first)
         let originalRelease = try XCTUnwrap(snapshot.releasesByDigest[
@@ -1008,6 +1009,7 @@ extension JourneyTestCase {
             "sizeBytes": .number(Double(sceneBytes.count)),
         ])
         render["assets"] = .array(assets)
+        if let videoElements { render["videoElements"] = .array(videoElements) }
         let descriptor = JourneyReleaseDescriptor(
             schemaVersion: originalDescriptor.schemaVersion,
             identity: originalDescriptor.identity,
