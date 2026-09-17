@@ -5,7 +5,7 @@ Generated through the production Journey release compiler in the parent reposito
 signed descriptor digest, and explicit test public key. The render and font bytes
 are acquired through the signed entry's content-addressed references.
 
-This candidate requires `scene-semantics-v1`; default SDK admission must reject it
+This candidate requires `experience-accessibility`; default SDK admission must reject it
 until platform qualification is complete. Generator tests verify secure-value
 redaction, response binding, native geometry paths, and font identity. The fixture
 alone does not prove native adapter behavior or VoiceOver/TalkBack qualification.

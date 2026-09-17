@@ -61,14 +61,14 @@ final class SignedSemanticJourneyTests: XCTestCase {
             _ = try await productionCatalog.prepare(profile, authority: authority)
             XCTFail("Default admission must reject the unqualified semantic capability")
         } catch {
-            XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .unsupportedCapabilities(["scene-semantics-v1"]))
+            XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .unsupportedCapabilities(["experience-accessibility"]))
         }
         let current = JourneyReleaseRuntime.current
         let candidate = JourneyReleaseSupportedRuntime(currentSdkVersion: current.currentSdkVersion,
             supportedRuntimeRevisions: current.supportedRuntimeRevisions, supportedLuauRevisions: current.supportedLuauRevisions,
             sceneFormat: current.sceneFormat, timezoneDataRevision: current.timezoneDataRevision,
             timezoneDataSHA256: current.timezoneDataSHA256,
-            supportedCapabilities: current.supportedCapabilities.union(["scene-semantics-v1"]))
+            supportedCapabilities: current.supportedCapabilities.union(["experience-accessibility"]))
         let catalog = JourneyProfileCatalog(authorizationKeys: keys, supportedRuntime: candidate,
             highWaterStore: InMemoryJourneyReleaseHighWaterStore())
         let prepared = try await catalog.prepare(profile, authority: authority)
