@@ -1,9 +1,9 @@
 {
-  "publisherSourceCommit": "67ffe5759fec72872a9c8a2277ce54b8dd9d2c2c",
+  "publisherSourceCommit": "b172c73b10b184309a4ac3f4d118b2f9a1b2aadc",
   "keyId": "TEST_ONLY_DEV_KEYPAIR",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "sourceSnapshotSha256": "53daae7e67cb838cd6bcc4077d5bbb53f5aebeec0c4c21087ea8297f7c6fd4ca",
-  "publishSnapshotSha256": "75fba33ad4711572aa2efe59f7cc704de7a46600ecfadfbffdb8d715be40189b",
-  "descriptorSha256": "274d97ff83ffc70d4ee4522bbd3b668b66c76bb61d0dc1335e4e72ba53df57ae",
+  "sourceSnapshotSha256": "442c4b170353a2f5408ee2d8edfb0e33eadc99aa4ef75bea1eb74eabdee96d0f",
+  "publishSnapshotSha256": "75fda1d3ae25dfcfd6f0f534475f3e1bb591720fb224bcb879456b0b01839d48",
+  "descriptorSha256": "d9d6c7b15dca806029e166256ee1672a10253e489b777bc5665b96845ee2b5d0",
   "qualification": "Production release compiler output inside a test-signed candidate descriptor; SDK and screen-reader qualification remain separate."
 }
