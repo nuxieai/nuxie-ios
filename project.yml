@@ -650,6 +650,7 @@ schemes:
       config: Debug
       executable: NuxieStoreKitTestHost
       macroExpansion: NuxieStoreKitTestHost
+      storeKitConfiguration: Tests/NuxieStoreKitTests/Fixtures/NuxieNativePurchase.storekit
     test:
       macroExpansion: NuxieStoreKitTestHost
       environmentVariables:
