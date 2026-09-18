@@ -153,7 +153,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             journey: JourneyDocument(screens: [.init(id: "screen")]), sceneBytes: scene,
             assets: [.init(kind: .video, riveAssetID: id, riveUniqueName: name, sourceKey: key, contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: url)])
         let externalAssets = try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
-            authenticatedAssets: payload.assets, catalog: catalog)
+            authenticatedAssets: payload.assets, catalog: catalog, systemFontCache: .shared).bytes
         XCTAssertTrue(externalAssets.isEmpty, "Published external video must bind without an in-memory payload")
         let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: artboardName, player: .defaultScene,
             pixelWidth: UInt32(width), pixelHeight: UInt32(height), bindDefaultViewModel: sceneName == "list", importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: externalAssets, videoEnabled: true))
@@ -342,18 +342,18 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                   contentType: "video/mp4", sha256: digest, required: true, bytes: bytes, fileURL: fileURL)
         }
         XCTAssertTrue(try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
-            authenticatedAssets: [asset(fileURL: url)], catalog: catalog).isEmpty,
+            authenticatedAssets: [asset(fileURL: url)], catalog: catalog, systemFontCache: .shared).bytes.isEmpty,
             "Video files must not be copied into the in-memory image/font provider")
         for invalid in [asset(fileURL: nil), asset(fileURL: nil, bytes: Data([1])),
                         asset(fileURL: URL(string: "https://provider.example/clip.mp4")),
                         asset(fileURL: url, id: 2), asset(fileURL: url, sourceKey: "assets/another.mp4")] {
             XCTAssertThrowsError(try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
-                authenticatedAssets: [invalid], catalog: catalog))
+                authenticatedAssets: [invalid], catalog: catalog, systemFontCache: .shared))
         }
         XCTAssertThrowsError(try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
-            authenticatedAssets: [asset(fileURL: url)], catalog: []))
+            authenticatedAssets: [asset(fileURL: url)], catalog: [], systemFontCache: .shared))
         XCTAssertThrowsError(try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
-            authenticatedAssets: [asset(fileURL: url)], catalog: catalog + catalog))
+            authenticatedAssets: [asset(fileURL: url)], catalog: catalog + catalog, systemFontCache: .shared))
     }
 
 }
