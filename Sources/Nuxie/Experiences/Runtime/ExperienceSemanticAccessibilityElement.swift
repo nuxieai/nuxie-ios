@@ -71,9 +71,15 @@ final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
         return true
     }
 
+    private var containingView: UIView? {
+        var container = accessibilityContainer
+        while let element = container as? UIAccessibilityElement { container = element.accessibilityContainer }
+        return container as? UIView
+    }
+
     private func perform(_ action: NuxieNativeSemanticAction) -> Bool {
         guard isAccessibilityElement,
-              let container = accessibilityContainer as? UIView,
+              let container = containingView,
               Self.allowsInteraction(in: container),
               let captureID, let node, let submit,
               node.stateFlags & NuxieNativeSemanticNode.disabled == 0,

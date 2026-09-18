@@ -13,6 +13,7 @@ final class ExperienceSemanticAccessibilityContainer {
 
     private weak var view: UIView?
     private var elements: [UInt32: ExperienceSemanticAccessibilityElement] = [:]
+    private let groups = ExperienceAccessibilityGroups()
 
     private let focusedElement: () -> AnyObject?
     private let moveFocus: (AnyObject) -> Void
@@ -105,15 +106,15 @@ final class ExperienceSemanticAccessibilityContainer {
         }
         updateExcludedControls(nativeControls, allowedIDs: Set(scope.nodes.map(\.id)))
         var next: [UInt32: ExperienceSemanticAccessibilityElement] = [:]
-        var ordered: [Any] = []
+        var frames: [UInt32: CGRect] = [:]
         var nextObjects: [UInt32: AnyObject] = [:]
         var nextOrder: [UInt32] = []
         for node in scope.nodes {
             guard let projection = project(node) else { continue }
+            frames[node.id] = projection.frame
             if node.role == NuxieNativeSemanticRole.textField.rawValue {
                 // An editable semantic node is represented exclusively by its real control.
                 if let control = nativeControls[node.id] {
-                    ordered.append(control)
                     nextObjects[node.id] = control
                     nextOrder.append(node.id)
                 }
@@ -124,14 +125,13 @@ final class ExperienceSemanticAccessibilityContainer {
             element.update(captureID: capture.id, node: node,
                 frameInContainer: projection.frame, traits: projection.traits, submit: submit)
             next[node.id] = element
-            ordered.append(element)
             nextObjects[node.id] = element
             nextOrder.append(node.id)
         }
         for (id, element) in elements where next[id] == nil { element.retire() }
         elements = next
         view.isAccessibilityElement = false
-        view.accessibilityElements = ordered
+        view.accessibilityElements = groups.arrange(in: view, nodes: scope.nodes, objects: nextObjects, frames: frames)
         objects = nextObjects
         order = nextOrder
         if let focusedID, objects[focusedID] !== focusedObject {
@@ -221,6 +221,7 @@ final class ExperienceSemanticAccessibilityContainer {
         updateExcludedControls([:], allowedIDs: [])
         for element in elements.values { element.retire() }
         elements.removeAll()
+        groups.clear()
         objects.removeAll()
         order.removeAll()
         view?.accessibilityElements = []
