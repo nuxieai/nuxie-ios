@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "nuxie.experience-planes.v1",
+  "id": "1111111111111111111111111111111111111111111111111111111111111111",
+  "entryCondition": {
+    "type": "app_foregrounded"
+  },
+  "entryStepId": "entry",
+  "steps": [
+    {
+      "kind": "action",
+      "id": "entry",
+      "action": {
+        "type": "navigate",
+        "screenId": "screen"
+      },
+      "outlets": {
+        "next": "complete"
+      }
+    },
+    {
+      "kind": "complete",
+      "id": "complete",
+      "outcome": "complete"
+    }
+  ],
+  "routes": [],
+  "screens": [
+    {
+      "id": "screen",
+      "defaultViewModelName": "Root",
+      "defaultInstanceId": "vmi.root",
+      "responseCaptures": []
+    }
+  ],
+  "reentry": {
+    "type": "every_time"
+  },
+  "entitlementGate": {
+    "enabled": true,
+    "products": []
+  },
+  "facts": {
+    "propertyKeys": [],
+    "segmentIds": [],
+    "experimentIds": []
+  },
+  "inputs": {
+    "eventFields": [],
+    "responseFields": []
+  },
+  "outputs": [],
+  "completionOutputs": {}
+}
