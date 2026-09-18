@@ -217,6 +217,8 @@ targets:
       - path: Examples/Adapters/NuxieProviderCheckoutRoute.swift
       - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
+      - path: fixtures/video
+        type: folder
     dependencies:
       - target: NuxieSDK
       - target: NuxieRuntime
@@ -242,6 +244,35 @@ targets:
       testTargets:
         - NuxieSDKUnitTests
       gatherCoverageData: true
+
+  NuxieVideoDeviceTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/NuxieUnitTests/Experiences/ExperienceVideoPlaybackTests.swift
+      - path: fixtures/video
+        type: folder
+    dependencies:
+      - target: NuxieExperienceRuntimeHostApp
+      - target: NuxieSDK
+      - target: NuxieRuntime
+        link: false
+      - target: NuxieTestSupportiOS
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: Security.framework
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.video-device-tests
+      SWIFT_PACKAGE_NAME: Nuxie
+      TEST_HOST: $(BUILT_PRODUCTS_DIR)/NuxieExperienceRuntimeHost.app/NuxieExperienceRuntimeHost
+      BUNDLE_LOADER: $(TEST_HOST)
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SWIFT_PACKAGE
+      GENERATE_INFOPLIST_FILE: YES
+      SUPPORTS_MACCATALYST: NO
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
 
   NuxieSDKMacUnitTests:
     type: bundle.unit-test
@@ -569,6 +600,16 @@ schemes:
     test:
       targets:
         - NuxieExperienceRuntimeReferenceUITests
+      gatherCoverageData: false
+
+  NuxieVideoDeviceTests:
+    build:
+      targets:
+        NuxieExperienceRuntimeHostApp: all
+        NuxieVideoDeviceTests: all
+    test:
+      targets:
+        - NuxieVideoDeviceTests
       gatherCoverageData: false
 
   NuxieSDKUnitTests:

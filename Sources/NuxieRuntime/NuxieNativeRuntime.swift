@@ -3091,6 +3091,18 @@ extension NuxieNativeRuntime {
         }
     }
 
+    package func videoReadiness(componentID: Int, elapsedSeconds: Double,
+        timeoutSeconds: Double, optional: Bool) async throws -> UInt32 {
+        let state = try requireState()
+        return try await executor.call {
+            var value: UInt32 = 0
+            try requireOK(nux_player_video_readiness(try state.player.require(), componentID,
+                elapsedSeconds, timeoutSeconds, optional ? 1 : 0, &value), operation: "video readiness")
+            guard value <= 3 else { throw NuxieNativeRuntimeError.invalidNativeValue("invalid video readiness") }
+            return value
+        }
+    }
+
     package func videoCommand(componentID: Int, kind: UInt32, value: Double, reason: UInt32 = 0) async throws {
         let state = try requireState()
         try await executor.call {

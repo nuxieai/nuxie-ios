@@ -9,5 +9,9 @@ package enum NuxieEmbeddedRuntimeCompatibility {
     package static let luauBytecodeVersions: Set<Int> = [3, 6]
     package static let sceneFormatMajor = 7
     package static let sceneFormatMinor = 3
+    #if os(iOS) && !targetEnvironment(macCatalyst)
+    package static let capabilities: Set<String> = ["rive", "text-input", "video.playback.v1"]
+    #else
     package static let capabilities: Set<String> = ["rive", "text-input"]
+    #endif
 }

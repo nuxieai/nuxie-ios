@@ -3540,7 +3540,8 @@ actor ExperienceInteractiveScreen {
         return try await operationGate.withLock { [self] in
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
-            let outcome = try await runtime.render(drawable: state, clearColor: clearColor, completion: completion)
+            let ready = try await videoPlayback?.isReadyForPresentation() ?? true
+            let outcome = try await runtime.render(drawable: ready ? state : .timeout, clearColor: clearColor, completion: completion)
             let semantics: NuxieNativeSemanticCapture?
             if capturesSemantics, outcome.disposition == .presented {
                 semantics = try await runtime.captureSemantics(textRuns: textRuns)
