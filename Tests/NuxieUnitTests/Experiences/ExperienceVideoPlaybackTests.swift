@@ -12,6 +12,47 @@ import XCTest
 #endif
 
 final class ExperienceVideoPlaybackTests: XCTestCase {
+    @MainActor
+    func testSharedDecoderBudgetWaitsForDisposalAcrossOwners() throws {
+        let pool = ExperienceVideoDecoderPool(budget: {
+            .init(maxPlayers: 1, managedPlayers: 1, hardwarePlayers: 0,
+                managedPixelsPerSecond: 100, softwarePixelsPerSecond: 0)
+        })
+        let background = UUID(), foreground = UUID()
+        let low: [Int: ExperienceVideoDecoderPool.Request] = [5: .init(pixelsPerSecond: 100, priority: 0, visible: true)]
+        let high: [Int: ExperienceVideoDecoderPool.Request] = [5: .init(pixelsPerSecond: 100, priority: 10, visible: true)]
+        XCTAssertEqual(try pool.update(owner: background, requests: low), [5])
+        // Identical component IDs belong to different screens. A higher priority
+        // request must wait while the previous owner still holds a real decoder.
+        XCTAssertEqual(try pool.update(owner: foreground, requests: high), [])
+        XCTAssertEqual(try pool.update(owner: background, requests: low), [])
+        XCTAssertEqual(try pool.update(owner: foreground, requests: high), [])
+        pool.release(owner: background, componentID: 5)
+        XCTAssertEqual(try pool.update(owner: foreground, requests: high), [5])
+        pool.remove(owner: foreground)
+        XCTAssertEqual(try pool.update(owner: background, requests: low), [5])
+    }
+
+    @MainActor
+    func testSharedDecoderBudgetRetainsRemovedAndResizedClaimsUntilDisposal() throws {
+        let pool = ExperienceVideoDecoderPool(budget: {
+            .init(maxPlayers: 3, managedPlayers: 3, hardwarePlayers: 0,
+                managedPixelsPerSecond: 100, softwarePixelsPerSecond: 0)
+        })
+        let first = UUID(), second = UUID()
+        XCTAssertEqual(try pool.update(owner: first, requests: [1: .init(pixelsPerSecond: 80, priority: 0, visible: true)]), [1])
+        XCTAssertEqual(try pool.update(owner: first, requests: [:]), [])
+        let next: [Int: ExperienceVideoDecoderPool.Request] = [2: .init(pixelsPerSecond: 30, priority: 10, visible: true)]
+        XCTAssertEqual(try pool.update(owner: second, requests: next), [])
+        pool.release(owner: first, componentID: 1)
+        XCTAssertEqual(try pool.update(owner: second, requests: next), [2])
+        let resized: [Int: ExperienceVideoDecoderPool.Request] = [2: .init(pixelsPerSecond: 60, priority: 10, visible: true)]
+        XCTAssertEqual(try pool.update(owner: second, requests: resized), [])
+        pool.release(owner: second, componentID: 2)
+        XCTAssertEqual(try pool.update(owner: second, requests: resized), [2])
+        XCTAssertEqual(try pool.update(owner: first, requests: [1: .init(pixelsPerSecond: 40, priority: 0, visible: true)]), [1])
+    }
+
     func testBoundedVideoDecodeCost() async throws {
         XCTAssertEqual(try ExperienceVideoDecodeCost.pixelsPerSecond(width: 100, height: 10,
             durationUs: 1_000_000, timestamps: [0, 500_000, 550_000]), 20_000)
@@ -222,9 +263,11 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: artboardName, player: .defaultScene,
             pixelWidth: UInt32(width), pixelHeight: UInt32(height), bindDefaultViewModel: sceneName == "list", importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: externalAssets, videoEnabled: true))
         var decoderSlots = UInt32(expectedOccurrences)
-        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
-            decoderBudget: { .init(maxPlayers: decoderSlots, managedPlayers: decoderSlots, hardwarePlayers: 0,
-                managedPixelsPerSecond: 200_000, softwarePixelsPerSecond: 0) })
+        let pool = ExperienceVideoDecoderPool(budget: {
+            .init(maxPlayers: decoderSlots, managedPlayers: decoderSlots, hardwarePlayers: 0,
+                managedPixelsPerSecond: 200_000, softwarePixelsPerSecond: 0)
+        })
+        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, decoderPool: pool)
         defer { host.close(); Task { try? await runtime.close() } }
         if sceneName == "waiting" {
             let initiallyReady = try await host.isReadyForPresentation()
