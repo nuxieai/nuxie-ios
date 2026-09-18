@@ -1157,7 +1157,10 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                         width: CGFloat(node.max_x - node.min_x), height: CGFloat(node.max_y - node.min_y)),
                     label: try copyString(node.label, label: "semantic label"),
                     value: value,
-                    hint: try copyString(node.hint, label: "semantic hint")
+                    hint: try copyString(node.hint, label: "semantic hint"),
+                    collectionID: node.collection_flags & 1 != 0 ? node.collection_id : nil,
+                    itemCount: node.collection_flags & 2 != 0 ? node.item_count : nil,
+                    itemPosition: node.collection_flags & 4 != 0 ? node.item_position : nil
                 ))
             }
             let modalScope: NuxieNativeSemanticModalScope

@@ -351,6 +351,47 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             "Copied geometry survives later mutations, step-result frees and runtime close")
     }
 
+    func testPresentedCollectionCapturePreservesLogicalMetadata() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/accessibility/collections.riv"))
+        let prepared = try await NuxieNativePreparedFile.prepare(bytes: bytes, importMode: .portable)
+        let artboards = try await prepared.artboards()
+        let runtime = try await prepared.openSession(artboardName: XCTUnwrap(artboards.first).name,
+            player: .defaultScene, pixelWidth: 64, pixelHeight: 64)
+        defer { Task { try? await runtime.close() } }
+        try await runtime.enableSemantics()
+        _ = try await runtime.step(elapsedSeconds: 0)
+        let outcome = try await render(runtime)
+        XCTAssertEqual(outcome.disposition, .presented)
+        let capture = try await runtime.captureSemantics()
+        let nodes = capture.tree.nodes
+        XCTAssertEqual(nodes.count, 9)
+        let plans = try XCTUnwrap(nodes.first { $0.label == "Plans" })
+        XCTAssertEqual(plans.itemCount, 10)
+        XCTAssertNil(plans.collectionID)
+        XCTAssertNil(plans.itemPosition)
+        for position: UInt32 in 4...6 {
+            let item = try XCTUnwrap(nodes.first { $0.label == "Plan \(position)" })
+            XCTAssertEqual(item.collectionID, plans.id)
+            XCTAssertEqual(item.itemPosition, position)
+            XCTAssertNil(item.itemCount)
+        }
+        let nested = try XCTUnwrap(nodes.first { $0.label == "Nested" })
+        XCTAssertEqual(nested.itemCount, 1)
+        let nestedItem = try XCTUnwrap(nodes.first { $0.label == "Nested item" })
+        XCTAssertEqual(nestedItem.collectionID, nested.id)
+        XCTAssertEqual(nestedItem.itemPosition, 0)
+        XCTAssertEqual(try XCTUnwrap(nodes.first { $0.label == "Empty" }).itemCount, 0)
+        let unknown = try XCTUnwrap(nodes.first { $0.label == "Unknown" })
+        XCTAssertNil(unknown.itemCount)
+        let item = try XCTUnwrap(nodes.first { $0.label == "Unknown item" })
+        XCTAssertEqual(item.collectionID, unknown.id)
+        XCTAssertNil(item.itemPosition)
+        try await runtime.close()
+        XCTAssertEqual(plans.itemCount, 10, "Copied metadata outlives the native snapshot")
+    }
+
     func testPresentedSemanticCaptureCopiesUnicodeAndRejectsRetiredCaptureActions() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "semantic_text", extension: "riv"), importMode: .portable)
