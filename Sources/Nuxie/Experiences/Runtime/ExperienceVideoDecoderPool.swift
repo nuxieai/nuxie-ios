@@ -6,6 +6,15 @@ import NuxieRuntime
 /// remains reserved until the owner acknowledges disposal with `release`.
 @MainActor
 final class ExperienceVideoDecoderPool {
+    // One process-wide budget includes overlapping screens and Experiences.
+    // These are SDK workload ceilings, not a hardware decoder capacity claim.
+    static let shared = ExperienceVideoDecoderPool(budget: { productionBudget })
+    // Cadence probes round the shortest sample interval upward.
+    static var productionBudget: NuxieNativeVideoDecoderBudget {
+        .init(maxPlayers: 4, managedPlayers: 4, hardwarePlayers: 0,
+            managedPixelsPerSecond: 3840 * 2160 * 61, softwarePixelsPerSecond: 0)
+    }
+
     struct Request {
         let pixelsPerSecond: UInt64
         let priority: UInt32

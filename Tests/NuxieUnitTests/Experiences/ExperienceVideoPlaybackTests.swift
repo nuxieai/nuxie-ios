@@ -28,6 +28,27 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testProductionPoolBoundsOverlappingOwnersAndPixelWork() throws {
+        let pool = ExperienceVideoDecoderPool.shared
+        let owners = (0..<5).map { _ in UUID() }
+        defer { for owner in owners { pool.remove(owner: owner) } }
+        let small: [Int: ExperienceVideoDecoderPool.Request] = [1: .init(
+            pixelsPerSecond: 1920 * 1080 * 31, priority: 0, visible: true)]
+        for owner in owners.prefix(4) {
+            XCTAssertEqual(try pool.update(owner: owner, requests: small), [1])
+        }
+        XCTAssertTrue(try pool.update(owner: owners[4], requests: small).isEmpty)
+        pool.remove(owner: owners[0])
+        XCTAssertEqual(try pool.update(owner: owners[4], requests: small), [1])
+        for owner in owners { pool.remove(owner: owner) }
+        let uhd: [Int: ExperienceVideoDecoderPool.Request] = [1: .init(
+            pixelsPerSecond: 3840 * 2160 * 61, priority: 0, visible: true)]
+        XCTAssertEqual(try pool.update(owner: owners[0], requests: uhd), [1])
+        XCTAssertTrue(try pool.update(owner: owners[1], requests: small).isEmpty,
+            "An available slot cannot exceed aggregate pixel workload")
+    }
+
+    @MainActor
     func testSharedDecoderBudgetWaitsForDisposalAcrossOwners() throws {
         let pool = ExperienceVideoDecoderPool(budget: {
             .init(maxPlayers: 1, managedPlayers: 1, hardwarePlayers: 0,
@@ -471,10 +492,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
 
     @MainActor
     private func verifyPreparedScreenPool(payload: AuthenticatedRuntimePayload, width: Int, height: Int) async throws {
-        let pool = ExperienceVideoDecoderPool(budget: {
-            .init(maxPlayers: 1, managedPlayers: 1, hardwarePlayers: 0,
-                managedPixelsPerSecond: 64 * 32 * 31, softwarePixelsPerSecond: 0)
-        })
+        let pool = ExperienceVideoDecoderPool.shared
         let screen = try await ExperienceInteractiveScreen.open(payload: payload,
             pixelWidth: UInt32(width), pixelHeight: UInt32(height), videoDecoderPool: pool)
         defer { Task { try? await screen.close() } }
@@ -524,7 +542,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         try await awaitPlayback()
         let other = UUID()
         let request: [Int: ExperienceVideoDecoderPool.Request] = [99: .init(
-            pixelsPerSecond: 64 * 32 * 31, priority: UInt32.max, visible: true)]
+            pixelsPerSecond: ExperienceVideoDecoderPool.productionBudget.managedPixelsPerSecond, priority: UInt32.max, visible: true)]
         XCTAssertTrue(try pool.update(owner: other, requests: request).isEmpty,
             "The existing decoder holds its reservation until its owner retires it")
         _ = try await screen.step(elapsedSeconds: 0.03)

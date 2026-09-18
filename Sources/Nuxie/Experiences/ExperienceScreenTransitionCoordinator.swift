@@ -752,6 +752,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             screen: screen,
             reduceMotion: reduceMotionEnabled,
             presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
+            videoDecoderPool: .shared,
             delegate: screenDelegate
         )
         mountingControllersByScreenId[screenId] = controller

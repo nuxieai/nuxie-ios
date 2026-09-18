@@ -1,5 +1,5 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
-/// Host-measured limits; platform-managed decoding does not assert hardware use.
+/// Host-selected workload limits; platform-managed decoding does not assert hardware use.
 package struct NuxieNativeVideoDecoderBudget: Sendable {
     package let maxPlayers: UInt32
     package let managedPlayers: UInt32
