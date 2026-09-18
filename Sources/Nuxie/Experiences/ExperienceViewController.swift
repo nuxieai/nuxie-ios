@@ -447,6 +447,7 @@ class ExperienceViewController: NuxiePlatformViewController {
     private(set) var experienceContentIsHidden = true
     private let recoveryAffordanceDelay: TimeInterval
     private let presentationDiagnosticsEnabled: Bool
+    private let videoDecoderPool: ExperienceVideoDecoderPool?
     private var recoveryAffordanceTask: Task<Void, Never>?
     private var inFlightPurchaseOperationCount = 0
     private var purchaseOperationWaiters:
@@ -482,6 +483,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         loadingTimeoutSeconds: TimeInterval = 15.0,
         recoveryAffordanceDelay: TimeInterval = 5.0,
         presentationDiagnosticsEnabled: Bool = false,
+        videoDecoderPool: ExperienceVideoDecoderPool? = nil,
         transactionService: TransactionService,
         productService: ProductService,
         systemEventSink: SystemEventSink
@@ -491,6 +493,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         self.systemEventSink = systemEventSink
         self.recoveryAffordanceDelay = recoveryAffordanceDelay
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
+        self.videoDecoderPool = videoDecoderPool
         self.screenEmissionDispatcher = ScreenEmissionDispatcher(
             createId: { UUID.v7().uuidString },
             now: { Date().ISO8601Format() },
@@ -1214,6 +1217,7 @@ class ExperienceViewController: NuxiePlatformViewController {
                     artifact: artifact,
                     initialScreenID: self.presentationInitialScreenID,
                     presentationDiagnosticsEnabled: self.presentationDiagnosticsEnabled,
+                    videoDecoderPool: self.videoDecoderPool,
                     hostViewController: self,
                     screenDelegate: self,
                     onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in

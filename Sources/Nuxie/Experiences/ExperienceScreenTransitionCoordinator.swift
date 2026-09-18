@@ -49,6 +49,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private var activePresentedController: ExperienceScreenViewController?
     private var cachedControllersByScreenId: [String: ExperienceScreenViewController] = [:]
     private var mountingControllersByScreenId: [String: ExperienceScreenViewController] = [:]
+    private let videoDecoderPool: ExperienceVideoDecoderPool?
     private var latestSnapshot: ExperienceViewModelSnapshot?
     private var contentHidden = true
     private var terminalScreenIds: Set<String> = []
@@ -82,6 +83,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         artifact: LoadedExperienceArtifact,
         initialScreenID: String? = nil,
         presentationDiagnosticsEnabled: Bool = false,
+        videoDecoderPool: ExperienceVideoDecoderPool? = nil,
         hostViewController: UIViewController,
         screenDelegate: ExperienceScreenViewControllerDelegate,
         onPresentedScreenDismissed: @escaping (
@@ -101,6 +103,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         self.artifact = artifact
         self.initialScreenID = initialScreenID ?? artifact.renderPlan.entry.screenId
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
+        self.videoDecoderPool = videoDecoderPool
         self.hostViewController = hostViewController
         self.screenDelegate = screenDelegate
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
@@ -752,7 +755,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             screen: screen,
             reduceMotion: reduceMotionEnabled,
             presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
-            videoDecoderPool: .shared,
+            videoDecoderPool: videoDecoderPool,
             delegate: screenDelegate
         )
         mountingControllersByScreenId[screenId] = controller

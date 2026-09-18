@@ -46,6 +46,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let productService: ProductService
     private let systemEventSink: SystemEventSink
     private let presentationDiagnosticsEnabled: Bool
+    private let videoDecoderPoolProvider: @MainActor @Sendable () -> ExperienceVideoDecoderPool?
 
     init(
         productService: ProductService,
@@ -58,7 +59,8 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         systemEventSink: SystemEventSink,
         releaseStore: any JourneyReleaseAcquiring,
         presentationDiagnosticsEnabled: Bool = false,
-        testStoreEnabled: Bool = false
+        testStoreEnabled: Bool = false,
+        videoDecoderPoolProvider: @escaping @MainActor @Sendable () -> ExperienceVideoDecoderPool? = { nil }
     ) {
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
@@ -66,6 +68,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         self.systemEventSink = systemEventSink
         self.releaseStore = releaseStore
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
+        self.videoDecoderPoolProvider = videoDecoderPoolProvider
         catalog = JourneyReleaseCatalog(
             productService: productService,
             introEligibilityTokenProvider: introEligibilityTokenProvider,
@@ -150,6 +153,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
             artifactLoader: prepared.artifactLoader,
             eventLog: eventLog,
             presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
+            videoDecoderPool: videoDecoderPoolProvider(),
             transactionService: transactionServiceProvider(),
             productService: productService,
             systemEventSink: systemEventSink

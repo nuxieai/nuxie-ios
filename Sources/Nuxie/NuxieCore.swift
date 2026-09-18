@@ -182,7 +182,8 @@ final class NuxieCore: @unchecked Sendable {
         internalConfiguration.presentationDiagnosticsEnabled
           || (overrides.presentationDiagnosticsEnabled
             ?? (overrides.presentationTrace != nil)),
-      testStoreEnabled: configuration.testStoreEnabled
+      testStoreEnabled: configuration.testStoreEnabled,
+      videoDecoderPoolProvider: { ExperienceVideoDecoderPool.shared }
     )
     let defaultExperiencePresentation = ExperiencePresentationService(
       windowProvider: nil,
