@@ -12,6 +12,21 @@ import XCTest
 #endif
 
 final class ExperienceVideoPlaybackTests: XCTestCase {
+    func testCaptionLanguageSelectionContract() throws {
+        struct Case: Decodable {
+            let name: String
+            let languages: [String?]
+            let preferred: [String]
+            let expected: Int?
+        }
+        struct Contract: Decodable { let cases: [Case] }
+        let data = try Data(contentsOf: videoFixtureDirectory().appendingPathComponent("caption-selection.json"))
+        for example in try JSONDecoder().decode(Contract.self, from: data).cases {
+            XCTAssertEqual(ExperienceVideoCaptionSelection.index(languages: example.languages, preferred: example.preferred),
+                example.expected, example.name)
+        }
+    }
+
     @MainActor
     func testSharedDecoderBudgetWaitsForDisposalAcrossOwners() throws {
         let pool = ExperienceVideoDecoderPool(budget: {
