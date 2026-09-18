@@ -12,6 +12,54 @@ import XCTest
 #endif
 
 final class ExperienceVideoPlaybackTests: XCTestCase {
+    func testNativeVideoDecoderBudgetBridge() throws {
+        let budget = NuxieNativeVideoDecoderBudget(maxPlayers: 2, managedPlayers: 1, hardwarePlayers: 1,
+            managedPixelsPerSecond: 100, softwarePixelsPerSecond: 100)
+        let requests = [
+            NuxieNativeVideoDecoderRequest(id: 9, pixelsPerSecond: 100, priority: 0, visible: true,
+                hardwareSupported: true, softwareSupported: true),
+            NuxieNativeVideoDecoderRequest(id: 4, pixelsPerSecond: 100, priority: 10, visible: true,
+                hardwareSupported: true, softwareSupported: true),
+            NuxieNativeVideoDecoderRequest(id: 3, pixelsPerSecond: 100, priority: 10, visible: true),
+            NuxieNativeVideoDecoderRequest(id: 1, pixelsPerSecond: 1, priority: 99, visible: false,
+                hardwareSupported: true, softwareSupported: true),
+        ]
+        XCTAssertEqual(try NuxieNativeRuntime.allocateVideoDecoders(requests, budget: budget),
+            [.poster, .hardware, .platformManaged, .poster])
+        XCTAssertEqual(try NuxieNativeRuntime.allocateVideoDecoders([], budget: budget), [])
+        XCTAssertThrowsError(try NuxieNativeRuntime.allocateVideoDecoders(requests + [requests[0]], budget: budget))
+    }
+
+    func testNativeVideoReclamationPreservesPausedPosition() async throws {
+        let directory = try videoFixtureDirectory()
+        let scene = try Data(contentsOf: directory.appendingPathComponent("greeting.nux"))
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
+            pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog,
+                externalAssets: [:], videoEnabled: true))
+        defer { Task { try? await runtime.close() } }
+        let videos = try await runtime.videos()
+        let video = try XCTUnwrap(videos.first)
+        _ = try await runtime.videoStep(componentID: video.componentID, observation: 1, generation: video.generation, value: 2.022)
+        try await runtime.videoCommand(componentID: video.componentID, kind: 1, value: 0)
+        try await runtime.videoCommand(componentID: video.componentID, kind: 2, value: 1.0)
+        _ = try await runtime.videoStep(componentID: video.componentID, observation: 0, generation: video.generation)
+        let oldVideos = try await runtime.videos()
+        let oldGeneration = try XCTUnwrap(oldVideos.first).generation
+        let denied = try await runtime.reclaimVideoDecoder(componentID: video.componentID, blocked: true)
+        XCTAssertGreaterThan(denied, oldGeneration)
+        let stale = try await runtime.videoStep(componentID: video.componentID, observation: 1, generation: oldGeneration, value: 2.022)
+        XCTAssertTrue(stale.isEmpty)
+        let reopened = try await runtime.reclaimVideoDecoder(componentID: video.componentID, blocked: false)
+        XCTAssertGreaterThan(reopened, denied)
+        let actions = try await runtime.videoStep(componentID: video.componentID, observation: 1, generation: reopened, value: 2.022)
+        XCTAssertTrue(actions.contains { $0.kind == 2 && $0.value == 1.0 })
+        XCTAssertFalse(actions.contains { $0.kind == 0 })
+        let current = try await runtime.videos()
+        XCTAssertFalse(try XCTUnwrap(current.first).wantsPlay)
+        try await runtime.close()
+    }
+
     func testMobileReleaseAdmissionAdvertisesVideo() {
         #if os(iOS) && !targetEnvironment(macCatalyst)
         XCTAssertTrue(JourneyReleaseRuntime.current.supportedCapabilities.contains("video.playback.v1"))

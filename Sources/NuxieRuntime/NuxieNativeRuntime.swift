@@ -3091,6 +3091,46 @@ extension NuxieNativeRuntime {
         }
     }
 
+    package static func allocateVideoDecoders(_ requests: [NuxieNativeVideoDecoderRequest],
+        budget: NuxieNativeVideoDecoderBudget) throws -> [NuxieNativeVideoAllocation] {
+        guard requests.count <= 65_536 else {
+            throw NuxieNativeRuntimeError.invalidNativeValue("too many decoder requests")
+        }
+        let input = requests.map { request in
+            NuxVideoDecoderRequest(struct_size: UInt32(MemoryLayout<NuxVideoDecoderRequest>.size),
+                id: request.id, pixels_per_second: request.pixelsPerSecond,
+                priority: request.priority, flags: request.flags)
+        }
+        var nativeBudget = NuxVideoDecoderBudget(struct_size: UInt32(MemoryLayout<NuxVideoDecoderBudget>.size),
+            max_players: budget.maxPlayers, managed_players: budget.managedPlayers,
+            hardware_players: budget.hardwarePlayers, managed_pixels_per_second: budget.managedPixelsPerSecond,
+            software_pixels_per_second: budget.softwarePixelsPerSecond)
+        var output = [UInt32](repeating: 0, count: input.count)
+        try input.withUnsafeBufferPointer { source in
+            try output.withUnsafeMutableBufferPointer { destination in
+                try requireOK(nux_video_allocate_decoders(source.baseAddress, source.count, &nativeBudget,
+                    destination.baseAddress), operation: "video allocation")
+            }
+        }
+        return try output.map { value in
+            guard let allocation = NuxieNativeVideoAllocation(rawValue: value) else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("invalid video allocation")
+            }
+            return allocation
+        }
+    }
+
+    /// Close the actual decoder and drain commands before reclaiming its generation.
+    package func reclaimVideoDecoder(componentID: Int, blocked: Bool) async throws -> UInt64 {
+        let state = try requireState()
+        return try await executor.call {
+            var generation: UInt64 = 0
+            try requireOK(nux_player_video_reclaim_decoder(try state.player.require(), componentID,
+                blocked ? 1 : 0, &generation), operation: "video reclamation")
+            return generation
+        }
+    }
+
     package func videoReadiness(componentID: Int, elapsedSeconds: Double,
         timeoutSeconds: Double, optional: Bool) async throws -> UInt32 {
         let state = try requireState()
