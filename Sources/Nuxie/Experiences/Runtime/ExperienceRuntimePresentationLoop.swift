@@ -274,6 +274,7 @@ struct ExperienceRuntimePresentationQueuedWork: Sendable {
 
 enum ExperienceRuntimePresentationSessionOperation: @unchecked Sendable {
     case copyMetalDevice
+    case setMediaVisible(Bool)
     case step(ExperienceRuntimePresentationStep)
     case resize(ExperienceRuntimeSurfaceSize)
     /// The session accepts ownership of `completion` and must consume it on
@@ -386,6 +387,9 @@ extension ExperienceInteractiveScreen {
             case .copyMetalDevice:
                 if onSemantics != nil { try await screen.enableSemantics() }
                 return .metalDevice(try await screen.metalDevice().value)
+            case .setMediaVisible(let visible):
+                try await screen.setMediaVisible(visible)
+                return .none
             case .step(let step):
                 let result = try await screen.step(
                     pointers: step.pointers,
@@ -548,6 +552,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var submittedPresentationContext: (epoch: UInt64, generation: UInt64)?
     private var applicationIsActive = true
     private var owningSceneIsActive = true
+    private var appliedMediaVisibility = true
     private var isPresentationVisible = true
     private var isTimelineActive = true
     private var sessionIsOpen = true
@@ -894,6 +899,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return makeRenderOperation(for: surfaceView)
         }
 
+        // Media must observe visibility even when no display tick or render is
+        // pending. Keep the transition serialized with all other screen work.
+        if appliedMediaVisibility != shouldPresent {
+            return .setMediaVisible(shouldPresent)
+        }
+
         if !shouldAdvance {
             if !pendingWork.isEmpty { return takeNextQueuedOperation() }
             if pendingZeroDeltaFrame {
@@ -969,6 +980,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             try requireHealthy(outcome)
             lastAppliedSize = size
             pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
+        case (.setMediaVisible(let visible), .none):
+            appliedMediaVisibility = visible
         case (.step(let step), .session):
             await result.deliver()
             if !step.pointers.isEmpty {

@@ -6,6 +6,29 @@ import XCTest
 
 final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     @MainActor
+    func testHiddenPresentationSuspendsMediaWithoutAnotherDisplayTick() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let rendered = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(rendered)
+        loop.setPresentationVisible(false)
+        let hidden = await recorder.waitForMediaVisibility(false)
+        XCTAssertTrue(hidden, "Media suspension must not depend on another display tick")
+        loop.setPresentationVisible(true)
+        let visible = await recorder.waitForMediaVisibility(true)
+        XCTAssertTrue(visible)
+        loop.setTimelineActive(false)
+        let suspended = await recorder.waitForMediaVisibility(false)
+        XCTAssertTrue(suspended, "Timeline suspension must also stop media")
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testPresentedSemanticDeliveryWaitsForObservationAndRejectsHiddenEpoch() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
         let firstDelivery = expectation(description: "first presented semantic frame")
@@ -1083,6 +1106,7 @@ private actor PresentationSessionRecorder {
 
     private let device: any MTLDevice
     private let onRenderDelivery: (@MainActor @Sendable () async -> Void)?
+    private var mediaVisibility: Bool?
     private var names: [String] = []
     private var sizes: [ExperienceRuntimeSurfaceSize] = []
     private var recordedSteps: [ExperienceRuntimePresentationStep] = []
@@ -1110,6 +1134,9 @@ private actor PresentationSessionRecorder {
         -> ExperienceRuntimePresentationSessionResult
     {
         switch operation {
+        case .setMediaVisible(let visible):
+            mediaVisibility = visible
+            return .none
         case .copyMetalDevice:
             names.append("metalDevice")
             return .metalDevice(device)
@@ -1197,6 +1224,15 @@ private actor PresentationSessionRecorder {
             $0.signalFromNative()
             completionCount += 1
         }
+    }
+
+    func waitForMediaVisibility(_ visible: Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if mediaVisibility == visible { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return false
     }
 
     func operationNames() -> [String] { names }

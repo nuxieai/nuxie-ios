@@ -3516,6 +3516,12 @@ actor ExperienceInteractiveScreen {
         try await operationGate.withLock { try await runtime.retireSemanticCapture() }
     }
 
+    func setMediaVisible(_ visible: Bool) async throws {
+        try await operationGate.withLock { [self] in
+            try await videoPlayback?.setSuspended(reason: 1, enabled: !visible)
+        }
+    }
+
     func render(
         drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
