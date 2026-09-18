@@ -327,6 +327,7 @@ import UIKit
                 artifactTelemetryContext: .from(experience: experience),
                 eventLog: eventLog,
                 presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
+                videoDecoderPool: .shared,
                 transactionService: transactionService,
                 productService: productService,
                 systemEventSink: systemEvents
