@@ -413,7 +413,9 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             .init(maxPlayers: decoderSlots, managedPlayers: decoderSlots, hardwarePlayers: 0,
                 managedPixelsPerSecond: UInt64(mediaWidth * mediaHeight * (measurement?.cadence ?? 31) * expectedOccurrences), softwarePixelsPerSecond: 0)
         })
-        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, decoderPool: pool,
+        _ = try await runtime.step(elapsedSeconds: 0)
+        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
+            artboardBounds: CGRect(x: 0, y: 0, width: width, height: height), decoderPool: pool,
             preferredCaptionLanguages: frenchCaptions ? ["fr-CA", "en"] : ["en"])
         defer { host.close(); Task { try? await runtime.close() } }
         if sceneName == "waiting" {
@@ -421,6 +423,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             XCTAssertFalse(initiallyReady, "Opening a decoder is not a decoded first frame")
         }
         if forceFirstFrameTimeout {
+            try await host.resizeViewport(pixelWidth: 0, pixelHeight: 0)
+            let hiddenReady = try await host.isReadyForPresentation()
+            XCTAssertTrue(hiddenReady, "An offscreen video must not block presentation")
+            try await Task.sleep(nanoseconds: 2_100_000_000)
+            try await host.resizeViewport(pixelWidth: UInt32(width), pixelHeight: UInt32(height))
+            let restoredReady = try await host.isReadyForPresentation()
+            XCTAssertTrue(restoredReady, "A presented screen stays admitted while the restored video waits")
             // Do not tick the decoder: admission must not accept an opened
             // media item when no frame has reached the runtime by the deadline.
             try await Task.sleep(nanoseconds: 2_100_000_000)
@@ -707,7 +716,9 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 pixelWidth: 320, pixelHeight: 640,
                 importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
             do {
-                let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
+                _ = try await runtime.step(elapsedSeconds: 0)
+                let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
+                    artboardBounds: CGRect(x: 0, y: 0, width: 320, height: 640))
                 XCTAssertFalse(required, "Required unplayable media must reject screen admission")
                 let occurrences = try await runtime.videos()
                 XCTAssertEqual(occurrences.map(\.state), [7], "Optional failure is observable by scene scripts")

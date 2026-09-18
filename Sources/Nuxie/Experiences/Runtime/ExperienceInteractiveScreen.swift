@@ -1874,7 +1874,9 @@ actor ExperienceInteractiveScreen {
         let videoPlayback: ExperienceVideoPlayback?
         do {
             videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(
-                runtime: runtime, payload: payload, decoderPool: videoDecoderPool)
+                runtime: runtime, payload: payload,
+                artboardBounds: CGRect(x: 0, y: 0, width: manifestScreen.width, height: manifestScreen.height),
+                decoderPool: videoDecoderPool)
         } catch {
             try? await runtime.close()
             fontScope.close()
@@ -3493,9 +3495,9 @@ actor ExperienceInteractiveScreen {
         let runtime = runtime
         return try await operationGate.withLock { [self] in
             await discardTextFrame()
-            return Self.renderOutcome(
-                try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
-            )
+            let outcome = try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+            try await videoPlayback?.resizeViewport(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+            return Self.renderOutcome(outcome)
         }
     }
 

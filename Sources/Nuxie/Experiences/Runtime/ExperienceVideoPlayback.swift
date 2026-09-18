@@ -47,26 +47,34 @@ final class ExperienceVideoPlayback {
     }
 
     /// AVFoundation cannot reliably infer MP4 from an extension-free cache key.
-    /// A scoped symlink supplies the format hint on every supported OS without
-    /// copying media or changing cache identity. The existing lease owns bytes.
+    /// A scoped hard link supplies the format hint without copying media or
+    /// changing cache identity. The existing lease owns the cached bytes.
     private final class MediaFile {
         let url: URL
-        private let directory: URL
+        private let directory: URL?
 
         init(source: URL) throws {
-            directory = FileManager.default.temporaryDirectory
+            if source.pathExtension.lowercased() == "mp4" {
+                url = source
+                directory = nil
+                return
+            }
+            let directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("nuxie-video-" + UUID().uuidString, isDirectory: true)
+            self.directory = directory
             url = directory.appendingPathComponent("media.mp4")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             do {
-                try FileManager.default.createSymbolicLink(at: url, withDestinationURL: source)
+                try FileManager.default.linkItem(at: source, to: url)
             } catch {
                 try? FileManager.default.removeItem(at: directory)
                 throw error
             }
         }
 
-        deinit { try? FileManager.default.removeItem(at: directory) }
+        deinit {
+            if let directory { try? FileManager.default.removeItem(at: directory) }
+        }
     }
 
     private struct PreparedMedia {
@@ -90,6 +98,9 @@ final class ExperienceVideoPlayback {
     private var requestedRates: [Int: Double] = [:]
     private var reconciling = false
     private let runtime: NuxieNativeRuntime
+    private let artboardBounds: CGRect
+    private var viewport: CGRect
+    private var visibleOccurrences: Set<Int> = []
     private let lease: JourneyReleaseVideoFileLease?
     private let targets: [NativeExperienceVideoElement]
     private var sources: [UInt32: Source] = [:]
@@ -108,23 +119,25 @@ final class ExperienceVideoPlayback {
     private(set) var deliveredRGBABytes: UInt64 = 0
     var activeDecoderCount: Int { decoders.filter { !$0.disposed }.count }
 
-    private init(runtime: NuxieNativeRuntime, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement],
+    private init(runtime: NuxieNativeRuntime, artboardBounds: CGRect, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement],
         decoderBudget: (() -> NuxieNativeVideoDecoderBudget)?, decoderPool: ExperienceVideoDecoderPool?) {
         self.decoderPool = decoderPool
         self.decoderBudget = decoderBudget
         self.runtime = runtime
+        self.artboardBounds = artboardBounds
+        self.viewport = artboardBounds
         self.lease = lease
         self.targets = targets
     }
 
-    static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload,
+    static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload, artboardBounds: CGRect,
         decoderBudget: (() -> NuxieNativeVideoDecoderBudget)? = nil,
         decoderPool: ExperienceVideoDecoderPool? = nil,
         preferredCaptionLanguages: [String] = ExperienceVideoCaptionSelection.preferredLanguages) async throws -> ExperienceVideoPlayback {
         guard decoderBudget == nil || decoderPool == nil else {
             throw ExperienceInteractiveScreenError.stateContract("video playback requires a single budget owner")
         }
-        let host = ExperienceVideoPlayback(runtime: runtime, lease: payload.videoFileLease,
+        let host = ExperienceVideoPlayback(runtime: runtime, artboardBounds: artboardBounds, lease: payload.videoFileLease,
             targets: payload.renderPlan.videoElements, decoderBudget: decoderBudget, decoderPool: decoderPool)
         do {
             var prepared: [String: PreparedMedia] = [:]
@@ -213,10 +226,8 @@ final class ExperienceVideoPlayback {
         }
         resourceBlocked.formIntersection(live)
         requestedRates = requestedRates.filter { live.contains($0.key) }
-        if decoderBudget != nil || decoderPool != nil {
-            occurrences = try await admit(occurrences, budget: decoderBudget?())
-            guard !closed else { return }
-        }
+        occurrences = try await admit(occurrences, budget: decoderBudget?())
+        guard !closed else { return }
         for decoder in decoders where !live.contains(decoder.componentID) { dispose(decoder) }
         decoders.removeAll { !live.contains($0.componentID) }
         for occurrence in occurrences {
@@ -250,7 +261,7 @@ final class ExperienceVideoPlayback {
         let elapsed = max(0, now - admissionClock)
         admissionClock = now
         guard suspensionReasons.isEmpty else { return }
-        for id in admissions.keys where admissions[id]?.decision == 0 {
+        for id in admissions.keys where admissions[id]?.decision == 0 && visibleOccurrences.contains(id) {
             admissions[id]?.elapsed += elapsed
         }
     }
@@ -264,7 +275,7 @@ final class ExperienceVideoPlayback {
         let live = Set(videos.map(\.componentID))
         admissions = admissions.filter { live.contains($0.key) }
         var waiting = false
-        for video in videos where video.readiness == 1 {
+        for video in videos where video.readiness == 1 && visibleOccurrences.contains(video.componentID) {
             guard let target = targets.first(where: {
                 Int($0.sourceArtboardIndex) == video.sourceArtboardIndex &&
                 Int($0.componentId) == video.sourceComponentID
@@ -377,6 +388,7 @@ final class ExperienceVideoPlayback {
     }
 
     private func admit(_ occurrences: [NuxieNativeVideoOccurrence], budget: NuxieNativeVideoDecoderBudget?) async throws -> [NuxieNativeVideoOccurrence] {
+        advanceAdmissionClock()
         for video in occurrences where video.state != 7 && video.state != 8 {
             let actions = try await runtime.videoStep(componentID: video.componentID, observation: 0, generation: video.generation)
             guard !closed else { return [] }
@@ -387,12 +399,14 @@ final class ExperienceVideoPlayback {
         }
         let current = try await runtime.videos()
         guard !closed else { return [] }
+        visibleOccurrences = try await runtime.visibleVideoIDs(current.map(\.componentID), viewport: viewport)
+        guard !closed else { return [] }
         let demands: [Int: ExperienceVideoDecoderPool.Request] = Dictionary(uniqueKeysWithValues: current.map { video in
             let cost = sources[video.assetID]?.media?.decodeCost ?? 0
             let scaled = ceil(Double(cost) * max(1, requestedRates[video.componentID] ?? 1))
             let pixels = scaled >= Double(UInt64.max) ? UInt64.max : UInt64(scaled)
             return (video.componentID, ExperienceVideoDecoderPool.Request(pixelsPerSecond: pixels,
-                priority: video.priority, visible: suspensionReasons.isEmpty && video.state != 7 && video.state != 8 && cost > 0))
+                priority: video.priority, visible: visibleOccurrences.contains(video.componentID) && suspensionReasons.isEmpty && video.state != 7 && video.state != 8 && cost > 0))
         })
         let choices: [NuxieNativeVideoAllocation]
         if let decoderPool {
@@ -404,7 +418,9 @@ final class ExperienceVideoPlayback {
                 return NuxieNativeVideoDecoderRequest(id: UInt64(video.componentID), pixelsPerSecond: demand.pixelsPerSecond,
                     priority: demand.priority, visible: demand.visible)
             }, budget: budget)
-        } else { return current }
+        } else {
+            choices = current.map { visibleOccurrences.contains($0.componentID) && suspensionReasons.isEmpty ? .platformManaged : .poster }
+        }
         for (index, video) in current.enumerated() where video.state != 7 && video.state != 8 && sources[video.assetID]?.media != nil {
             let blocked = choices[index] == .poster
             guard blocked || choices[index] == .platformManaged else {
@@ -425,6 +441,22 @@ final class ExperienceVideoPlayback {
             resourceBlocked.remove(video.componentID)
         }
         return try await runtime.videos()
+    }
+
+    /// Invert the renderer's centered contain fit, including the letterboxed area.
+    func resizeViewport(pixelWidth: UInt32, pixelHeight: UInt32) async throws {
+        advanceAdmissionClock()
+        if pixelWidth > 0, pixelHeight > 0, artboardBounds.width > 0, artboardBounds.height > 0 {
+            let scale = min(CGFloat(pixelWidth) / artboardBounds.width, CGFloat(pixelHeight) / artboardBounds.height)
+            let width = CGFloat(pixelWidth) / scale
+            let height = CGFloat(pixelHeight) / scale
+            viewport = CGRect(x: artboardBounds.midX - width / 2, y: artboardBounds.midY - height / 2,
+                width: width, height: height)
+        } else {
+            viewport = .zero
+        }
+        let current = try await runtime.videos()
+        visibleOccurrences = try await runtime.visibleVideoIDs(current.map(\.componentID), viewport: viewport)
     }
 
     /// Called after Luau/state-machine stepping and before drawing the scene.

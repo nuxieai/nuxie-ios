@@ -3061,6 +3061,27 @@ private final class NuxieVideoActionCollector {
 }
 
 extension NuxieNativeRuntime {
+    /// Query all requested occurrences on the runtime lane after scene advance.
+    /// The viewport is in root-artboard coordinates, including any letterboxing.
+    package func visibleVideoIDs(_ componentIDs: [Int], viewport: CGRect) async throws -> Set<Int> {
+        let state = try requireState()
+        return try await executor.call {
+            let player = try state.player.require()
+            var visible = Set<Int>()
+            for componentID in componentIDs {
+                var value: UInt32 = 0
+                try requireOK(nux_player_video_is_visible(player, componentID,
+                    Float(viewport.minX), Float(viewport.minY), Float(viewport.maxX), Float(viewport.maxY),
+                    &value), operation: "query video visibility")
+                guard value <= 1 else {
+                    throw NuxieNativeRuntimeError.invalidNativeValue("invalid video visibility")
+                }
+                if value == 1 { visible.insert(componentID) }
+            }
+            return visible
+        }
+    }
+
     package func videos() async throws -> [NuxieNativeVideoOccurrence] {
         let state = try requireState()
         return try await executor.call {
