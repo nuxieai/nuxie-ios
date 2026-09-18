@@ -80,3 +80,16 @@ resources must withdraw that screen's demand and acknowledge decoder release
 without requiring another frame update. On showing the screen again, a newly
 opened decoder restores retained playback position and requested play/pause
 intent. Releasing decoder capacity does not release the acquired file lease.
+
+`captions-4k60.mp4` exercises the production workload ceiling with square-pixel
+3840×2160, 60 fps H.264 Baseline level 5.2. Audio/captions and red/blue phases
+match the small fixture. Reproduce with:
+
+```sh
+ffmpeg -i captions.mp4 -map 0 -vf scale=3840:2160:flags=neighbor,setsar=1,fps=60 \
+  -c:v libx264 -threads 2 -profile:v baseline -level:v 5.2 -pix_fmt yuv420p \
+  -c:a copy -c:s copy captions-4k60.mp4
+```
+
+Passing loop/caption/control checks at this size is distinct from sustaining
+60 delivered frames/second; record the measured delivery rate and host.
