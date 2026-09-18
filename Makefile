@@ -1,4 +1,4 @@
-.PHONY: test-experience-input generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: test-video test-experience-input generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -50,6 +50,7 @@ help:
 	@echo "  test             - Run the full unit + native-runtime + integration + macOS gate (includes hosted input)"
 	@echo "  test-ios         - Alias for the full test gate"
 	@echo "  test-unit        - Run unit tests"
+	@echo "  test-video       - Run hosted video tests (TEST_DESTINATION selects simulator or device)"
 	@echo "  test-storekit    - Run real StoreKitTest native-purchase qualification (Xcode 26.6+)"
 	@echo "  test-native-runtime - Test the Swift-owned runtime and product harness"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
@@ -240,7 +241,7 @@ check-provider-adapters:
 
 # Run tests on iOS simulator
 test-xcode: test-product-neutrality check-staged-runtime-xcframework generate
-	@echo "Running tests on iOS Simulator..."
+	@echo "Running tests on $(TEST_DESTINATION)..."
 	@xcodebuild test \
 		-project "$(XCODEPROJ)" \
 		-scheme "$(SCHEME)" \
@@ -249,6 +250,10 @@ test-xcode: test-product-neutrality check-staged-runtime-xcframework generate
 		-destination '$(TEST_DESTINATION)' \
 		$(XCODEBUILD_TEST_FLAGS)
 	@$(MAKE) verify-customer-framework
+
+# Hosted video qualification supports both simulators and physical devices.
+test-video: SCHEME = NuxieVideoDeviceTests
+test-video: test-xcode
 
 # UIKit target-action delivery requires an application host.
 test-experience-input: SCHEME = NuxieExperienceInputTests

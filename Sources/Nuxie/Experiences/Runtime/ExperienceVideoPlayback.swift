@@ -65,6 +65,13 @@ final class ExperienceVideoPlayback {
     private var decoders: [Decoder] = []
     private var observers: [NSObjectProtocol] = []
     private var suspensionReasons: Set<UInt32> = []
+    private struct Admission {
+        var elapsed: Double = 0
+        var decision: UInt32 = 0
+    }
+    private var admissions: [Int: Admission] = [:]
+    private var admissionClock = CACurrentMediaTime()
+    private var presentationAdmitted = false
     private var closed = false
 
     private init(runtime: NuxieNativeRuntime, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement]) {
@@ -178,6 +185,56 @@ final class ExperienceVideoPlayback {
                 try await runtime.videoCommand(componentID: occurrence.componentID, kind: 6, value: suspensionReasons.contains(reason) ? 1 : 0, reason: reason)
             }
         }
+    }
+
+    private func advanceAdmissionClock() {
+        let now = CACurrentMediaTime()
+        let elapsed = max(0, now - admissionClock)
+        admissionClock = now
+        guard suspensionReasons.isEmpty else { return }
+        for id in admissions.keys where admissions[id]?.decision == 0 {
+            admissions[id]?.elapsed += elapsed
+        }
+    }
+
+    /// Scene advancement and decoder ticking precede this initial-presentation gate.
+    func isReadyForPresentation() async throws -> Bool {
+        guard !closed else { return false }
+        advanceAdmissionClock()
+        let videos = try await runtime.videos()
+        guard !closed else { return false }
+        let live = Set(videos.map(\.componentID))
+        admissions = admissions.filter { live.contains($0.key) }
+        var waiting = false
+        for video in videos where video.readiness == 1 {
+            guard let target = targets.first(where: {
+                Int($0.sourceArtboardIndex) == video.sourceArtboardIndex &&
+                Int($0.componentId) == video.sourceComponentID
+            }) else { throw ExperienceInteractiveScreenError.assetContract("video readiness target unavailable") }
+            var admission = admissions[video.componentID] ?? Admission()
+            if admission.decision == 0 {
+                admission.decision = try await runtime.videoReadiness(componentID: video.componentID,
+                    elapsedSeconds: admission.elapsed, timeoutSeconds: target.readinessTimeoutSeconds,
+                    optional: target.optional)
+                guard !closed else { return false }
+                admissions[video.componentID] = admission
+                if admission.decision == 2 {
+                    // Retire the actual decoder before clearing its scene frame;
+                    // asynchronous seek callbacks cannot resurrect this owner.
+                    if let decoder = decoders.first(where: { $0.componentID == video.componentID }) { dispose(decoder) }
+                    try await runtime.videoCommand(componentID: video.componentID, kind: 8, value: 0)
+                    _ = try await runtime.videoStep(componentID: video.componentID, observation: 0, generation: video.generation)
+                }
+            }
+            if admission.decision == 3 {
+                throw ExperienceInteractiveScreenError.assetContract("required video first frame unavailable")
+            }
+            waiting = waiting || admission.decision == 0
+        }
+        // Later list rows keep their own deadline without hiding an already
+        // presented screen while those new decoders acquire a first frame.
+        if !waiting { presentationAdmitted = true }
+        return presentationAdmitted
     }
 
     func captions() async throws -> [ExperienceInteractiveVideoCaption] {
@@ -346,6 +403,7 @@ final class ExperienceVideoPlayback {
 
     func setSuspended(reason: UInt32, enabled: Bool) async throws {
         guard !closed else { return }
+        advanceAdmissionClock()
         let changed = enabled ? suspensionReasons.insert(reason).inserted : suspensionReasons.remove(reason) != nil
         guard changed else { return }
         if enabled { for decoder in decoders { decoder.player.pause() } }
@@ -370,6 +428,7 @@ final class ExperienceVideoPlayback {
         for decoder in decoders { dispose(decoder) }
         decoders.removeAll()
         sources.removeAll()
+        admissions.removeAll()
     }
 }
 
