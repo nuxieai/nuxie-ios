@@ -64,3 +64,13 @@ Regenerate with:
 ffmpeg -i captions.mp4 -map 0 -vf setsar=2 -c:v libx264 -profile:v baseline \
   -pix_fmt yuv420p -c:a copy -c:s copy captions-anamorphic.mp4
 ```
+
+### Shared decoder handoff
+
+The greeting fixture also exercises resource suspension through the mounted
+screen. When a higher-priority owner claims the shared decoder budget, the
+screen must close its decoder before capacity is reusable and withdraw its
+caption text. A resource-blocked video must not leave a frozen caption over its
+poster. Releasing the competing claim preserves requested play intent: the same
+mounted screen reacquires a decoder and resumes alternating red/blue frames and
+caption text. This is distinct from the repeated paused-seek stress case.
