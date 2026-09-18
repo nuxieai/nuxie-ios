@@ -92,7 +92,8 @@ final class ExperienceVideoPlayback {
 
     static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload,
         decoderBudget: (() -> NuxieNativeVideoDecoderBudget)? = nil,
-        decoderPool: ExperienceVideoDecoderPool? = nil) async throws -> ExperienceVideoPlayback {
+        decoderPool: ExperienceVideoDecoderPool? = nil,
+        preferredCaptionLanguages: [String] = ExperienceVideoCaptionSelection.preferredLanguages) async throws -> ExperienceVideoPlayback {
         guard decoderBudget == nil || decoderPool == nil else {
             throw ExperienceInteractiveScreenError.stateContract("video playback requires a single budget owner")
         }
@@ -100,7 +101,6 @@ final class ExperienceVideoPlayback {
             targets: payload.renderPlan.videoElements, decoderBudget: decoderBudget, decoderPool: decoderPool)
         do {
             var prepared: [String: PreparedMedia] = [:]
-            let preferredCaptionLanguages = ExperienceVideoCaptionSelection.preferredLanguages
             for declaration in payload.renderPlan.videos {
                 guard let assetID = UInt32(exactly: declaration.riveAssetId),
                       let retained = payload.assets.first(where: { $0.kind == .video && $0.riveAssetID == assetID }) else {

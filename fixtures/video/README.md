@@ -29,3 +29,14 @@ ffmpeg -i greeting.mp4 -i captions.srt -map 0:v -map 0:a -map 1:0 \
 Caption tests check track admission and cue timing from these MP4 bytes, and
 runtime projection across forward/backward seeks, cue end boundaries, clearing,
 and atomic rejection of an invalid replacement.
+
+`multilingual.mp4` retains English at stream 2 and adds French at stream 3.
+The playback test requests `fr-CA`, verifies French cues through native playback,
+and exercises two video loops, resource retirement, pause, and lifecycle resume.
+Regenerate from this directory:
+
+```sh
+ffmpeg -i greeting.mp4 -i captions.srt -i captions-fr.srt \
+  -map 0:v -map 0:a -map 1:0 -map 2:0 -c:v copy -c:a copy -c:s mov_text \
+  -metadata:s:s:0 language=eng -metadata:s:s:1 language=fra multilingual.mp4
+```
