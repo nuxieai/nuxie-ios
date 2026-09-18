@@ -14,11 +14,21 @@ import XCTest
 final class ExperienceVideoPlaybackTests: XCTestCase {
     #if canImport(UIKit)
     @MainActor
-    private func showVideoLayer(_ layer: CAMetalLayer, width: Int, height: Int)
+    private func showVideoLayer(_ layer: CAMetalLayer, width: Int, height: Int) async throws
         -> (caption: UILabel, status: UILabel)? {
-        // The unit-test scheme is unhosted; the device scheme supplies this window.
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).flatMap(\.windows).first(where: { $0.isKeyWindow }) else { return nil }
+        // Unhosted unit tests intentionally use an offscreen surface. Device
+        // qualification must visibly present the very drawable being asserted.
+        guard Bundle(for: Self.self).bundleIdentifier == "com.nuxie.sdk.video-device-tests" else { return nil }
+        func visibleWindow() -> UIWindow? {
+            UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene }).flatMap(\.windows)
+                .first(where: { $0.isKeyWindow && !$0.isHidden && !$0.bounds.isEmpty })
+        }
+        let deadline = Date().addingTimeInterval(3)
+        while visibleWindow() == nil && Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let window = try XCTUnwrap(visibleWindow(), "Device video qualification requires a visible app window")
         // Use the common window parent; SwiftUI owns its hosting view's children.
         let root = window
         root.viewWithTag(904_321)?.removeFromSuperview()
@@ -429,7 +439,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         layer.framebufferOnly = false
         layer.drawableSize = CGSize(width: width, height: height)
         #if canImport(UIKit)
-        let display = showVideoLayer(layer, width: width, height: height)
+        let display = try await showVideoLayer(layer, width: width, height: height)
         let idleTimerWasDisabled = UIApplication.shared.isIdleTimerDisabled
         UIApplication.shared.isIdleTimerDisabled = true
         defer {
@@ -587,7 +597,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         layer.framebufferOnly = false
         layer.drawableSize = CGSize(width: width, height: height)
         #if canImport(UIKit)
-        let display = showVideoLayer(layer, width: width, height: height)
+        let display = try await showVideoLayer(layer, width: width, height: height)
         let idleTimerWasDisabled = UIApplication.shared.isIdleTimerDisabled
         UIApplication.shared.isIdleTimerDisabled = true
         defer {
