@@ -221,6 +221,12 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testPreferredFrenchTrackFollowsActualVideoPlayback() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, frenchCaptions: true)
+    }
+
+    @MainActor
     func testPublishedVideoWaitsForDecodedFirstFrame() async throws {
         try await verifyPublishedVideo(sceneName: "waiting", artboardName: "Video Frame",
             viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80)
@@ -242,10 +248,10 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false) async throws {
         let directory = try videoFixtureDirectory()
         let scene = try Data(contentsOf: directory.appendingPathComponent("\(sceneName).nux"))
-        let url = directory.appendingPathComponent("captions.mp4")
+        let url = directory.appendingPathComponent(frenchCaptions ? "multilingual.mp4" : "captions.mp4")
         let media = try Data(contentsOf: url)
         let digest = SHA256Provider.hexDigest(media)
         let key = "assets/sha256/\(digest).mp4"
@@ -253,9 +259,11 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let authored = try XCTUnwrap(catalog.first { $0.kind == .video })
         let id = try XCTUnwrap(authored.authoredID)
         let name = "\(authored.name)-\(id)"
+        var tracks: [NativeExperienceVideoAsset.CaptionTrack] = [.init(streamIndex: 2, codec: "mov_text", language: "eng", title: nil)]
+        if frenchCaptions { tracks.append(.init(streamIndex: 3, codec: "mov_text", language: "fra", title: nil)) }
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
             riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: media.count,
-            width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: [.init(streamIndex: 2, codec: "mov_text", language: "eng", title: nil)], required: true)
+            width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
         struct ExportedScreen: Decodable { let width: Int; let height: Int }
         struct ExportedTargets: Decodable {
             let videoElements: [NativeExperienceVideoElement]
@@ -282,7 +290,8 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             .init(maxPlayers: decoderSlots, managedPlayers: decoderSlots, hardwarePlayers: 0,
                 managedPixelsPerSecond: 200_000, softwarePixelsPerSecond: 0)
         })
-        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, decoderPool: pool)
+        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, decoderPool: pool,
+            preferredCaptionLanguages: frenchCaptions ? ["fr-CA", "en"] : ["en"])
         defer { host.close(); Task { try? await runtime.close() } }
         if sceneName == "waiting" {
             let initiallyReady = try await host.isReadyForPresentation()
@@ -348,7 +357,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             if (phase % 2 == 0 && red) || (phase % 2 == 1 && blue) { phase += 1 }
             try await Task.sleep(nanoseconds: 30_000_000)
         }
-        XCTAssertEqual(seenCaptions, ["Hello 👋", "Welcome"], "Authenticated file captions must follow native playback")
+        XCTAssertEqual(seenCaptions, frenchCaptions ? ["Bonjour 👋", "Bienvenue"] : ["Hello 👋", "Welcome"], "Authenticated file captions must follow native playback")
         XCTAssertTrue(sawRed, "Decoded red frame must reach the composed Metal scene")
         XCTAssertTrue(sawBlue, "Playback must advance to the decoded blue frame")
         XCTAssertEqual(phase, 4, "Two red/blue cycles must render across a runtime-owned loop seek: \(host.playbackDiagnostics)")
