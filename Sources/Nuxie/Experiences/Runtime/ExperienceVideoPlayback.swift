@@ -46,7 +46,31 @@ final class ExperienceVideoPlayback {
         }
     }
 
+    /// AVFoundation cannot reliably infer MP4 from an extension-free cache key.
+    /// A scoped symlink supplies the format hint on every supported OS without
+    /// copying media or changing cache identity. The existing lease owns bytes.
+    private final class MediaFile {
+        let url: URL
+        private let directory: URL
+
+        init(source: URL) throws {
+            directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("nuxie-video-" + UUID().uuidString, isDirectory: true)
+            url = directory.appendingPathComponent("media.mp4")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            do {
+                try FileManager.default.createSymbolicLink(at: url, withDestinationURL: source)
+            } catch {
+                try? FileManager.default.removeItem(at: directory)
+                throw error
+            }
+        }
+
+        deinit { try? FileManager.default.removeItem(at: directory) }
+    }
+
     private struct PreparedMedia {
+        let file: MediaFile
         let asset: AVURLAsset
         let duration: Double
         let decodeCost: UInt64
@@ -123,7 +147,8 @@ final class ExperienceVideoPlayback {
                     media = cached
                 } else {
                     do {
-                        let asset = AVURLAsset(url: url)
+                        let file = try MediaFile(source: url)
+                        let asset = AVURLAsset(url: file.url)
                         let playable = try await asset.load(.isPlayable)
                         let duration = try await asset.load(.duration).seconds
                         guard playable, duration.isFinite, duration > 0 else {
@@ -131,10 +156,10 @@ final class ExperienceVideoPlayback {
                         }
                         let cues: [NuxieNativeVideoCaptionCue]
                         if let track = captionTrack {
-                            cues = try await ExperienceVideoCaptions.read(url: url, track: track)
+                            cues = try await ExperienceVideoCaptions.read(url: file.url, track: track)
                         } else { cues = [] }
-                        let decodeCost = decoderBudget == nil && decoderPool == nil ? 0 : try await ExperienceVideoDecodeCost.read(url: url)
-                        media = PreparedMedia(asset: asset, duration: duration, decodeCost: decodeCost,
+                        let decodeCost = decoderBudget == nil && decoderPool == nil ? 0 : try await ExperienceVideoDecodeCost.read(url: file.url)
+                        media = PreparedMedia(file: file, asset: asset, duration: duration, decodeCost: decodeCost,
                             captionLanguage: captionTrack?.language ?? "", captions: cues)
                         prepared[key] = media
                     } catch {

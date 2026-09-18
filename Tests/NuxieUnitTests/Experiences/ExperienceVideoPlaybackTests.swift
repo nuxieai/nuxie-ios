@@ -337,17 +337,32 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testContentAddressedVideoFilePlaysWithCaptionsAndPool() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80,
+            preparedPool: true, contentAddressed: true)
+    }
+
+    @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false) async throws {
         let preparationStarted = CACurrentMediaTime()
         let mediaWidth = measurement?.width ?? 64
         let mediaHeight = measurement?.height ?? 32
         let directory = try videoFixtureDirectory()
         let scene = try Data(contentsOf: directory.appendingPathComponent("\(sceneName).nux"))
-        let url = directory.appendingPathComponent(measurement?.file ?? (frenchCaptions ? "multilingual.mp4" : "captions.mp4"))
+        var url = directory.appendingPathComponent(measurement?.file ?? (frenchCaptions ? "multilingual.mp4" : "captions.mp4"))
         let media = try Data(contentsOf: url)
         let digest = SHA256Provider.hexDigest(media)
+        let cacheDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { if contentAddressed { try? FileManager.default.removeItem(at: cacheDirectory) } }
+        if contentAddressed {
+            try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+            url = cacheDirectory.appendingPathComponent(digest)
+            try media.write(to: url)
+        }
+
         let key = "assets/sha256/\(digest).mp4"
         let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
         let authored = try XCTUnwrap(catalog.first { $0.kind == .video })
