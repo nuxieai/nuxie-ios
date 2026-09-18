@@ -459,6 +459,7 @@ targets:
         includes:
           - Experiences/ExperienceTextInputSemanticsTests.swift
           - Experiences/ExperienceTextInputTypographyTests.swift
+          - Experiences/UIKitAccessibilityContainerContractTests.swift
           - Experiences/SignedSemanticJourneyTests.swift
           - Fixtures/semantic_text.riv
       - path: fixtures/journeys/rendered-semantic-screen-control
