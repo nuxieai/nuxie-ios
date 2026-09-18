@@ -1036,7 +1036,7 @@ enum JourneyReleaseSchemaPrimitives {
                     "riveTextRunName", "value", "editable", "geometry", "style",
                     "secureTextEntry", "multiline",
                 ],
-                optional: ["responseFieldKey", "placeholder", "keyboardType", "maxLength"],
+                optional: ["responseFieldKey", "responseCapture", "placeholder", "keyboardType", "maxLength"],
                 path: "render.textInputs[\(index)]"
             )
             for field in ["id", "screenId", "artboardId", "viewNodeId", "renderedNodeId", "riveTextObjectKey", "riveTextRunObjectKey"] { try identifier(input[field], path: "render.textInputs[\(index)].\(field)") }
@@ -1045,6 +1045,13 @@ enum JourneyReleaseSchemaPrimitives {
             try boundedString(input["riveTextRunName"], minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].riveTextRunName")
             try boundedString(input["value"], minimum: 0, maximumUTF16: 1_000_000, path: "render.textInputs[\(index)].value")
             if let value = input["responseFieldKey"] { try identifier(value, path: "render.textInputs[\(index)].responseFieldKey") }
+            if let capture = input["responseCapture"] {
+                guard let mode = capture as? String, ["text", "binding"].contains(mode),
+                      input["responseFieldKey"] != nil,
+                      mode != "binding" || (input["secureTextEntry"] as? Bool) == false else {
+                    try invalid("render.textInputs[\(index)].responseCapture")
+                }
+            }
             if let value = input["placeholder"] { try boundedString(value, minimum: 0, maximumUTF16: 1_024, path: "render.textInputs[\(index)].placeholder") }
             for field in ["editable", "secureTextEntry", "multiline"] where !isJSONBoolean(input[field]) { try invalid("render.textInputs[\(index)].\(field)") }
             if let value = input["keyboardType"] { try boundedString(value, minimum: 1, maximumUTF16: 64, path: "render.textInputs[\(index)].keyboardType") }

@@ -147,6 +147,29 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    func testTextInputResponseCaptureAdmission() throws {
+        let fixture = try golden(entryKey: "renderedEntry", file: "text-input-navigation.json")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        let source = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        for (mode, secure, hasField, accepted) in [
+            ("text", false, true, true), ("text", true, true, true),
+            ("binding", false, true, true), ("binding", true, true, false),
+            ("binding", false, false, false), ("unknown", false, true, false),
+        ] {
+            var root = source
+            var render = try XCTUnwrap(root["render"] as? [String: Any])
+            var inputs = try XCTUnwrap(render["textInputs"] as? [[String: Any]])
+            XCTAssertFalse(inputs.isEmpty)
+            inputs[0]["responseCapture"] = mode
+            inputs[0]["secureTextEntry"] = secure
+            inputs[0]["responseFieldKey"] = hasField ? "name" : nil
+            render["textInputs"] = inputs
+            root["render"] = render
+            if accepted { XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), mode) }
+            else { XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), mode) }
+        }
+    }
+
     func testRejectsHostDismissalThatImmediatelyPresentsAgain() throws {
         let fixture = try golden(entryKey: "renderedEntry")
         let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))

@@ -657,12 +657,48 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
-    static func responseSetDraft(
+    nonisolated static func responseSetDraft(
         for input: NativeExperienceTextInput,
-        text: String
-    ) -> ScreenEmissionDraft? {
+        text: String,
+        snapshot: ExperienceInteractiveViewModelSnapshot? = nil
+    ) throws -> ScreenEmissionDraft? {
         guard let fieldKey = input.responseFieldKey, !fieldKey.isEmpty else { return nil }
-        return .responseSet(field: fieldKey, value: .string(text))
+        guard input.responseCapture == .binding else {
+            return .responseSet(field: fieldKey, value: .string(text))
+        }
+        guard input.secureTextEntry != true, let snapshot else {
+            throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' requires a non-secure evaluated response binding")
+        }
+        var owner = snapshot.rootInstanceID
+        let path = ["response", "values", fieldKey]
+        for (index, segment) in path.enumerated() {
+            let matches = snapshot.values.filter { $0.ownerInstanceID == owner && $0.name == segment }
+            guard matches.count == 1 else {
+                throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding is missing or ambiguous")
+            }
+            let value = matches[0].value
+            if index < path.count - 1 {
+                guard case .referencedInstance(let child) = value else {
+                    throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding has invalid topology")
+                }
+                owner = child
+                continue
+            }
+            let captured: ScreenEmissionValue
+            switch value {
+            case .number(let number) where number.isFinite: captured = .number(Double(number))
+            case .bool(let boolean): captured = .bool(boolean)
+            case .bytes(let bytes):
+                guard let string = String(data: bytes, encoding: .utf8) else {
+                    throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding is not UTF-8")
+                }
+                captured = .string(string)
+            default:
+                throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding is not a supported scalar")
+            }
+            return .responseSet(field: fieldKey, value: captured)
+        }
+        return nil
     }
 
     func applyVideoCommand(_ action: JourneyVideoAction) async -> Bool {
@@ -752,12 +788,32 @@ final class ExperienceScreenViewController: UIViewController {
     private func configureTextInputCallbacks() {
         textInputOverlayBridge.onAcceptedTextChange = { [weak self] input, text in
             guard let self,
+                  let interactiveScreen = self.interactiveScreen,
                   let loop = self.presentationLoop else { return }
             let originatingRun = self.delegate?.screenEmissionRun(for: self)
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
-                return .work(requestsFrame: false) { [weak self] in
-                    guard let self, self.semanticInputIsEligible else { return }
-                    guard let draft = Self.responseSetDraft(for: input, text: text) else { return }
+                // Accepted text reaches the native target before this queued work.
+                // Settle its reverse binding before reading the authoritative source.
+                let step = input.responseCapture == .binding
+                    ? try await interactiveScreen.step(elapsedSeconds: 0) : nil
+                let draftResult: Result<ScreenEmissionDraft?, Error>
+                do {
+                    let snapshot = input.responseCapture == .binding
+                        ? try await interactiveScreen.snapshot() : nil
+                    draftResult = .success(try Self.responseSetDraft(for: input, text: text, snapshot: snapshot))
+                } catch {
+                    draftResult = .failure(error)
+                }
+                return .work(requestsFrame: step != nil) { [weak self] in
+                    guard let self else { return }
+                    if let step { await self.deliverStep(effects: step.effects) }
+                    guard self.semanticInputIsEligible else { return }
+                    let draft: ScreenEmissionDraft?
+                    switch draftResult {
+                    case .success(let value): draft = value
+                    case .failure(let error): self.handleTerminalFailure(error); return
+                    }
+                    guard let draft else { return }
                     await self.delegate?.experienceScreenViewController(
                         self,
                         didEmitScreenEmission: .effects(
@@ -773,7 +829,13 @@ final class ExperienceScreenViewController: UIViewController {
                     )
                 }
             }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { [weak self] result in
-                if case .failure(let error) = result { self?.logRejectedState(error) }
+                if case .failure(let error) = result {
+                    if input.responseCapture == .binding, !(error is CancellationError) {
+                        self?.handleTerminalFailure(error)
+                    } else {
+                        self?.logRejectedState(error)
+                    }
+                }
             })
         }
         textInputOverlayBridge.onEditingEvent = { [weak self] input, event in

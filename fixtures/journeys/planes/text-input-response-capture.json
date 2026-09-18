@@ -1,0 +1,11 @@
+{
+  "cases": [
+    { "name": "legacy text", "text": "50", "secure": false, "source": 0.5, "expected": "50" },
+    { "name": "secure text", "text": "secret", "secure": true, "source": "", "expected": "secret" },
+    { "name": "converted number", "mode": "binding", "text": "50", "secure": false, "source": 0.5, "expected": 0.5 },
+    { "name": "normalized string", "mode": "binding", "text": "  name  ", "secure": false, "source": "name", "expected": "name" },
+    { "name": "false remains boolean", "mode": "binding", "text": "No", "secure": false, "source": false, "expected": false },
+    { "name": "missing source", "mode": "binding", "text": "50", "secure": false, "rejected": true },
+    { "name": "secure source is not rendered text", "mode": "binding", "text": "secret", "secure": true, "source": "", "rejected": true }
+  ]
+}

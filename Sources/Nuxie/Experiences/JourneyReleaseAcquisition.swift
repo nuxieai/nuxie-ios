@@ -307,6 +307,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let multiline: Bool?
         let maxLength: Int?
         let responseFieldKey: String?
+        let responseCapture: NativeExperienceTextInput.ResponseCapture?
         var actionEvent: ExperienceTextInputEventKind? = nil
         var declarativeActionId: String? = nil
     }
@@ -1683,6 +1684,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     multiline: $0.multiline,
                     maxLength: $0.maxLength,
                     responseFieldKey: $0.responseFieldKey,
+                    responseCapture: $0.responseCapture,
                     actionEvent: $0.actionEvent,
                     declarativeActionId: $0.declarativeActionId
                 )
