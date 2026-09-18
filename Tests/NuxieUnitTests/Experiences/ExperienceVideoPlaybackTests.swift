@@ -227,6 +227,14 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func test720pVideoDeliveryMeasurements() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, measure720p: true)
+        try await verifyPublishedVideo(sceneName: "list", artboardName: "Screen",
+            viewNodeID: "item-card", expectedOccurrences: 2, sampleX: 20, sampleY: 30, measure720p: true)
+    }
+
+    @MainActor
     func testPublishedVideoWaitsForDecodedFirstFrame() async throws {
         try await verifyPublishedVideo(sceneName: "waiting", artboardName: "Video Frame",
             viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80)
@@ -248,10 +256,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measure720p: Bool = false) async throws {
+        let preparationStarted = CACurrentMediaTime()
+        let mediaWidth = measure720p ? 1280 : 64
+        let mediaHeight = measure720p ? 720 : 32
         let directory = try videoFixtureDirectory()
         let scene = try Data(contentsOf: directory.appendingPathComponent("\(sceneName).nux"))
-        let url = directory.appendingPathComponent(frenchCaptions ? "multilingual.mp4" : "captions.mp4")
+        let url = directory.appendingPathComponent(measure720p ? "captions-720p.mp4" : frenchCaptions ? "multilingual.mp4" : "captions.mp4")
         let media = try Data(contentsOf: url)
         let digest = SHA256Provider.hexDigest(media)
         let key = "assets/sha256/\(digest).mp4"
@@ -263,7 +274,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         if frenchCaptions { tracks.append(.init(streamIndex: 3, codec: "mov_text", language: "fra", title: nil)) }
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
             riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: media.count,
-            width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
+            width: mediaWidth, height: mediaHeight, durationMs: 2022, videoCodec: measure720p ? "avc1.42c01f" : "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
         struct ExportedScreen: Decodable { let width: Int; let height: Int }
         struct ExportedTargets: Decodable {
             let videoElements: [NativeExperienceVideoElement]
@@ -288,7 +299,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         var decoderSlots = UInt32(expectedOccurrences)
         let pool = ExperienceVideoDecoderPool(budget: {
             .init(maxPlayers: decoderSlots, managedPlayers: decoderSlots, hardwarePlayers: 0,
-                managedPixelsPerSecond: 200_000, softwarePixelsPerSecond: 0)
+                managedPixelsPerSecond: UInt64(mediaWidth * mediaHeight * 31 * expectedOccurrences), softwarePixelsPerSecond: 0)
         })
         let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, decoderPool: pool,
             preferredCaptionLanguages: frenchCaptions ? ["fr-CA", "en"] : ["en"])
@@ -333,10 +344,18 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         }
         let videoComponent = try XCTUnwrap(videoOccurrences.first).componentID
         var phase = 0
+        let measuringStarted = CACurrentMediaTime()
+        let framesAtStart = host.deliveredFrames
+        var firstDelivered: Double?
+        var tickMilliseconds: [Double] = []
         let deadline = Date().addingTimeInterval(12)
         while Date() < deadline && phase < 4 {
+            let cycleStarted = CACurrentMediaTime()
             _ = try await runtime.step(elapsedSeconds: 0.03)
+            let tickStarted = CACurrentMediaTime()
             _ = try await host.tick()
+            tickMilliseconds.append((CACurrentMediaTime() - tickStarted) * 1000)
+            if firstDelivered == nil && host.deliveredFrames > 0 { firstDelivered = CACurrentMediaTime() }
             guard try await host.isReadyForPresentation() else {
                 try await Task.sleep(nanoseconds: 30_000_000)
                 continue
@@ -355,7 +374,31 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             sawRed = sawRed || red
             sawBlue = sawBlue || blue
             if (phase % 2 == 0 && red) || (phase % 2 == 1 && blue) { phase += 1 }
-            try await Task.sleep(nanoseconds: 30_000_000)
+            let delay = measure720p ? max(0, 1.0 / 60.0 - (CACurrentMediaTime() - cycleStarted)) : 0.03
+            if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+        }
+        if measure720p {
+            let elapsed = CACurrentMediaTime() - measuringStarted
+            let ordered = tickMilliseconds.sorted()
+            let metrics: [String: Any] = [
+                "width": mediaWidth, "height": mediaHeight, "players": expectedOccurrences,
+                "elapsedSeconds": elapsed, "deliveredFrames": host.deliveredFrames - framesAtStart,
+                "aggregateDeliveredFps": Double(host.deliveredFrames - framesAtStart) / elapsed,
+                "firstFrameFromPreparationMs": ((firstDelivered ?? CACurrentMediaTime()) - preparationStarted) * 1000,
+                "tickP95Ms": ordered.isEmpty ? 0 : ordered[min(ordered.count - 1, Int(Double(ordered.count) * 0.95))],
+                "deliveredRGBABytes": host.deliveredRGBABytes,
+                "metalAllocatedBytes": device.currentAllocatedSize,
+                "activeDecoders": host.activeDecoderCount,
+                "includesForcedMetalReadback": true, "targetTickPeriodMs": 1000.0 / 60.0,
+            ]
+            let data = try JSONSerialization.data(withJSONObject: metrics, options: [.sortedKeys])
+            let report = String(decoding: data, as: UTF8.self)
+            print("NUXIE_VIDEO_MEASUREMENT " + report)
+            XCTContext.runActivity(named: "SDK 720p video delivery") { activity in
+                let attachment = XCTAttachment(string: report)
+                attachment.lifetime = .keepAlways
+                activity.add(attachment)
+            }
         }
         XCTAssertEqual(seenCaptions, frenchCaptions ? ["Bonjour 👋", "Bienvenue"] : ["Hello 👋", "Welcome"], "Authenticated file captions must follow native playback")
         XCTAssertTrue(sawRed, "Decoded red frame must reach the composed Metal scene")

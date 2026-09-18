@@ -80,6 +80,9 @@ final class ExperienceVideoPlayback {
     private var admissionClock = CACurrentMediaTime()
     private var presentationAdmitted = false
     private var closed = false
+    private(set) var deliveredFrames: UInt64 = 0
+    private(set) var deliveredRGBABytes: UInt64 = 0
+    var activeDecoderCount: Int { decoders.filter { !$0.disposed }.count }
 
     private init(runtime: NuxieNativeRuntime, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement],
         decoderBudget: (() -> NuxieNativeVideoDecoderBudget)?, decoderPool: ExperienceVideoDecoderPool?) {
@@ -457,6 +460,8 @@ final class ExperienceVideoPlayback {
                         try await runtime.videoPresent(componentID: decoder.componentID, generation: decoder.generation,
                             seconds: displayTime.seconds.isFinite ? displayTime.seconds : clock,
                             width: UInt32(width), height: UInt32(height), rgba: rgba)
+                        deliveredFrames += 1
+                        deliveredRGBABytes += UInt64(rgba.count)
                     }
                 }
             }

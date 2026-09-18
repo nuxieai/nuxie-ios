@@ -40,3 +40,17 @@ ffmpeg -i greeting.mp4 -i captions.srt -i captions-fr.srt \
   -map 0:v -map 0:a -map 1:0 -map 2:0 -c:v copy -c:a copy -c:s mov_text \
   -metadata:s:s:0 language=eng -metadata:s:s:1 language=fra multilingual.mp4
 ```
+
+`captions-720p.mp4` is a 1280×720 rendition for SDK delivery measurements.
+It preserves the same timing, audio, and caption stream. Regenerate with:
+
+```sh
+ffmpeg -i captions.mp4 -map 0 -vf scale=1280:720:flags=neighbor \
+  -c:v libx264 -profile:v baseline -level:v 3.1 -pix_fmt yuv420p \
+  -c:a copy -c:s copy captions-720p.mp4
+```
+
+The measurement test runs one and two simultaneous players. Its JSON attachment
+reports actual delivered decoded frames, bridge tick time, and Metal allocation.
+It includes forced scene readback and targets a 60 Hz update cadence; these are qualification
+measurements, not a claim about unrestricted decoder throughput or A/V skew.
