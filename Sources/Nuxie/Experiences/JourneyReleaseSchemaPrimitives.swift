@@ -943,16 +943,17 @@ enum JourneyReleaseSchemaPrimitives {
             for (index, value) in elements.enumerated() {
                 let path = "render.videoElements[\(index)]"
                 guard renderer == "nux" else { try invalid(path) }
-                let element = try object(value, required: ["artboardId", "viewNodeId", "renderedNodeId", "componentId", "readinessTimeoutSeconds", "optional"], path: path)
+                let element = try object(value, required: ["sourceArtboardIndex", "artboardId", "viewNodeId", "renderedNodeId", "componentId", "readinessTimeoutSeconds", "optional"], path: path)
                 for field in ["artboardId", "viewNodeId", "renderedNodeId"] {
                     try identifier(element[field], path: "\(path).\(field)")
                 }
+                try integer(element["sourceArtboardIndex"], minimum: 0, maximum: 4_294_967_295, path: "\(path).sourceArtboardIndex")
                 try integer(element["componentId"], minimum: 1, maximum: 4_294_967_295, path: "\(path).componentId")
                 try finiteNumber(element["readinessTimeoutSeconds"], minimum: 0, maximum: 60, path: "\(path).readinessTimeoutSeconds")
                 guard isJSONBoolean(element["optional"]) else { try invalid("\(path).optional") }
                 let artboard = element["artboardId"] as! String
                 let target = [artboard, element["renderedNodeId"] as! String]
-                let slot = [artboard, String((element["componentId"] as! NSNumber).uint64Value)]
+                let slot = [String((element["sourceArtboardIndex"] as! NSNumber).uint64Value), String((element["componentId"] as! NSNumber).uint64Value)]
                 guard targets.insert(target).inserted, slots.insert(slot).inserted else { try invalid(path) }
             }
         }

@@ -58,6 +58,7 @@ struct NativeExperienceSystemFontRequirement: Equatable, Sendable {
 
 /// Authored targets resolved to local component slots in this exact signed scene.
 struct NativeExperienceVideoElement: Decodable, Equatable, Sendable {
+    let sourceArtboardIndex: UInt32
     let artboardId: String
     let viewNodeId: String
     let renderedNodeId: String
