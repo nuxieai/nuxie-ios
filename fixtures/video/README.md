@@ -54,3 +54,13 @@ The measurement test runs one and two simultaneous players. Its JSON attachment
 reports actual delivered decoded frames, bridge tick time, and Metal allocation.
 It includes forced scene readback and targets a 60 Hz update cadence; these are qualification
 measurements, not a claim about unrestricted decoder throughput or A/V skew.
+
+`captions-anamorphic.mp4` has 64×32 coded pixels and 2:1 sample aspect ratio.
+Android's player reports 128×32 display pixels; the decoder-budget regression
+compares the actual RGBA frame dimensions with the media probe's work estimate.
+Regenerate with:
+
+```sh
+ffmpeg -i captions.mp4 -map 0 -vf setsar=2 -c:v libx264 -profile:v baseline \
+  -pix_fmt yuv420p -c:a copy -c:s copy captions-anamorphic.mp4
+```
