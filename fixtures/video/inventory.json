@@ -11,6 +11,7 @@
   "transitions": [],
   "videoElements": [
     {
+      "sourceArtboardIndex": 0,
       "artboardId": "screen",
       "viewNodeId": "clip-view",
       "renderedNodeId": "clip-view",

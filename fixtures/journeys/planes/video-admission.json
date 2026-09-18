@@ -152,7 +152,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -166,7 +167,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         },
         {
           "artboardId": "component",
@@ -174,7 +176,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 1
         }
       ]
     },
@@ -188,7 +191,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         },
         {
           "artboardId": "screen",
@@ -196,7 +200,8 @@
           "renderedNodeId": "clip:second",
           "componentId": 9,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -210,7 +215,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         },
         {
           "artboardId": "screen",
@@ -218,7 +224,8 @@
           "renderedNodeId": "clip",
           "componentId": 9,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -232,7 +239,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         },
         {
           "artboardId": "screen",
@@ -240,7 +248,8 @@
           "renderedNodeId": "second",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -259,7 +268,8 @@
           "renderedNodeId": "clip",
           "componentId": 0,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -273,7 +283,8 @@
           "renderedNodeId": "clip",
           "componentId": -1,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -287,7 +298,8 @@
           "renderedNodeId": "clip",
           "componentId": 1.5,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -301,7 +313,8 @@
           "renderedNodeId": "clip",
           "componentId": 4294967296,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -315,7 +328,8 @@
           "renderedNodeId": "clip",
           "componentId": "7",
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -329,7 +343,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": -1,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -343,7 +358,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": 61,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -357,7 +373,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": false,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -371,7 +388,8 @@
           "renderedNodeId": "clip",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": "false"
+          "optional": "false",
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -386,7 +404,8 @@
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
           "optional": false,
-          "extra": 1
+          "extra": 1,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -410,7 +429,8 @@
           "renderedNodeId": "greeting-copy",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -448,7 +468,8 @@
           "renderedNodeId": "greeting-copy",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ]
     },
@@ -472,10 +493,94 @@
           "renderedNodeId": "greeting-copy",
           "componentId": 7,
           "readinessTimeoutSeconds": 5,
-          "optional": false
+          "optional": false,
+          "sourceArtboardIndex": 0
         }
       ],
       "capabilities": []
+    },
+    {
+      "name": "negative source artboard index",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false,
+          "sourceArtboardIndex": -1
+        }
+      ]
+    },
+    {
+      "name": "overflow source artboard index",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false,
+          "sourceArtboardIndex": 4294967296
+        }
+      ]
+    },
+    {
+      "name": "fractional source artboard index",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false,
+          "sourceArtboardIndex": 0.5
+        }
+      ]
+    },
+    {
+      "name": "missing source artboard index",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "duplicate source slot behind different authored targets",
+      "valid": false,
+      "videoElements": [
+        {
+          "artboardId": "screen",
+          "viewNodeId": "clip",
+          "renderedNodeId": "clip",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false,
+          "sourceArtboardIndex": 0
+        },
+        {
+          "artboardId": "other-frame",
+          "viewNodeId": "other-video",
+          "renderedNodeId": "other-video",
+          "componentId": 7,
+          "readinessTimeoutSeconds": 5,
+          "optional": false,
+          "sourceArtboardIndex": 0
+        }
+      ]
     }
   ]
 }
