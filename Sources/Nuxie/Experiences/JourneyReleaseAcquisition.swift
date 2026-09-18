@@ -1100,8 +1100,10 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         ) {
             var rejectedCacheMetrics = JourneyReleaseResourceMetrics.zero
             if FileManager.default.fileExists(atPath: destination.path) {
+                var cachedDigest: BoundedFileDigest?
                 do {
                     let read = try Self.readAcquiredObject(at: destination, artifact: artifact)
+                    cachedDigest = read.digest
                     do {
                         try Self.verify(read.digest, artifact: artifact)
                         try? FileManager.default.setAttributes(
@@ -1132,6 +1134,10 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     }
                 } catch {
                     if error is CancellationError { throw error }
+                    // The content identity is authoritative across releases. A
+                    // conflicting declaration must not remove valid cached bytes,
+                    // including a file still leased by another presentation.
+                    if cachedDigest?.sha256 == artifact.sha256 { throw error }
                     try? FileManager.default.removeItem(at: destination)
                 }
             }
