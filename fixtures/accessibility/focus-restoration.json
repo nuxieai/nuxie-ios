@@ -123,6 +123,141 @@
         }
       ],
       "expectedFocus": "2"
+    },
+    {
+      "id": "reorder-preserves-identity",
+      "steps": [
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "op": "focus",
+          "target": 2
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            3,
+            1,
+            2
+          ]
+        }
+      ],
+      "expectedFocus": "2"
+    },
+    {
+      "id": "removed-middle-focus-moves-to-successor",
+      "steps": [
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "op": "focus",
+          "target": 2
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            3
+          ]
+        }
+      ],
+      "expectedFocus": "3"
+    },
+    {
+      "id": "removed-last-focus-moves-to-predecessor",
+      "steps": [
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2
+          ]
+        },
+        {
+          "op": "focus",
+          "target": 2
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            1
+          ]
+        }
+      ],
+      "expectedFocus": "1"
+    },
+    {
+      "id": "removal-after-reorder-uses-current-position",
+      "steps": [
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "op": "focus",
+          "target": 2
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            2,
+            1,
+            3
+          ]
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            3
+          ]
+        }
+      ],
+      "expectedFocus": "1"
+    },
+    {
+      "id": "shell-focus-wins-during-removal",
+      "steps": [
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "op": "focus",
+          "target": 2
+        },
+        {
+          "op": "shell"
+        },
+        {
+          "op": "publish",
+          "nodes": [
+            1,
+            3
+          ]
+        }
+      ],
+      "expectedFocus": "shell"
     }
   ]
 }
