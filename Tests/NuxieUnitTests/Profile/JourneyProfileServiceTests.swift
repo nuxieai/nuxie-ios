@@ -129,6 +129,87 @@ private actor RejectingHighWaterCommitStore {
 extension RejectingHighWaterCommitStore: JourneyReleaseHighWaterStore {}
 
 final class JourneyProfileServiceTests: JourneyTestCase {
+    func testEmptyDeliveryReplacesDiskCacheAndRestoresAfterOfflineRestart() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let empty = JourneyPlaneProfile(
+            schemaVersion: fixture.profile.schemaVersion,
+            status: fixture.profile.status,
+            delivery: fixture.profile.delivery,
+            features: fixture.profile.features,
+            facts: fixture.profile.facts,
+            armedLegs: [],
+            releases: []
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let options = DiskCacheOptions(baseDirectory: directory, subdirectory: "profiles")
+        let highWater = InMemoryJourneyReleaseHighWaterStore()
+        let authorityStore = InMemoryProfileAuthorityBindingStore()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let runtime = RecordingJourneyProfileConsumer()
+        let catalog = try makeCatalog(fixture, store: highWater)
+        let writer = makeService(
+            cache: try DiskCache<CachedProfile>(options: options),
+            identity: identity,
+            api: JourneyProfileSequenceAPI([
+                .response(ProfileResponse(planeProfile: fixture.profile)),
+                .failure,
+                .response(ProfileResponse(planeProfile: empty)),
+            ], authority: fixture.deliveryAuthority),
+            experiences: MockExperienceService(),
+            catalog: catalog,
+            runtime: runtime,
+            authorityStore: authorityStore
+        )
+        _ = try await writer.refetchProfile(distinctId: "customer")
+        await writer.onAppBecameActive()
+        let offlineSnapshot = await catalog.snapshot(distinctId: "customer")
+        XCTAssertEqual(offlineSnapshot?.profile.armedLegs.count, 1)
+        XCTAssertEqual(offlineSnapshot?.releasesByDigest.count, 1)
+
+        await writer.onAppBecameActive()
+        let withheldSnapshot = await catalog.snapshot(distinctId: "customer")
+        XCTAssertEqual(withheldSnapshot?.profile.armedLegs.count, 0)
+        XCTAssertEqual(withheldSnapshot?.releasesByDigest.count, 0)
+        let withheldCommits = await runtime.commits
+        XCTAssertEqual(withheldCommits.last?.profile.armedLegs.count, 0)
+
+        // A fresh service and DiskCache instance must not recover the obsolete
+        // armed profile from disk when the device starts without connectivity.
+        let restartedCatalog = try makeCatalog(fixture, store: highWater)
+        let restartedRuntime = RecordingJourneyProfileConsumer()
+        let reader = makeService(
+            cache: try DiskCache<CachedProfile>(options: options),
+            identity: identity,
+            api: JourneyProfileSequenceAPI([
+                .failure,
+                .response(ProfileResponse(planeProfile: fixture.profile)),
+            ], authority: fixture.deliveryAuthority),
+            experiences: MockExperienceService(),
+            catalog: restartedCatalog,
+            runtime: restartedRuntime,
+            authorityStore: authorityStore
+        )
+        let cached = await reader.getCachedProfile(distinctId: "customer")
+        XCTAssertEqual(cached?.planeProfile.armedLegs.count, 0)
+        XCTAssertEqual(cached?.planeProfile.releases.count, 0)
+        await reader.onAppBecameActive()
+        let stillWithheld = await restartedCatalog.snapshot(distinctId: "customer")
+        XCTAssertEqual(stillWithheld?.profile.armedLegs.count, 0)
+        XCTAssertEqual(stillWithheld?.releasesByDigest.count, 0)
+
+        await reader.onAppBecameActive()
+        let restored = await restartedCatalog.snapshot(distinctId: "customer")
+        XCTAssertEqual(restored?.profile.armedLegs.count, 1)
+        XCTAssertEqual(restored?.releasesByDigest.count, 1)
+        let restoredCommits = await restartedRuntime.commits
+        XCTAssertEqual(restoredCommits.last?.profile.armedLegs.count, 1)
+        let restoredCache = await reader.getCachedProfile(distinctId: "customer")
+        XCTAssertEqual(restoredCache?.planeProfile.releases.count, 1)
+    }
+
     func testForegroundAlwaysRevalidatesFreshCanonicalProfile() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let response = ProfileResponse(planeProfile: fixture.profile)
