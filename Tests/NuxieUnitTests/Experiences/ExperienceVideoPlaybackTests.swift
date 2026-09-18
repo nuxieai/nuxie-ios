@@ -12,6 +12,22 @@ import XCTest
 #endif
 
 final class ExperienceVideoPlaybackTests: XCTestCase {
+    func testBoundedVideoDecodeCost() async throws {
+        XCTAssertEqual(try ExperienceVideoDecodeCost.pixelsPerSecond(width: 100, height: 10,
+            durationUs: 1_000_000, timestamps: [0, 500_000, 550_000]), 20_000)
+        XCTAssertEqual(try ExperienceVideoDecodeCost.pixelsPerSecond(width: 100, height: 10,
+            durationUs: 1_000_000, timestamps: [990_000, 0]), 100_000)
+        XCTAssertEqual(try ExperienceVideoDecodeCost.pixelsPerSecond(width: 100, height: 10,
+            durationUs: 100_000, timestamps: [0]), 10_000)
+        let invalidTimes: [[Int64]] = [[], [0, 0], [-1], [0, 1_000_000]]
+        for times in invalidTimes {
+            XCTAssertThrowsError(try ExperienceVideoDecodeCost.pixelsPerSecond(width: 100, height: 10,
+                durationUs: 1_000_000, timestamps: times))
+        }
+        let cost = try await ExperienceVideoDecodeCost.read(url: videoFixtureDirectory().appendingPathComponent("captions.mp4"))
+        XCTAssertEqual(cost, 64 * 32 * 31)
+    }
+
     func testNativeVideoDecoderBudgetBridge() throws {
         let budget = NuxieNativeVideoDecoderBudget(maxPlayers: 2, managedPlayers: 1, hardwarePlayers: 1,
             managedPixelsPerSecond: 100, softwarePixelsPerSecond: 100)
