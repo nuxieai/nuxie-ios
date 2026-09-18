@@ -1576,7 +1576,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                   let source = asset.sourceAssetKey, let width = asset.width, let height = asset.height,
                   let duration = asset.durationMs, let codec = asset.videoCodec,
                   let captions = asset.captionTracks else {
-                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(artifact.key)
+                throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(asset.identity)
             }
             return NativeExperienceVideoAsset(
                 location: .external(key: artifact.key), sourceAssetKey: source,
