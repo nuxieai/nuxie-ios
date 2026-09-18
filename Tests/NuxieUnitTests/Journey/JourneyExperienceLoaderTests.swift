@@ -293,6 +293,7 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         ])
         let snapshot = try replacingRenderedArtifact(try await authenticatedRenderedSnapshot(fixture),
             sceneBytes: sceneBytes, renderer: "nux", assets: [video], videoElements: [.object([
+                "sourceArtboardIndex": .number(0),
                 "artboardId": .string("welcome"), "viewNodeId": .string("greeting"),
                 "renderedNodeId": .string("greeting-instance"), "componentId": .number(7),
                 "readinessTimeoutSeconds": .number(2.5), "optional": .bool(false),
@@ -319,6 +320,7 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         XCTAssertEqual(retained.fileURL, directory.appendingPathComponent(digest))
         XCTAssertEqual(artifact.payload.renderPlan.videos.first?.sourceAssetKey, "asset:greeting")
         XCTAssertEqual(artifact.payload.renderPlan.videoElements, [.init(
+            sourceArtboardIndex: 0,
             artboardId: "welcome", viewNodeId: "greeting", renderedNodeId: "greeting-instance",
             componentId: 7, readinessTimeoutSeconds: 2.5, optional: false
         )])
