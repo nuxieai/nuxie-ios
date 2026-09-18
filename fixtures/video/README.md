@@ -41,11 +41,11 @@ ffmpeg -i greeting.mp4 -i captions.srt -i captions-fr.srt \
   -metadata:s:s:0 language=eng -metadata:s:s:1 language=fra multilingual.mp4
 ```
 
-`captions-720p.mp4` is a 1280×720 rendition for SDK delivery measurements.
+`captions-720p.mp4` is a square-pixel 1280×720 rendition for SDK delivery measurements.
 It preserves the same timing, audio, and caption stream. Regenerate with:
 
 ```sh
-ffmpeg -i captions.mp4 -map 0 -vf scale=1280:720:flags=neighbor \
+ffmpeg -i captions.mp4 -map 0 -vf scale=1280:720:flags=neighbor,setsar=1 \
   -c:v libx264 -profile:v baseline -level:v 3.1 -pix_fmt yuv420p \
   -c:a copy -c:s copy captions-720p.mp4
 ```
