@@ -12,6 +12,16 @@ import XCTest
 #endif
 
 final class ExperienceVideoPlaybackTests: XCTestCase {
+    private struct VideoMeasurement {
+        let file: String
+        let width: Int
+        let height: Int
+        let cadence: Int
+        let codec: String
+        static let hd = Self(file: "captions-720p.mp4", width: 1280, height: 720, cadence: 31, codec: "avc1.42c01f")
+        static let uhd = Self(file: "captions-4k60.mp4", width: 3840, height: 2160, cadence: 61, codec: "avc1.42c034")
+    }
+
     func testCaptionLanguageSelectionContract() throws {
         struct Case: Decodable {
             let name: String
@@ -254,11 +264,17 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func test4k60VideoDeliveryMeasurements() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, measurement: .uhd)
+    }
+
+    @MainActor
     func test720pVideoDeliveryMeasurements() async throws {
         try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
-            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, measure720p: true)
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, measurement: .hd)
         try await verifyPublishedVideo(sceneName: "list", artboardName: "Screen",
-            viewNodeID: "item-card", expectedOccurrences: 2, sampleX: 20, sampleY: 30, measure720p: true)
+            viewNodeID: "item-card", expectedOccurrences: 2, sampleX: 20, sampleY: 30, measurement: .hd)
     }
 
     @MainActor
@@ -283,13 +299,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measure720p: Bool = false, preparedPool: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false) async throws {
         let preparationStarted = CACurrentMediaTime()
-        let mediaWidth = measure720p ? 1280 : 64
-        let mediaHeight = measure720p ? 720 : 32
+        let mediaWidth = measurement?.width ?? 64
+        let mediaHeight = measurement?.height ?? 32
         let directory = try videoFixtureDirectory()
         let scene = try Data(contentsOf: directory.appendingPathComponent("\(sceneName).nux"))
-        let url = directory.appendingPathComponent(measure720p ? "captions-720p.mp4" : frenchCaptions ? "multilingual.mp4" : "captions.mp4")
+        let url = directory.appendingPathComponent(measurement?.file ?? (frenchCaptions ? "multilingual.mp4" : "captions.mp4"))
         let media = try Data(contentsOf: url)
         let digest = SHA256Provider.hexDigest(media)
         let key = "assets/sha256/\(digest).mp4"
@@ -301,7 +317,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         if frenchCaptions { tracks.append(.init(streamIndex: 3, codec: "mov_text", language: "fra", title: nil)) }
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
             riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: media.count,
-            width: mediaWidth, height: mediaHeight, durationMs: 2022, videoCodec: measure720p ? "avc1.42c01f" : "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
+            width: mediaWidth, height: mediaHeight, durationMs: 2022, videoCodec: measurement?.codec ?? "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
         struct ExportedScreen: Decodable { let width: Int; let height: Int }
         struct ExportedTargets: Decodable {
             let videoElements: [NativeExperienceVideoElement]
@@ -330,7 +346,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         var decoderSlots = UInt32(expectedOccurrences)
         let pool = ExperienceVideoDecoderPool(budget: {
             .init(maxPlayers: decoderSlots, managedPlayers: decoderSlots, hardwarePlayers: 0,
-                managedPixelsPerSecond: UInt64(mediaWidth * mediaHeight * 31 * expectedOccurrences), softwarePixelsPerSecond: 0)
+                managedPixelsPerSecond: UInt64(mediaWidth * mediaHeight * (measurement?.cadence ?? 31) * expectedOccurrences), softwarePixelsPerSecond: 0)
         })
         let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, decoderPool: pool,
             preferredCaptionLanguages: frenchCaptions ? ["fr-CA", "en"] : ["en"])
@@ -405,10 +421,10 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             sawRed = sawRed || red
             sawBlue = sawBlue || blue
             if (phase % 2 == 0 && red) || (phase % 2 == 1 && blue) { phase += 1 }
-            let delay = measure720p ? max(0, 1.0 / 60.0 - (CACurrentMediaTime() - cycleStarted)) : 0.03
+            let delay = measurement != nil ? max(0, 1.0 / 60.0 - (CACurrentMediaTime() - cycleStarted)) : 0.03
             if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
         }
-        if measure720p {
+        if measurement != nil {
             let elapsed = CACurrentMediaTime() - measuringStarted
             let ordered = tickMilliseconds.sorted()
             let metrics: [String: Any] = [
@@ -425,7 +441,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             let data = try JSONSerialization.data(withJSONObject: metrics, options: [.sortedKeys])
             let report = String(decoding: data, as: UTF8.self)
             print("NUXIE_VIDEO_MEASUREMENT " + report)
-            XCTContext.runActivity(named: "SDK 720p video delivery") { activity in
+            XCTContext.runActivity(named: "SDK video delivery") { activity in
                 let attachment = XCTAttachment(string: report)
                 attachment.lifetime = .keepAlways
                 activity.add(attachment)
