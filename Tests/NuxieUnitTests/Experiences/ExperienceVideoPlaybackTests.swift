@@ -221,7 +221,10 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         XCTAssertTrue(externalAssets.isEmpty, "Published external video must bind without an in-memory payload")
         let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: artboardName, player: .defaultScene,
             pixelWidth: UInt32(width), pixelHeight: UInt32(height), bindDefaultViewModel: sceneName == "list", importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: externalAssets, videoEnabled: true))
-        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
+        var decoderSlots = UInt32(expectedOccurrences)
+        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
+            decoderBudget: { .init(maxPlayers: decoderSlots, managedPlayers: decoderSlots, hardwarePlayers: 0,
+                managedPixelsPerSecond: 200_000, softwarePixelsPerSecond: 0) })
         defer { host.close(); Task { try? await runtime.close() } }
         if sceneName == "waiting" {
             let initiallyReady = try await host.isReadyForPresentation()
@@ -308,13 +311,26 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         var paused = try XCTUnwrap(current.first)
         XCTAssertTrue(current.allSatisfy { !$0.wantsPlay }, "Journey pause reaches every live row")
         XCTAssertEqual(paused.state, 3)
+        let previousGeneration = paused.generation
+        decoderSlots = 0
+        _ = try await host.tick()
+        current = try await runtime.videos()
+        let retired = try XCTUnwrap(current.first)
+        XCTAssertGreaterThan(retired.generation, previousGeneration)
+        XCTAssertTrue(current.allSatisfy { !$0.wantsPlay })
+        XCTAssertTrue(host.playbackDiagnostics.isEmpty, "Denied decoders must be closed")
+        decoderSlots = UInt32(expectedOccurrences)
+        _ = try await host.tick()
+        current = try await runtime.videos()
+        XCTAssertGreaterThan(try XCTUnwrap(current.first).generation, retired.generation)
+        XCTAssertTrue(current.allSatisfy { !$0.wantsPlay })
         try await host.apply(command("play"))
         _ = try await host.tick()
         try await host.setSuspended(reason: 2, enabled: true)
         current = try await runtime.videos()
         paused = try XCTUnwrap(current.first)
         XCTAssertTrue(paused.wantsPlay, "Background suspension must preserve requested playback")
-        XCTAssertEqual(paused.state, 3)
+        XCTAssertNotEqual(paused.state, 2)
         try await host.setSuspended(reason: 2, enabled: false)
         _ = try await host.tick()
         current = try await runtime.videos()

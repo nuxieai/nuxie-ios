@@ -49,6 +49,7 @@ final class ExperienceVideoPlayback {
     private struct PreparedMedia {
         let asset: AVURLAsset
         let duration: Double
+        let decodeCost: UInt64
         let captionLanguage: String
         let captions: [NuxieNativeVideoCaptionCue]
     }
@@ -58,6 +59,10 @@ final class ExperienceVideoPlayback {
         let media: PreparedMedia?
     }
 
+    private let decoderBudget: (() -> NuxieNativeVideoDecoderBudget)?
+    private var resourceBlocked: Set<Int> = []
+    private var requestedRates: [Int: Double] = [:]
+    private var reconciling = false
     private let runtime: NuxieNativeRuntime
     private let lease: JourneyReleaseVideoFileLease?
     private let targets: [NativeExperienceVideoElement]
@@ -74,15 +79,18 @@ final class ExperienceVideoPlayback {
     private var presentationAdmitted = false
     private var closed = false
 
-    private init(runtime: NuxieNativeRuntime, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement]) {
+    private init(runtime: NuxieNativeRuntime, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement],
+        decoderBudget: (() -> NuxieNativeVideoDecoderBudget)?) {
+        self.decoderBudget = decoderBudget
         self.runtime = runtime
         self.lease = lease
         self.targets = targets
     }
 
-    static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload) async throws -> ExperienceVideoPlayback {
+    static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload,
+        decoderBudget: (() -> NuxieNativeVideoDecoderBudget)? = nil) async throws -> ExperienceVideoPlayback {
         let host = ExperienceVideoPlayback(runtime: runtime, lease: payload.videoFileLease,
-            targets: payload.renderPlan.videoElements)
+            targets: payload.renderPlan.videoElements, decoderBudget: decoderBudget)
         do {
             var prepared: [String: PreparedMedia] = [:]
             for declaration in payload.renderPlan.videos {
@@ -111,7 +119,8 @@ final class ExperienceVideoPlayback {
                         if let track = declaration.captionTracks.first {
                             cues = try await ExperienceVideoCaptions.read(url: url, track: track)
                         } else { cues = [] }
-                        media = PreparedMedia(asset: asset, duration: duration,
+                        let decodeCost = decoderBudget == nil ? 0 : try await ExperienceVideoDecodeCost.read(url: url)
+                        media = PreparedMedia(asset: asset, duration: duration, decodeCost: decodeCost,
                             captionLanguage: declaration.captionTracks.first?.language ?? "", captions: cues)
                         prepared[key] = media
                     } catch {
@@ -142,8 +151,10 @@ final class ExperienceVideoPlayback {
     }
 
     private func reconcile() async throws {
-        guard !closed else { return }
-        let occurrences = try await runtime.videos()
+        guard !closed, !reconciling else { return }
+        reconciling = true
+        defer { reconciling = false }
+        var occurrences = try await runtime.videos()
         guard !closed else { return }
         let live = Set(occurrences.map(\.componentID))
         guard live.count == occurrences.count else {
@@ -160,11 +171,18 @@ final class ExperienceVideoPlayback {
                 throw ExperienceInteractiveScreenError.assetContract("video occurrence differs from signed inventory")
             }
         }
+        resourceBlocked.formIntersection(live)
+        requestedRates = requestedRates.filter { live.contains($0.key) }
+        if let budget = decoderBudget?() {
+            occurrences = try await admit(occurrences, budget: budget)
+            guard !closed else { return }
+        }
         for decoder in decoders where !live.contains(decoder.componentID) { dispose(decoder) }
         decoders.removeAll { !live.contains($0.componentID) }
         for occurrence in occurrences {
             guard !closed else { return }
-            guard !decoders.contains(where: { $0.componentID == occurrence.componentID }) else { continue }
+            guard !resourceBlocked.contains(occurrence.componentID), occurrence.state != 7, occurrence.state != 8,
+                  !decoders.contains(where: { $0.componentID == occurrence.componentID }) else { continue }
             guard let media = sources[occurrence.assetID]?.media else {
                 if occurrence.state != 7 && occurrence.state != 8 {
                     _ = try await runtime.videoStep(componentID: occurrence.componentID, observation: 6, generation: occurrence.generation)
@@ -269,6 +287,96 @@ final class ExperienceVideoPlayback {
         }
     }
 
+    private func apply(_ actions: [NuxieNativeVideoAction], to decoder: Decoder) async throws {
+        for action in actions {
+            if action.kind == 3 { requestedRates[decoder.componentID] = action.value }
+            switch action.kind {
+            case 0:
+                decoder.wantsPlay = true
+                guard suspensionReasons.isEmpty else { decoder.player.pause(); continue }
+                do {
+                    try ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: decoder.player.volume > 0)
+                    if !decoder.seeking { decoder.player.playImmediately(atRate: decoder.requestedRate) }
+                } catch {
+                    decoder.player.pause()
+                    try? ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: false)
+                    _ = try await runtime.videoStep(componentID: decoder.componentID, observation: 5, generation: decoder.generation)
+                }
+            case 1:
+                decoder.wantsPlay = false
+                decoder.player.pause()
+                try ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: false)
+            case 2:
+                decoder.generation = action.generation
+                decoder.ended = false
+                decoder.seeking = true
+                decoder.player.pause()
+                let generation = action.generation
+                decoder.player.seek(to: CMTime(seconds: action.value, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak decoder] finished in
+                    Task { @MainActor in
+                        guard let self, let decoder, decoder.generation == generation, !decoder.disposed else { return }
+                        decoder.seeking = false
+                        decoder.failed = !finished
+                        if finished && decoder.wantsPlay && self.suspensionReasons.isEmpty {
+                            decoder.player.playImmediately(atRate: decoder.requestedRate)
+                        }
+                    }
+                }
+            case 3:
+                decoder.requestedRate = Float(action.value)
+                if decoder.player.rate != 0 { decoder.player.rate = decoder.requestedRate }
+            case 4:
+                decoder.player.volume = Float(action.value)
+                try ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy,
+                    audible: decoder.player.volume > 0 && decoder.player.rate != 0)
+            case 5:
+                decoder.player.pause(); decoder.player.replaceCurrentItem(with: nil); decoder.disposed = true
+                try ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: false)
+            default: throw ExperienceInteractiveScreenError.assetContract("unknown native video action")
+            }
+        }
+    }
+
+    private func admit(_ occurrences: [NuxieNativeVideoOccurrence], budget: NuxieNativeVideoDecoderBudget) async throws -> [NuxieNativeVideoOccurrence] {
+        for video in occurrences where video.state != 7 && video.state != 8 {
+            let actions = try await runtime.videoStep(componentID: video.componentID, observation: 0, generation: video.generation)
+            guard !closed else { return [] }
+            for action in actions where action.kind == 3 { requestedRates[video.componentID] = action.value }
+            if let decoder = decoders.first(where: { $0.componentID == video.componentID && !$0.disposed }) {
+                try await apply(actions, to: decoder)
+            }
+        }
+        let current = try await runtime.videos()
+        guard !closed else { return [] }
+        let requests = current.map { video in
+            let cost = sources[video.assetID]?.media?.decodeCost ?? 0
+            let scaled = ceil(Double(cost) * max(1, requestedRates[video.componentID] ?? 1))
+            let pixels = scaled >= Double(UInt64.max) ? UInt64.max : UInt64(scaled)
+            return NuxieNativeVideoDecoderRequest(id: UInt64(video.componentID), pixelsPerSecond: pixels,
+                priority: video.priority, visible: suspensionReasons.isEmpty && video.state != 7 && video.state != 8 && cost > 0)
+        }
+        let choices = try NuxieNativeRuntime.allocateVideoDecoders(requests, budget: budget)
+        for (index, video) in current.enumerated() where video.state != 7 && video.state != 8 && sources[video.assetID]?.media != nil {
+            let blocked = choices[index] == .poster
+            guard blocked || choices[index] == .platformManaged else {
+                throw ExperienceInteractiveScreenError.assetContract("AVPlayer cannot force a decoder implementation")
+            }
+            if blocked && !resourceBlocked.contains(video.componentID) {
+                if let decoder = decoders.first(where: { $0.componentID == video.componentID }) { dispose(decoder) }
+                decoders.removeAll { $0.componentID == video.componentID }
+                resourceBlocked.insert(video.componentID)
+                _ = try await runtime.reclaimVideoDecoder(componentID: video.componentID, blocked: true)
+                guard !closed else { return [] }
+            }
+        }
+        for (index, video) in current.enumerated() where choices[index] == .platformManaged && resourceBlocked.contains(video.componentID) {
+            _ = try await runtime.reclaimVideoDecoder(componentID: video.componentID, blocked: false)
+            guard !closed else { return [] }
+            resourceBlocked.remove(video.componentID)
+        }
+        return try await runtime.videos()
+    }
+
     /// Called after Luau/state-machine stepping and before drawing the scene.
     func tick() async throws -> Bool {
         guard !closed else { return false }
@@ -291,52 +399,7 @@ final class ExperienceVideoPlayback {
             let actions = try await runtime.videoStep(componentID: decoder.componentID, observation: observation,
                 generation: decoder.generation, value: observation == 1 ? decoder.duration : 0)
             guard !closed, !decoder.disposed else { continue }
-            for action in actions {
-                switch action.kind {
-                case 0:
-                    decoder.wantsPlay = true
-                    guard suspensionReasons.isEmpty else { decoder.player.pause(); continue }
-                    do {
-                        try ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: decoder.player.volume > 0)
-                        if !decoder.seeking { decoder.player.playImmediately(atRate: decoder.requestedRate) }
-                    } catch {
-                        decoder.player.pause()
-                        try? ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: false)
-                        _ = try await runtime.videoStep(componentID: decoder.componentID, observation: 5, generation: decoder.generation)
-                    }
-                case 1:
-                    decoder.wantsPlay = false
-                    decoder.player.pause()
-                    try ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: false)
-                case 2:
-                    decoder.generation = action.generation
-                    decoder.ended = false
-                    decoder.seeking = true
-                    decoder.player.pause()
-                    let generation = action.generation
-                    decoder.player.seek(to: CMTime(seconds: action.value, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak decoder] finished in
-                        Task { @MainActor in
-                            guard let self, let decoder, decoder.generation == generation, !decoder.disposed else { return }
-                            decoder.seeking = false
-                            decoder.failed = !finished
-                            if finished && decoder.wantsPlay && self.suspensionReasons.isEmpty {
-                                decoder.player.playImmediately(atRate: decoder.requestedRate)
-                            }
-                        }
-                    }
-                case 3:
-                    decoder.requestedRate = Float(action.value)
-                    if decoder.player.rate != 0 { decoder.player.rate = decoder.requestedRate }
-                case 4:
-                    decoder.player.volume = Float(action.value)
-                    try ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy,
-                        audible: decoder.player.volume > 0 && decoder.player.rate != 0)
-                case 5:
-                    decoder.player.pause(); decoder.player.replaceCurrentItem(with: nil); decoder.disposed = true
-                    try ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: false)
-                default: throw ExperienceInteractiveScreenError.assetContract("unknown native video action")
-                }
-            }
+            try await apply(actions, to: decoder)
             guard !decoder.disposed else { continue }
             let clock = decoder.player.currentTime().seconds
             try await runtime.videoClock(componentID: decoder.componentID, generation: decoder.generation,
@@ -429,6 +492,8 @@ final class ExperienceVideoPlayback {
         decoders.removeAll()
         sources.removeAll()
         admissions.removeAll()
+        resourceBlocked.removeAll()
+        requestedRates.removeAll()
     }
 }
 
