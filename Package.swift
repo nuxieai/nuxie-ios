@@ -35,6 +35,7 @@ let nuxieRuntimeBinaryTarget = makeNuxieRuntimeBinaryTarget()
 
 let package = Package(
     name: "Nuxie",
+    defaultLocalization: "en",
     platforms: [
         .iOS(.v15),
         .macOS(.v12)
