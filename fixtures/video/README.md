@@ -74,3 +74,9 @@ caption text. A resource-blocked video must not leave a frozen caption over its
 poster. Releasing the competing claim preserves requested play intent: the same
 mounted screen reacquires a decoder and resumes alternating red/blue frames and
 caption text. This is distinct from the repeated paused-seek stress case.
+
+A hidden screen stops requesting render frames. A host using shared decoder
+resources must withdraw that screen's demand and acknowledge decoder release
+without requiring another frame update. On showing the screen again, a newly
+opened decoder restores retained playback position and requested play/pause
+intent. Releasing decoder capacity does not release the acquired file lease.
