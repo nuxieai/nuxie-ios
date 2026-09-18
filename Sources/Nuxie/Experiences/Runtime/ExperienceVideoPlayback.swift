@@ -100,6 +100,7 @@ final class ExperienceVideoPlayback {
             targets: payload.renderPlan.videoElements, decoderBudget: decoderBudget, decoderPool: decoderPool)
         do {
             var prepared: [String: PreparedMedia] = [:]
+            let preferredCaptionLanguages = ExperienceVideoCaptionSelection.preferredLanguages
             for declaration in payload.renderPlan.videos {
                 guard let assetID = UInt32(exactly: declaration.riveAssetId),
                       let retained = payload.assets.first(where: { $0.kind == .video && $0.riveAssetID == assetID }) else {
@@ -110,7 +111,10 @@ final class ExperienceVideoPlayback {
                     host.sources[assetID] = Source(key: declaration.sourceAssetKey, media: nil)
                     continue
                 }
-                let key = "\(declaration.sha256):\(declaration.captionTracks.first?.streamIndex ?? -1)"
+                let captionIndex = ExperienceVideoCaptionSelection.index(languages: declaration.captionTracks.map(\.language),
+                    preferred: preferredCaptionLanguages)
+                let captionTrack = captionIndex.map { declaration.captionTracks[$0] }
+                let key = "\(declaration.sha256):\(captionTrack?.streamIndex ?? -1)"
                 let media: PreparedMedia
                 if let cached = prepared[key] {
                     media = cached
@@ -123,12 +127,12 @@ final class ExperienceVideoPlayback {
                             throw ExperienceInteractiveScreenError.assetContract("video is not playable on this device")
                         }
                         let cues: [NuxieNativeVideoCaptionCue]
-                        if let track = declaration.captionTracks.first {
+                        if let track = captionTrack {
                             cues = try await ExperienceVideoCaptions.read(url: url, track: track)
                         } else { cues = [] }
                         let decodeCost = decoderBudget == nil && decoderPool == nil ? 0 : try await ExperienceVideoDecodeCost.read(url: url)
                         media = PreparedMedia(asset: asset, duration: duration, decodeCost: decodeCost,
-                            captionLanguage: declaration.captionTracks.first?.language ?? "", captions: cues)
+                            captionLanguage: captionTrack?.language ?? "", captions: cues)
                         prepared[key] = media
                     } catch {
                         // Optional media failure keeps the scene and its poster usable.
