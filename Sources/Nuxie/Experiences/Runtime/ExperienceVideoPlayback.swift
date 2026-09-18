@@ -73,9 +73,9 @@ final class ExperienceVideoPlayback {
         self.targets = targets
     }
 
-    static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload, artboardId: String) async throws -> ExperienceVideoPlayback {
+    static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload) async throws -> ExperienceVideoPlayback {
         let host = ExperienceVideoPlayback(runtime: runtime, lease: payload.videoFileLease,
-            targets: payload.renderPlan.videoElements.filter { $0.artboardId == artboardId })
+            targets: payload.renderPlan.videoElements)
         do {
             var prepared: [String: PreparedMedia] = [:]
             for declaration in payload.renderPlan.videos {
@@ -136,7 +136,11 @@ final class ExperienceVideoPlayback {
         for occurrence in occurrences {
             guard !occurrence.embedded,
                   occurrence.contentType.isEmpty || occurrence.contentType == "video/mp4",
-                  sources[occurrence.assetID]?.key == occurrence.sourceKey else {
+                  sources[occurrence.assetID]?.key == occurrence.sourceKey,
+                  targets.contains(where: {
+                      Int($0.sourceArtboardIndex) == occurrence.sourceArtboardIndex &&
+                      Int($0.componentId) == occurrence.sourceComponentID
+                  }) else {
                 throw ExperienceInteractiveScreenError.assetContract("video occurrence differs from signed inventory")
             }
         }
@@ -184,12 +188,17 @@ final class ExperienceVideoPlayback {
     func apply(_ action: JourneyVideoAction) async throws {
         guard !closed else { throw ExperienceInteractiveScreenError.stateContract("video playback is closed") }
         let matches = targets.filter { $0.artboardId == action.artboardId && $0.viewNodeId == action.viewNodeId }
-        let live = Set(try await runtime.videos().map(\.componentID))
-        guard !closed, !matches.isEmpty, matches.allSatisfy({ live.contains(Int($0.componentId)) }) else {
+        let live = try await runtime.videos().filter { occurrence in
+            matches.contains { target in
+                Int(target.sourceArtboardIndex) == occurrence.sourceArtboardIndex &&
+                Int(target.componentId) == occurrence.sourceComponentID
+            }
+        }
+        guard !closed, !live.isEmpty else {
             throw ExperienceInteractiveScreenError.stateContract("video target is not mounted in this screen")
         }
-        for target in matches {
-            try await runtime.videoCommand(componentID: Int(target.componentId),
+        for occurrence in live {
+            try await runtime.videoCommand(componentID: occurrence.componentID,
                 kind: action.commandKind, value: action.commandValue)
         }
     }
