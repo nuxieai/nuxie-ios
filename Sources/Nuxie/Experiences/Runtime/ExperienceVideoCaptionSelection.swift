@@ -3,6 +3,15 @@ import Foundation
 import MediaAccessibility
 
 enum ExperienceVideoCaptionSelection {
+    // ISO 639-2 bibliographic aliases used in MP4 language metadata.
+    // https://www.loc.gov/standards/iso639-2/php/code_list.php
+    private static let bibliographicLanguages = [
+        "alb": "sq", "arm": "hy", "baq": "eu", "bur": "my", "chi": "zh",
+        "cze": "cs", "dut": "nl", "fre": "fr", "geo": "ka", "ger": "de",
+        "gre": "el", "ice": "is", "mac": "mk", "mao": "mi", "may": "ms",
+        "per": "fa", "rum": "ro", "slo": "sk", "tib": "bo", "wel": "cy",
+    ]
+
     static var preferredLanguages: [String] {
         let selected = MACaptionAppearanceCopySelectedLanguages(.user).takeRetainedValue() as? [String] ?? []
         return selected + Locale.preferredLanguages
@@ -11,8 +20,10 @@ enum ExperienceVideoCaptionSelection {
     static func index(languages: [String?], preferred: [String]) -> Int? {
         guard !languages.isEmpty else { return nil }
         func normalized(_ value: String) -> String {
-            Locale.canonicalLanguageIdentifier(from: value.trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "_", with: "-")).lowercased()
+            var values = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "_", with: "-").lowercased().components(separatedBy: "-")
+            values[0] = bibliographicLanguages[values[0]] ?? values[0]
+            return Locale.canonicalLanguageIdentifier(from: values.joined(separator: "-")).lowercased()
         }
         func parts(_ tag: String) -> (String, String?) {
             let values = tag.split(separator: "-").map(String.init)
