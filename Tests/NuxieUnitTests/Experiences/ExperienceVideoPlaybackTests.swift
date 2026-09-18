@@ -227,6 +227,12 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testPreparedScreenRelinquishesSharedDecoderCapacity() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, preparedPool: true)
+    }
+
+    @MainActor
     func test720pVideoDeliveryMeasurements() async throws {
         try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
             viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, measure720p: true)
@@ -256,7 +262,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measure720p: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measure720p: Bool = false, preparedPool: Bool = false) async throws {
         let preparationStarted = CACurrentMediaTime()
         let mediaWidth = measure720p ? 1280 : 64
         let mediaHeight = measure720p ? 720 : 32
@@ -291,6 +297,10 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
             journey: JourneyDocument(screens: [.init(id: "screen")]), sceneBytes: scene,
             assets: [.init(kind: .video, riveAssetID: id, riveUniqueName: name, sourceKey: key, contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: url)])
+        if preparedPool {
+            try await verifyPreparedScreenPool(payload: payload, width: width, height: height)
+            return
+        }
         let externalAssets = try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
             authenticatedAssets: payload.assets, catalog: catalog, systemFontCache: .shared).bytes
         XCTAssertTrue(externalAssets.isEmpty, "Published external video must bind without an in-memory payload")
@@ -457,6 +467,75 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             XCTFail("A closed owner must reject playback commands")
         } catch {}
         try await runtime.close()
+    }
+
+    @MainActor
+    private func verifyPreparedScreenPool(payload: AuthenticatedRuntimePayload, width: Int, height: Int) async throws {
+        let pool = ExperienceVideoDecoderPool(budget: {
+            .init(maxPlayers: 1, managedPlayers: 1, hardwarePlayers: 0,
+                managedPixelsPerSecond: 64 * 32 * 31, softwarePixelsPerSecond: 0)
+        })
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload,
+            pixelWidth: UInt32(width), pixelHeight: UInt32(height), videoDecoderPool: pool)
+        defer { Task { try? await screen.close() } }
+        let device = try await screen.metalDevice().value
+        let layer = CAMetalLayer()
+        layer.device = device
+        layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = false
+        layer.drawableSize = CGSize(width: width, height: height)
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let stride = width * 4
+        let buffer = try XCTUnwrap(device.makeBuffer(length: stride * height, options: .storageModeShared))
+        func frame() async throws -> (red: Bool, blue: Bool, captions: [ExperienceInteractiveVideoCaption]) {
+            _ = try await screen.step(elapsedSeconds: 0.03)
+            let drawable = try XCTUnwrap(layer.nextDrawable())
+            let completed = expectation(description: "prepared video presented")
+            let result = try await screen.renderFrame(drawable: .init(drawable), capturesSemantics: false,
+                capturesCaptions: true, completion: { completed.fulfill() })
+            await fulfillment(of: [completed], timeout: 2)
+            XCTAssertEqual(result.outcome.disposition, .presented)
+            let command = try XCTUnwrap(queue.makeCommandBuffer())
+            let blit = try XCTUnwrap(command.makeBlitCommandEncoder())
+            blit.copy(from: drawable.texture, sourceSlice: 0, sourceLevel: 0,
+                sourceOrigin: .init(x: 0, y: 0, z: 0), sourceSize: .init(width: width, height: height, depth: 1),
+                to: buffer, destinationOffset: 0, destinationBytesPerRow: stride, destinationBytesPerImage: stride * height)
+            blit.endEncoding()
+            command.commit()
+            command.waitUntilCompleted()
+            XCTAssertNil(command.error)
+            let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
+            let offset = 80 * stride + 100 * 4
+            return (pixels[offset + 2] > 180 && pixels[offset] < 70,
+                pixels[offset] > 180 && pixels[offset + 2] < 70, result.captions ?? [])
+        }
+        func awaitPlayback() async throws {
+            var red = false, blue = false, captions = false
+            let deadline = Date().addingTimeInterval(8)
+            while Date() < deadline && !(red && blue && captions) {
+                let value = try await frame()
+                red = red || value.red
+                blue = blue || value.blue
+                captions = captions || value.captions.contains { !$0.text.isEmpty }
+                try await Task.sleep(nanoseconds: 30_000_000)
+            }
+            XCTAssertTrue(red && blue && captions, "Prepared screen delivers both video colors and captions")
+        }
+        try await awaitPlayback()
+        let other = UUID()
+        let request: [Int: ExperienceVideoDecoderPool.Request] = [99: .init(
+            pixelsPerSecond: 64 * 32 * 31, priority: UInt32.max, visible: true)]
+        XCTAssertTrue(try pool.update(owner: other, requests: request).isEmpty,
+            "The existing decoder holds its reservation until its owner retires it")
+        _ = try await screen.step(elapsedSeconds: 0.03)
+        XCTAssertEqual(try pool.update(owner: other, requests: request), [99])
+        let suspended = try await frame()
+        XCTAssertTrue(suspended.captions.isEmpty, "Resource suspension withdraws captions")
+        pool.remove(owner: other)
+        try await awaitPlayback()
+        try await screen.close()
+        XCTAssertEqual(try pool.update(owner: other, requests: request), [99], "Screen close releases its reservation")
+        pool.remove(owner: other)
     }
 
     @MainActor

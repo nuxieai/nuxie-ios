@@ -128,6 +128,7 @@ final class ExperienceScreenViewController: UIViewController {
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
     private let videoCaptionOverlay = ExperienceVideoCaptionOverlay()
+    private let videoDecoderPool: ExperienceVideoDecoderPool?
     private var requiresSceneSemantics: Bool {
         artifact.payload.requiredCapabilities.contains("experience-accessibility")
     }
@@ -172,12 +173,14 @@ final class ExperienceScreenViewController: UIViewController {
         screen: NativeExperienceScreen,
         reduceMotion: Bool,
         presentationDiagnosticsEnabled: Bool = false,
+        videoDecoderPool: ExperienceVideoDecoderPool? = nil,
         delegate: ExperienceScreenViewControllerDelegate?
     ) {
         self.experience = experience
         self.artifact = artifact
         self.screen = screen
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
+        self.videoDecoderPool = videoDecoderPool
         lifecycleState = ExperienceScreenLifecycleState(reduceMotion: reduceMotion)
         self.delegate = delegate
         super.init(nibName: nil, bundle: nil)
@@ -303,7 +306,8 @@ final class ExperienceScreenViewController: UIViewController {
             screenID: screenId,
             products: artifact.acquired.products,
             pixelWidth: initialWidth,
-            pixelHeight: initialHeight
+            pixelHeight: initialHeight,
+            videoDecoderPool: videoDecoderPool
         )
         interactiveScreen = interactive
 
