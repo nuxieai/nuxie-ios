@@ -538,15 +538,35 @@ final class ExperienceVideoPlayback {
             let type = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             let options = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
             Task { @MainActor in
-                if type == AVAudioSession.InterruptionType.began.rawValue {
-                    try? await self?.setSuspended(reason: 4, enabled: true)
-                } else if AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume) {
-                    try? await self?.setSuspended(reason: 4, enabled: false)
-                }
+                guard let type, let interruption = AVAudioSession.InterruptionType(rawValue: type) else { return }
+                try? await self?.handleAudioInterruption(interruption,
+                    options: AVAudioSession.InterruptionOptions(rawValue: options))
             }
         })
         #endif
     }
+
+    #if canImport(UIKit)
+    func handleAudioInterruption(_ type: AVAudioSession.InterruptionType,
+                                 options: AVAudioSession.InterruptionOptions) async throws {
+        guard !closed else { return }
+        switch type {
+        case .began:
+            try await setSuspended(reason: 4, enabled: true)
+        case .ended:
+            if !options.contains(.shouldResume) {
+                // Ending an interruption clears the suspension even when the system
+                // forbids automatic resume. A later authored play remains possible.
+                for video in try await runtime.videos() {
+                    try await runtime.videoCommand(componentID: video.componentID, kind: 1, value: 0)
+                }
+            }
+            try await setSuspended(reason: 4, enabled: false)
+        @unknown default:
+            break
+        }
+    }
+    #endif
 
     func setSuspended(reason: UInt32, enabled: Bool) async throws {
         guard !closed else { return }

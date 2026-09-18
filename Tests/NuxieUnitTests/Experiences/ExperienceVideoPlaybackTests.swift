@@ -2,6 +2,7 @@
 import Foundation
 import QuartzCore
 #if canImport(UIKit)
+import AVFAudio
 import UIKit
 #endif
 import XCTest
@@ -579,6 +580,23 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         _ = try await host.tick()
         current = try await runtime.videos()
         XCTAssertTrue(current.allSatisfy(\.wantsPlay), "Journey play reaches every live row")
+        #if canImport(UIKit)
+        try await host.handleAudioInterruption(.began, options: [])
+        try await host.handleAudioInterruption(.ended, options: [])
+        current = try await runtime.videos()
+        XCTAssertTrue(current.allSatisfy { !$0.wantsPlay && $0.state != 2 },
+            "An interruption without shouldResume must leave playback paused")
+        try await host.apply(command("play"))
+        let resumeDeadline = Date().addingTimeInterval(5)
+        repeat {
+            _ = try await host.tick()
+            current = try await runtime.videos()
+            if current.allSatisfy({ $0.wantsPlay && $0.state == 2 }) { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        } while Date() < resumeDeadline
+        XCTAssertTrue(current.allSatisfy { $0.wantsPlay && $0.state == 2 },
+            "Explicit play must recover after interruption ended without shouldResume: \(host.playbackDiagnostics)")
+        #endif
         host.close()
         let closedTick = try await host.tick()
         let closedCaptions = try await host.captions()
