@@ -77,9 +77,22 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     @MainActor
     func testPublishedVideoDecodesIntoMetalScene() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80)
+    }
+
+    @MainActor
+    func testPublishedListVideosDecodeAndJourneyCommandsFanOut() async throws {
+        try await verifyPublishedVideo(sceneName: "list", artboardName: "Screen",
+            viewNodeID: "item-card", expectedOccurrences: 2, sampleX: 20, sampleY: 30)
+    }
+
+    @MainActor
+    private func verifyPublishedVideo(sceneName: String, artboardName: String,
+        viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int) async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/video")
-        let scene = try Data(contentsOf: directory.appendingPathComponent("greeting.nux"))
+        let scene = try Data(contentsOf: directory.appendingPathComponent("\(sceneName).nux"))
         let url = directory.appendingPathComponent("captions.mp4")
         let media = try Data(contentsOf: url)
         let digest = SHA256Provider.hexDigest(media)
@@ -91,12 +104,18 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
             riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: media.count,
             width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: [.init(streamIndex: 2, codec: "mov_text", language: "eng", title: nil)], required: true)
-        struct ExportedTargets: Decodable { let videoElements: [NativeExperienceVideoElement] }
+        struct ExportedScreen: Decodable { let width: Int; let height: Int }
+        struct ExportedTargets: Decodable {
+            let videoElements: [NativeExperienceVideoElement]
+            let screens: [ExportedScreen]
+        }
         let exportedTargets = try JSONDecoder().decode(ExportedTargets.self,
-            from: Data(contentsOf: directory.appendingPathComponent("inventory.json")))
+            from: Data(contentsOf: directory.appendingPathComponent(sceneName == "greeting" ? "inventory.json" : "\(sceneName)-inventory.json")))
+        let dimensions = try XCTUnwrap(exportedTargets.screens.first)
+        let width = dimensions.width, height = dimensions.height
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "video", buildId: "video", appId: "app", environment: "test"),
             scene: .init(key: "scene.nux", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
-            entry: .init(screenId: "screen"), screens: [.init(screenId: "screen", artboardId: "screen", artboardName: "Video Frame", width: 320, height: 640, exit: nil)],
+            entry: .init(screenId: "screen"), screens: [.init(screenId: "screen", artboardId: "screen", artboardName: artboardName, width: Double(width), height: Double(height), exit: nil)],
             transitions: [], textInputs: [], images: [], fonts: [], videos: [video], videoElements: exportedTargets.videoElements)
         let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
             journey: JourneyDocument(screens: [.init(id: "screen")]), sceneBytes: scene,
@@ -104,21 +123,32 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let externalAssets = try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,
             authenticatedAssets: payload.assets, catalog: catalog)
         XCTAssertTrue(externalAssets.isEmpty, "Published external video must bind without an in-memory payload")
-        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
-            pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: externalAssets, videoEnabled: true))
-        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, artboardId: "screen")
+        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: artboardName, player: .defaultScene,
+            pixelWidth: UInt32(width), pixelHeight: UInt32(height), bindDefaultViewModel: sceneName == "list", importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: externalAssets, videoEnabled: true))
+        let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
         defer { host.close(); Task { try? await runtime.close() } }
         let device = try await runtime.metalDevice().value
         let layer = CAMetalLayer()
         layer.device = device
         layer.pixelFormat = .bgra8Unorm
         layer.framebufferOnly = false
-        layer.drawableSize = CGSize(width: 320, height: 640)
-        let stride = 1280
-        let buffer = try XCTUnwrap(device.makeBuffer(length: stride * 640, options: .storageModeShared))
+        layer.drawableSize = CGSize(width: width, height: height)
+        let stride = width * 4
+        let buffer = try XCTUnwrap(device.makeBuffer(length: stride * height, options: .storageModeShared))
         var sawRed = false, sawBlue = false
         var seenCaptions: Set<String> = []
+        // Bound list rows materialize when the scene first advances. The host
+        // must discover their players during its next tick after opening.
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await host.tick()
         let videoOccurrences = try await runtime.videos()
+        XCTAssertEqual(videoOccurrences.count, expectedOccurrences)
+        XCTAssertEqual(Set(videoOccurrences.map(\.componentID)).count, expectedOccurrences)
+        let target = try XCTUnwrap(exportedTargets.videoElements.first)
+        for occurrence in videoOccurrences {
+            XCTAssertEqual(occurrence.sourceArtboardIndex, Int(target.sourceArtboardIndex))
+            XCTAssertEqual(occurrence.sourceComponentID, Int(target.componentId))
+        }
         let videoComponent = try XCTUnwrap(videoOccurrences.first).componentID
         var phase = 0
         let deadline = Date().addingTimeInterval(12)
@@ -133,7 +163,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
             await fulfillment(of: [completed], timeout: 2)
             let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
-            let offset = 80 * stride + 100 * 4
+            let offset = sampleY * stride + sampleX * 4
             let red = pixels[offset + 2] > 180 && pixels[offset] < 70
             let blue = pixels[offset] > 180 && pixels[offset + 2] < 70
             sawRed = sawRed || red
@@ -147,9 +177,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(phase, 4, "Two red/blue cycles must render across a runtime-owned loop seek: \(host.playbackDiagnostics)")
         let occurrences = try await runtime.videos()
         _ = try XCTUnwrap(occurrences.first)
-        func command(_ type: String, view: String = "clip-view") throws -> JourneyVideoAction {
+        func command(_ type: String, view: String? = nil) throws -> JourneyVideoAction {
             try JourneyVideoAction(action: ["type": .string("video"),
-                "target": .object(["artboardId": .string("screen"), "viewNodeId": .string(view)]),
+                "target": .object(["artboardId": .string("screen"), "viewNodeId": .string(view ?? viewNodeID)]),
                 "command": .object(["type": .string(type)])])
         }
         do {
@@ -160,7 +190,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         _ = try await host.tick()
         var current = try await runtime.videos()
         var paused = try XCTUnwrap(current.first)
-        XCTAssertFalse(paused.wantsPlay)
+        XCTAssertTrue(current.allSatisfy { !$0.wantsPlay }, "Journey pause reaches every live row")
         XCTAssertEqual(paused.state, 3)
         try await host.apply(command("play"))
         _ = try await host.tick()
@@ -172,7 +202,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await host.setSuspended(reason: 2, enabled: false)
         _ = try await host.tick()
         current = try await runtime.videos()
-        XCTAssertTrue(current.first?.wantsPlay == true)
+        XCTAssertTrue(current.allSatisfy(\.wantsPlay), "Journey play reaches every live row")
         host.close()
         let closedTick = try await host.tick()
         let closedCaptions = try await host.captions()

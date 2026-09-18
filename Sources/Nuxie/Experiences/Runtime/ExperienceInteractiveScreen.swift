@@ -1868,7 +1868,7 @@ actor ExperienceInteractiveScreen {
         }
         let videoPlayback: ExperienceVideoPlayback?
         do {
-            videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload, artboardId: manifestScreen.artboardId)
+            videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
         } catch {
             try? await runtime.close()
             fontScope.close()

@@ -3008,6 +3008,8 @@ private func copyRendererOutcome(_ view: NuxRendererOutcome) throws
 }
 
 package struct NuxieNativeVideoOccurrence: Sendable {
+    package let sourceArtboardIndex: Int
+    package let sourceComponentID: Int
     package let componentID: Int
     package let assetID: UInt32
     package let generation: UInt64
@@ -3073,7 +3075,9 @@ extension NuxieNativeRuntime {
                 }
                 let value = pointer.pointee
                 do {
-                    collector.values.append(.init(componentID: value.component_id, assetID: value.asset_id,
+                    collector.values.append(.init(sourceArtboardIndex: value.source_artboard_index,
+                        sourceComponentID: value.source_component_id,
+                        componentID: value.component_id, assetID: value.asset_id,
                         generation: value.generation, sourceKey: try copyString(value.source_key, label: "video source"),
                         contentType: try copyString(value.content_type, label: "video content type"),
                         embedded: value.embedded_bytes.len > 0, state: value.state, wantsPlay: value.wants_play != 0,
