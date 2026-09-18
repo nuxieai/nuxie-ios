@@ -533,6 +533,12 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         XCTAssertTrue(suspended.captions.isEmpty, "Resource suspension withdraws captions")
         pool.remove(owner: other)
         try await awaitPlayback()
+        try await screen.setMediaVisible(false)
+        XCTAssertEqual(try pool.update(owner: other, requests: request), [99],
+            "Hiding releases capacity without another step or render")
+        pool.remove(owner: other)
+        try await screen.setMediaVisible(true)
+        try await awaitPlayback()
         try await screen.close()
         XCTAssertEqual(try pool.update(owner: other, requests: request), [99], "Screen close releases its reservation")
         pool.remove(owner: other)
