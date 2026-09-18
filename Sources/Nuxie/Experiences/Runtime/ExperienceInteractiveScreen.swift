@@ -1618,7 +1618,8 @@ actor ExperienceInteractivePreparation {
         products: [StoreProduct] = [],
         player: ExperienceInteractivePlayerSelection = .defaultScene,
         pixelWidth: UInt32,
-        pixelHeight: UInt32
+        pixelHeight: UInt32,
+        videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let resolvedScreenID = screenID ?? payload.renderPlan.entry.screenId
         let resolvedArtboardName = payload.renderPlan.screens.first {
@@ -1646,7 +1647,8 @@ actor ExperienceInteractivePreparation {
                 products: products,
                 player: resolvedPlayer,
                 pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight
+                pixelHeight: pixelHeight,
+                videoDecoderPool: videoDecoderPool
             )
             systemFontCache.didImport(systemFontLeases)
         } catch {
@@ -1759,7 +1761,8 @@ actor ExperienceInteractiveScreen {
         screenID requestedScreenID: String? = nil,
         player: ExperienceInteractivePlayerSelection = .defaultScene,
         pixelWidth: UInt32,
-        pixelHeight: UInt32
+        pixelHeight: UInt32,
+        videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let preparation = try await ExperienceInteractivePreparation.prepare(
             payload: payload
@@ -1768,7 +1771,8 @@ actor ExperienceInteractiveScreen {
             screenID: requestedScreenID,
             player: player,
             pixelWidth: pixelWidth,
-            pixelHeight: pixelHeight
+            pixelHeight: pixelHeight,
+            videoDecoderPool: videoDecoderPool
         )
     }
 
@@ -1780,7 +1784,8 @@ actor ExperienceInteractiveScreen {
         products: [StoreProduct],
         player: ExperienceInteractivePlayerSelection,
         pixelWidth: UInt32,
-        pixelHeight: UInt32
+        pixelHeight: UInt32,
+        videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
         guard let manifestScreen = payload.renderPlan.screens.first(where: {
@@ -1868,7 +1873,8 @@ actor ExperienceInteractiveScreen {
         }
         let videoPlayback: ExperienceVideoPlayback?
         do {
-            videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
+            videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(
+                runtime: runtime, payload: payload, decoderPool: videoDecoderPool)
         } catch {
             try? await runtime.close()
             fontScope.close()
