@@ -7,6 +7,100 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testPortableResponseCaptureContract() throws {
+        struct Vector: Decodable {
+            let name: String
+            let mode: NativeExperienceTextInput.ResponseCapture?
+            let text: String
+            let secure: Bool
+            let source: ScreenEmissionValue?
+            let expected: ScreenEmissionValue?
+            let rejected: Bool?
+        }
+        struct Fixture: Decodable { let cases: [Vector] }
+        let path = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/text-input-response-capture.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: path))
+        for vector in fixture.cases {
+            var input = makePlan(secure: vector.secure).textInputs[0]
+            input.responseCapture = vector.mode
+            var values: [ExperienceInteractiveViewModelSnapshot.Value] = [
+                .init(ownerInstanceID: 1, propertyIndex: 0, name: "response", value: .referencedInstance(2)),
+                .init(ownerInstanceID: 2, propertyIndex: 0, name: "values", value: .referencedInstance(3)),
+            ]
+            if let source = vector.source {
+                let native: ExperienceInteractiveViewModelValue
+                switch source {
+                case .number(let value): native = .number(Float(value))
+                case .string(let value): native = .bytes(Data(value.utf8))
+                case .bool(let value): native = .bool(value)
+                default: throw ExperienceInteractiveScreenError.stateContract("Unsupported fixture value")
+                }
+                values.append(.init(ownerInstanceID: 3, propertyIndex: 0, name: "name", value: native))
+            }
+            let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [], values: values)
+            if vector.rejected == true {
+                XCTAssertThrowsError(try ExperienceScreenViewController.responseSetDraft(for: input, text: vector.text, snapshot: snapshot), vector.name)
+            } else {
+                XCTAssertEqual(try ExperienceScreenViewController.responseSetDraft(for: input, text: vector.text, snapshot: snapshot),
+                               .responseSet(field: "name", value: try XCTUnwrap(vector.expected)), vector.name)
+            }
+        }
+    }
+
+    func testConvertedResponseUsesTypedSourceInsteadOfDisplayedText() throws {
+        var input = makePlan().textInputs[0]
+        input.responseCapture = .binding
+        let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [], values: [
+            .init(ownerInstanceID: 1, propertyIndex: 0, name: "response", value: .referencedInstance(2)),
+            .init(ownerInstanceID: 2, propertyIndex: 0, name: "values", value: .referencedInstance(3)),
+            .init(ownerInstanceID: 3, propertyIndex: 0, name: "name", value: .number(0.5)),
+        ])
+        XCTAssertEqual(try ExperienceScreenViewController.responseSetDraft(for: input, text: "50", snapshot: snapshot),
+                       .responseSet(field: "name", value: .number(0.5)))
+        XCTAssertThrowsError(try ExperienceScreenViewController.responseSetDraft(for: input, text: "50"),
+                             "Missing converted state must not silently become a raw string")
+    }
+
+    func testOrdinaryAndSecureResponseCaptureKeepAcceptedText() throws {
+        for secure in [false, true] {
+            let input = makePlan(secure: secure).textInputs[0]
+            XCTAssertEqual(try ExperienceScreenViewController.responseSetDraft(for: input, text: "accepted"),
+                           .responseSet(field: "name", value: .string("accepted")))
+        }
+    }
+
+    func testConvertedResponseRejectsInvalidStateWithoutFallingBackToText() throws {
+        var input = makePlan().textInputs[0]
+        input.responseCapture = .binding
+        func snapshot(_ value: ExperienceInteractiveViewModelValue) -> ExperienceInteractiveViewModelSnapshot {
+            .init(rootInstanceID: 1, instances: [], values: [
+                .init(ownerInstanceID: 1, propertyIndex: 0, name: "response", value: .referencedInstance(2)),
+                .init(ownerInstanceID: 2, propertyIndex: 0, name: "values", value: .referencedInstance(3)),
+                .init(ownerInstanceID: 3, propertyIndex: 0, name: "name", value: value),
+            ])
+        }
+        let rejected: [ExperienceInteractiveViewModelValue] = [.number(.nan), .number(.infinity), .bytes(Data([0xff])), .unsupported, .referencedInstance(4)]
+        for value in rejected {
+            XCTAssertThrowsError(try ExperienceScreenViewController.responseSetDraft(for: input, text: "raw", snapshot: snapshot(value)))
+        }
+        let accepted: [(ExperienceInteractiveViewModelValue, ScreenEmissionValue)] = [
+            (.bool(false), .bool(false)), (.bytes(Data("normalized".utf8)), .string("normalized")),
+        ]
+        for (value, expected) in accepted {
+            XCTAssertEqual(try ExperienceScreenViewController.responseSetDraft(for: input, text: "raw", snapshot: snapshot(value)),
+                           .responseSet(field: "name", value: expected))
+        }
+        let valid = snapshot(.number(0.5))
+        let ambiguous = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [], values: valid.values + [valid.values[2]])
+        XCTAssertThrowsError(try ExperienceScreenViewController.responseSetDraft(for: input, text: "raw", snapshot: ambiguous))
+        var secure = makePlan(secure: true).textInputs[0]
+        secure.responseCapture = .binding
+        XCTAssertThrowsError(try ExperienceScreenViewController.responseSetDraft(for: secure, text: "secret", snapshot: valid))
+    }
+
     func testAuthoredInputActionChoosesOneEventAndUsesAcceptedValue() throws {
         for selectedEvent in [ExperienceTextInputEventKind.editingEnded, .returnPressed] {
             var input = makePlan().textInputs[0]

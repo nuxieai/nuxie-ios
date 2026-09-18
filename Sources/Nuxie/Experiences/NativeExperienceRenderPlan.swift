@@ -136,6 +136,10 @@ struct NativeExperienceFontAsset: Equatable, Sendable {
 }
 
 struct NativeExperienceTextInput: Equatable, Sendable {
+    enum ResponseCapture: String, Decodable, Sendable {
+        case text
+        case binding
+    }
     struct Geometry: Equatable, Sendable {
         let xPath: String
         let yPath: String
@@ -175,6 +179,7 @@ struct NativeExperienceTextInput: Equatable, Sendable {
     let multiline: Bool?
     let maxLength: Int?
     let responseFieldKey: String?
+    var responseCapture: ResponseCapture? = nil
     var actionEvent: ExperienceTextInputEventKind? = nil
     var declarativeActionId: String? = nil
 
