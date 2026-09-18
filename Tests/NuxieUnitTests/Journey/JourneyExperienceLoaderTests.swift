@@ -340,6 +340,34 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         try await evictionStore.enforceCacheBudget(protecting: [])
         XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(retained.fileURL).path))
         XCTAssertNotNil(artifact.payload.videoFileLease)
+
+        // A different authenticated release cannot invalidate another screen's
+        // leased, correctly content-addressed video through inconsistent metadata.
+        guard case .object(var conflictingVideo) = video else {
+            return XCTFail("Video fixture must be an object")
+        }
+        conflictingVideo["sizeBytes"] = .number(Double(videoBytes.count + 1))
+        let conflictingSnapshot = try replacingRenderedArtifact(
+            try await authenticatedRenderedSnapshot(fixture),
+            sceneBytes: sceneBytes, renderer: "nux", assets: [.object(conflictingVideo)],
+            videoElements: [.object([
+                "sourceArtboardIndex": .number(0),
+                "artboardId": .string("welcome"), "viewNodeId": .string("greeting"),
+                "renderedNodeId": .string("greeting-instance"), "componentId": .number(7),
+                "readinessTimeoutSeconds": .number(2.5), "optional": .bool(false),
+            ])]
+        )
+        let conflictingRelease = try XCTUnwrap(conflictingSnapshot.releasesByDigest.values.first)
+        do {
+            let conflictingPresentation = try await coldStore.preparePresentation(release: conflictingRelease,
+                delivery: conflictingSnapshot.profile.delivery, productResolver: { _ in [] })
+            _ = try await conflictingPresentation.artifactLoader(conflictingPresentation.experience, nil, "screen_welcome")
+            XCTFail("Inconsistent signed video size must be rejected")
+        } catch {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(retained.fileURL).path),
+                "A rejected release must preserve another presentation's leased video")
+            XCTAssertEqual(requests.value, 2, "Valid digest-addressed content must not be downloaded again")
+        }
     }
 
     func testCanonicalProfileAcquiresRenderedArtifactsBeforePublishingAuthority() async throws {
