@@ -1,0 +1,327 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "ten-total-three-exposed",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10,
+          "itemCount": 10
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1,
+          "itemPosition": 4
+        },
+        {
+          "id": 3,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1,
+          "itemPosition": 5
+        },
+        {
+          "id": 4,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1,
+          "itemPosition": 6
+        }
+      ],
+      "valid": true
+    },
+    {
+      "id": "unknown-total-and-position",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1
+        }
+      ],
+      "valid": true
+    },
+    {
+      "id": "known-empty",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10,
+          "itemCount": 0
+        }
+      ],
+      "valid": true
+    },
+    {
+      "id": "unsigned-owner",
+      "nodes": [
+        {
+          "id": 2147483648,
+          "role": 10,
+          "itemCount": 1
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "parentId": 2147483648,
+          "collectionId": 2147483648,
+          "itemPosition": 0
+        }
+      ],
+      "valid": true
+    },
+    {
+      "id": "nested-lists-independent",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10,
+          "itemCount": 1
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1,
+          "itemPosition": 0
+        },
+        {
+          "id": 3,
+          "role": 10,
+          "parentId": 2,
+          "itemCount": 1
+        },
+        {
+          "id": 4,
+          "role": 11,
+          "parentId": 3,
+          "collectionId": 3,
+          "itemPosition": 0
+        }
+      ],
+      "valid": true
+    },
+    {
+      "id": "legacy-item-without-metadata",
+      "nodes": [
+        {
+          "id": 2,
+          "role": 11
+        }
+      ],
+      "valid": true
+    },
+    {
+      "id": "missing-owner",
+      "nodes": [
+        {
+          "id": 2,
+          "role": 11,
+          "collectionId": 1,
+          "itemPosition": 0
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "position-without-owner",
+      "nodes": [
+        {
+          "id": 2,
+          "role": 11,
+          "itemPosition": 0
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "wrong-owner-role",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 9
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1,
+          "itemPosition": 0
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "position-out-of-range",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10,
+          "itemCount": 1
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1,
+          "itemPosition": 1
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "duplicate-position",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10,
+          "itemCount": 2
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1,
+          "itemPosition": 0
+        },
+        {
+          "id": 3,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1,
+          "itemPosition": 0
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "more-members-than-total",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10,
+          "itemCount": 1
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1
+        },
+        {
+          "id": 3,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "count-on-item",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "parentId": 1,
+          "collectionId": 1,
+          "itemCount": 3
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "position-on-list",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10,
+          "itemPosition": 0
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "metadata-on-button",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 1,
+          "itemCount": 3
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "unrelated-owner",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10
+        },
+        {
+          "id": 2,
+          "role": 11,
+          "collectionId": 1
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "bypassed-nested-owner",
+      "nodes": [
+        {
+          "id": 1,
+          "role": 10
+        },
+        {
+          "id": 3,
+          "role": 10,
+          "parentId": 1
+        },
+        {
+          "id": 4,
+          "role": 11,
+          "parentId": 3,
+          "collectionId": 1
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "layout-wrapper-owner",
+      "nodes": [
+        {
+          "id": 4,
+          "role": 11,
+          "parentId": 3,
+          "collectionId": 1,
+          "itemPosition": 0
+        },
+        {
+          "id": 3,
+          "role": 9,
+          "parentId": 1
+        },
+        {
+          "id": 1,
+          "role": 10,
+          "itemCount": 1
+        }
+      ],
+      "valid": true
+    }
+  ]
+}

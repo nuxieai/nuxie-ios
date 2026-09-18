@@ -116,6 +116,42 @@ final class NuxieNativeSemanticTreeTests: XCTestCase {
         XCTAssertEqual(unresolved.modalScope, .unresolved)
     }
 
+    func testSharedCollectionCaptureContract() throws {
+        struct Node: Decodable {
+            let id: UInt32
+            let parentId: UInt32?
+            let role: UInt32
+            let collectionId: UInt32?
+            let itemCount: UInt32?
+            let itemPosition: UInt32?
+        }
+        struct Scenario: Decodable { let id: String; let nodes: [Node]; let valid: Bool }
+        struct Suite: Decodable { let schemaVersion: Int; let cases: [Scenario] }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let suite = try JSONDecoder().decode(Suite.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/accessibility/collections.json")))
+        XCTAssertEqual(suite.schemaVersion, 1)
+        for scenario in suite.cases {
+            let nodes = scenario.nodes.map { item in
+                NuxieNativeSemanticNode(id: item.id, parentID: item.parentId, siblingIndex: 0,
+                    role: item.role, stateFlags: 0, traitFlags: 0, headingLevel: 0, actions: 0,
+                    bounds: .zero, label: "Item", value: "", hint: "",
+                    collectionID: item.collectionId, itemCount: item.itemCount, itemPosition: item.itemPosition)
+            }
+            if scenario.valid {
+                let result = try tree(nodes)
+                XCTAssertEqual(result.nodes, nodes, scenario.id)
+            } else {
+                XCTAssertThrowsError(try tree(nodes), scenario.id) { error in
+                    guard case NuxieNativeSemanticTreeError.invalidCollectionMetadata = error else {
+                        return XCTFail("Unexpected error: \(error)", file: #filePath, line: #line)
+                    }
+                }
+            }
+        }
+    }
+
     private func tree(_ nodes: [NuxieNativeSemanticNode]) throws -> NuxieNativeSemanticTree {
         try NuxieNativeSemanticTree(renderRevision: 7, treeVersion: 9, nodes: nodes)
     }

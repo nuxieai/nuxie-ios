@@ -26,6 +26,9 @@ package struct NuxieNativeSemanticNode: Equatable, Sendable {
     package let label: String
     package let value: String
     package let hint: String
+    package let collectionID: UInt32?
+    package let itemCount: UInt32?
+    package let itemPosition: UInt32?
 
     package init(
         id: UInt32,
@@ -39,7 +42,10 @@ package struct NuxieNativeSemanticNode: Equatable, Sendable {
         bounds: CGRect,
         label: String,
         value: String,
-        hint: String
+        hint: String,
+        collectionID: UInt32? = nil,
+        itemCount: UInt32? = nil,
+        itemPosition: UInt32? = nil
     ) {
         self.id = id
         self.parentID = parentID
@@ -53,6 +59,9 @@ package struct NuxieNativeSemanticNode: Equatable, Sendable {
         self.label = label
         self.value = stateFlags & Self.obscured == 0 ? value : ""
         self.hint = hint
+        self.collectionID = collectionID
+        self.itemCount = itemCount
+        self.itemPosition = itemPosition
     }
 }
 
@@ -62,6 +71,7 @@ package enum NuxieNativeSemanticTreeError: Error, Equatable {
     case missingAncestor(UInt32)
     case cyclicHierarchy
     case invalidModalIdentity(UInt32)
+    case invalidCollectionMetadata(UInt32)
 }
 
 /// Modal selection is copied from the runtime's rendered occurrence order.
@@ -134,8 +144,33 @@ package struct NuxieNativeSemanticTree: Sendable {
                 throw NuxieNativeSemanticTreeError.duplicateIdentity(node.id)
             }
         }
+        var positions: [UInt32: Set<UInt32>] = [:]
+        var members: [UInt32: Int] = [:]
+        for node in nodes {
+            let validRole = (node.itemCount == nil || node.role == NuxieNativeSemanticRole.list.rawValue)
+                && (node.itemPosition == nil || node.role == NuxieNativeSemanticRole.listItem.rawValue)
+                && (node.collectionID == nil || node.role == NuxieNativeSemanticRole.listItem.rawValue)
+            guard validRole, node.itemPosition == nil || node.collectionID != nil else {
+                throw NuxieNativeSemanticTreeError.invalidCollectionMetadata(node.id)
+            }
+            guard let ownerID = node.collectionID else { continue }
+            guard let owner = byID[ownerID], owner.role == NuxieNativeSemanticRole.list.rawValue else {
+                throw NuxieNativeSemanticTreeError.invalidCollectionMetadata(node.id)
+            }
+            members[ownerID, default: 0] += 1
+            if let total = owner.itemCount, members[ownerID, default: 0] > Int(total) {
+                throw NuxieNativeSemanticTreeError.invalidCollectionMetadata(node.id)
+            }
+            if let position = node.itemPosition {
+                guard owner.itemCount.map({ position < $0 }) ?? true,
+                      positions[ownerID, default: []].insert(position).inserted else {
+                    throw NuxieNativeSemanticTreeError.invalidCollectionMetadata(node.id)
+                }
+            }
+        }
         let inheritedMask = NuxieNativeSemanticNode.disabled | NuxieNativeSemanticNode.hidden
         var inheritedStates: [UInt32: UInt32] = [:]
+        var nearestLists: [UInt32: UInt32] = [:]
         // Resolve each ancestor once. Deep authored trees must not consume the
         // call stack or turn every captured frame into a quadratic traversal.
         for node in nodes {
@@ -157,7 +192,13 @@ package struct NuxieNativeSemanticTree: Sendable {
                 }
             }
             var inherited = current.flatMap { inheritedStates[$0.id] } ?? 0
+            var nearestList = current.flatMap { nearestLists[$0.id] }
             for item in path.reversed() {
+                if let ownerID = item.collectionID, ownerID != nearestList {
+                    throw NuxieNativeSemanticTreeError.invalidCollectionMetadata(item.id)
+                }
+                if item.role == NuxieNativeSemanticRole.list.rawValue { nearestList = item.id }
+                nearestLists[item.id] = nearestList
                 inherited |= item.stateFlags & inheritedMask
                 inheritedStates[item.id] = inherited
             }
