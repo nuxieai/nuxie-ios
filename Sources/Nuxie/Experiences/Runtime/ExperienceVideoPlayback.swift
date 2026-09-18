@@ -93,19 +93,28 @@ final class ExperienceVideoPlayback {
                 if let cached = prepared[key] {
                     media = cached
                 } else {
-                    let asset = AVURLAsset(url: url)
-                    let playable = try await asset.load(.isPlayable)
-                    let duration = try await asset.load(.duration).seconds
-                    guard playable, duration.isFinite, duration > 0 else {
-                        throw ExperienceInteractiveScreenError.assetContract("video is not playable on this device")
+                    do {
+                        let asset = AVURLAsset(url: url)
+                        let playable = try await asset.load(.isPlayable)
+                        let duration = try await asset.load(.duration).seconds
+                        guard playable, duration.isFinite, duration > 0 else {
+                            throw ExperienceInteractiveScreenError.assetContract("video is not playable on this device")
+                        }
+                        let cues: [NuxieNativeVideoCaptionCue]
+                        if let track = declaration.captionTracks.first {
+                            cues = try await ExperienceVideoCaptions.read(url: url, track: track)
+                        } else { cues = [] }
+                        media = PreparedMedia(asset: asset, duration: duration,
+                            captionLanguage: declaration.captionTracks.first?.language ?? "", captions: cues)
+                        prepared[key] = media
+                    } catch {
+                        // Optional media failure keeps the scene and its poster usable.
+                        // Cancellation still tears down the pending screen admission.
+                        try Task.checkCancellation()
+                        guard !declaration.required else { throw error }
+                        host.sources[assetID] = Source(key: declaration.sourceAssetKey, media: nil)
+                        continue
                     }
-                    let cues: [NuxieNativeVideoCaptionCue]
-                    if let track = declaration.captionTracks.first {
-                        cues = try await ExperienceVideoCaptions.read(url: url, track: track)
-                    } else { cues = [] }
-                    media = PreparedMedia(asset: asset, duration: duration,
-                        captionLanguage: declaration.captionTracks.first?.language ?? "", captions: cues)
-                    prepared[key] = media
                 }
                 host.sources[assetID] = Source(key: declaration.sourceAssetKey, media: media)
             }

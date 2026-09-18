@@ -217,6 +217,54 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await runtime.close()
     }
 
+    @MainActor
+    func testUnplayableOptionalVideoDoesNotRejectScreen() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/video")
+        let scene = try Data(contentsOf: directory.appendingPathComponent("greeting.nux"))
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let authored = try XCTUnwrap(catalog.first { $0.kind == .video })
+        let id = try XCTUnwrap(authored.authoredID)
+        let name = "\(authored.name)-\(id)"
+        let bytes = Data("authenticated but unsupported media".utf8)
+        let digest = SHA256Provider.hexDigest(bytes)
+        let key = "assets/sha256/\(digest).mp4"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
+        try bytes.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        struct Inventory: Decodable { let videoElements: [NativeExperienceVideoElement] }
+        let targets = try JSONDecoder().decode(Inventory.self,
+            from: Data(contentsOf: directory.appendingPathComponent("inventory.json"))).videoElements
+        for required in [false, true] {
+            let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
+                riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: bytes.count,
+                width: 64, height: 32, durationMs: 2000, videoCodec: "avc1.42c00a", audioCodec: nil,
+                captionTracks: [], required: required)
+            let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "video", buildId: "video", appId: "app", environment: "test"),
+                scene: .init(key: "scene.nux", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
+                entry: .init(screenId: "screen"), screens: [], transitions: [], textInputs: [], images: [], fonts: [],
+                videos: [video], videoElements: targets)
+            let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
+                journey: JourneyDocument(screens: []), sceneBytes: scene,
+                assets: [.init(kind: .video, riveAssetID: id, riveUniqueName: name, sourceKey: key,
+                    contentType: "video/mp4", sha256: digest, required: required, bytes: nil, fileURL: url)])
+            let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
+                pixelWidth: 320, pixelHeight: 640,
+                importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
+            do {
+                let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload)
+                XCTAssertFalse(required, "Required unplayable media must reject screen admission")
+                let occurrences = try await runtime.videos()
+                XCTAssertEqual(occurrences.map(\.state), [7], "Optional failure is observable by scene scripts")
+                XCTAssertTrue(host.playbackDiagnostics.isEmpty, "Unavailable media must not allocate a decoder")
+                host.close()
+            } catch {
+                XCTAssertTrue(required, "Optional media failure must preserve the usable screen: \(error)")
+            }
+            try await runtime.close()
+        }
+    }
+
     func testVideoBindingRequiresExactSignedIdentityAndLocalFile() throws {
         let digest = String(repeating: "b", count: 64)
         let key = "assets/sha256/\(digest).mp4"
