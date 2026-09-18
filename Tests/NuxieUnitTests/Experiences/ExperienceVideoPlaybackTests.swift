@@ -12,6 +12,46 @@ import XCTest
 #endif
 
 final class ExperienceVideoPlaybackTests: XCTestCase {
+    #if canImport(UIKit)
+    @MainActor
+    private func showVideoLayer(_ layer: CAMetalLayer, width: Int, height: Int)
+        -> (caption: UILabel, status: UILabel)? {
+        // The unit-test scheme is unhosted; the device scheme supplies this window.
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).flatMap(\.windows).first(where: { $0.isKeyWindow }) else { return nil }
+        // Use the common window parent; SwiftUI owns its hosting view's children.
+        let root = window
+        root.viewWithTag(904_321)?.removeFromSuperview()
+        let canvas = UIView(frame: root.bounds)
+        canvas.tag = 904_321
+        canvas.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        canvas.backgroundColor = .systemBackground
+        root.addSubview(canvas)
+        let bounds = canvas.bounds.inset(by: window.safeAreaInsets)
+        let available = bounds.insetBy(dx: 20, dy: 72)
+        let scale = min(available.width / CGFloat(width), available.height / CGFloat(height))
+        layer.frame = CGRect(x: bounds.midX - CGFloat(width) * scale / 2,
+            y: bounds.midY - CGFloat(height) * scale / 2,
+            width: CGFloat(width) * scale, height: CGFloat(height) * scale)
+        layer.drawableSize = CGSize(width: width, height: height)
+        canvas.layer.addSublayer(layer)
+        let status = UILabel(frame: CGRect(x: bounds.minX + 20, y: bounds.minY + 12,
+            width: bounds.width - 40, height: 52))
+        status.text = "Preparing composed video playback"
+        status.numberOfLines = 2
+        status.textAlignment = .center
+        status.font = .preferredFont(forTextStyle: .headline)
+        canvas.addSubview(status)
+        let caption = UILabel(frame: CGRect(x: bounds.minX + 20, y: bounds.maxY - 66,
+            width: bounds.width - 40, height: 54))
+        caption.numberOfLines = 2
+        caption.textAlignment = .center
+        caption.font = .preferredFont(forTextStyle: .title2)
+        canvas.addSubview(caption)
+        return (caption, status)
+    }
+    #endif
+
     private struct VideoMeasurement {
         let file: String
         let width: Int
@@ -373,6 +413,15 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         layer.pixelFormat = .bgra8Unorm
         layer.framebufferOnly = false
         layer.drawableSize = CGSize(width: width, height: height)
+        #if canImport(UIKit)
+        let display = showVideoLayer(layer, width: width, height: height)
+        let idleTimerWasDisabled = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer {
+            UIApplication.shared.isIdleTimerDisabled = idleTimerWasDisabled
+            display?.status.text = "Playback check finished — see test results"
+        }
+        #endif
         let stride = width * 4
         let buffer = try XCTUnwrap(device.makeBuffer(length: stride * height, options: .storageModeShared))
         var sawRed = false, sawBlue = false
@@ -409,6 +458,10 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             }
             let caption = try await runtime.videoCaption(componentID: videoComponent)
             if !caption.text.isEmpty { seenCaptions.insert(caption.text) }
+            #if canImport(UIKit)
+            display?.caption.text = caption.text
+            display?.status.text = "Playing • \(mediaWidth) × \(mediaHeight) • phase \(phase + 1)/4"
+            #endif
             guard let drawable = layer.nextDrawable() else { XCTFail("Metal drawable unavailable"); break }
             let completed = expectation(description: "video frame presented")
             _ = try await runtime.render(drawable: .available(.init(drawable)),
@@ -518,6 +571,15 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         layer.pixelFormat = .bgra8Unorm
         layer.framebufferOnly = false
         layer.drawableSize = CGSize(width: width, height: height)
+        #if canImport(UIKit)
+        let display = showVideoLayer(layer, width: width, height: height)
+        let idleTimerWasDisabled = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer {
+            UIApplication.shared.isIdleTimerDisabled = idleTimerWasDisabled
+            display?.status.text = "Playback check finished — see test results"
+        }
+        #endif
         let queue = try XCTUnwrap(device.makeCommandQueue())
         let stride = width * 4
         let buffer = try XCTUnwrap(device.makeBuffer(length: stride * height, options: .storageModeShared))
@@ -529,6 +591,10 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 capturesCaptions: true, completion: { completed.fulfill() })
             await fulfillment(of: [completed], timeout: 2)
             XCTAssertEqual(result.outcome.disposition, .presented)
+            #if canImport(UIKit)
+            display?.caption.text = (result.captions ?? []).map(\.text).joined(separator: "\n")
+            display?.status.text = "Prepared screen • shared decoder pool"
+            #endif
             let command = try XCTUnwrap(queue.makeCommandBuffer())
             let blit = try XCTUnwrap(command.makeBlitCommandEncoder())
             blit.copy(from: drawable.texture, sourceSlice: 0, sourceLevel: 0,
