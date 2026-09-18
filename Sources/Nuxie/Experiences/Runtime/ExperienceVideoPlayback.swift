@@ -46,12 +46,26 @@ final class ExperienceVideoPlayback {
         }
     }
 
+    private struct PreparedMedia {
+        let asset: AVURLAsset
+        let duration: Double
+        let captionLanguage: String
+        let captions: [NuxieNativeVideoCaptionCue]
+    }
+
+    private struct Source {
+        let key: String
+        let media: PreparedMedia?
+    }
+
     private let runtime: NuxieNativeRuntime
     private let lease: JourneyReleaseVideoFileLease?
     private let targets: [NativeExperienceVideoElement]
+    private var sources: [UInt32: Source] = [:]
     private var decoders: [Decoder] = []
     private var observers: [NSObjectProtocol] = []
     private var suspensionReasons: Set<UInt32> = []
+    private var closed = false
 
     private init(runtime: NuxieNativeRuntime, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement]) {
         self.runtime = runtime
@@ -63,41 +77,39 @@ final class ExperienceVideoPlayback {
         let host = ExperienceVideoPlayback(runtime: runtime, lease: payload.videoFileLease,
             targets: payload.renderPlan.videoElements.filter { $0.artboardId == artboardId })
         do {
-            var captionCache: [String: [NuxieNativeVideoCaptionCue]] = [:]
-            for occurrence in try await runtime.videos() {
-                // An omitted scene MIME is resolved by the signed retained inventory.
-                guard !occurrence.embedded,
-                      occurrence.contentType.isEmpty || occurrence.contentType == "video/mp4",
-                      let declaration = payload.renderPlan.videos.first(where: { $0.riveAssetId == UInt64(occurrence.assetID) }),
-                      declaration.sourceAssetKey == occurrence.sourceKey,
-                      let retained = payload.assets.first(where: { $0.kind == .video && $0.riveAssetID == occurrence.assetID }) else {
+            var prepared: [String: PreparedMedia] = [:]
+            for declaration in payload.renderPlan.videos {
+                guard let assetID = UInt32(exactly: declaration.riveAssetId),
+                      let retained = payload.assets.first(where: { $0.kind == .video && $0.riveAssetID == assetID }) else {
                     throw ExperienceInteractiveScreenError.assetContract("video occurrence differs from signed inventory")
                 }
                 guard let url = retained.fileURL, url.isFileURL else {
                     if declaration.required { throw ExperienceInteractiveScreenError.assetContract("required video file unavailable") }
-                    _ = try await runtime.videoStep(componentID: occurrence.componentID, observation: 6, generation: occurrence.generation)
+                    host.sources[assetID] = Source(key: declaration.sourceAssetKey, media: nil)
                     continue
                 }
-                let asset = AVURLAsset(url: url)
-                let playable = try await asset.load(.isPlayable)
-                let duration = try await asset.load(.duration).seconds
-                guard playable, duration.isFinite, duration > 0 else {
-                    throw ExperienceInteractiveScreenError.assetContract("video is not playable on this device")
-                }
-                if let track = declaration.captionTracks.first {
-                    let key = "\(declaration.sha256):\(track.streamIndex)"
-                    let cues: [NuxieNativeVideoCaptionCue]
-                    if let cached = captionCache[key] { cues = cached }
-                    else {
-                        cues = try await ExperienceVideoCaptions.read(url: url, track: track)
-                        captionCache[key] = cues
+                let key = "\(declaration.sha256):\(declaration.captionTracks.first?.streamIndex ?? -1)"
+                let media: PreparedMedia
+                if let cached = prepared[key] {
+                    media = cached
+                } else {
+                    let asset = AVURLAsset(url: url)
+                    let playable = try await asset.load(.isPlayable)
+                    let duration = try await asset.load(.duration).seconds
+                    guard playable, duration.isFinite, duration > 0 else {
+                        throw ExperienceInteractiveScreenError.assetContract("video is not playable on this device")
                     }
-                    try await runtime.videoSetCaptions(componentID: occurrence.componentID,
-                        language: track.language ?? "", cues: cues)
+                    let cues: [NuxieNativeVideoCaptionCue]
+                    if let track = declaration.captionTracks.first {
+                        cues = try await ExperienceVideoCaptions.read(url: url, track: track)
+                    } else { cues = [] }
+                    media = PreparedMedia(asset: asset, duration: duration,
+                        captionLanguage: declaration.captionTracks.first?.language ?? "", captions: cues)
+                    prepared[key] = media
                 }
-                host.decoders.append(Decoder(componentID: occurrence.componentID, generation: occurrence.generation, audioPolicy: occurrence.audioPolicy,
-                    asset: asset, duration: duration))
+                host.sources[assetID] = Source(key: declaration.sourceAssetKey, media: media)
             }
+            try await host.reconcile()
             host.observeLifecycle()
             return host
         } catch {
@@ -106,10 +118,62 @@ final class ExperienceVideoPlayback {
         }
     }
 
+    private func dispose(_ decoder: Decoder) {
+        decoder.disposed = true
+        decoder.player.pause()
+        decoder.player.replaceCurrentItem(with: nil)
+        try? ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: false)
+    }
+
+    private func reconcile() async throws {
+        guard !closed else { return }
+        let occurrences = try await runtime.videos()
+        guard !closed else { return }
+        let live = Set(occurrences.map(\.componentID))
+        guard live.count == occurrences.count else {
+            throw ExperienceInteractiveScreenError.assetContract("duplicate video occurrence identity")
+        }
+        for occurrence in occurrences {
+            guard !occurrence.embedded,
+                  occurrence.contentType.isEmpty || occurrence.contentType == "video/mp4",
+                  sources[occurrence.assetID]?.key == occurrence.sourceKey else {
+                throw ExperienceInteractiveScreenError.assetContract("video occurrence differs from signed inventory")
+            }
+        }
+        for decoder in decoders where !live.contains(decoder.componentID) { dispose(decoder) }
+        decoders.removeAll { !live.contains($0.componentID) }
+        for occurrence in occurrences {
+            guard !closed else { return }
+            guard !decoders.contains(where: { $0.componentID == occurrence.componentID }) else { continue }
+            guard let media = sources[occurrence.assetID]?.media else {
+                if occurrence.state != 7 && occurrence.state != 8 {
+                    _ = try await runtime.videoStep(componentID: occurrence.componentID, observation: 6, generation: occurrence.generation)
+                }
+                continue
+            }
+            let decoder = Decoder(componentID: occurrence.componentID, generation: occurrence.generation,
+                audioPolicy: occurrence.audioPolicy, asset: media.asset, duration: media.duration)
+            // Publish ownership before awaiting actor calls so lifecycle callbacks
+            // cannot create a second player or leave a player alive after close.
+            decoders.append(decoder)
+            if !media.captions.isEmpty {
+                try await runtime.videoSetCaptions(componentID: occurrence.componentID,
+                    language: media.captionLanguage, cues: media.captions)
+            }
+            guard !closed else { return }
+            for reason in suspensionReasons {
+                try await runtime.videoCommand(componentID: occurrence.componentID, kind: 6, value: suspensionReasons.contains(reason) ? 1 : 0, reason: reason)
+            }
+        }
+    }
+
     func captions() async throws -> [ExperienceInteractiveVideoCaption] {
+        guard !closed else { return [] }
+        try await reconcile()
         var values: [ExperienceInteractiveVideoCaption] = []
         for decoder in decoders where !decoder.disposed && !decoder.failed {
             let caption = try await runtime.videoCaption(componentID: decoder.componentID)
+            guard !closed, !decoder.disposed else { continue }
             if !caption.text.isEmpty {
                 values.append(.init(componentID: decoder.componentID, language: caption.language, text: caption.text))
             }
@@ -118,9 +182,10 @@ final class ExperienceVideoPlayback {
     }
 
     func apply(_ action: JourneyVideoAction) async throws {
+        guard !closed else { throw ExperienceInteractiveScreenError.stateContract("video playback is closed") }
         let matches = targets.filter { $0.artboardId == action.artboardId && $0.viewNodeId == action.viewNodeId }
         let live = Set(try await runtime.videos().map(\.componentID))
-        guard !matches.isEmpty, matches.allSatisfy({ live.contains(Int($0.componentId)) }) else {
+        guard !closed, !matches.isEmpty, matches.allSatisfy({ live.contains(Int($0.componentId)) }) else {
             throw ExperienceInteractiveScreenError.stateContract("video target is not mounted in this screen")
         }
         for target in matches {
@@ -131,6 +196,8 @@ final class ExperienceVideoPlayback {
 
     /// Called after Luau/state-machine stepping and before drawing the scene.
     func tick() async throws -> Bool {
+        guard !closed else { return false }
+        try await reconcile()
         var active = false
         for decoder in decoders where !decoder.disposed {
             let item = decoder.player.currentItem
@@ -148,6 +215,7 @@ final class ExperienceVideoPlayback {
             else { observation = 0 }
             let actions = try await runtime.videoStep(componentID: decoder.componentID, observation: observation,
                 generation: decoder.generation, value: observation == 1 ? decoder.duration : 0)
+            guard !closed, !decoder.disposed else { continue }
             for action in actions {
                 switch action.kind {
                 case 0:
@@ -199,6 +267,7 @@ final class ExperienceVideoPlayback {
             try await runtime.videoClock(componentID: decoder.componentID, generation: decoder.generation,
                 seconds: clock.isFinite ? clock : 0, rate: Double(decoder.player.rate),
                 playing: decoder.player.timeControlStatus == .playing, available: decoder.ready && !decoder.seeking)
+            guard !closed, !decoder.disposed else { continue }
             if !decoder.seeking && suspensionReasons.isEmpty {
                 let time = decoder.output.itemTime(forHostTime: CACurrentMediaTime())
                 if decoder.output.hasNewPixelBuffer(forItemTime: time) {
@@ -258,12 +327,15 @@ final class ExperienceVideoPlayback {
     }
 
     func setSuspended(reason: UInt32, enabled: Bool) async throws {
+        guard !closed else { return }
         let changed = enabled ? suspensionReasons.insert(reason).inserted : suspensionReasons.remove(reason) != nil
         guard changed else { return }
+        if enabled { for decoder in decoders { decoder.player.pause() } }
+        try await reconcile()
         for decoder in decoders where !decoder.disposed {
             // Stop output immediately even if the app has stopped requesting frames.
             if enabled { decoder.player.pause() }
-            try await runtime.videoCommand(componentID: decoder.componentID, kind: 6, value: enabled ? 1 : 0, reason: reason)
+            try await runtime.videoCommand(componentID: decoder.componentID, kind: 6, value: suspensionReasons.contains(reason) ? 1 : 0, reason: reason)
         }
         _ = try await tick()
     }
@@ -273,13 +345,13 @@ final class ExperienceVideoPlayback {
     }
 
     func close() {
+        guard !closed else { return }
+        closed = true
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
-        for decoder in decoders {
-            decoder.player.pause(); decoder.player.replaceCurrentItem(with: nil)
-            try? ExperienceVideoAudioSession.update(id: decoder.audioID, policy: decoder.audioPolicy, audible: false)
-        }
+        for decoder in decoders { dispose(decoder) }
         decoders.removeAll()
+        sources.removeAll()
     }
 }
 

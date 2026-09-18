@@ -174,6 +174,16 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         current = try await runtime.videos()
         XCTAssertTrue(current.first?.wantsPlay == true)
         host.close()
+        let closedTick = try await host.tick()
+        let closedCaptions = try await host.captions()
+        XCTAssertFalse(closedTick, "A closed owner must never recreate AVPlayers")
+        XCTAssertTrue(closedCaptions.isEmpty)
+        XCTAssertTrue(host.playbackDiagnostics.isEmpty)
+        try await host.setSuspended(reason: 2, enabled: false)
+        do {
+            try await host.apply(command("play"))
+            XCTFail("A closed owner must reject playback commands")
+        } catch {}
         try await runtime.close()
     }
 
