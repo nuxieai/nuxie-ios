@@ -1,17 +1,17 @@
 {
   "schemaVersion": 6,
-  "runtimeVersion": "0.10.5",
-  "buildSourceRevision": "5a4c90dc0f38e0ed8222ff89304fe98ac3ea2cd8",
-  "releaseRevision": "5a4c90dc0f38e0ed8222ff89304fe98ac3ea2cd8",
-  "runtimeIdentity": "0.10.5@5a4c90dc0f38e0ed8222ff89304fe98ac3ea2cd8",
-  "contractFingerprint": "3392ddccd59ce06c3732af17a6aff91182d13b492c1bde027ccf9bc07739a032",
-  "buildInputsHash": "9481104b4dabb3f55a8a0b94f6130d535c124a3925f7b68f3cda8e6461899e53",
+  "runtimeVersion": "0.10.6",
+  "buildSourceRevision": "d1207baa04673825df3b6b928877e148103a1947",
+  "releaseRevision": "d1207baa04673825df3b6b928877e148103a1947",
+  "runtimeIdentity": "0.10.6@d1207baa04673825df3b6b928877e148103a1947",
+  "contractFingerprint": "9b150ea97506f89259c37d9962fafff239ca91e9abaec9c29c955a7081b153de",
+  "buildInputsHash": "5644fc6be777691d7f246a65ff6fdb089e50c4b50e0d8201538c5a833894b72c",
   "artifacts": [
     {
       "kind": "full-apple",
       "archiveName": "NuxieRuntime.xcframework.zip",
       "bundleName": "NuxieRuntime.xcframework",
-      "swiftPackageChecksum": "302a18a23d0e858212764412d5ee056c57b5c6339ccdd4407fb6642ee4d599ef",
+      "swiftPackageChecksum": "d765119c272bc8c8bada3f2c8b0b530bb41da1c13917c107fff948f35eaebb38",
       "targets": [
         "aarch64-apple-darwin",
         "aarch64-apple-ios",
@@ -24,7 +24,7 @@
       "kind": "ios-only",
       "archiveName": "NuxieRuntime-iOS.xcframework.zip",
       "bundleName": "NuxieRuntime.xcframework",
-      "swiftPackageChecksum": "c4522350353947af95ad00c1aa3d7719f5dac34bc42cfdfe3ae0559d0cd1059d",
+      "swiftPackageChecksum": "20356097cd502fec4130204ba6ef6fca724ee77ebc40ebace81e1e687d70da78",
       "targets": [
         "aarch64-apple-ios",
         "aarch64-apple-ios-sim",
