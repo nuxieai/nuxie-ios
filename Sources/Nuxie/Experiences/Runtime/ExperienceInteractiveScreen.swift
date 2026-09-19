@@ -1148,7 +1148,7 @@ final class ExperiencePresentationWarmReservation: @unchecked Sendable {
 }
 
 /// Coalesces immutable native preparation independently from mutable screen
-/// sessions. Portable catalog inspection is keyed by the authenticated RIV
+/// sessions. Portable catalog inspection is keyed by the authenticated scene
 /// digest, while configured preparation is keyed by the exact signed release
 /// provenance supplied by the loader.
 actor ExperienceInteractivePreparationCache {

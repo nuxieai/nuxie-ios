@@ -147,7 +147,7 @@ struct JourneyReleaseResourceFailure: Error {
     let resourceMetrics: JourneyReleaseResourceMetrics
 }
 
-/// Descriptor-authenticated RIV bytes and content-addressed external assets.
+/// Descriptor-authenticated Nuxie scene bytes and content-addressed external assets.
 struct AcquiredExperienceArtifact: Sendable {
     struct Identity: Sendable {
         let experienceId: String

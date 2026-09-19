@@ -11,7 +11,7 @@ Connects iOS/macOS apps to Nuxie: tracks events (SQLite-backed local history +
 batched network delivery), identifies users, admits signed Journey plane
 profiles, executes their on-device regions, and renders Nuxie Runtime-backed
 experiences (paywalls, onboarding, surveys). Journey releases authenticate an
-inline signed descriptor, then acquire standalone content-addressed RIV,
+inline signed descriptor, then acquire standalone content-addressed `.nux` scenes,
 assets, and scripts.
 
 ## Project structure (actual)
@@ -34,9 +34,9 @@ Sources/Nuxie/
 │   └── Storage/            #   durable run journals and release pins
 ├── IR/                     # IRInterpreter/IRValue/IRModels
 ├── Experiences/            # Journey release authentication/admission,
-│                           #   standalone RIV/assets/scripts acquisition,
+│                           #   standalone scene/assets/scripts acquisition,
 │                           #   shared content-addressed artifact caches and
-│                           #   immutable prepared-RIV/session reuse,
+│                           #   immutable prepared-scene/session reuse,
 │                           #   ExperienceService/Store/ViewController,
 │                           #   Swift-owned interactive screen + presentation loop,
 │                           #   ExperiencePresentationService
@@ -93,7 +93,7 @@ make stage-runtime-xcframework \
 
 `make check-staged-runtime-xcframework` repeats validation without copying.
 After assembling the SDK, `make verify-customer-framework` requires the runtime
-ABI symbols and exact privacy manifest and rejects packaged or linked Rive
+ABI symbols and exact privacy manifest and rejects packaged or linked upstream Rive SDK
 artifacts. `nuxie-runtime` owns the Apple ABI and XCFramework production;
 `nuxie-ios` owns only the Swift adapter and consumer-side qualification. Direct
 FFI imports belong only inside `Sources/NuxieRuntime`.
