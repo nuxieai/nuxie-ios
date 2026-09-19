@@ -8,7 +8,7 @@ verify both content-addressed files, and present its normal video caption overla
 From the parent repository, generate into a new directory:
 
 ```sh
-bun tests/e2e/device/tooling/build-video-qualification.mts --captioned --delivery-base-url https://video.sdk-fixtures.nuxie.test/ --output <new-directory>
+bun tests/e2e/device/tooling/build-video-qualification.mts --captioned --delivery-base-url https://video-captions.sdk-fixtures.nuxie.test/ --output <new-directory>
 ```
 
 `testSignedVideoCaptionsAppearInPresentationAccessibilityTree` checks the real

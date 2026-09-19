@@ -36,6 +36,8 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
             let contentType: String
             switch fileURL.pathExtension {
             case "riv": contentType = "application/vnd.rive"
+            case "nux": contentType = "application/vnd.nuxie.scene"
+            case "mp4": contentType = "video/mp4"
             case "png": contentType = "image/png"
             case "ttf": contentType = "font/ttf"
             default: contentType = "application/octet-stream"
@@ -122,7 +124,8 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
                 }
                 return name
             })
-            XCTAssertTrue(expected.contains("rive"), "Exercise nonempty signed requirements")
+            let requiredFixtureCapability = fixture.id == "video-captions" ? "video.playback.v1" : "rive"
+            XCTAssertTrue(expected.contains(requiredFixtureCapability), "Exercise signed fixture requirements: \(fixture.id)")
             XCTAssertEqual(artifact.payload.requiredCapabilities, expected, fixture.id)
             for screen in release.descriptor.leg.screens where screen.id != initialScreenID {
                 let other = try await presentation.artifactLoader(presentation.experience, nil, screen.id)

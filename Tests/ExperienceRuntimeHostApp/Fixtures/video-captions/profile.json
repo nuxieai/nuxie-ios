@@ -55,8 +55,8 @@
   ],
   "status": "ok",
   "delivery": {
-    "renderBaseUrl": "https://video.sdk-fixtures.nuxie.test/",
-    "assetBaseUrl": "https://video.sdk-fixtures.nuxie.test/"
+    "renderBaseUrl": "https://video-captions.sdk-fixtures.nuxie.test/",
+    "assetBaseUrl": "https://video-captions.sdk-fixtures.nuxie.test/"
   },
   "features": []
 }
