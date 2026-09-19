@@ -304,6 +304,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testComposedVideoMatchesMediaClockAcrossSeekAndResume() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80,
+            clockQualification: true)
+    }
+
+    @MainActor
     func testPreferredFrenchTrackFollowsActualVideoPlayback() async throws {
         try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
             viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, frenchCaptions: true)
@@ -358,7 +365,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false) async throws {
         let preparationStarted = CACurrentMediaTime()
         let mediaWidth = measurement?.width ?? 64
         let mediaHeight = measurement?.height ?? 32
@@ -478,6 +485,45 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             XCTAssertEqual(occurrence.sourceComponentID, Int(target.componentId))
         }
         let videoComponent = try XCTUnwrap(videoOccurrences.first).componentID
+        // The pixels are the independent timing oracle: this fixture changes
+        // red to blue at 1s. Player time is sampled around actual composition,
+        // never inferred from the frame timestamp sent back into the runtime.
+        func mediaClock() throws -> Double {
+            let tokens = host.playbackDiagnostics.split(separator: " ")
+            let text = try XCTUnwrap(tokens.first { $0.hasPrefix("time=") })
+            let value = try XCTUnwrap(Double(text.dropFirst(5)))
+            XCTAssertTrue(value.isFinite)
+            return value
+        }
+        var clockSamples = 0
+        var stableColors: [String: Set<String>] = [:]
+        var sampleBrackets: [Double] = []
+        var transitionBrackets: [[String: Double]] = []
+        var previousClockSample: (phase: String, before: Double, after: Double, red: Bool)?
+        func recordClock(phase: String, before: Double, after: Double, red: Bool, blue: Bool) {
+            guard clockQualification else { return }
+            clockSamples += 1
+            // A loop/seek discontinuity does not define a continuous clock interval.
+            guard after >= before else { previousClockSample = nil; return }
+            sampleBrackets.append((after - before) * 1000)
+            if before >= 0.1 && after < 0.9 {
+                XCTAssertTrue(red, "Composed frame must be red at media clock \(before)...\(after)")
+                if red { stableColors[phase, default: []].insert("red") }
+            }
+            if before > 1.1 && after < 1.9 {
+                XCTAssertTrue(blue, "Composed frame must be blue at media clock \(before)...\(after)")
+                if blue { stableColors[phase, default: []].insert("blue") }
+            }
+            if let previous = previousClockSample, previous.phase == phase, previous.red, blue,
+               before >= previous.after {
+                transitionBrackets.append([
+                    "earliestOffsetMs": (previous.before - 1) * 1000,
+                    "latestOffsetMs": (after - 1) * 1000,
+                    "uncertaintyMs": (after - previous.before) * 1000,
+                ])
+            }
+            previousClockSample = (phase, before, after, red)
+        }
         var phase = 0
         let measuringStarted = CACurrentMediaTime()
         let framesAtStart = host.deliveredFrames
@@ -502,19 +548,79 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             display?.status.text = "Playing • \(mediaWidth) × \(mediaHeight) • phase \(phase + 1)/4"
             #endif
             guard let drawable = layer.nextDrawable() else { XCTFail("Metal drawable unavailable"); break }
+            let clockBefore = clockQualification ? try mediaClock() : 0
             let completed = expectation(description: "video frame presented")
             _ = try await runtime.render(drawable: .available(.init(drawable)),
                 readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
             await fulfillment(of: [completed], timeout: 2)
+            let clockAfter = clockQualification ? try mediaClock() : 0
             let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
             let offset = sampleY * stride + sampleX * 4
             let red = pixels[offset + 2] > 180 && pixels[offset] < 70
             let blue = pixels[offset] > 180 && pixels[offset + 2] < 70
+            recordClock(phase: "playback", before: clockBefore, after: clockAfter, red: red, blue: blue)
             sawRed = sawRed || red
             sawBlue = sawBlue || blue
             if (phase % 2 == 0 && red) || (phase % 2 == 1 && blue) { phase += 1 }
             let delay = measurement != nil ? max(0, 1.0 / 60.0 - (CACurrentMediaTime() - cycleStarted)) : 0.03
             if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+        }
+        if clockQualification {
+            try await runtime.videoCommand(componentID: videoComponent, kind: 1, value: 0)
+            _ = try await host.tick()
+            let framesBeforeSeek = host.deliveredFrames
+            try await runtime.videoCommand(componentID: videoComponent, kind: 2, value: 0.25)
+            let seekDeadline = Date().addingTimeInterval(5)
+            var seekReady = false
+            while Date() < seekDeadline {
+                _ = try await host.tick()
+                let time = try mediaClock()
+                if abs(time - 0.25) < 0.1 && !host.playbackDiagnostics.contains("seeking=true")
+                    && host.deliveredFrames > framesBeforeSeek {
+                    seekReady = true
+                    break
+                }
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            XCTAssertTrue(seekReady, "Paused seek must deliver a new frame at 0.25s")
+            previousClockSample = nil
+            try await runtime.videoCommand(componentID: videoComponent, kind: 0, value: 0)
+            let resumeDeadline = Date().addingTimeInterval(5)
+            while Date() < resumeDeadline {
+                _ = try await runtime.step(elapsedSeconds: 0.03)
+                _ = try await host.tick()
+                let before = try mediaClock()
+                let drawable = try XCTUnwrap(layer.nextDrawable())
+                let completed = expectation(description: "Seek/resume composed timing sample")
+                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                    readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
+                await fulfillment(of: [completed], timeout: 2)
+                let after = try mediaClock()
+                let pixel = buffer.contents().assumingMemoryBound(to: UInt8.self) + sampleY * stride + sampleX * 4
+                recordClock(phase: "seek-resume", before: before, after: after,
+                    red: pixel[2] > 180 && pixel[0] < 70, blue: pixel[0] > 180 && pixel[2] < 70)
+                if after >= 1.4 { break }
+                try await Task.sleep(nanoseconds: 30_000_000)
+            }
+            XCTAssertEqual(stableColors["playback"], ["red", "blue"])
+            XCTAssertEqual(stableColors["seek-resume"], ["red", "blue"])
+            XCTAssertGreaterThanOrEqual(transitionBrackets.count, 3,
+                "Observe two playback boundaries and one boundary after seek/resume")
+            let report: [String: Any] = [
+                "clock": "AVPlayer.currentTime", "oracle": "GPU readback; red before0.9s, blue after1.1s",
+                "samples": clockSamples, "seekSeconds": 0.25,
+                "maxRenderClockBracketMs": sampleBrackets.max() ?? 0,
+                "transitionOffsetBrackets": transitionBrackets,
+                "measuresExternalSpeakerLatency": false,
+                "includesForcedMetalReadback": true,
+            ]
+            let json = String(decoding: try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self)
+            print("NUXIE_VIDEO_MEDIA_CLOCK " + json)
+            XCTContext.runActivity(named: "Composed video versus media clock") { activity in
+                let attachment = XCTAttachment(string: json)
+                attachment.lifetime = .keepAlways
+                activity.add(attachment)
+            }
         }
         if measurement != nil {
             let elapsed = CACurrentMediaTime() - measuringStarted
