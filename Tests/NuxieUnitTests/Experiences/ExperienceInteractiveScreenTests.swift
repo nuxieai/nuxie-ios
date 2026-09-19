@@ -2951,6 +2951,71 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
     }
 
+    func testNestedRuntimeChangeResolvesToAuthenticatedRootPath() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+        let snapshot = try await screen.snapshot()
+        let nested = try XCTUnwrap(snapshot.values.first {
+            $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "Nested"
+        })
+        guard case .referencedInstance(let owner) = nested.value else {
+            return XCTFail("Expected a nested authored instance")
+        }
+        let property = try XCTUnwrap(snapshot.values.first {
+            $0.ownerInstanceID == owner && $0.name == "String"
+        })
+        let resolved = try await screen.resolveViewModelChange(.init(
+            origin: .runtime,
+            correlationID: 1,
+            ownerInstanceID: owner,
+            propertyIndex: property.propertyIndex,
+            value: .bytes(Data("changed".utf8))
+        ))
+        XCTAssertEqual(resolved.viewModelName, "Test")
+        XCTAssertEqual(resolved.path, "Nested/String")
+        XCTAssertEqual(resolved.value, .string("changed"))
+        let deeper = try XCTUnwrap(snapshot.values.first {
+            $0.ownerInstanceID == owner && $0.name == "DeeperNested"
+        })
+        guard case .referencedInstance(let deeperOwner) = deeper.value else {
+            return XCTFail("Expected a second nested instance")
+        }
+        let deeperProperty = try XCTUnwrap(snapshot.values.first {
+            $0.ownerInstanceID == deeperOwner && $0.name == "String"
+        })
+        let deeperResolved = try await screen.resolveViewModelChange(.init(
+            origin: .runtime,
+            correlationID: 2,
+            ownerInstanceID: deeperOwner,
+            propertyIndex: deeperProperty.propertyIndex,
+            value: .bytes(Data("deeper".utf8))
+        ))
+        XCTAssertEqual(deeperResolved.path, "Nested/DeeperNested/String")
+        for (invalidOwner, invalidProperty) in [(UInt64(0), property.propertyIndex), (owner, Int.max)] {
+            do {
+                _ = try await screen.resolveViewModelChange(.init(
+                    origin: .runtime,
+                    correlationID: 3,
+                    ownerInstanceID: invalidOwner,
+                    propertyIndex: invalidProperty,
+                    value: .bytes(Data("invalid".utf8))
+                ))
+                XCTFail("Unknown owners and properties must remain rejected")
+            } catch {
+                guard case .stateContract(let reason) = error as? ExperienceInteractiveScreenError else {
+                    return XCTFail("Unexpected error: \(error)")
+                }
+                XCTAssertTrue(reason.contains("authenticated catalog"))
+            }
+        }
+    }
+
     func testScreenWithoutDefaultMutatesDetachedViewModel() async throws {
         let payload = try await statePayload(defaultViewModelName: nil)
         let inspection = try await NuxieNativeRuntime.open(
