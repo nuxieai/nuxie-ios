@@ -3511,7 +3511,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             let bytes = try Data(contentsOf: file)
             let contentType: String
             switch file.pathExtension {
-            case "riv": contentType = "application/vnd.rive"
+            case "nux": contentType = "application/vnd.nuxie.scene"
             case "png": contentType = "image/png"
             case "ttf": contentType = "font/ttf"
             default: contentType = "application/octet-stream"

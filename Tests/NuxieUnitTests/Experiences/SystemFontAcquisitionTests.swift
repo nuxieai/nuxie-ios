@@ -116,7 +116,7 @@ final class SystemFontAcquisitionTests: XCTestCase {
             else { data = try Data(contentsOf: file) }
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                 headerFields: ["Content-Length": String(data.count),
-                    "Content-Type": file.pathExtension == "riv" ? "application/vnd.nuxie.scene" : "font/ttf"])!, data)
+                    "Content-Type": file.pathExtension == "nux" ? "application/vnd.nuxie.scene" : "font/ttf"])!, data)
         }
         let fontCache = ExperienceRuntimeSystemFontCache()
         for offline in [false, true] {

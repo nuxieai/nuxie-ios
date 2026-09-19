@@ -36,7 +36,6 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
             let contentType: String
             switch fileURL.pathExtension {
             case "nux": contentType = "application/vnd.nuxie.scene"
-            case "nux": contentType = "application/vnd.nuxie.scene"
             case "mp4": contentType = "video/mp4"
             case "png": contentType = "image/png"
             case "ttf": contentType = "font/ttf"
