@@ -2996,9 +2996,8 @@ actor ExperienceInteractiveScreen {
     func resolveViewModelChange(
         _ change: ExperienceInteractiveViewModelChange
     ) throws -> ExperienceInteractiveResolvedViewModelChange {
-        guard let reference = ExperienceInteractiveViewModelReference(
-            rawValue: change.ownerInstanceID
-        ),
+        guard let reference = snapshotTopology.reference(forSnapshotID: change.ownerInstanceID)
+            ?? ExperienceInteractiveViewModelReference(rawValue: change.ownerInstanceID),
         let schemaIndex = schemaIndexByViewModel[reference],
         let property = viewModelCatalog.properties.first(where: {
             $0.schemaIndex == schemaIndex && $0.index == change.propertyIndex
@@ -3007,15 +3006,10 @@ actor ExperienceInteractiveScreen {
                 "runtime view-model change is absent from the authenticated catalog"
             )
         }
-        let identities = viewModelsByIdentity
-            .filter { $0.value == reference }
-            .map(\.key)
-            .sorted {
-                let lhs = ($0.instanceID ?? "", $0.instanceName ?? "")
-                let rhs = ($1.instanceID ?? "", $1.instanceName ?? "")
-                return lhs.0 == rhs.0 ? lhs.1 < rhs.1 : lhs.0 < rhs.0
-            }
-        guard let identity = identities.first else {
+        guard let (identity, path) = publisherPath(
+            reference: reference,
+            path: property.name
+        ) else {
             throw ExperienceInteractiveScreenError.stateContract(
                 "runtime view-model publisher has no stable product identity"
             )
@@ -3033,10 +3027,51 @@ actor ExperienceInteractiveScreen {
             viewModelName: identity.viewModelName,
             instanceID: identity.instanceID,
             instanceName: identity.instanceName,
-            path: property.name,
+            path: path,
             value: projected,
             isTrigger: property.kind == .trigger
         )
+    }
+
+    /// Native changes identify their immediate owner, whereas Journey paths
+    /// start at a registered product instance. Reuse the authoritative topology
+    /// to find the nearest registered ancestor; never invent a product identity.
+    private func publisherPath(
+        reference: ExperienceInteractiveViewModelReference,
+        path: String
+    ) -> (ExperienceInteractiveViewModelIdentity, String)? {
+        var pending = [(reference, path)]
+        var visited = Set<ExperienceInteractiveViewModelReference>()
+        var cursor = 0
+        while cursor < pending.count {
+            let (owner, ownerPath) = pending[cursor]
+            cursor += 1
+            guard visited.insert(owner).inserted else { continue }
+            let identities = viewModelsByIdentity.filter { $0.value == owner }.map(\.key)
+                .sorted {
+                    ($0.viewModelName, $0.instanceID ?? "", $0.instanceName ?? "")
+                        < ($1.viewModelName, $1.instanceID ?? "", $1.instanceName ?? "")
+                }
+            if let identity = identities.first { return (identity, ownerPath) }
+            guard let snapshotID = snapshotTopology.snapshotID(for: owner),
+                  let snapshot = latestSnapshot else { continue }
+            // Aliased properties address the same native value. Select a stable
+            // path; list rows instead require their own registered identity.
+            let parents = snapshot.values.filter {
+                if case .referencedInstance(let child) = $0.value { return child == snapshotID }
+                return false
+            }.sorted { ($0.name, $0.ownerInstanceID) < ($1.name, $1.ownerInstanceID) }
+            for parent in parents {
+                guard let parentReference = snapshotTopology.reference(forSnapshotID: parent.ownerInstanceID),
+                      let parentSchema = schemaIndexByViewModel[parentReference],
+                      viewModelCatalog.properties.contains(where: {
+                          $0.schemaIndex == parentSchema && $0.index == parent.propertyIndex
+                              && $0.name == parent.name && $0.kind == .viewModel
+                      }) else { continue }
+                pending.append((parentReference, "\(parent.name)/\(ownerPath)"))
+            }
+        }
+        return nil
     }
 
     private func canonicalValue(
