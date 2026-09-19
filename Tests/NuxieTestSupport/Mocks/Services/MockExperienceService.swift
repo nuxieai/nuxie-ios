@@ -9,6 +9,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     private var deliverProductAuthorityOnHandlerRegistration = false
     private var productAuthorityChangeHandler: (@Sendable () async -> Void)?
 
+    var journeyArtifactPreparationHandler: (@Sendable (JourneyProfileCatalog.Snapshot?) async throws -> PreparedJourneyProfileArtifacts)?
     var journeyArtifactPreparationFailuresRemaining = 0
     private(set) var preparedJourneyReleaseCounts: [Int?] = []
     private(set) var committedJourneyReleaseCounts: [Int?] = []
@@ -35,6 +36,9 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             return true
         }
         if shouldFail { throw URLError(.notConnectedToInternet) }
+        if let handler = withLock({ journeyArtifactPreparationHandler }) {
+            return try await handler(snapshot)
+        }
         return PreparedJourneyProfileArtifacts(snapshot: snapshot)
     }
 
@@ -147,6 +151,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             deliverProductAuthorityOnHandlerRegistration = false
             productAuthorityChangeHandler = nil
             journeyArtifactPreparationFailuresRemaining = 0
+            journeyArtifactPreparationHandler = nil
             preparedJourneyReleaseCounts = []
             committedJourneyReleaseCounts = []
             optimisticAllowancesByStoreProductId = [:]
