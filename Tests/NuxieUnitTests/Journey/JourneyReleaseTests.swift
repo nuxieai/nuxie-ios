@@ -197,6 +197,42 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    func testTextInputActionMetadataAdmission() throws {
+        let fixture = try golden(entryKey: "renderedEntry", file: "text-input-navigation.json")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        let source = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let cases: [([String: Any], Bool)] = [
+            ([:], true),
+            (["actionEvent": "editing-ended"], true),
+            (["actionEvent": "return"], true),
+            (["declarativeActionId": "capture-duration"], true),
+            (["actionEvent": "return", "declarativeActionId": "capture-duration"], true),
+            (["actionEvent": "change"], false),
+            (["actionEvent": 1], false),
+            (["actionEvent": NSNull()], false),
+            (["declarativeActionId": ""], false),
+            (["declarativeActionId": 1], false),
+            (["declarativeActionId": NSNull()], false),
+            (["unknownActionField": "capture-duration"], false),
+        ]
+        for (fields, accepted) in cases {
+            var root = source
+            var render = try XCTUnwrap(root["render"] as? [String: Any])
+            var inputs = try XCTUnwrap(render["textInputs"] as? [[String: Any]])
+            XCTAssertFalse(inputs.isEmpty)
+            inputs[0].removeValue(forKey: "actionEvent")
+            inputs[0].removeValue(forKey: "declarativeActionId")
+            inputs[0].merge(fields) { _, new in new }
+            render["textInputs"] = inputs
+            root["render"] = render
+            if accepted {
+                XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), "\(fields)")
+            } else {
+                XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), "\(fields)")
+            }
+        }
+    }
+
     func testRejectsHostDismissalThatImmediatelyPresentsAgain() throws {
         let fixture = try golden(entryKey: "renderedEntry")
         let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))

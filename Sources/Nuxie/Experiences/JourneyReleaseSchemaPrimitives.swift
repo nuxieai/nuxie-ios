@@ -1036,7 +1036,7 @@ enum JourneyReleaseSchemaPrimitives {
                     "textRunName", "value", "editable", "geometry", "style",
                     "secureTextEntry", "multiline",
                 ],
-                optional: ["responseFieldKey", "responseCapture", "placeholder", "keyboardType", "maxLength"],
+                optional: ["responseFieldKey", "responseCapture", "placeholder", "keyboardType", "maxLength", "actionEvent", "declarativeActionId"],
                 path: "render.textInputs[\(index)]"
             )
             for field in ["id", "screenId", "artboardId", "viewNodeId", "renderedNodeId", "textObjectKey", "textRunObjectKey"] { try identifier(input[field], path: "render.textInputs[\(index)].\(field)") }
@@ -1045,6 +1045,12 @@ enum JourneyReleaseSchemaPrimitives {
             try boundedString(input["textRunName"], minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].textRunName")
             try boundedString(input["value"], minimum: 0, maximumUTF16: 1_000_000, path: "render.textInputs[\(index)].value")
             if let value = input["responseFieldKey"] { try identifier(value, path: "render.textInputs[\(index)].responseFieldKey") }
+            if let value = input["actionEvent"] {
+                try enumeration(value, values: ["editing-ended", "return"], path: "render.textInputs[\(index)].actionEvent")
+            }
+            if let value = input["declarativeActionId"] {
+                try identifier(value, path: "render.textInputs[\(index)].declarativeActionId")
+            }
             if let capture = input["responseCapture"] {
                 guard let mode = capture as? String, ["text", "binding"].contains(mode),
                       input["responseFieldKey"] != nil,
