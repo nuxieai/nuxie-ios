@@ -2,6 +2,31 @@ import XCTest
 import Vision
 
 final class ExperienceRuntimePackageSmokeTests: XCTestCase {
+    func testSignedVideoCaptionsAppearInPresentationAccessibilityTree() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--nuxie-fixture", "video-captions"]
+        app.launch()
+        let fixture = app.cells["nuxie-fixture-video-captions"]
+        XCTAssertTrue(fixture.waitForExistence(timeout: 10))
+        fixture.tap()
+        let caption = app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "nuxie-video-caption-"
+        )).firstMatch
+        XCTAssertTrue(caption.waitForExistence(timeout: 30), app.debugDescription)
+        let welcome = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Welcome"), object: caption)
+        XCTAssertEqual(XCTWaiter.wait(for: [welcome], timeout: 10), .completed)
+        XCTAssertTrue(!caption.frame.isEmpty && app.frame.intersects(caption.frame), "Current caption must have visible bounds in the presentation tree")
+        let hello = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Hello 👋"), object: caption)
+        XCTAssertEqual(XCTWaiter.wait(for: [hello], timeout: 10), .completed)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "signed-video-caption-accessibility"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: caption)
+        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 5), .completed)
+    }
+
     /// Installed-app client coverage; this does not simulate VoiceOver gestures.
     func testAccessibilityQualificationHostRunsSignedJourneyWithoutDiagnosticElements() throws {
         let app = XCUIApplication()

@@ -1,0 +1,22 @@
+{
+  "descriptorSha256": "0f0912bb4fbe6548d992d5e5f761844e1e3c3d45a30cf7e75ff44b0f065ecd31",
+  "profileHeaders": {
+    "Nuxie-App-Id": "wrapper-video-app",
+    "Nuxie-App-Environment": "test",
+    "ETag": "\"wrapper-video-v1\""
+  },
+  "objects": [
+    {
+      "key": "renders/sha256/242a0ebc242f2617d923a9e1e04a7cf01b9d5d6a8e62cc934f1f26df6efef4db.nux",
+      "sha256": "242a0ebc242f2617d923a9e1e04a7cf01b9d5d6a8e62cc934f1f26df6efef4db",
+      "sizeBytes": 1086,
+      "contentType": "application/vnd.nuxie.scene"
+    },
+    {
+      "key": "assets/sha256/927dea0603713eb68586b050cb640b9379952753b0b6d60b17395b321a0f3b41.mp4",
+      "sha256": "927dea0603713eb68586b050cb640b9379952753b0b6d60b17395b321a0f3b41",
+      "sizeBytes": 22646,
+      "contentType": "video/mp4"
+    }
+  ]
+}
