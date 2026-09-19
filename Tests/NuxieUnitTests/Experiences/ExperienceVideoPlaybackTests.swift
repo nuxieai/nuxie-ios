@@ -1,6 +1,7 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
 import QuartzCore
+import MediaAccessibility
 #if canImport(UIKit)
 import AVFAudio
 import UIKit
@@ -415,9 +416,12 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 managedPixelsPerSecond: UInt64(mediaWidth * mediaHeight * (measurement?.cadence ?? 31) * expectedOccurrences), softwarePixelsPerSecond: 0)
         })
         _ = try await runtime.step(elapsedSeconds: 0)
+        var selectedCaptionLanguages = ["fr-CA", "en"]
+        var captionPreferenceReads = 0
         let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
             artboardBounds: CGRect(x: 0, y: 0, width: width, height: height), decoderPool: pool,
-            preferredCaptionLanguages: frenchCaptions ? ["fr-CA", "en"] : ["en"])
+            preferredCaptionLanguages: frenchCaptions ? nil : ["en"],
+            systemCaptionLanguages: { captionPreferenceReads += 1; return selectedCaptionLanguages })
         defer { host.close(); Task { try? await runtime.close() } }
         if sceneName == "waiting" {
             let initiallyReady = try await host.isReadyForPresentation()
@@ -556,6 +560,36 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         var paused = try XCTUnwrap(current.first)
         XCTAssertTrue(current.allSatisfy { !$0.wantsPlay }, "Journey pause reaches every live row")
         XCTAssertEqual(paused.state, 3)
+        if frenchCaptions {
+            let diagnostics = host.playbackDiagnostics
+            let decoderCount = host.activeDecoderCount
+            selectedCaptionLanguages = ["en"]
+            CFNotificationCenterPostNotification(CFNotificationCenterGetLocalCenter(),
+                CFNotificationName(kMACaptionAppearanceSettingsChangedNotification), nil, nil, true)
+            let refreshDeadline = Date().addingTimeInterval(3)
+            while try await runtime.videoCaption(componentID: videoComponent).language != "eng", Date() < refreshDeadline {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let english = try await runtime.videoCaption(componentID: videoComponent)
+            XCTAssertEqual(english.language, "eng")
+            XCTAssertTrue(["Hello 👋", "Welcome"].contains(english.text))
+            XCTAssertEqual(host.playbackDiagnostics, diagnostics, "Caption selection cannot seek or recreate the paused decoder")
+            XCTAssertEqual(host.activeDecoderCount, decoderCount)
+            selectedCaptionLanguages = ["en"]
+            CFNotificationCenterPostNotification(CFNotificationCenterGetLocalCenter(),
+                CFNotificationName(kMACaptionAppearanceSettingsChangedNotification), nil, nil, true)
+            selectedCaptionLanguages = ["fr"]
+            CFNotificationCenterPostNotification(CFNotificationCenterGetLocalCenter(),
+                CFNotificationName(kMACaptionAppearanceSettingsChangedNotification), nil, nil, true)
+            let latestDeadline = Date().addingTimeInterval(3)
+            while try await runtime.videoCaption(componentID: videoComponent).language != "fra", Date() < latestDeadline {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let french = try await runtime.videoCaption(componentID: videoComponent)
+            XCTAssertEqual(french.language, "fra")
+            XCTAssertTrue(["Bonjour 👋", "Bienvenue"].contains(french.text))
+            XCTAssertEqual(host.playbackDiagnostics, diagnostics)
+        }
         let previousGeneration = paused.generation
         decoderSlots = 0
         _ = try await host.tick()
@@ -598,6 +632,15 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             "Explicit play must recover after interruption ended without shouldResume: \(host.playbackDiagnostics)")
         #endif
         host.close()
+        if frenchCaptions {
+            let readsAtClose = captionPreferenceReads
+            selectedCaptionLanguages = ["en"]
+            CFNotificationCenterPostNotification(CFNotificationCenterGetLocalCenter(),
+                CFNotificationName(kMACaptionAppearanceSettingsChangedNotification), nil, nil, true)
+            try await Task.sleep(nanoseconds: 30_000_000)
+            XCTAssertEqual(captionPreferenceReads, readsAtClose, "Closed owners must remove preference observers")
+            try await host.refreshCaptionLanguages(["en"])
+        }
         let closedTick = try await host.tick()
         let closedCaptions = try await host.captions()
         XCTAssertFalse(closedTick, "A closed owner must never recreate AVPlayers")
