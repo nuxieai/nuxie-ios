@@ -581,6 +581,209 @@
           "sourceArtboardIndex": 0
         }
       ]
+    },
+    {
+      "name": "shared-content-distinct-bindings",
+      "additionalAssets": [
+        {
+          "kind": "video",
+          "key": "assets/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sizeBytes": 1024,
+          "contentType": "video/mp4",
+          "sourceAssetKey": "asset:greeting-copy",
+          "riveAssetId": 2,
+          "riveUniqueName": "video-copy-2",
+          "width": 64,
+          "height": 32,
+          "durationMs": 2000,
+          "videoCodec": "avc1.42e01e",
+          "audioCodec": "mp4a.40.2",
+          "captionTracks": [
+            {
+              "streamIndex": 2,
+              "codec": "mov_text",
+              "language": "eng",
+              "title": "English"
+            }
+          ],
+          "required": true
+        }
+      ],
+      "valid": true
+    },
+    {
+      "name": "shared-content-distinct-required-policy",
+      "additionalAssets": [
+        {
+          "kind": "video",
+          "key": "assets/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sizeBytes": 1024,
+          "contentType": "video/mp4",
+          "sourceAssetKey": "asset:greeting-copy",
+          "riveAssetId": 2,
+          "riveUniqueName": "video-copy-2",
+          "width": 64,
+          "height": 32,
+          "durationMs": 2000,
+          "videoCodec": "avc1.42e01e",
+          "audioCodec": "mp4a.40.2",
+          "captionTracks": [
+            {
+              "streamIndex": 2,
+              "codec": "mov_text",
+              "language": "eng",
+              "title": "English"
+            }
+          ],
+          "required": false
+        }
+      ],
+      "valid": true
+    },
+    {
+      "name": "shared-content-conflicting-size",
+      "additionalAssets": [
+        {
+          "kind": "video",
+          "key": "assets/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sizeBytes": 2048,
+          "contentType": "video/mp4",
+          "sourceAssetKey": "asset:greeting-copy",
+          "riveAssetId": 2,
+          "riveUniqueName": "video-copy-2",
+          "width": 64,
+          "height": 32,
+          "durationMs": 2000,
+          "videoCodec": "avc1.42e01e",
+          "audioCodec": "mp4a.40.2",
+          "captionTracks": [
+            {
+              "streamIndex": 2,
+              "codec": "mov_text",
+              "language": "eng",
+              "title": "English"
+            }
+          ],
+          "required": true
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "shared-content-conflicting-dimensions",
+      "additionalAssets": [
+        {
+          "kind": "video",
+          "key": "assets/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sizeBytes": 1024,
+          "contentType": "video/mp4",
+          "sourceAssetKey": "asset:greeting-copy",
+          "riveAssetId": 2,
+          "riveUniqueName": "video-copy-2",
+          "width": 128,
+          "height": 32,
+          "durationMs": 2000,
+          "videoCodec": "avc1.42e01e",
+          "audioCodec": "mp4a.40.2",
+          "captionTracks": [
+            {
+              "streamIndex": 2,
+              "codec": "mov_text",
+              "language": "eng",
+              "title": "English"
+            }
+          ],
+          "required": true
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "shared-content-conflicting-captions",
+      "additionalAssets": [
+        {
+          "kind": "video",
+          "key": "assets/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sizeBytes": 1024,
+          "contentType": "video/mp4",
+          "sourceAssetKey": "asset:greeting-copy",
+          "riveAssetId": 2,
+          "riveUniqueName": "video-copy-2",
+          "width": 64,
+          "height": 32,
+          "durationMs": 2000,
+          "videoCodec": "avc1.42e01e",
+          "audioCodec": "mp4a.40.2",
+          "captionTracks": [],
+          "required": true
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "shared-content-unsorted-bindings",
+      "additionalAssets": [
+        {
+          "kind": "video",
+          "key": "assets/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sizeBytes": 1024,
+          "contentType": "video/mp4",
+          "sourceAssetKey": "asset:aaa",
+          "riveAssetId": 2,
+          "riveUniqueName": "video-copy-2",
+          "width": 64,
+          "height": 32,
+          "durationMs": 2000,
+          "videoCodec": "avc1.42e01e",
+          "audioCodec": "mp4a.40.2",
+          "captionTracks": [
+            {
+              "streamIndex": 2,
+              "codec": "mov_text",
+              "language": "eng",
+              "title": "English"
+            }
+          ],
+          "required": true
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "shared-content-duplicate-native-id",
+      "additionalAssets": [
+        {
+          "kind": "video",
+          "key": "assets/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "sizeBytes": 1024,
+          "contentType": "video/mp4",
+          "sourceAssetKey": "asset:greeting-copy",
+          "riveAssetId": 1,
+          "riveUniqueName": "video-copy-2",
+          "width": 64,
+          "height": 32,
+          "durationMs": 2000,
+          "videoCodec": "avc1.42e01e",
+          "audioCodec": "mp4a.40.2",
+          "captionTracks": [
+            {
+              "streamIndex": 2,
+              "codec": "mov_text",
+              "language": "eng",
+              "title": "English"
+            }
+          ],
+          "required": true
+        }
+      ],
+      "valid": false
     }
   ]
 }
