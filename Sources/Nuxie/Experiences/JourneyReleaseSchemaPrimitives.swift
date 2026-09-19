@@ -1103,8 +1103,28 @@ enum JourneyReleaseSchemaPrimitives {
             guard let key = asset["key"] as? String else { try invalid("render.assets[\(index)].key") }
             return key
         }
-        guard zip(assetKeys, assetKeys.dropFirst()).allSatisfy(javascriptStringPrecedes) else {
-            try invalid("render.assets")
+        for index in assetKeys.indices.dropFirst() {
+            let previousKey = assetKeys[index - 1]
+            let key = assetKeys[index]
+            if javascriptStringPrecedes(previousKey, key) { continue }
+            let previous = try dictionary(assets[index - 1], path: "render.assets")
+            let current = try dictionary(assets[index], path: "render.assets")
+            guard previousKey == key,
+                  previous["kind"] as? String == "video",
+                  current["kind"] as? String == "video",
+                  let previousSource = previous["sourceAssetKey"] as? String,
+                  let currentSource = current["sourceAssetKey"] as? String,
+                  javascriptStringPrecedes(previousSource, currentSource) else {
+                try invalid("render.assets")
+            }
+            // Multiple scene bindings can share one immutable video object.
+            // Binding identity and requiredness do not change its bytes or media metadata.
+            let bindingFields: Set<String> = ["riveAssetId", "riveUniqueName", "sourceAssetKey", "required"]
+            let previousObject = previous.filter { !bindingFields.contains($0.key) }
+            let currentObject = current.filter { !bindingFields.contains($0.key) }
+            guard NSDictionary(dictionary: previousObject).isEqual(to: currentObject) else {
+                try invalid("render.assets")
+            }
         }
     }
 

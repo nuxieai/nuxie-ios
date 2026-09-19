@@ -291,8 +291,15 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
             "durationMs": .number(2000), "videoCodec": .string("avc1.42e01e"), "audioCodec": .null,
             "captionTracks": .array([]),
         ])
+        guard case .object(var sharedVideo) = video else {
+            return XCTFail("Video fixture must be an object")
+        }
+        sharedVideo["sourceAssetKey"] = .string("asset:greeting-copy")
+        sharedVideo["riveAssetId"] = .number(2)
+        sharedVideo["riveUniqueName"] = .string("video-greeting-2")
+        sharedVideo["required"] = .bool(false)
         let snapshot = try replacingRenderedArtifact(try await authenticatedRenderedSnapshot(fixture),
-            sceneBytes: sceneBytes, renderer: "nux", assets: [video], videoElements: [.object([
+            sceneBytes: sceneBytes, renderer: "nux", assets: [video, .object(sharedVideo)], videoElements: [.object([
                 "sourceArtboardIndex": .number(0),
                 "artboardId": .string("welcome"), "viewNodeId": .string("greeting"),
                 "renderedNodeId": .string("greeting-instance"), "componentId": .number(7),
@@ -319,6 +326,12 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         XCTAssertNil(retained.bytes)
         XCTAssertEqual(retained.fileURL, directory.appendingPathComponent(digest))
         XCTAssertEqual(artifact.payload.renderPlan.videos.first?.sourceAssetKey, "asset:greeting")
+        XCTAssertEqual(artifact.payload.renderPlan.videos.map(\.sourceAssetKey), ["asset:greeting", "asset:greeting-copy"])
+        XCTAssertEqual(artifact.payload.renderPlan.videos.map(\.required), [true, false])
+        let videoFiles = artifact.payload.assets.filter { $0.kind == .video }.compactMap(\.fileURL)
+        XCTAssertEqual(videoFiles.count, 2)
+        XCTAssertEqual(Set(videoFiles), [directory.appendingPathComponent(digest)],
+            "Distinct scene bindings must share one verified video file")
         XCTAssertEqual(artifact.payload.renderPlan.videoElements, [.init(
             sourceArtboardIndex: 0,
             artboardId: "welcome", viewNodeId: "greeting", renderedNodeId: "greeting-instance",
