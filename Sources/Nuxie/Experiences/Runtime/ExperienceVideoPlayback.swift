@@ -3,6 +3,7 @@ import Accelerate
 import AVFoundation
 import CoreVideo
 import Foundation
+import MediaAccessibility
 import QuartzCore
 import NuxieRuntime
 #if canImport(UIKit)
@@ -77,13 +78,22 @@ final class ExperienceVideoPlayback {
         }
     }
 
-    private struct PreparedMedia {
+    private final class PreparedMedia {
         let file: MediaFile
         let asset: AVURLAsset
         let duration: Double
         let decodeCost: UInt64
-        let captionLanguage: String
-        let captions: [NuxieNativeVideoCaptionCue]
+        let tracks: [NativeExperienceVideoAsset.CaptionTrack]
+        var captionLanguage: String
+        var captions: [NuxieNativeVideoCaptionCue]
+        var captionCache: [Int: [NuxieNativeVideoCaptionCue]]
+        init(file: MediaFile, asset: AVURLAsset, duration: Double, decodeCost: UInt64,
+             tracks: [NativeExperienceVideoAsset.CaptionTrack], selected: NativeExperienceVideoAsset.CaptionTrack?,
+             captions: [NuxieNativeVideoCaptionCue]) {
+            self.file = file; self.asset = asset; self.duration = duration; self.decodeCost = decodeCost
+            self.tracks = tracks; self.captionLanguage = selected?.language ?? ""; self.captions = captions
+            self.captionCache = selected.map { [$0.streamIndex: captions] } ?? [:]
+        }
     }
 
     private struct Source {
@@ -106,6 +116,9 @@ final class ExperienceVideoPlayback {
     private var sources: [UInt32: Source] = [:]
     private var decoders: [Decoder] = []
     private var observers: [NSObjectProtocol] = []
+    private var captionRefreshTask: Task<Void, Never>?
+    private var captionRefreshGeneration: UInt64 = 0
+    private var systemCaptionLanguages: () -> [String] = { ExperienceVideoCaptionSelection.preferredLanguages }
     private var suspensionReasons: Set<UInt32> = []
     private struct Admission {
         var elapsed: Double = 0
@@ -133,12 +146,15 @@ final class ExperienceVideoPlayback {
     static func open(runtime: NuxieNativeRuntime, payload: AuthenticatedRuntimePayload, artboardBounds: CGRect,
         decoderBudget: (() -> NuxieNativeVideoDecoderBudget)? = nil,
         decoderPool: ExperienceVideoDecoderPool? = nil,
-        preferredCaptionLanguages: [String] = ExperienceVideoCaptionSelection.preferredLanguages) async throws -> ExperienceVideoPlayback {
+        preferredCaptionLanguages: [String]? = nil,
+        systemCaptionLanguages: @escaping () -> [String] = { ExperienceVideoCaptionSelection.preferredLanguages }) async throws -> ExperienceVideoPlayback {
         guard decoderBudget == nil || decoderPool == nil else {
             throw ExperienceInteractiveScreenError.stateContract("video playback requires a single budget owner")
         }
         let host = ExperienceVideoPlayback(runtime: runtime, artboardBounds: artboardBounds, lease: payload.videoFileLease,
             targets: payload.renderPlan.videoElements, decoderBudget: decoderBudget, decoderPool: decoderPool)
+        host.systemCaptionLanguages = systemCaptionLanguages
+        let captionLanguages = preferredCaptionLanguages ?? systemCaptionLanguages()
         do {
             var prepared: [String: PreparedMedia] = [:]
             for declaration in payload.renderPlan.videos {
@@ -152,7 +168,7 @@ final class ExperienceVideoPlayback {
                     continue
                 }
                 let captionIndex = ExperienceVideoCaptionSelection.index(languages: declaration.captionTracks.map(\.language),
-                    preferred: preferredCaptionLanguages)
+                    preferred: captionLanguages)
                 let captionTrack = captionIndex.map { declaration.captionTracks[$0] }
                 let key = "\(declaration.sha256):\(captionTrack?.streamIndex ?? -1)"
                 let media: PreparedMedia
@@ -173,7 +189,7 @@ final class ExperienceVideoPlayback {
                         } else { cues = [] }
                         let decodeCost = decoderBudget == nil && decoderPool == nil ? 0 : try await ExperienceVideoDecodeCost.read(url: file.url)
                         media = PreparedMedia(file: file, asset: asset, duration: duration, decodeCost: decodeCost,
-                            captionLanguage: captionTrack?.language ?? "", captions: cues)
+                            tracks: declaration.captionTracks, selected: captionTrack, captions: cues)
                         prepared[key] = media
                     } catch {
                         // Optional media failure keeps the scene and its poster usable.
@@ -188,10 +204,62 @@ final class ExperienceVideoPlayback {
             }
             try await host.reconcile()
             host.observeLifecycle()
+            if preferredCaptionLanguages == nil {
+                host.observeCaptionPreferences()
+                // Close the read/subscription gap across asynchronous media preparation.
+                try await host.refreshCaptionLanguages(systemCaptionLanguages())
+            }
             return host
         } catch {
             host.close()
             throw error
+        }
+    }
+
+    private func observeCaptionPreferences() {
+        let names = [Notification.Name(kMACaptionAppearanceSettingsChangedNotification as String),
+                     NSLocale.currentLocaleDidChangeNotification]
+        for name in names {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, !self.closed else { return }
+                    self.captionRefreshTask?.cancel()
+                    self.captionRefreshTask = Task { [weak self] in
+                        guard let self else { return }
+                        do { try await self.refreshCaptionLanguages(self.systemCaptionLanguages()) }
+                        catch is CancellationError { }
+                        catch { NuxieLogger.shared.warning("Video caption preference refresh failed: \(error)") }
+                    }
+                }
+            })
+        }
+    }
+
+    func refreshCaptionLanguages(_ languages: [String]) async throws {
+        guard !closed else { return }
+        captionRefreshGeneration &+= 1
+        let generation = captionRefreshGeneration
+        var visited = Set<ObjectIdentifier>()
+        for source in sources.values {
+            guard let media = source.media, visited.insert(ObjectIdentifier(media)).inserted,
+                  let index = ExperienceVideoCaptionSelection.index(languages: media.tracks.map(\.language), preferred: languages) else { continue }
+            let track = media.tracks[index]
+            let cues: [NuxieNativeVideoCaptionCue]
+            if let cached = media.captionCache[track.streamIndex] { cues = cached }
+            else { cues = try await ExperienceVideoCaptions.read(url: media.file.url, track: track) }
+            try Task.checkCancellation()
+            guard !closed, generation == captionRefreshGeneration else { return }
+            media.captionCache[track.streamIndex] = cues
+            media.captionLanguage = track.language ?? ""
+            media.captions = cues
+        }
+        let occurrences = try await runtime.videos()
+        for occurrence in occurrences {
+            try Task.checkCancellation()
+            guard !closed, generation == captionRefreshGeneration else { return }
+            guard let media = sources[occurrence.assetID]?.media else { continue }
+            try await runtime.videoSetCaptions(componentID: occurrence.componentID,
+                language: media.captionLanguage, cues: media.captions)
         }
     }
 
@@ -590,6 +658,9 @@ final class ExperienceVideoPlayback {
     func close() {
         guard !closed else { return }
         closed = true
+        captionRefreshGeneration &+= 1
+        captionRefreshTask?.cancel()
+        captionRefreshTask = nil
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
         for decoder in decoders { dispose(decoder) }
