@@ -158,6 +158,12 @@ internal actor ProfileService: ProfileServiceProtocol {
     private let diskCache: any CachedProfileStore
     private let authorityStore: any ProfileAuthorityBindingStore
     private let admissionGeneration = ProfileAdmissionGeneration()
+    private struct AdmissionPreparation {
+        let generation: UInt64
+        let task: Task<PreparedJourneyProfileArtifacts, Error>
+    }
+
+    private var admissionPreparation: AdmissionPreparation?
     private var initialDiskLoadTask: Task<Void, Never>?
     private var initialDiskLoadDone = false
     private let initialDiskLoadNeeded: Bool
@@ -431,8 +437,9 @@ internal actor ProfileService: ProfileServiceProtocol {
             authority: authority
         )
         guard isCurrent(admission) else { return false }
-        let preparedArtifacts = try await experiences.prepareJourneyProfile(
-            preparedProfile.snapshot
+        let preparedArtifacts = try await prepareArtifacts(
+            preparedProfile.snapshot,
+            admission: admission
         )
         guard isCurrent(admission) else { return false }
 
@@ -508,6 +515,7 @@ internal actor ProfileService: ProfileServiceProtocol {
 
     func localeDidChange() async {
         let distinctId = identity.getDistinctId()
+        cancelAdmissionPreparation()
         let generation = admissionGeneration.invalidate()
         cachedProfile = nil
         _ = await journeyProfiles.clear(distinctId: distinctId)
@@ -519,6 +527,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     func clearCache(distinctId: String) async {
+        cancelAdmissionPreparation()
         let generation = admissionGeneration.invalidate()
         cachedProfile = nil
         _ = await journeyProfiles.clear(distinctId: distinctId)
@@ -531,6 +540,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     func clearAllCache() async {
+        cancelAdmissionPreparation()
         let generation = admissionGeneration.invalidate()
         cachedProfile = nil
         await journeyProfiles.clearAll()
@@ -584,11 +594,46 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     private func beginAdmission(distinctId: String) -> Admission {
-        .init(
+        cancelAdmissionPreparation()
+        return .init(
             distinctId: distinctId,
             generation: admissionGeneration.claim(),
             locale: effectiveLocale
         )
+    }
+
+    private func prepareArtifacts(
+        _ snapshot: JourneyProfileCatalog.Snapshot?,
+        admission: Admission
+    ) async throws -> PreparedJourneyProfileArtifacts {
+        try Task.checkCancellation()
+        let experiences = experiences
+        let task = Task {
+            try Task.checkCancellation()
+            return try await experiences.prepareJourneyProfile(snapshot)
+        }
+        admissionPreparation = AdmissionPreparation(
+            generation: admission.generation,
+            task: task
+        )
+        defer {
+            // An obsolete completion must not release a newer admission's task.
+            if admissionPreparation?.generation == admission.generation {
+                admissionPreparation = nil
+            }
+        }
+        return try await withTaskCancellationHandler {
+            let prepared = try await task.value
+            try Task.checkCancellation()
+            return prepared
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func cancelAdmissionPreparation() {
+        admissionPreparation?.task.cancel()
+        admissionPreparation = nil
     }
 
     private func isCurrent(_ admission: Admission) -> Bool {

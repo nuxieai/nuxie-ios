@@ -128,7 +128,7 @@ private actor RejectingHighWaterCommitStore {
 
 extension RejectingHighWaterCommitStore: JourneyReleaseHighWaterStore {}
 
-final class JourneyProfileServiceTests: XCTestCase {
+final class JourneyProfileServiceTests: JourneyTestCase {
     func testForegroundAlwaysRevalidatesFreshCanonicalProfile() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let response = ProfileResponse(planeProfile: fixture.profile)
@@ -478,6 +478,130 @@ final class JourneyProfileServiceTests: XCTestCase {
         XCTAssertEqual(retainedProfile?.planeProfile.releases.count, 1)
     }
 
+    func testCancellingProfilePreparationPreservesActiveVideoLease() async throws {
+        let directory = temporaryDirectory()
+        defer { StubURLProtocol.reset(); removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let scene = Data("nux-scene".utf8)
+        let video = Data(repeating: 7, count: 200_000)
+        let digest = SHA256Provider.hexDigest(video)
+        let snapshot = try replacingRenderedArtifact(
+            try await authenticatedRenderedSnapshot(fixture), sceneBytes: scene, renderer: "nux",
+            assets: [.object([
+                "kind": .string("video"), "key": .string("assets/sha256/\(digest).mp4"),
+                "sha256": .string(digest), "sizeBytes": .number(Double(video.count)),
+                "contentType": .string("video/mp4"), "required": .bool(true),
+                "sourceAssetKey": .string("asset:greeting"), "riveAssetId": .number(1),
+                "riveUniqueName": .string("video-greeting-1"), "width": .number(64), "height": .number(32),
+                "durationMs": .number(2000), "videoCodec": .string("avc1.42e01e"),
+                "audioCodec": .null, "captionTracks": .array([]),
+            ])])
+        StubURLProtocol.register(matcher: { _ in true }) { request in
+            let bytes = request.url?.pathExtension == "mp4" ? video : scene
+            return (HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200,
+                httpVersion: nil, headerFields: ["Content-Length": String(bytes.count),
+                    "Content-Type": request.url?.pathExtension == "mp4" ? "video/mp4" : "application/vnd.nuxie.scene"])!, bytes)
+        }
+        let store = JourneyReleaseAcquisitionStore(cacheDirectory: directory,
+            urlSession: TestURLSessionProvider.createTestSession())
+        let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
+        let prepared = try await store.preparePresentation(release: release,
+            delivery: snapshot.profile.delivery, productResolver: { _ in [] })
+        let artifact = try await prepared.artifactLoader(prepared.experience, nil, "screen_welcome")
+        XCTAssertNotNil(artifact.payload.videoFileLease)
+        try await assertPreparationCancellation(trigger: .locale)
+        let evictionStore = JourneyReleaseAcquisitionStore(cacheDirectory: directory, maximumCacheBytes: 0)
+        try await evictionStore.enforceCacheBudget(protecting: [])
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(digest)), video)
+        withExtendedLifetime(artifact) {}
+    }
+
+    func testSupersedingAdmissionCancelsOnlyObsoletePreparation() async throws {
+        try await assertPreparationCancellation(trigger: .supersede)
+    }
+
+    func testLocaleChangeCancelsObsoletePreparation() async throws {
+        try await assertPreparationCancellation(trigger: .locale)
+    }
+
+    func testResetCancelsObsoletePreparation() async throws {
+        try await assertPreparationCancellation(trigger: .reset)
+    }
+
+    func testClearAllCancelsObsoletePreparation() async throws {
+        try await assertPreparationCancellation(trigger: .clearAll)
+    }
+
+    func testCallerCancellationReachesPreparation() async throws {
+        try await assertPreparationCancellation(trigger: .caller)
+    }
+
+    func testCancelledRefreshKeepsCommittedProfileInstalled() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let response = ProfileResponse(planeProfile: fixture.profile)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let experiences = MockExperienceService()
+        let catalog = try makeCatalog(fixture, store: InMemoryJourneyReleaseHighWaterStore())
+        let service = makeService(cache: InMemoryCachedProfileStore(ttl: nil), identity: identity,
+            api: JourneyProfileSequenceAPI([.response(response), .response(response)],
+                authority: fixture.deliveryAuthority), experiences: experiences, catalog: catalog)
+        _ = try await service.refetchProfile(distinctId: "customer")
+        let entered = expectation(description: "Refresh preparation entered")
+        let cancelled = expectation(description: "Refresh preparation cancelled")
+        let probe = ProfilePreparationCancellationProbe(entered: entered, cancelled: cancelled)
+        experiences.journeyArtifactPreparationHandler = { snapshot in
+            try await probe.prepare(snapshot)
+        }
+        let refresh = Task { try await service.refetchProfile(distinctId: "customer") }
+        await fulfillment(of: [entered], timeout: 2)
+        refresh.cancel()
+        await fulfillment(of: [cancelled], timeout: 2)
+        _ = await refresh.result
+        let retained = await catalog.snapshot(distinctId: "customer")
+        XCTAssertNotNil(retained)
+        XCTAssertEqual(experiences.committedJourneyReleaseCounts.compactMap { $0 }, [1])
+    }
+
+    private enum CancellationTrigger { case supersede, locale, reset, clearAll, caller }
+
+    private func assertPreparationCancellation(trigger: CancellationTrigger) async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let response = ProfileResponse(planeProfile: fixture.profile)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let experiences = MockExperienceService()
+        let entered = expectation(description: "Obsolete preparation entered")
+        let cancelled = expectation(description: "Obsolete preparation cancelled")
+        let probe = ProfilePreparationCancellationProbe(entered: entered, cancelled: cancelled)
+        experiences.journeyArtifactPreparationHandler = { snapshot in
+            try await probe.prepare(snapshot)
+        }
+        let service = makeService(
+            cache: InMemoryCachedProfileStore(ttl: nil), identity: identity,
+            api: JourneyProfileSequenceAPI([.response(response), .response(response)],
+                authority: fixture.deliveryAuthority),
+            experiences: experiences,
+            catalog: try makeCatalog(fixture, store: InMemoryJourneyReleaseHighWaterStore())
+        )
+        let obsolete = Task { try await service.refetchProfile(distinctId: "customer") }
+        await fulfillment(of: [entered], timeout: 2)
+        switch trigger {
+        case .supersede:
+            _ = try await service.refetchProfile(distinctId: "customer")
+        case .locale: await service.localeDidChange()
+        case .reset: await service.clearCache(distinctId: "customer")
+        case .clearAll: await service.clearAllCache()
+        case .caller: obsolete.cancel()
+        }
+        await fulfillment(of: [cancelled], timeout: 2)
+        // Bound cleanup even when the pre-fix implementation fails to cancel.
+        obsolete.cancel()
+        _ = await obsolete.result
+        XCTAssertEqual(experiences.committedJourneyReleaseCounts.compactMap { $0 },
+            trigger == .supersede ? [1] : [])
+    }
+
     private func makeService(
         cache: any CachedProfileStore,
         identity: MockIdentityService,
@@ -516,5 +640,30 @@ final class JourneyProfileServiceTests: XCTestCase {
             supportedRuntime: JourneyReleaseRuntime.current,
             highWaterStore: store
         )
+    }
+}
+
+private actor ProfilePreparationCancellationProbe {
+    private let entered: XCTestExpectation
+    private let cancelled: XCTestExpectation
+    private var count = 0
+
+    init(entered: XCTestExpectation, cancelled: XCTestExpectation) {
+        self.entered = entered
+        self.cancelled = cancelled
+    }
+
+    func prepare(_ snapshot: JourneyProfileCatalog.Snapshot?) async throws -> PreparedJourneyProfileArtifacts {
+        count += 1
+        if count == 1 {
+            entered.fulfill()
+            do {
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+            } catch {
+                cancelled.fulfill()
+                throw error
+            }
+        }
+        return PreparedJourneyProfileArtifacts(snapshot: snapshot)
     }
 }
