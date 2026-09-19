@@ -43,6 +43,14 @@
       "capabilities": [
         "native-text-input"
       ]
+    },
+    {
+      "id": "video-captions",
+      "experienceId": "wrapper-video",
+      "capabilities": [
+        "video.playback.v1",
+        "accessible-captions"
+      ]
     }
   ]
 }
