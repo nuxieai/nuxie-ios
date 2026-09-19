@@ -250,6 +250,7 @@ targets:
     platform: iOS
     sources:
       - path: Tests/NuxieUnitTests/Experiences/ExperienceVideoPlaybackTests.swift
+      - path: Tests/NuxieUnitTests/Experiences/ExperienceVideoConcurrencyTests.swift
       - path: fixtures/video
         type: folder
     dependencies:
