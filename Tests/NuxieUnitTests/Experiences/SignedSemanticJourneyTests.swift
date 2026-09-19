@@ -107,7 +107,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
         let descriptorBytes = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))
         let descriptorDocument = try XCTUnwrap(JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any])
         let render = try XCTUnwrap(descriptorDocument["render"] as? [String: Any])
-        let references = [try XCTUnwrap(render["riv"] as? [String: Any])]
+        let references = [try XCTUnwrap(render["nux"] as? [String: Any])]
             + (render["assets"] as? [[String: Any]] ?? [])
             + (descriptorDocument["screenBehaviors"] as? [[String: Any]] ?? []).compactMap {
                 ($0["script"] as? [String: Any])?["artifact"] as? [String: Any]

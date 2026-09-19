@@ -286,8 +286,8 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
             "kind": .string("video"), "key": .string("assets/sha256/\(digest).mp4"),
             "sha256": .string(digest), "sizeBytes": .number(Double(videoBytes.count)),
             "contentType": .string("video/mp4"), "required": .bool(true),
-            "sourceAssetKey": .string("asset:greeting"), "riveAssetId": .number(1),
-            "riveUniqueName": .string("video-greeting-1"), "width": .number(64), "height": .number(32),
+            "sourceAssetKey": .string("asset:greeting"), "authoredAssetId": .number(1),
+            "assetUniqueName": .string("video-greeting-1"), "width": .number(64), "height": .number(32),
             "durationMs": .number(2000), "videoCodec": .string("avc1.42e01e"), "audioCodec": .null,
             "captionTracks": .array([]),
         ])
@@ -295,8 +295,8 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
             return XCTFail("Video fixture must be an object")
         }
         sharedVideo["sourceAssetKey"] = .string("asset:greeting-copy")
-        sharedVideo["riveAssetId"] = .number(2)
-        sharedVideo["riveUniqueName"] = .string("video-greeting-2")
+        sharedVideo["authoredAssetId"] = .number(2)
+        sharedVideo["assetUniqueName"] = .string("video-greeting-2")
         sharedVideo["required"] = .bool(false)
         let snapshot = try replacingRenderedArtifact(try await authenticatedRenderedSnapshot(fixture),
             sceneBytes: sceneBytes, renderer: "nux", assets: [video, .object(sharedVideo)], videoElements: [.object([
@@ -406,7 +406,7 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
                     httpVersion: nil,
                     headerFields: [
                         "Content-Length": String(sceneBytes.count),
-                        "Content-Type": "application/vnd.rive",
+                        "Content-Type": "application/vnd.nuxie.scene",
                     ]
                 )!,
                 sceneBytes
@@ -481,7 +481,7 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
                     httpVersion: nil,
                     headerFields: [
                         "Content-Length": String(sceneBytes.count),
-                        "Content-Type": "application/vnd.rive",
+                        "Content-Type": "application/vnd.nuxie.scene",
                     ]
                 )!,
                 sceneBytes

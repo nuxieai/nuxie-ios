@@ -390,7 +390,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         var tracks: [NativeExperienceVideoAsset.CaptionTrack] = [.init(streamIndex: 2, codec: "mov_text", language: "eng", title: nil)]
         if frenchCaptions { tracks.append(.init(streamIndex: 3, codec: "mov_text", language: "fra", title: nil)) }
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
-            riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: media.count,
+            authoredAssetId: UInt64(id), assetUniqueName: name, sha256: digest, sizeBytes: media.count,
             width: mediaWidth, height: mediaHeight, durationMs: 2022, videoCodec: measurement?.codec ?? "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
         struct ExportedScreen: Decodable { let width: Int; let height: Int }
         struct ExportedTargets: Decodable {
@@ -407,7 +407,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             transitions: [], textInputs: [], images: [], fonts: [], videos: [video], videoElements: exportedTargets.videoElements)
         let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
             journey: JourneyDocument(screens: [.init(id: "screen")]), sceneBytes: scene,
-            assets: [.init(kind: .video, riveAssetID: id, riveUniqueName: name, sourceKey: key, contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: url)])
+            assets: [.init(kind: .video, authoredAssetID: id, assetUniqueName: name, sourceKey: key, contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: url)])
         if preparedPool {
             try await verifyPreparedScreenPool(payload: payload, width: width, height: height)
             return
@@ -864,7 +864,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             from: Data(contentsOf: directory.appendingPathComponent("waiting-inventory.json"))).videoElements
         for required in [false, true] {
             let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
-                riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: bytes.count,
+                authoredAssetId: UInt64(id), assetUniqueName: name, sha256: digest, sizeBytes: bytes.count,
                 width: 64, height: 32, durationMs: 2000, videoCodec: "avc1.42c00a", audioCodec: nil,
                 captionTracks: [], required: required)
             let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "video", buildId: "video", appId: "app", environment: "test"),
@@ -877,7 +877,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 })
             let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
                 journey: JourneyDocument(screens: []), sceneBytes: scene,
-                assets: [.init(kind: .video, riveAssetID: id, riveUniqueName: name, sourceKey: key,
+                assets: [.init(kind: .video, authoredAssetID: id, assetUniqueName: name, sourceKey: key,
                     contentType: "video/mp4", sha256: digest, required: required, bytes: nil, fileURL: url)])
             let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
                 pixelWidth: 320, pixelHeight: 640,
@@ -907,7 +907,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let key = "assets/sha256/\(digest).mp4"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(digest)
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:greeting",
-            riveAssetId: 1, riveUniqueName: "greeting-1", sha256: digest, sizeBytes: 100,
+            authoredAssetId: 1, assetUniqueName: "greeting-1", sha256: digest, sizeBytes: 100,
             width: 64, height: 32, durationMs: 2000, videoCodec: "avc1.42e01e", audioCodec: nil,
             captionTracks: [], required: true)
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "experience", buildId: "build", appId: "app", environment: "test"),
@@ -916,7 +916,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let catalog = [NuxieNativeFileAssetDescriptor(ordinal: 0, kind: .video, authoredID: 1,
             name: "greeting", fileExtension: "mp4", isEmbedded: false, hasContentsRecord: false, requiredProviderFlags: 4)]
         func asset(fileURL: URL?, id: UInt32 = 1, sourceKey: String? = nil, bytes: Data? = nil) -> AuthenticatedRuntimeAsset {
-            .init(kind: .video, riveAssetID: id, riveUniqueName: "greeting-1", sourceKey: sourceKey ?? key,
+            .init(kind: .video, authoredAssetID: id, assetUniqueName: "greeting-1", sourceKey: sourceKey ?? key,
                   contentType: "video/mp4", sha256: digest, required: true, bytes: bytes, fileURL: fileURL)
         }
         XCTAssertTrue(try ExperienceInteractiveAssetBinding.bind(renderPlan: plan,

@@ -50,8 +50,8 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
 }
 
 struct NativeExperienceSystemFontRequirement: Equatable, Sendable {
-    let riveAssetId: UInt64
-    let riveUniqueName: String
+    let authoredAssetId: UInt64
+    let assetUniqueName: String
     let weight: String
     let style: String
 }
@@ -113,8 +113,8 @@ enum NativeExperienceAssetLocation: Equatable, Sendable {
 
 struct NativeExperienceImageAsset: Equatable, Sendable {
     let location: NativeExperienceAssetLocation
-    let riveAssetId: UInt64
-    let riveUniqueName: String
+    let authoredAssetId: UInt64
+    let assetUniqueName: String
     let sha256: String
     let sizeBytes: Int
     let contentType: String
@@ -123,8 +123,8 @@ struct NativeExperienceImageAsset: Equatable, Sendable {
 
 struct NativeExperienceFontAsset: Equatable, Sendable {
     let location: NativeExperienceAssetLocation
-    let riveAssetId: UInt64
-    let riveUniqueName: String
+    let authoredAssetId: UInt64
+    let assetUniqueName: String
     let family: String
     let weight: String
     let style: String
@@ -157,7 +157,7 @@ struct NativeExperienceTextInput: Equatable, Sendable {
         let lineHeight: Double
         let letterSpacing: Double
         let color: UInt32
-        let fontAssetRiveUniqueName: String
+        let fontAssetUniqueName: String
         let textAlign: String?
     }
     let inputId: String
@@ -165,10 +165,10 @@ struct NativeExperienceTextInput: Equatable, Sendable {
     let artboardId: String
     let viewNodeId: String
     let renderedNodeId: String
-    let riveTextObjectKey: String
-    let riveTextRunObjectKey: String
-    let riveTextName: String
-    let riveTextRunName: String
+    let textObjectKey: String
+    let textRunObjectKey: String
+    let textName: String
+    let textRunName: String
     let value: String
     let placeholder: String?
     let editable: Bool
@@ -199,8 +199,8 @@ struct NativeExperienceVideoAsset: Equatable, Sendable {
 
     let location: NativeExperienceAssetLocation
     let sourceAssetKey: String
-    let riveAssetId: UInt64
-    let riveUniqueName: String
+    let authoredAssetId: UInt64
+    let assetUniqueName: String
     let sha256: String
     let sizeBytes: Int
     let width: Int

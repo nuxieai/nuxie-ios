@@ -269,7 +269,7 @@ struct JourneyReleasePinStore: Sendable {
             guard Self.isLowercaseSHA256(object.sha256),
                   object.sizeBytes > 0,
                   object.sizeBytes
-                    <= JourneyReleaseLimits.rivArtifactBytes else {
+                    <= JourneyReleaseLimits.sceneArtifactBytes else {
                 throw JourneyJournalError.invalidState
             }
             let (nextBytes, overflowed) = declaredBytes.addingReportingOverflow(
@@ -380,7 +380,7 @@ struct JourneyReleasePinStore: Sendable {
                     file,
                     maximumBytes: isDescriptor
                         ? Self.maximumReleaseBytes
-                        : JourneyReleaseLimits.rivArtifactBytes
+                        : JourneyReleaseLimits.sceneArtifactBytes
                 )
                 let (nextTotal, overflowed) = totalBytes
                     .addingReportingOverflow(bytes)

@@ -1,0 +1,44 @@
+{
+  "cases": [
+    {
+      "name": "Nuxie scene",
+      "valid": true,
+      "renderer": "nux",
+      "field": "nux",
+      "extension": "nux",
+      "contentType": "application/vnd.nuxie.scene"
+    },
+    {
+      "name": "retired renderer",
+      "valid": false,
+      "renderer": "rive",
+      "field": "riv",
+      "extension": "riv",
+      "contentType": "application/vnd.rive"
+    },
+    {
+      "name": "retired scene field",
+      "valid": false,
+      "renderer": "nux",
+      "field": "riv",
+      "extension": "nux",
+      "contentType": "application/vnd.nuxie.scene"
+    },
+    {
+      "name": "retired extension",
+      "valid": false,
+      "renderer": "nux",
+      "field": "nux",
+      "extension": "riv",
+      "contentType": "application/vnd.nuxie.scene"
+    },
+    {
+      "name": "retired MIME type",
+      "valid": false,
+      "renderer": "nux",
+      "field": "nux",
+      "extension": "nux",
+      "contentType": "application/vnd.rive"
+    }
+  ]
+}

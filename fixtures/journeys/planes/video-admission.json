@@ -6,8 +6,8 @@
     "sizeBytes": 1024,
     "contentType": "video/mp4",
     "sourceAssetKey": "asset:greeting",
-    "riveAssetId": 1,
-    "riveUniqueName": "video-greeting-1",
+    "authoredAssetId": 1,
+    "assetUniqueName": "video-greeting-1",
     "width": 64,
     "height": 32,
     "durationMs": 2000,
@@ -592,8 +592,8 @@
           "sizeBytes": 1024,
           "contentType": "video/mp4",
           "sourceAssetKey": "asset:greeting-copy",
-          "riveAssetId": 2,
-          "riveUniqueName": "video-copy-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "video-copy-2",
           "width": 64,
           "height": 32,
           "durationMs": 2000,
@@ -622,8 +622,8 @@
           "sizeBytes": 1024,
           "contentType": "video/mp4",
           "sourceAssetKey": "asset:greeting-copy",
-          "riveAssetId": 2,
-          "riveUniqueName": "video-copy-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "video-copy-2",
           "width": 64,
           "height": 32,
           "durationMs": 2000,
@@ -652,8 +652,8 @@
           "sizeBytes": 2048,
           "contentType": "video/mp4",
           "sourceAssetKey": "asset:greeting-copy",
-          "riveAssetId": 2,
-          "riveUniqueName": "video-copy-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "video-copy-2",
           "width": 64,
           "height": 32,
           "durationMs": 2000,
@@ -682,8 +682,8 @@
           "sizeBytes": 1024,
           "contentType": "video/mp4",
           "sourceAssetKey": "asset:greeting-copy",
-          "riveAssetId": 2,
-          "riveUniqueName": "video-copy-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "video-copy-2",
           "width": 128,
           "height": 32,
           "durationMs": 2000,
@@ -712,8 +712,8 @@
           "sizeBytes": 1024,
           "contentType": "video/mp4",
           "sourceAssetKey": "asset:greeting-copy",
-          "riveAssetId": 2,
-          "riveUniqueName": "video-copy-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "video-copy-2",
           "width": 64,
           "height": 32,
           "durationMs": 2000,
@@ -735,8 +735,8 @@
           "sizeBytes": 1024,
           "contentType": "video/mp4",
           "sourceAssetKey": "asset:aaa",
-          "riveAssetId": 2,
-          "riveUniqueName": "video-copy-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "video-copy-2",
           "width": 64,
           "height": 32,
           "durationMs": 2000,
@@ -765,8 +765,8 @@
           "sizeBytes": 1024,
           "contentType": "video/mp4",
           "sourceAssetKey": "asset:greeting-copy",
-          "riveAssetId": 1,
-          "riveUniqueName": "video-copy-2",
+          "authoredAssetId": 1,
+          "assetUniqueName": "video-copy-2",
           "width": 64,
           "height": 32,
           "durationMs": 2000,
@@ -784,6 +784,20 @@
         }
       ],
       "valid": false
+    },
+    {
+      "name": "retired asset ID field",
+      "valid": false,
+      "assetPatch": {
+        "riveAssetId": 0
+      }
+    },
+    {
+      "name": "retired asset name field",
+      "valid": false,
+      "assetPatch": {
+        "riveUniqueName": "video-greeting-0"
+      }
     }
   ]
 }

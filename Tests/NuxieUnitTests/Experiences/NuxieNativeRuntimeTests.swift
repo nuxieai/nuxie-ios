@@ -14,13 +14,13 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("fixtures/runtime/system-font-axes")
-        struct Font: Decodable { let location: String; let riveAssetId: UInt32 }
+        struct Font: Decodable { let location: String; let authoredAssetId: UInt32 }
         struct Scene: Decodable { let name: String; let fonts: [Font]? }
         struct Provenance: Decodable { let scenes: [Scene] }
         let provenance = try JSONDecoder().decode(Provenance.self,
             from: Data(contentsOf: directory.appendingPathComponent("provenance.json")))
         let fonts = try XCTUnwrap(provenance.scenes.first { $0.name == "mixed" }?.fonts)
-        let systemID = try XCTUnwrap(fonts.first { $0.location == "system" }?.riveAssetId)
+        let systemID = try XCTUnwrap(fonts.first { $0.location == "system" }?.authoredAssetId)
         let bytes = try Data(contentsOf: directory.appendingPathComponent("mixed.nux"))
         let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
         XCTAssertEqual(assets.count, 2)
@@ -53,13 +53,13 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("fixtures/runtime/system-font-axes")
-        struct Font: Decodable { let location: String; let riveAssetId: UInt32 }
+        struct Font: Decodable { let location: String; let authoredAssetId: UInt32 }
         struct Scene: Decodable { let name: String; let fonts: [Font]? }
         struct Provenance: Decodable { let scenes: [Scene] }
         let provenance = try JSONDecoder().decode(Provenance.self,
             from: Data(contentsOf: directory.appendingPathComponent("provenance.json")))
         let fonts = try XCTUnwrap(provenance.scenes.first { $0.name == "mixed" }?.fonts)
-        let systemID = try XCTUnwrap(fonts.first { $0.location == "system" }?.riveAssetId)
+        let systemID = try XCTUnwrap(fonts.first { $0.location == "system" }?.authoredAssetId)
         let bytes = try Data(contentsOf: directory.appendingPathComponent("mixed.nux"))
         let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
         XCTAssertEqual(assets.count, 2)
@@ -1525,7 +1525,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent(
-                "Fixtures/scripted-generic-commands/renders/sha256/8b0d173101d37e5ac152344a6ab40805897fd1c193d7400f119e231f56e36b07.riv"
+                "Fixtures/scripted-generic-commands/renders/sha256/8b0d173101d37e5ac152344a6ab40805897fd1c193d7400f119e231f56e36b07.nux"
             )
         return try Data(contentsOf: url)
     }

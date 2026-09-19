@@ -1927,7 +1927,7 @@ actor ExperienceInteractiveScreen {
                 pointers: nativePointers,
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID,
-                textRunNames: capturesTextLayout ? textInputs.values.filter(\.editable).map(\.riveTextRunName).sorted() : []
+                textRunNames: capturesTextLayout ? textInputs.values.filter(\.editable).map(\.textRunName).sorted() : []
             )
             if let videoPlayback {
                 let videoActive = try await videoPlayback.tick()
@@ -3449,7 +3449,7 @@ actor ExperienceInteractiveScreen {
         ])
     }
 
-    /// Applies signed manifest text policy before mutating authored Rive runs.
+    /// Applies signed manifest text policy before mutating authored text runs.
     @discardableResult
     func setText(inputID: String, value: String) async throws -> Bool {
         guard let input = textInputs[inputID] else {
@@ -3463,7 +3463,7 @@ actor ExperienceInteractiveScreen {
         return try await operationGate.withLock {
             try await runtime.setTextRuns([
                 NuxieNativeTextRunMutation(
-                    name: input.riveTextRunName,
+                    name: input.textRunName,
                     text: Data(limited.utf8)
                 )
             ])
@@ -3481,7 +3481,7 @@ actor ExperienceInteractiveScreen {
         let runtime = runtime
         return try await operationGate.withLock {
             try await runtime.setSemanticTextRun(captureID: captureID,
-                name: input.riveTextRunName, text: Data(limited.utf8))
+                name: input.textRunName, text: Data(limited.utf8))
         }
     }
 
@@ -3550,7 +3550,7 @@ actor ExperienceInteractiveScreen {
             state = isOccluded ? .occluded : .timeout
         }
         let runtime = runtime
-        let textRuns = textInputs.values.filter(\.editable).map(\.riveTextRunName).sorted()
+        let textRuns = textInputs.values.filter(\.editable).map(\.textRunName).sorted()
         return try await operationGate.withLock { [self] in
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
@@ -4594,13 +4594,13 @@ enum ExperienceInteractiveImageIdentityMap {
     static func make(images: [NativeExperienceImageAsset]) throws -> [String: UInt64] {
         var result: [String: UInt64] = [:]
         for image in images {
-            for key in [image.riveUniqueName, image.location.contentAddressedPath] {
-                if let existing = result[key], existing != image.riveAssetId {
+            for key in [image.assetUniqueName, image.location.contentAddressedPath] {
+                if let existing = result[key], existing != image.authoredAssetId {
                     throw ExperienceInteractiveScreenError.stateContract(
                         "image identity '\(key)' maps to multiple authored assets"
                     )
                 }
-                result[key] = image.riveAssetId
+                result[key] = image.authoredAssetId
             }
         }
         return result
@@ -4615,30 +4615,30 @@ private enum ExperienceInteractiveExternalFontRegistration {
     ) throws {
         for font in renderPlan.fonts {
             guard case .external = font.location else { continue }
-            guard let authoredID = UInt32(exactly: font.riveAssetId),
+            guard let authoredID = UInt32(exactly: font.authoredAssetId),
                   let asset = authenticatedAssets.first(where: {
                       $0.kind == .font
-                          && $0.riveAssetID == authoredID
-                          && $0.riveUniqueName == font.riveUniqueName
+                          && $0.authoredAssetID == authoredID
+                          && $0.assetUniqueName == font.assetUniqueName
                   }) else {
-                throw ExperienceInteractiveScreenError.assetContract(font.riveUniqueName)
+                throw ExperienceInteractiveScreenError.assetContract(font.assetUniqueName)
             }
             guard let bytes = asset.bytes else {
                 if font.required {
                     throw ExperienceInteractiveScreenError.assetContract(
-                        "required CoreText font registration failed: \(font.riveUniqueName)"
+                        "required CoreText font registration failed: \(font.assetUniqueName)"
                     )
                 }
                 continue
             }
             guard ExperienceRuntimeFontRegistry.registerFont(
-                riveUniqueName: font.riveUniqueName,
+                assetUniqueName: font.assetUniqueName,
                 data: bytes,
                 in: scope
             ) != nil else {
                 if font.required {
                     throw ExperienceInteractiveScreenError.assetContract(
-                        "required CoreText font registration failed: \(font.riveUniqueName)"
+                        "required CoreText font registration failed: \(font.assetUniqueName)"
                     )
                 }
                 continue
@@ -4676,34 +4676,34 @@ enum ExperienceInteractiveAssetBinding {
         let declarations = try declarationMap(renderPlan)
         var systemDeclarations: [Key: NativeExperienceSystemFontRequirement] = [:]
         for font in renderPlan.systemFonts {
-            guard let authoredID = UInt32(exactly: font.riveAssetId) else {
-                throw ExperienceInteractiveScreenError.assetContract(font.riveUniqueName)
+            guard let authoredID = UInt32(exactly: font.authoredAssetId) else {
+                throw ExperienceInteractiveScreenError.assetContract(font.assetUniqueName)
             }
-            let key = Key(kind: .font, authoredID: authoredID, uniqueName: font.riveUniqueName)
+            let key = Key(kind: .font, authoredID: authoredID, uniqueName: font.assetUniqueName)
             guard declarations[key] == nil, systemDeclarations.updateValue(font, forKey: key) == nil else {
-                throw ExperienceInteractiveScreenError.assetContract(font.riveUniqueName)
+                throw ExperienceInteractiveScreenError.assetContract(font.assetUniqueName)
             }
         }
         for input in renderPlan.textInputs {
-            let system = renderPlan.systemFonts.first { $0.riveUniqueName == input.style.fontAssetRiveUniqueName }
+            let system = renderPlan.systemFonts.first { $0.assetUniqueName == input.style.fontAssetUniqueName }
             if let system {
                 guard input.style.fontFamily == "System", input.style.fontWeight == system.weight,
                       input.style.fontStyle == system.style else {
-                    throw ExperienceInteractiveScreenError.assetContract(input.style.fontAssetRiveUniqueName)
+                    throw ExperienceInteractiveScreenError.assetContract(input.style.fontAssetUniqueName)
                 }
             } else if input.style.fontFamily == "System" {
-                throw ExperienceInteractiveScreenError.assetContract(input.style.fontAssetRiveUniqueName)
+                throw ExperienceInteractiveScreenError.assetContract(input.style.fontAssetUniqueName)
             }
         }
         var authenticated: [Key: AuthenticatedRuntimeAsset] = [:]
         for asset in authenticatedAssets {
             let key = Key(
                 kind: asset.kind,
-                authoredID: asset.riveAssetID,
-                uniqueName: asset.riveUniqueName
+                authoredID: asset.authoredAssetID,
+                uniqueName: asset.assetUniqueName
             )
             guard let declaration = declarations[key] else {
-                throw ExperienceInteractiveScreenError.assetContract(asset.riveUniqueName)
+                throw ExperienceInteractiveScreenError.assetContract(asset.assetUniqueName)
             }
             let hasRequiredBytes = (asset.kind == .video ? asset.fileURL?.isFileURL == true : asset.bytes != nil)
                 || (!declaration.isEmbedded && !asset.required)
@@ -4714,7 +4714,7 @@ enum ExperienceInteractiveAssetBinding {
                   authenticated.updateValue(asset, forKey: key) == nil,
                   hasRequiredBytes
             else {
-                throw ExperienceInteractiveScreenError.assetContract(asset.riveUniqueName)
+                throw ExperienceInteractiveScreenError.assetContract(asset.assetUniqueName)
             }
         }
         guard authenticated.count == declarations.count else {
@@ -4799,7 +4799,7 @@ enum ExperienceInteractiveAssetBinding {
                 leases.append(lease)
                 externalAssets[ordinal] = lease.candidate.bytes
             } catch let failure as ExperienceRuntimeSystemFontProvider.Failure {
-                throw ExperienceInteractiveScreenError.systemFontPreparation(font.riveUniqueName, failure)
+                throw ExperienceInteractiveScreenError.systemFontPreparation(font.assetUniqueName, failure)
             }
         }
         return Binding(bytes: externalAssets, systemFonts: leases)
@@ -4812,8 +4812,8 @@ enum ExperienceInteractiveAssetBinding {
         for asset in renderPlan.images {
             try append(
                 kind: .image,
-                riveAssetID: asset.riveAssetId,
-                uniqueName: asset.riveUniqueName,
+                authoredAssetID: asset.authoredAssetId,
+                uniqueName: asset.assetUniqueName,
                 location: asset.location,
                 contentType: asset.contentType,
                 sha256: asset.sha256,
@@ -4824,8 +4824,8 @@ enum ExperienceInteractiveAssetBinding {
         for asset in renderPlan.fonts {
             try append(
                 kind: .font,
-                riveAssetID: asset.riveAssetId,
-                uniqueName: asset.riveUniqueName,
+                authoredAssetID: asset.authoredAssetId,
+                uniqueName: asset.assetUniqueName,
                 location: asset.location,
                 contentType: asset.contentType,
                 sha256: asset.sha256,
@@ -4834,7 +4834,7 @@ enum ExperienceInteractiveAssetBinding {
             )
         }
         for asset in renderPlan.videos {
-            try append(kind: .video, riveAssetID: asset.riveAssetId, uniqueName: asset.riveUniqueName,
+            try append(kind: .video, authoredAssetID: asset.authoredAssetId, uniqueName: asset.assetUniqueName,
                        location: asset.location, contentType: "video/mp4", sha256: asset.sha256,
                        required: asset.required, to: &result)
         }
@@ -4843,7 +4843,7 @@ enum ExperienceInteractiveAssetBinding {
 
     private static func append(
         kind: AuthenticatedRuntimeAsset.Kind,
-        riveAssetID: UInt64,
+        authoredAssetID: UInt64,
         uniqueName: String,
         location: NativeExperienceAssetLocation,
         contentType: String,
@@ -4851,7 +4851,7 @@ enum ExperienceInteractiveAssetBinding {
         required: Bool,
         to result: inout [Key: Declaration]
     ) throws {
-        guard let authoredID = UInt32(exactly: riveAssetID) else {
+        guard let authoredID = UInt32(exactly: authoredAssetID) else {
             throw ExperienceInteractiveScreenError.assetContract(uniqueName)
         }
         let key = Key(kind: kind, authoredID: authoredID, uniqueName: uniqueName)

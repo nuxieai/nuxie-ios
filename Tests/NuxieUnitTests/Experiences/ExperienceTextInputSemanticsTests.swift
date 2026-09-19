@@ -498,12 +498,12 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
 
     private func makePlan(secure: Bool? = nil, textRunName: String = "run", multiline: Bool? = nil) -> NativeExperienceRenderPlan {
         let input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",
-            viewNodeId: "v", renderedNodeId: "r", riveTextObjectKey: "text", riveTextRunObjectKey: "run",
-            riveTextName: "text", riveTextRunName: textRunName, value: "saved", placeholder: "Name", editable: true,
+            viewNodeId: "v", renderedNodeId: "r", textObjectKey: "text", textRunObjectKey: "run",
+            textName: "text", textRunName: textRunName, value: "saved", placeholder: "Name", editable: true,
             geometry: .init(xPath: "x", yPath: "y", widthPath: "w", heightPath: "h", rotationPath: "r",
                 scaleXPath: "sx", scaleYPath: "sy"),
             style: .init(fontFamily: "system", fontWeight: "normal", fontStyle: "normal", fontSize: 16,
-                lineHeight: 20, letterSpacing: 0, color: 0, fontAssetRiveUniqueName: "", textAlign: nil),
+                lineHeight: 20, letterSpacing: 0, color: 0, fontAssetUniqueName: "", textAlign: nil),
             keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: nil, responseFieldKey: "name")
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "b", appId: "a", environment: "test"),
             scene: .init(key: "scene", sha256: "", sizeBytes: 0), entry: .init(screenId: "screen"),

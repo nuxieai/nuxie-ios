@@ -326,11 +326,11 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             struct Style: Decodable {
                 let fontFamily: String; let fontWeight: String; let fontStyle: String
                 let fontSize: Double; let lineHeight: Double; let letterSpacing: Double
-                let color: UInt32; let fontAssetRiveUniqueName: String; let textAlign: String?
+                let color: UInt32; let fontAssetUniqueName: String; let textAlign: String?
             }
             let viewNodeId: String; let renderedNodeId: String; let artboardId: String
-            let riveTextObjectKey: String; let riveTextRunObjectKey: String
-            let riveTextName: String; let riveTextRunName: String; let value: String
+            let textObjectKey: String; let textRunObjectKey: String
+            let textName: String; let textRunName: String; let value: String
             let editable: Bool; let multiline: Bool; let secureTextEntry: Bool?; let style: Style
         }
         struct Report: Decodable {
@@ -347,28 +347,28 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         let sha = "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5"
         let fontBytes = try Data(contentsOf: directory.appendingPathComponent("\(sha).otf"))
         let inputs = try report.builtPackageMetadata.textInputs.map { item in
-            let prefix = try XCTUnwrap(expected.geometry.first { $0.runName == item.riveTextRunName }).path
+            let prefix = try XCTUnwrap(expected.geometry.first { $0.runName == item.textRunName }).path
             return NativeExperienceTextInput(inputId: item.viewNodeId, screenId: "screen", artboardId: item.artboardId,
                 viewNodeId: item.viewNodeId, renderedNodeId: item.renderedNodeId,
-                riveTextObjectKey: item.riveTextObjectKey, riveTextRunObjectKey: item.riveTextRunObjectKey,
-                riveTextName: item.riveTextName, riveTextRunName: item.riveTextRunName,
+                textObjectKey: item.textObjectKey, textRunObjectKey: item.textRunObjectKey,
+                textName: item.textName, textRunName: item.textRunName,
                 value: item.value, placeholder: nil, editable: item.editable,
                 geometry: .init(xPath: "\(prefix)/x", yPath: "\(prefix)/y", widthPath: "\(prefix)/width",
                     heightPath: "\(prefix)/height", rotationPath: "\(prefix)/rotation", scaleXPath: "\(prefix)/scaleX", scaleYPath: "\(prefix)/scaleY"),
                 style: .init(fontFamily: item.style.fontFamily, fontWeight: item.style.fontWeight,
                     fontStyle: item.style.fontStyle, fontSize: item.style.fontSize, lineHeight: item.style.lineHeight,
                     letterSpacing: item.style.letterSpacing, color: item.style.color,
-                    fontAssetRiveUniqueName: item.style.fontAssetRiveUniqueName, textAlign: item.style.textAlign),
+                    fontAssetUniqueName: item.style.fontAssetUniqueName, textAlign: item.style.textAlign),
                 keyboardType: nil, secureTextEntry: item.secureTextEntry ?? false, multiline: item.multiline, maxLength: nil, responseFieldKey: nil)
         }
-        let fontName = try XCTUnwrap(inputs.first).style.fontAssetRiveUniqueName
+        let fontName = try XCTUnwrap(inputs.first).style.fontAssetUniqueName
         let scope = ExperienceRuntimeFontScope()
         defer { scope.close() }
-        let registeredName = try XCTUnwrap(ExperienceRuntimeFontRegistry.registerFont(riveUniqueName: fontName, data: fontBytes, in: scope))
+        let registeredName = try XCTUnwrap(ExperienceRuntimeFontRegistry.registerFont(assetUniqueName: fontName, data: fontBytes, in: scope))
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "published", appId: "a", environment: "test"),
             scene: .init(key: "scene", sha256: "", sizeBytes: 0), entry: .init(screenId: "screen"),
             screens: [], transitions: [], textInputs: inputs, images: [], fonts: [
-                .init(location: .external(key: sha), riveAssetId: 0, riveUniqueName: fontName,
+                .init(location: .external(key: sha), authoredAssetId: 0, assetUniqueName: fontName,
                     family: "Fixture Sans", weight: "400", style: "normal", sha256: sha,
                     sizeBytes: fontBytes.count, contentType: "font/otf", format: "otf", required: true)
             ])
@@ -405,7 +405,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                 .setNumber(instance: root, path: "requestedFontSize", value: item.fontSize),
                 .setNumber(instance: root, path: "requestedLineHeight", value: item.lineHeight),
             ])
-            let step = try await runtime.step(elapsedSeconds: 0, textRunNames: inputs.map(\.riveTextRunName))
+            let step = try await runtime.step(elapsedSeconds: 0, textRunNames: inputs.map(\.textRunName))
             guard case .captured(let geometry) = step.textGeometry else { return XCTFail("No native geometry") }
             let native = try await runtime.snapshot()
             let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: native.rootInstanceID,
@@ -449,7 +449,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                     initialWrites = writes
                 }
                 for (index, editor) in fields.enumerated() {
-                    let captured = try XCTUnwrap(geometry[inputs[index].riveTextRunName])
+                    let captured = try XCTUnwrap(geometry[inputs[index].textRunName])
                     XCTAssertEqual(editor.font?.fontName, registeredName)
                     XCTAssertEqual(editor.font?.pointSize, CGFloat(item.fontSize))
                     if editor.isSecureTextEntry {
@@ -506,7 +506,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             let editors = surface.subviews.compactMap { $0 as? UITextView }.sorted { $0.center.y < $1.center.y }
             XCTAssertEqual(editors.count, inputs.count)
             for (index, editor) in editors.enumerated() {
-                let field = try XCTUnwrap(geometry[inputs[index].riveTextRunName])
+                let field = try XCTUnwrap(geometry[inputs[index].textRunName])
                 let baseline = try XCTUnwrap(field.firstBaseline)
                 let expectedPoint = CGPoint(x: 0, y: baseline).applying(field.contentTransform)
                 let first = try XCTUnwrap(baselines(editor).first)
@@ -549,8 +549,8 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         let caret = editor.map { $0.caretRect(for: $0.beginningOfDocument) }
         let fields = surface.subviews.compactMap { $0 as? UITextField }
         let fieldCarets = fields.map { $0.textInputView.convert($0.caretRect(for: $0.beginningOfDocument), to: surface) }
-        _ = try await runtime.setTextRuns(inputs.map { .init(name: $0.riveTextRunName, text: Data()) })
-        let blank = try await runtime.step(elapsedSeconds: 0, textRunNames: inputs.map(\.riveTextRunName))
+        _ = try await runtime.setTextRuns(inputs.map { .init(name: $0.textRunName, text: Data()) })
+        let blank = try await runtime.step(elapsedSeconds: 0, textRunNames: inputs.map(\.textRunName))
         guard case .captured(let blankGeometry) = blank.textGeometry else { return XCTFail("No blank geometry") }
         XCTAssertTrue(blankGeometry.values.allSatisfy { $0.firstBaseline == nil })
         guard let drawable = layer.nextDrawable() else { throw XCTSkip("No blank drawable") }
@@ -748,17 +748,17 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
 
     private func plan(_ item: Fixture.Case, text: String, prefix: String = "", multiline: Bool = true, secure: Bool = false, systemWeight: String? = nil) -> NativeExperienceRenderPlan {
         let input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",
-            viewNodeId: "v", renderedNodeId: "r", riveTextObjectKey: "text", riveTextRunObjectKey: "run",
-            riveTextName: "text", riveTextRunName: "run", value: text, placeholder: nil, editable: true,
+            viewNodeId: "v", renderedNodeId: "r", textObjectKey: "text", textRunObjectKey: "run",
+            textName: "text", textRunName: "run", value: text, placeholder: nil, editable: true,
             geometry: .init(xPath: "\(prefix)x", yPath: "\(prefix)y", widthPath: "\(prefix)w", heightPath: "\(prefix)h", rotationPath: "\(prefix)r",
                 scaleXPath: "\(prefix)sx", scaleYPath: "\(prefix)sy"),
             style: .init(fontFamily: systemWeight == nil ? "system" : "System", fontWeight: systemWeight ?? "normal", fontStyle: "normal", fontSize: item.fontSize,
-                lineHeight: item.lineHeight, letterSpacing: 0, color: 0, fontAssetRiveUniqueName: systemWeight == nil ? "" : "system-1", textAlign: nil),
+                lineHeight: item.lineHeight, letterSpacing: 0, color: 0, fontAssetUniqueName: systemWeight == nil ? "" : "system-1", textAlign: nil),
             keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: nil, responseFieldKey: "answer")
         return NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "b", appId: "a", environment: "test"),
             scene: .init(key: "scene", sha256: "", sizeBytes: 0), entry: .init(screenId: "screen"),
             screens: [], transitions: [], textInputs: [input], images: [], fonts: [],
-            systemFonts: systemWeight.map { [.init(riveAssetId: 1, riveUniqueName: "system-1", weight: $0, style: "normal")] } ?? [])
+            systemFonts: systemWeight.map { [.init(authoredAssetId: 1, assetUniqueName: "system-1", weight: $0, style: "normal")] } ?? [])
     }
 }
 #endif

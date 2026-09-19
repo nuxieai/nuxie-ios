@@ -6,6 +6,33 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testSharedNuxOnlySceneAdmission() throws {
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/scene-admission.json")
+        let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let fixture = try golden(entryKey: "renderedEntry")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        let source = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        for item in try XCTUnwrap(corpus["cases"] as? [[String: Any]]) {
+            var root = source
+            var render = try XCTUnwrap(root["render"] as? [String: Any])
+            var scene = try XCTUnwrap(render.removeValue(forKey: "nux") as? [String: Any])
+            let digest = try XCTUnwrap(scene["sha256"] as? String)
+            let ext = try XCTUnwrap(item["extension"] as? String)
+            scene["key"] = "renders/sha256/\(digest).\(ext)"
+            scene["contentType"] = item["contentType"]
+            render["renderer"] = item["renderer"]
+            render[try XCTUnwrap(item["field"] as? String)] = scene
+            root["render"] = render
+            let name = try XCTUnwrap(item["name"] as? String)
+            if item["valid"] as? Bool == true {
+                XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), name)
+            } else {
+                XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), name)
+            }
+        }
+    }
+
     func testAuthenticatesBothOrdinalOutputDeclarations() throws {
         let fixture = try golden()
         let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
@@ -364,7 +391,7 @@ final class JourneyReleaseTests: XCTestCase {
         for item in try XCTUnwrap(corpus["cases"] as? [[String: Any]]) {
             var root = original
             var render = try XCTUnwrap(root["render"] as? [String: Any])
-            var scene = try XCTUnwrap(render.removeValue(forKey: "riv") as? [String: Any])
+            var scene = try XCTUnwrap(render.removeValue(forKey: "nux") as? [String: Any])
             let renderer = item["renderer"] as? String ?? "nux"
             let sceneField = renderer == "nux" ? "nux" : "riv"
             scene["key"] = "renders/sha256/\(try XCTUnwrap(scene["sha256"] as? String)).\(sceneField)"
@@ -431,8 +458,8 @@ final class JourneyReleaseTests: XCTestCase {
         var render = try XCTUnwrap(root["render"] as? [String: Any])
         let first = try XCTUnwrap((render["assets"] as? [[String: Any]])?.first)
         var second = first
-        second["riveUniqueName"] = "system-700-2"
-        second["riveAssetId"] = 2
+        second["assetUniqueName"] = "system-700-2"
+        second["authoredAssetId"] = 2
         second["weight"] = "700"
         render["assets"] = [first, second]
         root["render"] = render
@@ -450,7 +477,7 @@ final class JourneyReleaseTests: XCTestCase {
         let digest = String(repeating: "a", count: 64)
         let font: [String: Any] = [
             "kind": "font", "location": "cdn", "family": "Roboto", "weight": "400",
-            "style": "normal", "required": true, "riveAssetId": 1, "riveUniqueName": "roboto-1",
+            "style": "normal", "required": true, "authoredAssetId": 1, "assetUniqueName": "roboto-1",
             "key": "assets/sha256/\(digest).ttf", "sha256": digest, "sizeBytes": 100,
             "contentType": "font/ttf", "format": "ttf",
         ]
@@ -557,7 +584,7 @@ final class JourneyReleaseTests: XCTestCase {
         render["assets"] = [[
             "kind": "font", "location": "system", "family": "System",
             "weight": weight, "style": "normal", "required": true,
-            "riveAssetId": 1, "riveUniqueName": "system-400-1",
+            "authoredAssetId": 1, "assetUniqueName": "system-400-1",
         ]]
         root["render"] = render
         var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])

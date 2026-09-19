@@ -4,8 +4,8 @@ struct AuthenticatedRuntimeAsset: Equatable, Sendable {
     enum Kind: Equatable, Sendable { case image, font, video }
 
     let kind: Kind
-    let riveAssetID: UInt32
-    let riveUniqueName: String
+    let authoredAssetID: UInt32
+    let assetUniqueName: String
     let sourceKey: String
     let contentType: String
     let sha256: String
@@ -157,7 +157,7 @@ struct AcquiredExperienceArtifact: Sendable {
     let identity: Identity
     let sceneURL: URL
     let sceneBytes: Data
-    let assetURLsByRiveUniqueName: [String: URL]
+    let assetURLsByUniqueName: [String: URL]
     let source: ExperienceArtifactSource
     let payload: AuthenticatedRuntimePayload
     let interactivePreparation: ExperienceInteractivePreparationHandle
@@ -170,7 +170,7 @@ struct AcquiredExperienceArtifact: Sendable {
         identity: Identity,
         sceneURL: URL,
         sceneBytes: Data,
-        assetURLsByRiveUniqueName: [String: URL],
+        assetURLsByUniqueName: [String: URL],
         source: ExperienceArtifactSource,
         payload: AuthenticatedRuntimePayload,
         interactivePreparation: ExperienceInteractivePreparationHandle,
@@ -182,7 +182,7 @@ struct AcquiredExperienceArtifact: Sendable {
         self.identity = identity
         self.sceneURL = sceneURL
         self.sceneBytes = sceneBytes
-        self.assetURLsByRiveUniqueName = assetURLsByRiveUniqueName
+        self.assetURLsByUniqueName = assetURLsByUniqueName
         self.source = source
         self.payload = payload
         self.interactivePreparation = interactivePreparation
@@ -192,8 +192,8 @@ struct AcquiredExperienceArtifact: Sendable {
         self.productResolver = productResolver
     }
 
-    func localAssetURL(forRiveUniqueName uniqueName: String) -> URL? {
-        assetURLsByRiveUniqueName[uniqueName]
+    func localAssetURL(forUniqueName uniqueName: String) -> URL? {
+        assetURLsByUniqueName[uniqueName]
     }
 }
 
@@ -206,13 +206,13 @@ struct LoadedExperienceArtifact: Sendable {
     var journey: JourneyDocument { payload.journey }
     var sceneURL: URL { acquired.sceneURL }
     var sceneBytes: Data { acquired.sceneBytes }
-    var assetURLsByRiveUniqueName: [String: URL] {
-        acquired.assetURLsByRiveUniqueName
+    var assetURLsByUniqueName: [String: URL] {
+        acquired.assetURLsByUniqueName
     }
     var source: ExperienceArtifactSource { acquired.source }
 
-    func localAssetURL(forRiveUniqueName uniqueName: String) -> URL? {
-        acquired.localAssetURL(forRiveUniqueName: uniqueName)
+    func localAssetURL(forUniqueName uniqueName: String) -> URL? {
+        acquired.localAssetURL(forUniqueName: uniqueName)
     }
 
     func resolvingProducts(for screenID: String) async throws -> LoadedExperienceArtifact {
@@ -227,7 +227,7 @@ struct LoadedExperienceArtifact: Sendable {
             identity: acquired.identity,
             sceneURL: acquired.sceneURL,
             sceneBytes: acquired.sceneBytes,
-            assetURLsByRiveUniqueName: acquired.assetURLsByRiveUniqueName,
+            assetURLsByUniqueName: acquired.assetURLsByUniqueName,
             source: acquired.source,
             payload: acquired.payload,
             interactivePreparation: acquired.interactivePreparation,

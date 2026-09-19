@@ -674,7 +674,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             return false
         }))
         XCTAssertNil(ExperienceRuntimeFontRegistry.font(
-            forRiveUniqueName: font.riveUniqueName,
+            forUniqueName: font.assetUniqueName,
             contentSHA256: font.sha256,
             size: 16
         ))
@@ -686,14 +686,14 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         defer { Task { try? await screen.close() } }
         XCTAssertNotNil(ExperienceRuntimeFontRegistry.font(
-            forRiveUniqueName: font.riveUniqueName,
+            forUniqueName: font.assetUniqueName,
             contentSHA256: font.sha256,
             size: 16
         ))
 
         try await screen.close()
         XCTAssertNil(ExperienceRuntimeFontRegistry.font(
-            forRiveUniqueName: font.riveUniqueName,
+            forUniqueName: font.assetUniqueName,
             contentSHA256: font.sha256,
             size: 16
         ))
@@ -2908,8 +2908,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let images = [
             NativeExperienceImageAsset(
                 location: .external(key: "shared-key"),
-                riveAssetId: 1,
-                riveUniqueName: "first",
+                authoredAssetId: 1,
+                assetUniqueName: "first",
                 sha256: digest,
                 sizeBytes: 1,
                 contentType: "image/png",
@@ -2917,8 +2917,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             ),
             NativeExperienceImageAsset(
                 location: .external(key: "shared-key"),
-                riveAssetId: 2,
-                riveUniqueName: "second",
+                authoredAssetId: 2,
+                assetUniqueName: "second",
                 sha256: digest,
                 sizeBytes: 1,
                 contentType: "image/png",
@@ -3656,8 +3656,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             if descriptor.kind == .image {
                 images.append(NativeExperienceImageAsset(
                     location: .embedded(member: member),
-                    riveAssetId: UInt64(authoredID),
-                    riveUniqueName: uniqueName,
+                    authoredAssetId: UInt64(authoredID),
+                    assetUniqueName: uniqueName,
                     sha256: assetHash,
                     sizeBytes: assetBytes.count,
                     contentType: "image/png",
@@ -3666,8 +3666,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             } else {
                 fonts.append(NativeExperienceFontAsset(
                     location: .embedded(member: member),
-                    riveAssetId: UInt64(authoredID),
-                    riveUniqueName: uniqueName,
+                    authoredAssetId: UInt64(authoredID),
+                    assetUniqueName: uniqueName,
                     family: "Inter",
                     weight: "400",
                     style: "normal",
@@ -3717,8 +3717,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let runtimeAssets = try images.map { image in
             AuthenticatedRuntimeAsset(
                 kind: .image,
-                riveAssetID: try XCTUnwrap(UInt32(exactly: image.riveAssetId)),
-                riveUniqueName: image.riveUniqueName,
+                authoredAssetID: try XCTUnwrap(UInt32(exactly: image.authoredAssetId)),
+                assetUniqueName: image.assetUniqueName,
                 sourceKey: image.location.contentAddressedPath,
                 contentType: image.contentType,
                 sha256: image.sha256,
@@ -3728,8 +3728,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         } + fonts.map { font in
             AuthenticatedRuntimeAsset(
                 kind: .font,
-                riveAssetID: try XCTUnwrap(UInt32(exactly: font.riveAssetId)),
-                riveUniqueName: font.riveUniqueName,
+                authoredAssetID: try XCTUnwrap(UInt32(exactly: font.authoredAssetId)),
+                assetUniqueName: font.assetUniqueName,
                 sourceKey: font.location.contentAddressedPath,
                 contentType: font.contentType,
                 sha256: font.sha256,

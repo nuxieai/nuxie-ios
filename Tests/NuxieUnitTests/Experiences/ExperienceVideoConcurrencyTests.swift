@@ -148,7 +148,7 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
         let inventory = try JSONDecoder().decode(Inventory.self,
             from: Data(contentsOf: directory.appendingPathComponent("inventory.json")))
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
-            riveAssetId: UInt64(id), riveUniqueName: name, sha256: digest, sizeBytes: bytes.count,
+            authoredAssetId: UInt64(id), assetUniqueName: name, sha256: digest, sizeBytes: bytes.count,
             width: 1280, height: 720, durationMs: 2022, videoCodec: "avc1.42c01f",
             audioCodec: "mp4a.40.2", captionTracks: [], required: true)
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "video", buildId: "concurrency", appId: "app", environment: "test"),
@@ -158,7 +158,7 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
             transitions: [], textInputs: [], images: [], fonts: [], videos: [video], videoElements: inventory.videoElements)
         let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
             journey: JourneyDocument(screens: [.init(id: "screen")]), sceneBytes: scene,
-            assets: [.init(kind: .video, riveAssetID: id, riveUniqueName: name, sourceKey: key,
+            assets: [.init(kind: .video, authoredAssetID: id, assetUniqueName: name, sourceKey: key,
                 contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: url)])
         return payload
     }

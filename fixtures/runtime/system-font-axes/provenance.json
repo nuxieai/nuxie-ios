@@ -11,8 +11,8 @@
           "family": "System",
           "weight": "400",
           "style": "normal",
-          "riveAssetId": 0,
-          "riveUniqueName": "font-system-400-normal-6cda3de3-0",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-400-normal-6cda3de3-0",
           "location": "system",
           "required": true
         }
@@ -36,8 +36,8 @@
           "family": "System",
           "weight": "700",
           "style": "normal",
-          "riveAssetId": 0,
-          "riveUniqueName": "font-system-700-normal-42d2e562-0",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-700-normal-42d2e562-0",
           "location": "system",
           "required": true
         }
@@ -51,8 +51,8 @@
           "family": "Roboto",
           "weight": "400",
           "style": "normal",
-          "riveAssetId": 0,
-          "riveUniqueName": "font-roboto-400-normal-544ed647-0",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-roboto-400-normal-544ed647-0",
           "location": "cdn",
           "sha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1",
           "sizeBytes": 2208,
@@ -64,8 +64,8 @@
           "family": "System",
           "weight": "400",
           "style": "normal",
-          "riveAssetId": 1,
-          "riveUniqueName": "font-system-400-normal-6cda3de3-1",
+          "authoredAssetId": 1,
+          "assetUniqueName": "font-system-400-normal-6cda3de3-1",
           "location": "system",
           "required": true
         }

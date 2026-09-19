@@ -28,11 +28,11 @@ final class SystemFontAcquisitionTests: XCTestCase {
         var render = try XCTUnwrap(root["render"] as? [String: Any])
         var fonts = try XCTUnwrap(render["assets"] as? [[String: Any]])
         let index = try XCTUnwrap(fonts.firstIndex { $0["kind"] as? String == "font" })
-        var name = try XCTUnwrap(fonts[index]["riveUniqueName"] as? String)
+        var name = try XCTUnwrap(fonts[index]["assetUniqueName"] as? String)
         var mixedScene: Data?
         var mixedSceneKey: String?
         fonts[index] = ["kind": "font", "location": "system", "family": "System", "weight": "400",
-            "style": "normal", "required": true, "riveAssetId": try XCTUnwrap(fonts[index]["riveAssetId"]), "riveUniqueName": name]
+            "style": "normal", "required": true, "authoredAssetId": try XCTUnwrap(fonts[index]["authoredAssetId"]), "assetUniqueName": name]
         if mixed {
             let candidates = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
                 .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -44,21 +44,21 @@ final class SystemFontAcquisitionTests: XCTestCase {
             let declarations = try XCTUnwrap(evidence["fonts"] as? [[String: Any]])
             var system = try XCTUnwrap(declarations.first { $0["location"] as? String == "system" })
             system["kind"] = "font"
-            name = try XCTUnwrap(system["riveUniqueName"] as? String)
+            name = try XCTUnwrap(system["assetUniqueName"] as? String)
             let cdn = try XCTUnwrap(declarations.first { $0["location"] as? String == "cdn" })
             let originalRender = try XCTUnwrap((JSONSerialization.jsonObject(with: original) as? [String: Any])?["render"] as? [String: Any])
             var downloadable = try XCTUnwrap((originalRender["assets"] as? [[String: Any]])?.first { $0["kind"] as? String == "font" })
             XCTAssertEqual(downloadable["sha256"] as? String, evidence["cdnFontSha256"] as? String)
-            downloadable["riveAssetId"] = cdn["riveAssetId"]
-            downloadable["riveUniqueName"] = cdn["riveUniqueName"]
+            downloadable["authoredAssetId"] = cdn["authoredAssetId"]
+            downloadable["assetUniqueName"] = cdn["assetUniqueName"]
             fonts = [downloadable, system]
             let sceneBytes = try Data(contentsOf: candidates.appendingPathComponent("mixed.nux"))
             let hash = SHA256Provider.hexDigest(sceneBytes)
             XCTAssertEqual(hash, evidence["sha256"] as? String)
-            let key = "renders/sha256/\(hash).riv"
+            let key = "renders/sha256/\(hash).nux"
             mixedScene = sceneBytes
             mixedSceneKey = key
-            render["riv"] = ["key": key, "sha256": hash, "sizeBytes": sceneBytes.count, "contentType": "application/vnd.rive"]
+            render["nux"] = ["key": key, "sha256": hash, "sizeBytes": sceneBytes.count, "contentType": "application/vnd.nuxie.scene"]
             var screens = try XCTUnwrap(render["screens"] as? [[String: Any]])
             screens[0]["artboardName"] = "One"
             screens[0]["width"] = 320
@@ -66,8 +66,8 @@ final class SystemFontAcquisitionTests: XCTestCase {
             render["screens"] = screens
         }
         render["assets"] = fonts.sorted {
-            ($0["key"] as? String ?? "system-font:\($0["riveUniqueName"]!)")
-                < ($1["key"] as? String ?? "system-font:\($1["riveUniqueName"]!)")
+            ($0["key"] as? String ?? "system-font:\($0["assetUniqueName"]!)")
+                < ($1["key"] as? String ?? "system-font:\($1["assetUniqueName"]!)")
         }
         root["render"] = render
         var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
@@ -116,7 +116,7 @@ final class SystemFontAcquisitionTests: XCTestCase {
             else { data = try Data(contentsOf: file) }
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                 headerFields: ["Content-Length": String(data.count),
-                    "Content-Type": file.pathExtension == "riv" ? "application/vnd.rive" : "font/ttf"])!, data)
+                    "Content-Type": file.pathExtension == "riv" ? "application/vnd.nuxie.scene" : "font/ttf"])!, data)
         }
         let fontCache = ExperienceRuntimeSystemFontCache()
         for offline in [false, true] {
@@ -132,11 +132,11 @@ final class SystemFontAcquisitionTests: XCTestCase {
             let screenID = try XCTUnwrap(release.descriptor.leg.screens.first?.id)
             let acquired = try await presentation.artifactLoader(presentation.experience, nil, screenID)
             XCTAssertEqual(acquired.payload.renderPlan.fonts.count, mixed ? 1 : 0)
-            XCTAssertEqual(acquired.payload.renderPlan.systemFonts.map(\.riveUniqueName), [name])
+            XCTAssertEqual(acquired.payload.renderPlan.systemFonts.map(\.assetUniqueName), [name])
             XCTAssertEqual(acquired.payload.assets.filter { $0.kind == .font }.count, mixed ? 1 : 0)
             if mixed {
                 let cdn = try XCTUnwrap(acquired.payload.assets.first { $0.kind == .font })
-                XCTAssertNotEqual(cdn.riveUniqueName, name)
+                XCTAssertNotEqual(cdn.assetUniqueName, name)
                 XCTAssertEqual(SHA256Provider.hexDigest(try XCTUnwrap(cdn.bytes)), cdn.sha256)
                 XCTAssertEqual(cdn.sha256, "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1")
             }
@@ -167,7 +167,7 @@ final class SystemFontAcquisitionTests: XCTestCase {
                 let requirement = try XCTUnwrap(acquired.payload.renderPlan.systemFonts.first)
                 for declarations in [
                     [], [requirement, requirement],
-                    [.init(riveAssetId: requirement.riveAssetId, riveUniqueName: "wrong-name", weight: "400", style: "normal")],
+                    [.init(authoredAssetId: requirement.authoredAssetId, assetUniqueName: "wrong-name", weight: "400", style: "normal")],
                 ] as [[NativeExperienceSystemFontRequirement]] {
                     do {
                         _ = try await ExperienceInteractivePreparation.prepare(payload: replacingSystemFonts(acquired.payload, declarations))
@@ -176,8 +176,8 @@ final class SystemFontAcquisitionTests: XCTestCase {
                         guard case .assetContract = error else { return XCTFail("Unexpected error: \(error)") }
                     }
                 }
-                let invalid = NativeExperienceSystemFontRequirement(riveAssetId: requirement.riveAssetId,
-                    riveUniqueName: requirement.riveUniqueName, weight: "450", style: "normal")
+                let invalid = NativeExperienceSystemFontRequirement(authoredAssetId: requirement.authoredAssetId,
+                    assetUniqueName: requirement.assetUniqueName, weight: "450", style: "normal")
                 do {
                     _ = try await ExperienceInteractivePreparation.prepare(payload: replacingSystemFonts(acquired.payload, [invalid]))
                     XCTFail("Unusable System request must fail preparation")
@@ -216,7 +216,7 @@ final class SystemFontAcquisitionTests: XCTestCase {
         )
         let artifact = AcquiredExperienceArtifact(
             identity: acquired.identity, sceneURL: acquired.sceneURL,
-            sceneBytes: acquired.sceneBytes, assetURLsByRiveUniqueName: acquired.assetURLsByRiveUniqueName,
+            sceneBytes: acquired.sceneBytes, assetURLsByUniqueName: acquired.assetURLsByUniqueName,
             source: acquired.source, payload: payload, interactivePreparation: handle,
             products: acquired.products, resourceMetrics: acquired.resourceMetrics
         )

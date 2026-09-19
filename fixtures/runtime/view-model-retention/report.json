@@ -74,8 +74,8 @@
       "images": [
         {
           "sourceAssetKey": "https://example.test/archive.png",
-          "riveAssetId": 0,
-          "riveUniqueName": "image-archive-alternative-a233d65e-0",
+          "authoredAssetId": 0,
+          "assetUniqueName": "image-archive-alternative-a233d65e-0",
           "path": "assets/sha256/d39025e0a27e2c6251d563eae7dfacfa3db232cbd5c15780933d3d6cee715a61.png",
           "sha256": "d39025e0a27e2c6251d563eae7dfacfa3db232cbd5c15780933d3d6cee715a61",
           "contentType": "image/png",
@@ -85,8 +85,8 @@
         },
         {
           "sourceAssetKey": "https://example.test/archive.png",
-          "riveAssetId": 1,
-          "riveUniqueName": "image-archive-image-2a87bbc8-1",
+          "authoredAssetId": 1,
+          "assetUniqueName": "image-archive-image-2a87bbc8-1",
           "path": "assets/sha256/d39025e0a27e2c6251d563eae7dfacfa3db232cbd5c15780933d3d6cee715a61.png",
           "sha256": "d39025e0a27e2c6251d563eae7dfacfa3db232cbd5c15780933d3d6cee715a61",
           "contentType": "image/png",

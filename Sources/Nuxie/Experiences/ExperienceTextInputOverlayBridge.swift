@@ -233,8 +233,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var lastAppliedMetrics: [String: ExperienceTextInputMetrics] = [:]
     private var textValuesByInputID: [String: String] = [:]
     private var notifiedTextByInputID: [String: String] = [:]
-    private var fontSHA256ByRiveUniqueName: [String: String] = [:]
-    private var systemFontWeightsByRiveUniqueName: [String: String] = [:]
+    private var fontSHA256ByUniqueName: [String: String] = [:]
+    private var systemFontWeightsByUniqueName: [String: String] = [:]
     private var failedInputIDs = Set<String>()
     private var semanticFields: [String: NuxieNativeSemanticNode]?
     private var activeBuildID: String?
@@ -283,11 +283,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         self.textWriter = textWriter
         self.semanticTextWriter = semanticTextWriter
         if semanticTextWriter != nil { semanticFields = [:] }
-        fontSHA256ByRiveUniqueName = renderPlan.fonts.reduce(into: [:]) {
-            $0[$1.riveUniqueName] = $1.sha256
+        fontSHA256ByUniqueName = renderPlan.fonts.reduce(into: [:]) {
+            $0[$1.assetUniqueName] = $1.sha256
         }
-        systemFontWeightsByRiveUniqueName = renderPlan.systemFonts.reduce(into: [:]) {
-            $0[$1.riveUniqueName] = $1.weight
+        systemFontWeightsByUniqueName = renderPlan.systemFonts.reduce(into: [:]) {
+            $0[$1.assetUniqueName] = $1.weight
         }
 
         let declared = renderPlan.textInputs.filter {
@@ -341,7 +341,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     /// Exact runtime text-run association keeps each real editor in the scene tree once.
     func applySemantics(_ capture: NuxieNativeSemanticCapture) -> [UInt32: UIView] {
         let fields = bindingsByInputID.compactMapValues { binding in
-            capture.fieldsByTextRun[binding.input.riveTextRunName]
+            capture.fieldsByTextRun[binding.input.textRunName]
         }
         let counts = Dictionary(grouping: Array(fields.values), by: \.id).mapValues(\.count)
         let unique = fields.filter { counts[$0.value.id] == 1 }
@@ -456,7 +456,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             return
         }
         let placements = bindingsByInputID.compactMapValues { binding in
-            runtimeGeometryByRun[binding.input.riveTextRunName].flatMap {
+            runtimeGeometryByRun[binding.input.textRunName].flatMap {
                 ExperienceTextInputPlacement(geometry: $0, viewport: transform)
             }
         }
@@ -557,8 +557,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         let fontSize = CGFloat(metrics.fontSize)
         let font = Self.font(
             for: style,
-            contentSHA256: fontSHA256ByRiveUniqueName[style.fontAssetRiveUniqueName],
-            systemWeight: systemFontWeightsByRiveUniqueName[style.fontAssetRiveUniqueName],
+            contentSHA256: fontSHA256ByUniqueName[style.fontAssetUniqueName],
+            systemWeight: systemFontWeightsByUniqueName[style.fontAssetUniqueName],
             size: fontSize
         )
         let color = UIColor(nuxieARGB: style.color)
@@ -872,7 +872,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         }
         if let contentSHA256,
            let font = ExperienceRuntimeFontRegistry.font(
-               forRiveUniqueName: style.fontAssetRiveUniqueName,
+               forUniqueName: style.fontAssetUniqueName,
                contentSHA256: contentSHA256,
                size: size
            ) { return font }
