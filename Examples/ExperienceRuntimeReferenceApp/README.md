@@ -2,8 +2,8 @@
 
 Native iOS host for the signed Journey release contract. It
 depends on the customer SDK target, authenticates the exact inline envelope,
-acquires its content-addressed RIV and assets, imports the scene through the
-final `nux_experience_context_*` ABI, and does not ship a Rive dependency.
+acquires its content-addressed `.nux` scene and assets, imports the scene through the
+final `nux_experience_context_*` ABI, and does not ship an upstream Rive SDK dependency.
 
 The app bundles two neutral SDK-owned contract fixtures:
 
