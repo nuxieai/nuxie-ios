@@ -35,7 +35,7 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
             let bytes = try Data(contentsOf: fileURL)
             let contentType: String
             switch fileURL.pathExtension {
-            case "riv": contentType = "application/vnd.rive"
+            case "nux": contentType = "application/vnd.nuxie.scene"
             case "nux": contentType = "application/vnd.nuxie.scene"
             case "mp4": contentType = "video/mp4"
             case "png": contentType = "image/png"
@@ -124,7 +124,7 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
                 }
                 return name
             })
-            let requiredFixtureCapability = fixture.id == "video-captions" ? "video.playback.v1" : "rive"
+            let requiredFixtureCapability = fixture.id == "video-captions" ? "video.playback.v1" : "nux"
             XCTAssertTrue(expected.contains(requiredFixtureCapability), "Exercise signed fixture requirements: \(fixture.id)")
             XCTAssertEqual(artifact.payload.requiredCapabilities, expected, fixture.id)
             for screen in release.descriptor.leg.screens where screen.id != initialScreenID {

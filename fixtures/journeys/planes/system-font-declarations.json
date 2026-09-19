@@ -11,8 +11,8 @@
           "weight": "100",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -30,8 +30,8 @@
           "weight": "200",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -49,8 +49,8 @@
           "weight": "300",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -68,8 +68,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -87,8 +87,8 @@
           "weight": "500",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -106,8 +106,8 @@
           "weight": "600",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -125,8 +125,8 @@
           "weight": "700",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -144,8 +144,8 @@
           "weight": "800",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -163,8 +163,8 @@
           "weight": "900",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -182,8 +182,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1",
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1",
           "key": "assets/font.ttf"
         }
       ],
@@ -202,8 +202,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1",
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1",
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       ],
@@ -222,8 +222,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1",
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1",
           "sizeBytes": 100
         }
       ],
@@ -242,8 +242,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1",
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1",
           "contentType": "font/ttf"
         }
       ],
@@ -262,8 +262,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1",
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1",
           "format": "ttf"
         }
       ],
@@ -282,8 +282,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -301,8 +301,8 @@
           "weight": "450",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -320,8 +320,8 @@
           "weight": 400,
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -339,8 +339,8 @@
           "weight": "400",
           "style": "italic",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -358,8 +358,8 @@
           "weight": "400",
           "style": "normal",
           "required": false,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -377,8 +377,8 @@
           "weight": "400",
           "style": "normal",
           "required": 1,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -396,8 +396,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -415,8 +415,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [],
@@ -432,8 +432,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         },
         {
           "kind": "font",
@@ -442,8 +442,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -461,8 +461,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 2,
-          "riveUniqueName": "roboto-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "roboto-2",
           "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "sizeBytes": 100,
@@ -483,8 +483,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 2,
-          "riveUniqueName": "roboto-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "roboto-2",
           "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "sizeBytes": 100,
@@ -498,8 +498,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         }
       ],
       "requiredCapabilities": [
@@ -517,8 +517,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 1,
-          "riveUniqueName": "system-400-1"
+          "authoredAssetId": 1,
+          "assetUniqueName": "system-400-1"
         },
         {
           "kind": "font",
@@ -527,8 +527,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 2,
-          "riveUniqueName": "roboto-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "roboto-2",
           "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "sizeBytes": 100,
@@ -551,8 +551,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 2,
-          "riveUniqueName": "roboto-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "roboto-2",
           "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "sizeBytes": 100,
@@ -574,8 +574,8 @@
           "weight": "400",
           "style": "normal",
           "required": true,
-          "riveAssetId": 2,
-          "riveUniqueName": "roboto-2",
+          "authoredAssetId": 2,
+          "assetUniqueName": "roboto-2",
           "key": "assets/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ttf",
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "sizeBytes": 100,

@@ -5,7 +5,7 @@
   "sourceSnapshotSha256": "6bb039f9b2bc490f1d666fa95911c350e62da3994e4112045e17c4d7b0978f85",
   "scriptSourceSha256": "9163301d05fb80588746ce90165d636dd80ba4bdb35bc67cf6d9e8b411ef7390",
   "publishSnapshotSha256": "3f862c0bc369dedf8255a6f8f1bf7ed30b85cb9b30330159b87569ba8799529f",
-  "descriptorSha256": "834476fcdaab0f9953620da8516b940eeadd215762aca94e7a408f5b69599629",
+  "descriptorSha256": "e19308a011b810f37f29c6d0fc43c968cc93d86f760d20d8b0020aa014a899bd",
   "qualification": "Production release compiler output inside a test-signed candidate descriptor; SDK and screen-reader qualification remain separate.",
   "descriptorRefresh": {
     "script": "scripts/refresh-signed-fixtures.mjs",

@@ -9,7 +9,7 @@ import UIKit
 
 package struct ExperienceRuntimeRegisteredFontCatalog {
     package struct Identity: Hashable {
-        let riveUniqueName: String
+        let assetUniqueName: String
         let contentSHA256: String
     }
 
@@ -18,25 +18,25 @@ package struct ExperienceRuntimeRegisteredFontCatalog {
     package init() {}
 
     package mutating func record(
-        riveUniqueName: String,
+        assetUniqueName: String,
         contentSHA256: String,
         postScriptName: String
     ) {
         postScriptNamesByIdentity[
             Identity(
-                riveUniqueName: riveUniqueName,
+                assetUniqueName: assetUniqueName,
                 contentSHA256: contentSHA256.lowercased()
             )
         ] = postScriptName
     }
 
     package func postScriptName(
-        forRiveUniqueName riveUniqueName: String,
+        forUniqueName assetUniqueName: String,
         contentSHA256: String
     ) -> String? {
         postScriptNamesByIdentity[
             Identity(
-                riveUniqueName: riveUniqueName,
+                assetUniqueName: assetUniqueName,
                 contentSHA256: contentSHA256.lowercased()
             )
         ]
@@ -75,14 +75,14 @@ package enum ExperienceRuntimeFontRegistry {
 
     @discardableResult
     package static func registerFont(
-        riveUniqueName: String,
+        assetUniqueName: String,
         data: Data,
         in scope: ExperienceRuntimeFontScope
     ) -> String? {
         #if canImport(CoreText)
         let contentSHA256 = sha256Hex(data)
         let identity = ExperienceRuntimeRegisteredFontCatalog.Identity(
-            riveUniqueName: riveUniqueName,
+            assetUniqueName: assetUniqueName,
             contentSHA256: contentSHA256
         )
 
@@ -112,14 +112,14 @@ package enum ExperienceRuntimeFontRegistry {
                 NSLog(
                     "ExperienceRuntimeFontRegistry: registration failed without a CoreText "
                         + "error for %@",
-                    riveUniqueName
+                    assetUniqueName
                 )
                 return nil
             }
             guard isDuplicateFontRegistrationError(error) else {
                 NSLog(
                     "ExperienceRuntimeFontRegistry: failed to register font %@: %@",
-                    riveUniqueName,
+                    assetUniqueName,
                     CFErrorCopyDescription(error) as String
                 )
                 return nil
@@ -129,7 +129,7 @@ package enum ExperienceRuntimeFontRegistry {
             // live artifact revisions can still use their own bytes.
             NSLog(
                 "ExperienceRuntimeFontRegistry: retained content-backed duplicate font %@",
-                riveUniqueName
+                assetUniqueName
             )
         }
 
@@ -170,14 +170,14 @@ package enum ExperienceRuntimeFontRegistry {
                 if let error = unregisterError?.takeRetainedValue() {
                     NSLog(
                         "ExperienceRuntimeFontRegistry: failed to unregister font %@: %@",
-                        identity.riveUniqueName,
+                        identity.assetUniqueName,
                         CFErrorCopyDescription(error) as String
                     )
                 } else {
                     NSLog(
                         "ExperienceRuntimeFontRegistry: unregistration failed without a "
                             + "CoreText error for %@",
-                        identity.riveUniqueName
+                        identity.assetUniqueName
                     )
                 }
             }
@@ -188,12 +188,12 @@ package enum ExperienceRuntimeFontRegistry {
 
     #if canImport(UIKit) && canImport(CoreText)
     package static func font(
-        forRiveUniqueName riveUniqueName: String,
+        forUniqueName assetUniqueName: String,
         contentSHA256: String,
         size: CGFloat
     ) -> UIFont? {
         let identity = ExperienceRuntimeRegisteredFontCatalog.Identity(
-            riveUniqueName: riveUniqueName,
+            assetUniqueName: assetUniqueName,
             contentSHA256: contentSHA256.lowercased()
         )
         lock.lock()

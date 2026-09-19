@@ -22,12 +22,12 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 var secondScope: ExperienceRuntimeFontScope? = ExperienceRuntimeFontScope()
 
                 let firstName = ExperienceRuntimeFontRegistry.registerFont(
-                    riveUniqueName: uniqueName,
+                    assetUniqueName: uniqueName,
                     data: original,
                     in: firstScope!
                 )
                 let secondName = ExperienceRuntimeFontRegistry.registerFont(
-                    riveUniqueName: uniqueName,
+                    assetUniqueName: uniqueName,
                     data: revised,
                     in: secondScope!
                 )
@@ -36,14 +36,14 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 expect(secondName).to(equal(firstName))
                 expect(
                     ExperienceRuntimeFontRegistry.font(
-                        forRiveUniqueName: uniqueName,
+                        forUniqueName: uniqueName,
                         contentSHA256: SHA256Provider.hexDigest(original),
                         size: 16
                     )
                 ).notTo(beNil())
                 expect(
                     ExperienceRuntimeFontRegistry.font(
-                        forRiveUniqueName: uniqueName,
+                        forUniqueName: uniqueName,
                         contentSHA256: SHA256Provider.hexDigest(revised),
                         size: 16
                     )
@@ -52,14 +52,14 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 firstScope = nil
                 expect(
                     ExperienceRuntimeFontRegistry.font(
-                        forRiveUniqueName: uniqueName,
+                        forUniqueName: uniqueName,
                         contentSHA256: SHA256Provider.hexDigest(original),
                         size: 16
                     )
                 ).to(beNil())
                 expect(
                     ExperienceRuntimeFontRegistry.font(
-                        forRiveUniqueName: uniqueName,
+                        forUniqueName: uniqueName,
                         contentSHA256: SHA256Provider.hexDigest(revised),
                         size: 16
                     )
@@ -68,7 +68,7 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 secondScope = nil
                 expect(
                     ExperienceRuntimeFontRegistry.font(
-                        forRiveUniqueName: uniqueName,
+                        forUniqueName: uniqueName,
                         contentSHA256: SHA256Provider.hexDigest(revised),
                         size: 16
                     )
@@ -89,14 +89,14 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
 
                 expect(
                     ExperienceRuntimeFontRegistry.registerFont(
-                        riveUniqueName: uniqueName,
+                        assetUniqueName: uniqueName,
                         data: data,
                         in: firstScope!
                     )
                 ).notTo(beNil())
                 expect(
                     ExperienceRuntimeFontRegistry.registerFont(
-                        riveUniqueName: uniqueName,
+                        assetUniqueName: uniqueName,
                         data: data,
                         in: secondScope!
                     )
@@ -105,7 +105,7 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 firstScope = nil
                 expect(
                     ExperienceRuntimeFontRegistry.font(
-                        forRiveUniqueName: uniqueName,
+                        forUniqueName: uniqueName,
                         contentSHA256: contentSHA256,
                         size: 16
                     )
@@ -114,7 +114,7 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 secondScope = nil
                 expect(
                     ExperienceRuntimeFontRegistry.font(
-                        forRiveUniqueName: uniqueName,
+                        forUniqueName: uniqueName,
                         contentSHA256: contentSHA256,
                         size: 16
                     )
@@ -126,31 +126,31 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 var catalog = ExperienceRuntimeRegisteredFontCatalog()
 
                 catalog.record(
-                    riveUniqueName: "font-inter-400",
+                    assetUniqueName: "font-inter-400",
                     contentSHA256: "AAAA",
                     postScriptName: "Inter-Regular-v1"
                 )
                 catalog.record(
-                    riveUniqueName: "font-inter-400",
+                    assetUniqueName: "font-inter-400",
                     contentSHA256: "BBBB",
                     postScriptName: "Inter-Regular-v2"
                 )
 
                 expect(
                     catalog.postScriptName(
-                        forRiveUniqueName: "font-inter-400",
+                        forUniqueName: "font-inter-400",
                         contentSHA256: "aaaa"
                     )
                 ).to(equal("Inter-Regular-v1"))
                 expect(
                     catalog.postScriptName(
-                        forRiveUniqueName: "font-inter-400",
+                        forUniqueName: "font-inter-400",
                         contentSHA256: "bbbb"
                     )
                 ).to(equal("Inter-Regular-v2"))
                 expect(
                     catalog.postScriptName(
-                        forRiveUniqueName: "font-inter-400",
+                        forUniqueName: "font-inter-400",
                         contentSHA256: "cccc"
                     )
                 ).to(beNil())

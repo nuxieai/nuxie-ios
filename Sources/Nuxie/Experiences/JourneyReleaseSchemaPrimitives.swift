@@ -930,10 +930,10 @@ enum JourneyReleaseSchemaPrimitives {
 
     private static func validateRender(_ value: Any?) throws {
         let raw = try dictionary(value, path: "render")
-        guard let renderer = raw["renderer"] as? String, ["rive", "nux"].contains(renderer) else {
+        guard let renderer = raw["renderer"] as? String, renderer == "nux" else {
             try invalid("render.renderer")
         }
-        let sceneKey = renderer == "nux" ? "nux" : "riv"
+        let sceneKey = "nux"
         let render = try object(value, required: ["renderer", sceneKey, "screens", "transitions", "textInputs", "assets"], optional: ["videoElements"], path: "render")
         if let value = render["videoElements"] {
             let elements = try array(value, path: "render.videoElements")
@@ -961,11 +961,11 @@ enum JourneyReleaseSchemaPrimitives {
         try validateArtifactSemantics(
             render[sceneKey], path: "render.\(sceneKey)", expectedPrefix: "renders/sha256/",
             expectedExtension: sceneKey,
-            expectedContentTypes: [renderer == "nux" ? "application/vnd.nuxie.scene" : "application/vnd.rive"]
+            expectedContentTypes: ["application/vnd.nuxie.scene"]
         )
         if renderer == "nux" {
             let scene = try dictionary(render[sceneKey], path: "render.nux")
-            try integer(scene["sizeBytes"], minimum: 1, maximum: Double(JourneyReleaseLimits.rivArtifactBytes), path: "render.nux.sizeBytes")
+            try integer(scene["sizeBytes"], minimum: 1, maximum: Double(JourneyReleaseLimits.sceneArtifactBytes), path: "render.nux.sizeBytes")
         }
         let screens = try array(render["screens"], path: "render.screens")
         guard (1...256).contains(screens.count) else { try invalid("render.screens") }
@@ -1032,17 +1032,17 @@ enum JourneyReleaseSchemaPrimitives {
                 item,
                 required: [
                     "id", "screenId", "artboardId", "viewNodeId", "renderedNodeId",
-                    "riveTextObjectKey", "riveTextRunObjectKey", "riveTextName",
-                    "riveTextRunName", "value", "editable", "geometry", "style",
+                    "textObjectKey", "textRunObjectKey", "textName",
+                    "textRunName", "value", "editable", "geometry", "style",
                     "secureTextEntry", "multiline",
                 ],
                 optional: ["responseFieldKey", "responseCapture", "placeholder", "keyboardType", "maxLength"],
                 path: "render.textInputs[\(index)]"
             )
-            for field in ["id", "screenId", "artboardId", "viewNodeId", "renderedNodeId", "riveTextObjectKey", "riveTextRunObjectKey"] { try identifier(input[field], path: "render.textInputs[\(index)].\(field)") }
+            for field in ["id", "screenId", "artboardId", "viewNodeId", "renderedNodeId", "textObjectKey", "textRunObjectKey"] { try identifier(input[field], path: "render.textInputs[\(index)].\(field)") }
             guard screenIDSet.contains(input["screenId"] as! String) else { try invalid("render.textInputs[\(index)].screenId") }
-            try boundedString(input["riveTextName"], minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].riveTextName")
-            try boundedString(input["riveTextRunName"], minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].riveTextRunName")
+            try boundedString(input["textName"], minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].textName")
+            try boundedString(input["textRunName"], minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].textRunName")
             try boundedString(input["value"], minimum: 0, maximumUTF16: 1_000_000, path: "render.textInputs[\(index)].value")
             if let value = input["responseFieldKey"] { try identifier(value, path: "render.textInputs[\(index)].responseFieldKey") }
             if let capture = input["responseCapture"] {
@@ -1064,7 +1064,7 @@ enum JourneyReleaseSchemaPrimitives {
             for field in ["xPath", "yPath", "widthPath", "heightPath", "rotationPath", "scaleXPath", "scaleYPath"] { try boundedString(geometry[field], minimum: 1, maximumUTF16: 512, path: "render.textInputs[\(index)].geometry.\(field)") }
             let style = try object(
                 input["style"],
-                required: ["fontFamily", "fontWeight", "fontStyle", "fontSize", "lineHeight", "letterSpacing", "color", "fontAssetRiveUniqueName"],
+                required: ["fontFamily", "fontWeight", "fontStyle", "fontSize", "lineHeight", "letterSpacing", "color", "fontAssetUniqueName"],
                 optional: ["textAlign"],
                 path: "render.textInputs[\(index)].style"
             )
@@ -1080,7 +1080,7 @@ enum JourneyReleaseSchemaPrimitives {
             }
             try finiteNumber(style["letterSpacing"], minimum: -2_048, maximum: 2_048, path: "text.style.letterSpacing")
             try integer(style["color"], minimum: 0, maximum: Double(UInt32.max), path: "text.style.color")
-            try identifier(style["fontAssetRiveUniqueName"], path: "text.style.fontAssetRiveUniqueName")
+            try identifier(style["fontAssetUniqueName"], path: "text.style.fontAssetUniqueName")
             if let value = style["textAlign"] { try boundedString(value, minimum: 1, maximumUTF16: 32, path: "text.style.textAlign") }
         }
         let assets = try array(render["assets"], path: "render.assets")
@@ -1093,7 +1093,7 @@ enum JourneyReleaseSchemaPrimitives {
         var videoSources = Set<String>()
         for item in assets {
             let asset = try dictionary(item, path: "render.assets")
-            if let id = asset["riveAssetId"] as? NSNumber, let name = asset["riveUniqueName"] as? String {
+            if let id = asset["authoredAssetId"] as? NSNumber, let name = asset["assetUniqueName"] as? String {
                 guard nativeIDs.insert(id.doubleValue).inserted, nativeNames.insert(name).inserted else { try invalid("render.assets") }
             }
             if asset["kind"] as? String == "video" {
@@ -1104,7 +1104,7 @@ enum JourneyReleaseSchemaPrimitives {
         let assetKeys = try assets.enumerated().map { index, value in
             let asset = try dictionary(value, path: "render.assets[\(index)]")
             if asset["kind"] as? String == "font", asset["location"] as? String == "system",
-               let name = asset["riveUniqueName"] as? String {
+               let name = asset["assetUniqueName"] as? String {
                 return "system-font:\(name)"
             }
             guard let key = asset["key"] as? String else { try invalid("render.assets[\(index)].key") }
@@ -1126,7 +1126,7 @@ enum JourneyReleaseSchemaPrimitives {
             }
             // Multiple scene bindings can share one immutable video object.
             // Binding identity and requiredness do not change its bytes or media metadata.
-            let bindingFields: Set<String> = ["riveAssetId", "riveUniqueName", "sourceAssetKey", "required"]
+            let bindingFields: Set<String> = ["authoredAssetId", "assetUniqueName", "sourceAssetKey", "required"]
             let previousObject = previous.filter { !bindingFields.contains($0.key) }
             let currentObject = current.filter { !bindingFields.contains($0.key) }
             guard NSDictionary(dictionary: previousObject).isEqual(to: currentObject) else {
@@ -1141,7 +1141,7 @@ enum JourneyReleaseSchemaPrimitives {
         case "image":
             _ = try object(
                 typed.object,
-                required: ["kind", "key", "sha256", "sizeBytes", "contentType", "riveAssetId", "riveUniqueName", "width", "height", "required"],
+                required: ["kind", "key", "sha256", "sizeBytes", "contentType", "authoredAssetId", "assetUniqueName", "width", "height", "required"],
                 path: path
             )
             let contentType = typed.object["contentType"] as? String
@@ -1159,17 +1159,17 @@ enum JourneyReleaseSchemaPrimitives {
                 expectedExtension: expectedExtension,
                 expectedContentTypes: [contentType!]
             )
-            try integer(typed.object["riveAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).riveAssetId")
-            try identifier(typed.object["riveUniqueName"], path: "\(path).riveUniqueName")
+            try integer(typed.object["authoredAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).authoredAssetId")
+            try identifier(typed.object["assetUniqueName"], path: "\(path).assetUniqueName")
             try integer(typed.object["width"], minimum: 1, maximum: 65_535, path: "\(path).width")
             try integer(typed.object["height"], minimum: 1, maximum: 65_535, path: "\(path).height")
             guard isJSONBoolean(typed.object["required"]) else { try invalid("\(path).required") }
         case "video":
-            let asset = try object(typed.object, required: ["kind", "key", "sha256", "sizeBytes", "contentType", "sourceAssetKey", "riveAssetId", "riveUniqueName", "width", "height", "durationMs", "videoCodec", "audioCodec", "captionTracks", "required"], path: path)
+            let asset = try object(typed.object, required: ["kind", "key", "sha256", "sizeBytes", "contentType", "sourceAssetKey", "authoredAssetId", "assetUniqueName", "width", "height", "durationMs", "videoCodec", "audioCodec", "captionTracks", "required"], path: path)
             try validateArtifactSemantics(asset, path: path, expectedPrefix: "assets/sha256/", expectedExtension: "mp4", expectedContentTypes: ["video/mp4"])
             try integer(asset["sizeBytes"], minimum: 1, maximum: Double(JourneyReleaseLimits.externalAssetBytes), path: "\(path).sizeBytes")
-            try integer(asset["riveAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).riveAssetId")
-            try identifier(asset["riveUniqueName"], path: "\(path).riveUniqueName")
+            try integer(asset["authoredAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).authoredAssetId")
+            try identifier(asset["assetUniqueName"], path: "\(path).assetUniqueName")
             try boundedString(asset["sourceAssetKey"], minimum: 1, maximumUTF16: 128, path: "\(path).sourceAssetKey")
             guard let source = asset["sourceAssetKey"] as? String,
                   source.range(of: "^asset:[A-Za-z0-9_-]+$", options: .regularExpression) != nil else { try invalid("\(path).sourceAssetKey") }
@@ -1196,14 +1196,14 @@ enum JourneyReleaseSchemaPrimitives {
             if typed.object["location"] as? String == "system" {
                 _ = try object(
                     typed.object,
-                    required: ["kind", "location", "riveAssetId", "riveUniqueName", "family", "weight", "style", "required"],
+                    required: ["kind", "location", "authoredAssetId", "assetUniqueName", "family", "weight", "style", "required"],
                     path: path
                 )
                 try enumeration(typed.object["family"], values: ["System"], path: "\(path).family")
                 try enumeration(typed.object["weight"], values: ["100", "200", "300", "400", "500", "600", "700", "800", "900"], path: "\(path).weight")
                 try enumeration(typed.object["style"], values: ["normal"], path: "\(path).style")
-                try integer(typed.object["riveAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).riveAssetId")
-                try identifier(typed.object["riveUniqueName"], path: "\(path).riveUniqueName")
+                try integer(typed.object["authoredAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).authoredAssetId")
+                try identifier(typed.object["assetUniqueName"], path: "\(path).assetUniqueName")
                 guard isJSONBoolean(typed.object["required"]), typed.object["required"] as? Bool == true else {
                     try invalid("\(path).required")
                 }
@@ -1215,7 +1215,7 @@ enum JourneyReleaseSchemaPrimitives {
             }
             _ = try object(
                 typed.object,
-                required: ["kind", "location", "key", "sha256", "sizeBytes", "contentType", "riveAssetId", "riveUniqueName", "family", "weight", "style", "format", "required"],
+                required: ["kind", "location", "key", "sha256", "sizeBytes", "contentType", "authoredAssetId", "assetUniqueName", "family", "weight", "style", "format", "required"],
                 path: path
             )
             guard let contentType = typed.object["contentType"] as? String,
@@ -1238,8 +1238,8 @@ enum JourneyReleaseSchemaPrimitives {
                 expectedExtension: expectedExtension,
                 expectedContentTypes: [contentType]
             )
-            try integer(typed.object["riveAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).riveAssetId")
-            try identifier(typed.object["riveUniqueName"], path: "\(path).riveUniqueName")
+            try integer(typed.object["authoredAssetId"], minimum: 0, maximum: 9_007_199_254_740_991, path: "\(path).authoredAssetId")
+            try identifier(typed.object["assetUniqueName"], path: "\(path).assetUniqueName")
             try boundedString(typed.object["family"], minimum: 1, maximumUTF16: 256, path: "\(path).family")
             try boundedString(typed.object["weight"], minimum: 1, maximumUTF16: 32, path: "\(path).weight")
             try enumeration(typed.object["style"], values: ["normal", "italic"], path: "\(path).style")

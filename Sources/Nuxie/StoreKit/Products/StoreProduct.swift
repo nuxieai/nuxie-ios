@@ -258,7 +258,7 @@ public struct StoreProduct: Equatable, Codable, Sendable {
         guard let terms = introductoryTerms else { return "" }
         // Paid offers can be pay-as-you-go or pay-up-front. A single combined
         // string cannot state both truthfully without retaining payment mode,
-        // so Rive copy composes the typed price/period/cycle fields instead.
+        // so Experience copy composes the typed price/period/cycle fields instead.
         return terms.isFree ? terms.trialPeriodText : ""
     }
     /// The localized recurring charge sentence, empty when the product does not renew.

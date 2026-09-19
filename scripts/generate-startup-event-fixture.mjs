@@ -44,7 +44,7 @@ const entry = { locator: { ...descriptor.identity, legId: descriptor.leg.id }, e
   },
 } };
 mkdirSync(target, { recursive: true });
-for (const artifact of [descriptor.render.riv, ...descriptor.render.assets,
+for (const artifact of [descriptor.render.nux, ...descriptor.render.assets,
   ...descriptor.screenBehaviors.map(behavior => behavior.script.artifact)]) {
   const path = new URL(artifact.key, target);
   mkdirSync(new URL('./', path), { recursive: true });

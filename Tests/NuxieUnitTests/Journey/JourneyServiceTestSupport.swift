@@ -988,7 +988,7 @@ extension JourneyTestCase {
     func replacingRenderedArtifact(
         _ snapshot: JourneyProfileCatalog.Snapshot,
         sceneBytes: Data,
-        renderer: String = "rive",
+        renderer: String = "nux",
         assets: [JourneyReleaseJSONValue] = [],
         videoElements: [JourneyReleaseJSONValue]? = nil
     ) throws -> JourneyProfileCatalog.Snapshot {
@@ -999,11 +999,11 @@ extension JourneyTestCase {
         let originalDescriptor = originalRelease.descriptor
         var render = try XCTUnwrap(originalDescriptor.render)
         let sceneSHA256 = SHA256Provider.hexDigest(sceneBytes)
-        let sceneExtension = renderer == "nux" ? "nux" : "riv"
-        render.removeValue(forKey: "riv")
+        let sceneExtension = "nux"
+        render.removeValue(forKey: "nux")
         render["renderer"] = .string(renderer)
         render[sceneExtension] = .object([
-            "contentType": .string(renderer == "nux" ? "application/vnd.nuxie.scene" : "application/vnd.rive"),
+            "contentType": .string("application/vnd.nuxie.scene"),
             "key": .string("renders/sha256/\(sceneSHA256).\(sceneExtension)"),
             "sha256": .string(sceneSHA256),
             "sizeBytes": .number(Double(sceneBytes.count)),

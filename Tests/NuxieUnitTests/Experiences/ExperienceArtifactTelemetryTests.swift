@@ -451,7 +451,7 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
             artifactLoader: { _, _, _ in
                 throw JourneyReleaseResourceFailure(
                     underlying: JourneyReleaseAcquisitionError.objectDigestMismatch(
-                        key: "renders/sha256/expected.riv",
+                        key: "renders/sha256/expected.nux",
                         expected: String(repeating: "c", count: 64),
                         actual: String(repeating: "d", count: 64)
                     ),

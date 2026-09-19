@@ -1,7 +1,7 @@
 import Foundation
 
 /// The one compatibility declaration for the embedded native runtime and the
-/// publisher backend that produces its Rive/Luau inputs. Descriptor admission
+/// publisher backend that produces its Nuxie scene/Luau inputs. Descriptor admission
 /// consumes this authority instead of maintaining a second set of literals.
 package enum NuxieEmbeddedRuntimeCompatibility {
     package static let sourceRevision = "753fcb19fc1d6219cabbd95a7694ca1d13ae2bd8"
@@ -10,8 +10,8 @@ package enum NuxieEmbeddedRuntimeCompatibility {
     package static let sceneFormatMajor = 7
     package static let sceneFormatMinor = 3
     #if os(iOS) && !targetEnvironment(macCatalyst)
-    package static let capabilities: Set<String> = ["rive", "text-input", "video.playback.v1"]
+    package static let capabilities: Set<String> = ["nux", "text-input", "video.playback.v1"]
     #else
-    package static let capabilities: Set<String> = ["rive", "text-input"]
+    package static let capabilities: Set<String> = ["nux", "text-input"]
     #endif
 }

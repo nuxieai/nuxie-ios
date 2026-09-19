@@ -158,8 +158,8 @@ final class ExperienceVideoPlayback {
         do {
             var prepared: [String: PreparedMedia] = [:]
             for declaration in payload.renderPlan.videos {
-                guard let assetID = UInt32(exactly: declaration.riveAssetId),
-                      let retained = payload.assets.first(where: { $0.kind == .video && $0.riveAssetID == assetID }) else {
+                guard let assetID = UInt32(exactly: declaration.authoredAssetId),
+                      let retained = payload.assets.first(where: { $0.kind == .video && $0.authoredAssetID == assetID }) else {
                     throw ExperienceInteractiveScreenError.assetContract("video occurrence differs from signed inventory")
                 }
                 guard let url = retained.fileURL, url.isFileURL else {

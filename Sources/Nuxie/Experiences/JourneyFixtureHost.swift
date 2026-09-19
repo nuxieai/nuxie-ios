@@ -530,7 +530,7 @@ private final class JourneyFixtureURLProtocol: URLProtocol, @unchecked Sendable 
 
     private static func contentType(for pathExtension: String) -> String {
         switch pathExtension.lowercased() {
-        case "riv": "application/vnd.rive"
+        case "nux": "application/vnd.nuxie.scene"
         case "nux": "application/vnd.nuxie.scene"
         case "mp4": "video/mp4"
         case "png": "image/png"

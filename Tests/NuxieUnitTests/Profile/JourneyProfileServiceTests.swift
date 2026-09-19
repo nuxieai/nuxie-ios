@@ -572,8 +572,8 @@ final class JourneyProfileServiceTests: JourneyTestCase {
                 "kind": .string("video"), "key": .string("assets/sha256/\(digest).mp4"),
                 "sha256": .string(digest), "sizeBytes": .number(Double(video.count)),
                 "contentType": .string("video/mp4"), "required": .bool(true),
-                "sourceAssetKey": .string("asset:greeting"), "riveAssetId": .number(1),
-                "riveUniqueName": .string("video-greeting-1"), "width": .number(64), "height": .number(32),
+                "sourceAssetKey": .string("asset:greeting"), "authoredAssetId": .number(1),
+                "assetUniqueName": .string("video-greeting-1"), "width": .number(64), "height": .number(32),
                 "durationMs": .number(2000), "videoCodec": .string("avc1.42e01e"),
                 "audioCodec": .null, "captionTracks": .array([]),
             ])])

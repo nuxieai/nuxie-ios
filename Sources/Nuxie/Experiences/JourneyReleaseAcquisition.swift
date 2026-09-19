@@ -55,7 +55,7 @@ private struct PreparedRuntimeRelease: Sendable {
         }
         let assetURLs = Dictionary(uniqueKeysWithValues: payload.assets.compactMap {
             asset in objectURLsByKey[asset.sourceKey].map {
-                (asset.riveUniqueName, $0)
+                (asset.assetUniqueName, $0)
             }
         })
         guard let sceneURL = objectURLsByKey[payload.renderPlan.scene.key] else {
@@ -73,7 +73,7 @@ private struct PreparedRuntimeRelease: Sendable {
             identity: identity,
             sceneURL: sceneURL,
             sceneBytes: payload.sceneBytes,
-            assetURLsByRiveUniqueName: assetURLs,
+            assetURLsByUniqueName: assetURLs,
             source: source,
             payload: payload,
             interactivePreparation: interactivePreparation,
@@ -284,7 +284,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
             let lineHeight: Double
             let letterSpacing: Double
             let color: UInt32
-            let fontAssetRiveUniqueName: String
+            let fontAssetUniqueName: String
             let textAlign: String?
         }
 
@@ -293,10 +293,10 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let artboardId: String
         let viewNodeId: String
         let renderedNodeId: String
-        let riveTextObjectKey: String
-        let riveTextRunObjectKey: String
-        let riveTextName: String
-        let riveTextRunName: String
+        let textObjectKey: String
+        let textRunObjectKey: String
+        let textName: String
+        let textRunName: String
         let value: String
         let placeholder: String?
         let editable: Bool
@@ -315,8 +315,8 @@ private struct JourneyReleaseRenderDocument: Decodable {
     struct Asset: Decodable {
         let kind: String
         let location: String?
-        let riveAssetId: UInt64?
-        let riveUniqueName: String?
+        let authoredAssetId: UInt64?
+        let assetUniqueName: String?
         let family: String?
         let weight: String?
         let style: String?
@@ -332,14 +332,14 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let artifact: Artifact?
 
         var isSystem: Bool { kind == "font" && location == "system" }
-        var identity: String { riveUniqueName ?? artifact?.key ?? kind }
+        var identity: String { assetUniqueName ?? artifact?.key ?? kind }
 
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             kind = try values.decode(String.self, forKey: .kind)
             location = try values.decodeIfPresent(String.self, forKey: .location)
-            riveAssetId = try values.decodeIfPresent(UInt64.self, forKey: .riveAssetId)
-            riveUniqueName = try values.decodeIfPresent(String.self, forKey: .riveUniqueName)
+            authoredAssetId = try values.decodeIfPresent(UInt64.self, forKey: .authoredAssetId)
+            assetUniqueName = try values.decodeIfPresent(String.self, forKey: .assetUniqueName)
             family = try values.decodeIfPresent(String.self, forKey: .family)
             weight = try values.decodeIfPresent(String.self, forKey: .weight)
             style = try values.decodeIfPresent(String.self, forKey: .style)
@@ -357,7 +357,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
         }
 
         private enum CodingKeys: String, CodingKey {
-            case kind, location, riveAssetId, riveUniqueName, family, weight, style, format, required
+            case kind, location, authoredAssetId, assetUniqueName, family, weight, style, format, required
             case sourceAssetKey, width, height, durationMs, videoCodec, audioCodec, captionTracks
         }
     }
@@ -366,7 +366,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
     let scene: Artifact
 
     private enum CodingKeys: String, CodingKey {
-        case renderer, riv, nux, screens, transitions, textInputs, assets, videoElements
+        case renderer, nux, screens, transitions, textInputs, assets, videoElements
     }
 
     init(from decoder: Decoder) throws {
@@ -374,7 +374,6 @@ private struct JourneyReleaseRenderDocument: Decodable {
         renderer = try fields.decode(String.self, forKey: .renderer)
         switch renderer {
         case "nux": scene = try fields.decode(Artifact.self, forKey: .nux)
-        case "rive": scene = try fields.decode(Artifact.self, forKey: .riv)
         default: throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(renderer)
         }
         screens = try fields.decode([Screen].self, forKey: .screens)
@@ -972,9 +971,9 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             -> AuthenticatedRuntimeAsset? in
             guard ["image", "font", "video"].contains(asset.kind) else { return nil }
             guard let artifact = asset.artifact else { return nil }
-            guard let authoredID64 = asset.riveAssetId,
+            guard let authoredID64 = asset.authoredAssetId,
                   let authoredID = UInt32(exactly: authoredID64),
-                  let uniqueName = asset.riveUniqueName else {
+                  let uniqueName = asset.assetUniqueName else {
                 throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(artifact.key)
             }
             let object = objectsByKey[artifact.key]
@@ -983,8 +982,8 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             }
             return AuthenticatedRuntimeAsset(
                 kind: asset.kind == "video" ? .video : asset.kind == "image" ? .image : .font,
-                riveAssetID: authoredID,
-                riveUniqueName: uniqueName,
+                authoredAssetID: authoredID,
+                assetUniqueName: uniqueName,
                 sourceKey: artifact.key,
                 contentType: artifact.contentType,
                 sha256: artifact.sha256,
@@ -1431,7 +1430,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         for artifact: JourneyReleaseRenderDocument.Artifact
     ) -> Int {
         artifact.key.hasPrefix("renders/")
-            ? JourneyReleaseLimits.rivArtifactBytes
+            ? JourneyReleaseLimits.sceneArtifactBytes
             : JourneyReleaseLimits.externalAssetBytes
     }
 
@@ -1532,13 +1531,13 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         initialScreenID: String
     ) throws -> NativeExperienceRenderPlan {
         let images = try render.assets.filter { $0.kind == "image" }.map {
-            guard let id = $0.riveAssetId, let name = $0.riveUniqueName, let artifact = $0.artifact else {
+            guard let id = $0.authoredAssetId, let name = $0.assetUniqueName, let artifact = $0.artifact else {
                 throw JourneyReleaseAcquisitionError.invalidRuntimeBinding($0.identity)
             }
             return NativeExperienceImageAsset(
                 location: .external(key: artifact.key),
-                riveAssetId: id,
-                riveUniqueName: name,
+                authoredAssetId: id,
+                assetUniqueName: name,
                 sha256: artifact.sha256,
                 sizeBytes: artifact.sizeBytes,
                 contentType: artifact.contentType,
@@ -1546,8 +1545,8 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             )
         }
         let fonts = try render.assets.filter { $0.kind == "font" && !$0.isSystem }.map {
-            guard let id = $0.riveAssetId,
-                  let name = $0.riveUniqueName,
+            guard let id = $0.authoredAssetId,
+                  let name = $0.assetUniqueName,
                   let family = $0.family,
                   let weight = $0.weight,
                   let style = $0.style,
@@ -1557,8 +1556,8 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             }
             return NativeExperienceFontAsset(
                 location: .external(key: artifact.key),
-                riveAssetId: id,
-                riveUniqueName: name,
+                authoredAssetId: id,
+                assetUniqueName: name,
                 family: family,
                 weight: weight,
                 style: style,
@@ -1570,16 +1569,16 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             )
         }
         let systemFonts = try render.assets.filter(\.isSystem).map { asset in
-            guard let id = asset.riveAssetId, let name = asset.riveUniqueName,
+            guard let id = asset.authoredAssetId, let name = asset.assetUniqueName,
                   let weight = asset.weight, let style = asset.style else {
                 throw JourneyReleaseAcquisitionError.invalidRuntimeBinding(asset.identity)
             }
             return NativeExperienceSystemFontRequirement(
-                riveAssetId: id, riveUniqueName: name, weight: weight, style: style
+                authoredAssetId: id, assetUniqueName: name, weight: weight, style: style
             )
         }
         let videos = try render.assets.filter { $0.kind == "video" }.map { asset in
-            guard let artifact = asset.artifact, let id = asset.riveAssetId, let name = asset.riveUniqueName,
+            guard let artifact = asset.artifact, let id = asset.authoredAssetId, let name = asset.assetUniqueName,
                   let source = asset.sourceAssetKey, let width = asset.width, let height = asset.height,
                   let duration = asset.durationMs, let codec = asset.videoCodec,
                   let captions = asset.captionTracks else {
@@ -1587,7 +1586,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             }
             return NativeExperienceVideoAsset(
                 location: .external(key: artifact.key), sourceAssetKey: source,
-                riveAssetId: id, riveUniqueName: name, sha256: artifact.sha256, sizeBytes: artifact.sizeBytes,
+                authoredAssetId: id, assetUniqueName: name, sha256: artifact.sha256, sizeBytes: artifact.sizeBytes,
                 width: width, height: height, durationMs: duration, videoCodec: codec,
                 audioCodec: asset.audioCodec, captionTracks: captions, required: asset.required
             )
@@ -1652,10 +1651,10 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     artboardId: $0.artboardId,
                     viewNodeId: $0.viewNodeId,
                     renderedNodeId: $0.renderedNodeId,
-                    riveTextObjectKey: $0.riveTextObjectKey,
-                    riveTextRunObjectKey: $0.riveTextRunObjectKey,
-                    riveTextName: $0.riveTextName,
-                    riveTextRunName: $0.riveTextRunName,
+                    textObjectKey: $0.textObjectKey,
+                    textRunObjectKey: $0.textRunObjectKey,
+                    textName: $0.textName,
+                    textRunName: $0.textRunName,
                     value: $0.value,
                     placeholder: $0.placeholder,
                     editable: $0.editable,
@@ -1676,7 +1675,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                         lineHeight: $0.style.lineHeight,
                         letterSpacing: $0.style.letterSpacing,
                         color: $0.style.color,
-                        fontAssetRiveUniqueName: $0.style.fontAssetRiveUniqueName,
+                        fontAssetUniqueName: $0.style.fontAssetUniqueName,
                         textAlign: $0.style.textAlign
                     ),
                     keyboardType: $0.keyboardType,

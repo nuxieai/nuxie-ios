@@ -1,890 +1,816 @@
 {
-  "publicKeyBase64" : "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "suite" : "journeys/planes/profile-fact-admission",
-  "vectors" : [
+  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+  "suite": "journeys/planes/profile-fact-admission",
+  "vectors": [
     {
-      "name" : "exact union across two legs of one publication",
-      "profile" : {
-        "armedLegs" : [
+      "name": "exact union across two legs of one publication",
+      "profile": {
+        "armedLegs": [
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "type" : "app_foregrounded"
+            "entryCondition": {
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "experienceId" : "experience_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "experienceId": "experience_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "versionId": "version_golden"
             }
           },
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "condition" : {
-                "expr" : {
-                  "args" : [
+            "entryCondition": {
+              "condition": {
+                "expr": {
+                  "args": [
                     {
-                      "key" : "plan",
-                      "op" : "is_set",
-                      "type" : "User"
+                      "key": "plan",
+                      "op": "is_set",
+                      "type": "User"
                     },
                     {
-                      "id" : "segment-1",
-                      "op" : "is_member",
-                      "type" : "Segment"
+                      "id": "segment-1",
+                      "op": "is_member",
+                      "type": "Segment"
                     }
                   ],
-                  "type" : "And"
+                  "type": "And"
                 },
-                "ir_version" : 1
+                "ir_version": 1
               },
-              "type" : "app_foregrounded"
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "experienceId" : "experience_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "experienceId": "experience_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "versionId": "version_golden"
             }
           }
         ],
-        "delivery" : {
-          "assetBaseUrl" : "https://assets.example.com/",
-          "renderBaseUrl" : "https://renders.example.com/"
+        "delivery": {
+          "assetBaseUrl": "https://assets.example.com/",
+          "renderBaseUrl": "https://renders.example.com/"
         },
-        "facts" : {
-          "assignments" : {
-
+        "facts": {
+          "assignments": {},
+          "memberships": {
+            "segment-1": true
           },
-          "memberships" : {
-            "segment-1" : true
-          },
-          "properties" : {
-            "plan" : {
-              "present" : true,
-              "value" : "pro"
+          "properties": {
+            "plan": {
+              "present": true,
+              "value": "pro"
             }
           }
         },
-        "features" : [
-
-        ],
-        "releases" : [
+        "features": [],
+        "releases": [
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "descriptorSizeBytes" : 1278,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "descriptorSizeBytes": 1278,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           },
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "descriptorSizeBytes" : 1451,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "HiirzEYJxy6nkUiKD/2tlUA6WT/2aMlii0LyLC3FIJxApJYABftZCbkP2HLyavHqDoF1PCCeGwsj0Mv1JdviCw==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "descriptorSizeBytes": 1451,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "WSS8YY8XOhOTcXPyzl3HI64nU/20KHQit08DWoQkrtN3JH6Ux5bj3gbPQorEqTHVMUKRtRsHOuvompfZFLyBCQ==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           }
         ],
-        "schemaVersion" : "nuxie.journey-plane-profile.v1",
-        "status" : "ok"
+        "schemaVersion": "nuxie.journey-plane-profile.v1",
+        "status": "ok"
       },
-      "valid" : true
+      "valid": true
     },
     {
-      "name" : "missing property",
-      "profile" : {
-        "armedLegs" : [
+      "name": "missing property",
+      "profile": {
+        "armedLegs": [
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "type" : "app_foregrounded"
+            "entryCondition": {
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "experienceId" : "experience_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "experienceId": "experience_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "versionId": "version_golden"
             }
           },
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "condition" : {
-                "expr" : {
-                  "args" : [
+            "entryCondition": {
+              "condition": {
+                "expr": {
+                  "args": [
                     {
-                      "key" : "plan",
-                      "op" : "is_set",
-                      "type" : "User"
+                      "key": "plan",
+                      "op": "is_set",
+                      "type": "User"
                     },
                     {
-                      "id" : "segment-1",
-                      "op" : "is_member",
-                      "type" : "Segment"
+                      "id": "segment-1",
+                      "op": "is_member",
+                      "type": "Segment"
                     }
                   ],
-                  "type" : "And"
+                  "type": "And"
                 },
-                "ir_version" : 1
+                "ir_version": 1
               },
-              "type" : "app_foregrounded"
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "experienceId" : "experience_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "experienceId": "experience_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "versionId": "version_golden"
             }
           }
         ],
-        "delivery" : {
-          "assetBaseUrl" : "https://assets.example.com/",
-          "renderBaseUrl" : "https://renders.example.com/"
+        "delivery": {
+          "assetBaseUrl": "https://assets.example.com/",
+          "renderBaseUrl": "https://renders.example.com/"
         },
-        "facts" : {
-          "assignments" : {
-
+        "facts": {
+          "assignments": {},
+          "memberships": {
+            "segment-1": true
           },
-          "memberships" : {
-            "segment-1" : true
-          },
-          "properties" : {
-
-          }
+          "properties": {}
         },
-        "features" : [
-
-        ],
-        "releases" : [
+        "features": [],
+        "releases": [
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "descriptorSizeBytes" : 1278,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "descriptorSizeBytes": 1278,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           },
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "descriptorSizeBytes" : 1451,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "HiirzEYJxy6nkUiKD/2tlUA6WT/2aMlii0LyLC3FIJxApJYABftZCbkP2HLyavHqDoF1PCCeGwsj0Mv1JdviCw==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "descriptorSizeBytes": 1451,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "WSS8YY8XOhOTcXPyzl3HI64nU/20KHQit08DWoQkrtN3JH6Ux5bj3gbPQorEqTHVMUKRtRsHOuvompfZFLyBCQ==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           }
         ],
-        "schemaVersion" : "nuxie.journey-plane-profile.v1",
-        "status" : "ok"
+        "schemaVersion": "nuxie.journey-plane-profile.v1",
+        "status": "ok"
       },
-      "valid" : false
+      "valid": false
     },
     {
-      "name" : "missing membership",
-      "profile" : {
-        "armedLegs" : [
+      "name": "missing membership",
+      "profile": {
+        "armedLegs": [
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "type" : "app_foregrounded"
+            "entryCondition": {
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "experienceId" : "experience_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "experienceId": "experience_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "versionId": "version_golden"
             }
           },
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "condition" : {
-                "expr" : {
-                  "args" : [
+            "entryCondition": {
+              "condition": {
+                "expr": {
+                  "args": [
                     {
-                      "key" : "plan",
-                      "op" : "is_set",
-                      "type" : "User"
+                      "key": "plan",
+                      "op": "is_set",
+                      "type": "User"
                     },
                     {
-                      "id" : "segment-1",
-                      "op" : "is_member",
-                      "type" : "Segment"
+                      "id": "segment-1",
+                      "op": "is_member",
+                      "type": "Segment"
                     }
                   ],
-                  "type" : "And"
+                  "type": "And"
                 },
-                "ir_version" : 1
+                "ir_version": 1
               },
-              "type" : "app_foregrounded"
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "experienceId" : "experience_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "experienceId": "experience_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "versionId": "version_golden"
             }
           }
         ],
-        "delivery" : {
-          "assetBaseUrl" : "https://assets.example.com/",
-          "renderBaseUrl" : "https://renders.example.com/"
+        "delivery": {
+          "assetBaseUrl": "https://assets.example.com/",
+          "renderBaseUrl": "https://renders.example.com/"
         },
-        "facts" : {
-          "assignments" : {
-
-          },
-          "memberships" : {
-
-          },
-          "properties" : {
-            "plan" : {
-              "present" : true,
-              "value" : "pro"
+        "facts": {
+          "assignments": {},
+          "memberships": {},
+          "properties": {
+            "plan": {
+              "present": true,
+              "value": "pro"
             }
           }
         },
-        "features" : [
-
-        ],
-        "releases" : [
+        "features": [],
+        "releases": [
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "descriptorSizeBytes" : 1278,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "descriptorSizeBytes": 1278,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           },
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "descriptorSizeBytes" : 1451,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "HiirzEYJxy6nkUiKD/2tlUA6WT/2aMlii0LyLC3FIJxApJYABftZCbkP2HLyavHqDoF1PCCeGwsj0Mv1JdviCw==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "descriptorSizeBytes": 1451,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "WSS8YY8XOhOTcXPyzl3HI64nU/20KHQit08DWoQkrtN3JH6Ux5bj3gbPQorEqTHVMUKRtRsHOuvompfZFLyBCQ==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           }
         ],
-        "schemaVersion" : "nuxie.journey-plane-profile.v1",
-        "status" : "ok"
+        "schemaVersion": "nuxie.journey-plane-profile.v1",
+        "status": "ok"
       },
-      "valid" : false
+      "valid": false
     },
     {
-      "name" : "extra property",
-      "profile" : {
-        "armedLegs" : [
+      "name": "extra property",
+      "profile": {
+        "armedLegs": [
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "type" : "app_foregrounded"
+            "entryCondition": {
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "experienceId" : "experience_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "experienceId": "experience_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "versionId": "version_golden"
             }
           },
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "condition" : {
-                "expr" : {
-                  "args" : [
+            "entryCondition": {
+              "condition": {
+                "expr": {
+                  "args": [
                     {
-                      "key" : "plan",
-                      "op" : "is_set",
-                      "type" : "User"
+                      "key": "plan",
+                      "op": "is_set",
+                      "type": "User"
                     },
                     {
-                      "id" : "segment-1",
-                      "op" : "is_member",
-                      "type" : "Segment"
+                      "id": "segment-1",
+                      "op": "is_member",
+                      "type": "Segment"
                     }
                   ],
-                  "type" : "And"
+                  "type": "And"
                 },
-                "ir_version" : 1
+                "ir_version": 1
               },
-              "type" : "app_foregrounded"
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "experienceId" : "experience_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "experienceId": "experience_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "versionId": "version_golden"
             }
           }
         ],
-        "delivery" : {
-          "assetBaseUrl" : "https://assets.example.com/",
-          "renderBaseUrl" : "https://renders.example.com/"
+        "delivery": {
+          "assetBaseUrl": "https://assets.example.com/",
+          "renderBaseUrl": "https://renders.example.com/"
         },
-        "facts" : {
-          "assignments" : {
-
+        "facts": {
+          "assignments": {},
+          "memberships": {
+            "segment-1": true
           },
-          "memberships" : {
-            "segment-1" : true
-          },
-          "properties" : {
-            "extra" : {
-              "present" : false
+          "properties": {
+            "extra": {
+              "present": false
             },
-            "plan" : {
-              "present" : true,
-              "value" : "pro"
+            "plan": {
+              "present": true,
+              "value": "pro"
             }
           }
         },
-        "features" : [
-
-        ],
-        "releases" : [
+        "features": [],
+        "releases": [
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "descriptorSizeBytes" : 1278,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "descriptorSizeBytes": 1278,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           },
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "descriptorSizeBytes" : 1451,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "HiirzEYJxy6nkUiKD/2tlUA6WT/2aMlii0LyLC3FIJxApJYABftZCbkP2HLyavHqDoF1PCCeGwsj0Mv1JdviCw==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "descriptorSizeBytes": 1451,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "WSS8YY8XOhOTcXPyzl3HI64nU/20KHQit08DWoQkrtN3JH6Ux5bj3gbPQorEqTHVMUKRtRsHOuvompfZFLyBCQ==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           }
         ],
-        "schemaVersion" : "nuxie.journey-plane-profile.v1",
-        "status" : "ok"
+        "schemaVersion": "nuxie.journey-plane-profile.v1",
+        "status": "ok"
       },
-      "valid" : false
+      "valid": false
     },
     {
-      "name" : "extra membership",
-      "profile" : {
-        "armedLegs" : [
+      "name": "extra membership",
+      "profile": {
+        "armedLegs": [
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "type" : "app_foregrounded"
+            "entryCondition": {
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "experienceId" : "experience_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "experienceId": "experience_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "versionId": "version_golden"
             }
           },
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "condition" : {
-                "expr" : {
-                  "args" : [
+            "entryCondition": {
+              "condition": {
+                "expr": {
+                  "args": [
                     {
-                      "key" : "plan",
-                      "op" : "is_set",
-                      "type" : "User"
+                      "key": "plan",
+                      "op": "is_set",
+                      "type": "User"
                     },
                     {
-                      "id" : "segment-1",
-                      "op" : "is_member",
-                      "type" : "Segment"
+                      "id": "segment-1",
+                      "op": "is_member",
+                      "type": "Segment"
                     }
                   ],
-                  "type" : "And"
+                  "type": "And"
                 },
-                "ir_version" : 1
+                "ir_version": 1
               },
-              "type" : "app_foregrounded"
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "experienceId" : "experience_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "experienceId": "experience_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "versionId": "version_golden"
             }
           }
         ],
-        "delivery" : {
-          "assetBaseUrl" : "https://assets.example.com/",
-          "renderBaseUrl" : "https://renders.example.com/"
+        "delivery": {
+          "assetBaseUrl": "https://assets.example.com/",
+          "renderBaseUrl": "https://renders.example.com/"
         },
-        "facts" : {
-          "assignments" : {
-
+        "facts": {
+          "assignments": {},
+          "memberships": {
+            "extra": false,
+            "segment-1": true
           },
-          "memberships" : {
-            "extra" : false,
-            "segment-1" : true
-          },
-          "properties" : {
-            "plan" : {
-              "present" : true,
-              "value" : "pro"
+          "properties": {
+            "plan": {
+              "present": true,
+              "value": "pro"
             }
           }
         },
-        "features" : [
-
-        ],
-        "releases" : [
+        "features": [],
+        "releases": [
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "descriptorSizeBytes" : 1278,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "descriptorSizeBytes": 1278,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           },
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "descriptorSizeBytes" : 1451,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "HiirzEYJxy6nkUiKD/2tlUA6WT/2aMlii0LyLC3FIJxApJYABftZCbkP2HLyavHqDoF1PCCeGwsj0Mv1JdviCw==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "descriptorSizeBytes": 1451,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "WSS8YY8XOhOTcXPyzl3HI64nU/20KHQit08DWoQkrtN3JH6Ux5bj3gbPQorEqTHVMUKRtRsHOuvompfZFLyBCQ==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           }
         ],
-        "schemaVersion" : "nuxie.journey-plane-profile.v1",
-        "status" : "ok"
+        "schemaVersion": "nuxie.journey-plane-profile.v1",
+        "status": "ok"
       },
-      "valid" : false
+      "valid": false
     },
     {
-      "name" : "extra assignment",
-      "profile" : {
-        "armedLegs" : [
+      "name": "extra assignment",
+      "profile": {
+        "armedLegs": [
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "type" : "app_foregrounded"
+            "entryCondition": {
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "experienceId" : "experience_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "experienceId": "experience_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "versionId": "version_golden"
             }
           },
           {
-            "binding" : {
-              "type" : "new"
+            "binding": {
+              "type": "new"
             },
-            "context" : {
-              "event" : {
-
-              },
-              "responses" : {
-
-              }
+            "context": {
+              "event": {},
+              "responses": {}
             },
-            "entryCondition" : {
-              "condition" : {
-                "expr" : {
-                  "args" : [
+            "entryCondition": {
+              "condition": {
+                "expr": {
+                  "args": [
                     {
-                      "key" : "plan",
-                      "op" : "is_set",
-                      "type" : "User"
+                      "key": "plan",
+                      "op": "is_set",
+                      "type": "User"
                     },
                     {
-                      "id" : "segment-1",
-                      "op" : "is_member",
-                      "type" : "Segment"
+                      "id": "segment-1",
+                      "op": "is_member",
+                      "type": "Segment"
                     }
                   ],
-                  "type" : "And"
+                  "type": "And"
                 },
-                "ir_version" : 1
+                "ir_version": 1
               },
-              "type" : "app_foregrounded"
+              "type": "app_foregrounded"
             },
-            "reference" : {
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "experienceId" : "experience_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "versionId" : "version_golden"
+            "reference": {
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "experienceId": "experience_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "versionId": "version_golden"
             }
           }
         ],
-        "delivery" : {
-          "assetBaseUrl" : "https://assets.example.com/",
-          "renderBaseUrl" : "https://renders.example.com/"
+        "delivery": {
+          "assetBaseUrl": "https://assets.example.com/",
+          "renderBaseUrl": "https://renders.example.com/"
         },
-        "facts" : {
-          "assignments" : {
-            "extra" : null
+        "facts": {
+          "assignments": {
+            "extra": null
           },
-          "memberships" : {
-            "segment-1" : true
+          "memberships": {
+            "segment-1": true
           },
-          "properties" : {
-            "plan" : {
-              "present" : true,
-              "value" : "pro"
+          "properties": {
+            "plan": {
+              "present": true,
+              "value": "pro"
             }
           }
         },
-        "features" : [
-
-        ],
-        "releases" : [
+        "features": [],
+        "releases": [
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
-              "descriptorSha256" : "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
-              "descriptorSizeBytes" : 1278,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbXSwic2VnbWVudElkcyI6W119LCJpZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJpbnB1dHMiOnsiZXZlbnRGaWVsZHMiOltdLCJyZXNwb25zZUZpZWxkcyI6W119LCJvdXRwdXRzIjpbXSwicmVlbnRyeSI6eyJ0eXBlIjoib25lX3RpbWUifSwicm91dGVzIjpbXSwic2NoZW1hVmVyc2lvbiI6Im51eGllLmV4cGVyaWVuY2UtcGxhbmVzLnYxIiwic2NyZWVucyI6W10sInN0ZXBzIjpbeyJpZCI6InJlcG9ydCIsImtpbmQiOiJjb21wbGV0ZSIsIm91dGNvbWUiOiJjb250aW51ZSJ9XX0sIm1ldGFkYXRhIjp7ImFwcERlZmF1bHRUaW1lem9uZSI6IkV0Yy9VVEMiLCJkZXNjcmlwdGlvbiI6IkNyb3NzLXJ1bnRpbWUgc2lnbmVkIEV4cGVyaWVuY2UgUmVsZWFzZSBEZXNjcmlwdG9yIGZpeHR1cmUiLCJleHBlcmllbmNlVHlwZSI6Im9uYm9hcmRpbmciLCJuYW1lIjoiR29sZGVuIG9uYm9hcmRpbmcifSwicGxhY2VtZW50cyI6W10sInByZXNlbnRhdGlvbiI6eyJiYWNrZ3JvdW5kQ29sb3IiOiIjMEEwQTBBRkYiLCJvcmllbnRhdGlvbiI6InBvcnRyYWl0Iiwic3R5bGUiOiJmdWxsX3NjcmVlbiJ9LCJwcm9kdWN0cyI6W10sInByb3ZlbmFuY2UiOnsiY29tcGlsZXJDb21taXQiOiJhYmMxMjMiLCJjb21waWxlclZlcnNpb24iOiIxLjAuMCJ9LCJyZW5kZXIiOm51bGwsInJlcXVpcmVtZW50cyI6bnVsbCwic2NoZW1hVmVyc2lvbiI6Im51eGllLmpvdXJuZXktcmVsZWFzZS52MSIsInNjcmVlbkJlaGF2aW9ycyI6W10sInZpZXdNb2RlbFZhbHVlcyI6W119",
+              "descriptorSha256": "f70b579fa4fc220a766ec38ecc68bfe28db0c9214adc539109f8a721317a5b32",
+              "descriptorSizeBytes": 1278,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "1o4GAqil6OQrT+1cHgYvOZdLwV2vRbkmtRq+HfbvNRPawUt+un2nJ7H3k2GgTgQyHwPLwmXKms11OGgUDiVrCA==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           },
           {
-            "envelope" : {
-              "descriptorBytesBase64" : "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
-              "descriptorSha256" : "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
-              "descriptorSizeBytes" : 1451,
-              "encoding" : "base64",
-              "mediaType" : "application/vnd.nuxie.journey+json",
-              "signature" : {
-                "algorithm" : "ed25519",
-                "keyId" : "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64" : "HiirzEYJxy6nkUiKD/2tlUA6WT/2aMlii0LyLC3FIJxApJYABftZCbkP2HLyavHqDoF1PCCeGwsj0Mv1JdviCw==",
-                "version" : 1
+            "envelope": {
+              "descriptorBytesBase64": "eyJpZGVudGl0eSI6eyJhcHBJZCI6ImFwcF9nb2xkZW4iLCJidWlsZElkIjoiYnVpbGRfZ29sZGVuIiwiZW52aXJvbm1lbnQiOiJsaXZlIiwiZXhwZXJpZW5jZUlkIjoiZXhwZXJpZW5jZV9nb2xkZW4iLCJleHBlcmllbmNlVmVyc2lvbklkIjoidmVyc2lvbl9nb2xkZW4iLCJwdWJsaXNoZWRBdCI6IjIwMjYtMDgtMTJUMTI6MDA6MDAuMDAwWiIsInB1Ymxpc2hlZEF0U2VxIjo0MiwidmVyc2lvbk51bWJlciI6N30sImxlZyI6eyJjb21wbGV0aW9uT3V0cHV0cyI6eyJjb250aW51ZSI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX19LCJlbnRpdGxlbWVudEdhdGUiOnsiZW5hYmxlZCI6dHJ1ZSwicHJvZHVjdHMiOltdfSwiZW50cnlDb25kaXRpb24iOnsiY29uZGl0aW9uIjp7ImV4cHIiOnsiYXJncyI6W3sia2V5IjoicGxhbiIsIm9wIjoiaXNfc2V0IiwidHlwZSI6IlVzZXIifSx7ImlkIjoic2VnbWVudC0xIiwib3AiOiJpc19tZW1iZXIiLCJ0eXBlIjoiU2VnbWVudCJ9XSwidHlwZSI6IkFuZCJ9LCJpcl92ZXJzaW9uIjoxfSwidHlwZSI6ImFwcF9mb3JlZ3JvdW5kZWQifSwiZW50cnlTdGVwSWQiOiJyZXBvcnQiLCJmYWN0cyI6eyJleHBlcmltZW50SWRzIjpbXSwicHJvcGVydHlLZXlzIjpbInBsYW4iXSwic2VnbWVudElkcyI6WyJzZWdtZW50LTEiXX0sImlkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImlucHV0cyI6eyJldmVudEZpZWxkcyI6W10sInJlc3BvbnNlRmllbGRzIjpbXX0sIm91dHB1dHMiOltdLCJyZWVudHJ5Ijp7InR5cGUiOiJvbmVfdGltZSJ9LCJyb3V0ZXMiOltdLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuZXhwZXJpZW5jZS1wbGFuZXMudjEiLCJzY3JlZW5zIjpbXSwic3RlcHMiOlt7ImlkIjoicmVwb3J0Iiwia2luZCI6ImNvbXBsZXRlIiwib3V0Y29tZSI6ImNvbnRpbnVlIn1dfSwibWV0YWRhdGEiOnsiYXBwRGVmYXVsdFRpbWV6b25lIjoiRXRjL1VUQyIsImRlc2NyaXB0aW9uIjoiQ3Jvc3MtcnVudGltZSBzaWduZWQgRXhwZXJpZW5jZSBSZWxlYXNlIERlc2NyaXB0b3IgZml4dHVyZSIsImV4cGVyaWVuY2VUeXBlIjoib25ib2FyZGluZyIsIm5hbWUiOiJHb2xkZW4gb25ib2FyZGluZyJ9LCJwbGFjZW1lbnRzIjpbXSwicHJlc2VudGF0aW9uIjp7ImJhY2tncm91bmRDb2xvciI6IiMwQTBBMEFGRiIsIm9yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJzdHlsZSI6ImZ1bGxfc2NyZWVuIn0sInByb2R1Y3RzIjpbXSwicHJvdmVuYW5jZSI6eyJjb21waWxlckNvbW1pdCI6ImFiYzEyMyIsImNvbXBpbGVyVmVyc2lvbiI6IjEuMC4wIn0sInJlbmRlciI6bnVsbCwicmVxdWlyZW1lbnRzIjpudWxsLCJzY2hlbWFWZXJzaW9uIjoibnV4aWUuam91cm5leS1yZWxlYXNlLnYxIiwic2NyZWVuQmVoYXZpb3JzIjpbXSwidmlld01vZGVsVmFsdWVzIjpbXX0=",
+              "descriptorSha256": "4020f15103fc521d8f64e554b6a7ad4d928ef92c071feca808b8d93dab350f5d",
+              "descriptorSizeBytes": 1451,
+              "encoding": "base64",
+              "mediaType": "application/vnd.nuxie.journey+json",
+              "signature": {
+                "algorithm": "ed25519",
+                "keyId": "TEST_ONLY_DEV_KEYPAIR",
+                "signatureBase64": "WSS8YY8XOhOTcXPyzl3HI64nU/20KHQit08DWoQkrtN3JH6Ux5bj3gbPQorEqTHVMUKRtRsHOuvompfZFLyBCQ==",
+                "version": 1
               }
             },
-            "locator" : {
-              "appId" : "app_golden",
-              "buildId" : "build_golden",
-              "environment" : "live",
-              "experienceId" : "experience_golden",
-              "experienceVersionId" : "version_golden",
-              "legId" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "publishedAt" : "2026-08-12T12:00:00.000Z",
-              "publishedAtSeq" : 42,
-              "versionNumber" : 7
+            "locator": {
+              "appId": "app_golden",
+              "buildId": "build_golden",
+              "environment": "live",
+              "experienceId": "experience_golden",
+              "experienceVersionId": "version_golden",
+              "legId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "publishedAt": "2026-08-12T12:00:00.000Z",
+              "publishedAtSeq": 42,
+              "versionNumber": 7
             }
           }
         ],
-        "schemaVersion" : "nuxie.journey-plane-profile.v1",
-        "status" : "ok"
+        "schemaVersion": "nuxie.journey-plane-profile.v1",
+        "status": "ok"
       },
-      "valid" : false
+      "valid": false
     }
   ],
-  "version" : 1
+  "version": 1
 }

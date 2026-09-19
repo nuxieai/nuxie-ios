@@ -87,7 +87,7 @@ private struct AccessibilityFixture {
               let descriptorBytes = Data(base64Encoded: encoded),
               let descriptor = try JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any],
               let render = descriptor["render"] as? [String: Any],
-              let riv = render["riv"] as? [String: Any] else {
+              let riv = render["nux"] as? [String: Any] else {
             throw CocoaError(.fileReadCorruptFile)
         }
         let references = [riv] + (render["assets"] as? [[String: Any]] ?? [])

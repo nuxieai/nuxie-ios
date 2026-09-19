@@ -1,7 +1,7 @@
 {
   "contract": "published-custom-transition-completion",
   "publisherSourceCommit": "a43031094ef04df48f3f5af8c4f2ca46f1df5126",
-  "descriptorSha256": "5bc17bc4af2ca0bf173cde1fc230e3aeef45b8cdcfc8dd450afbb56d282fdd1b",
+  "descriptorSha256": "44cffcb29d13308f92db1179184726ba16621fa1fdba8aa4aaa43d739a1b4427",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
   "qualification": "Publisher declaration and signing checks passed; native completion event qualification is in progress.",
   "descriptorRefresh": {

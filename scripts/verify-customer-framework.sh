@@ -34,13 +34,13 @@ fi
 if find "${framework_path}" \
     \( -iname 'RiveRuntime.framework' -o -iname '*rive-ios*' -o -iname 'librive*' \) \
     -print -quit | grep -q .; then
-    echo "customer framework contains a Rive artifact" >&2
+    echo "customer framework contains an upstream Rive SDK artifact" >&2
     exit 1
 fi
 
 linked_dependencies="$({ otool -L "${main_executable}"; otool -L "${payload_executable}"; })"
 if grep -Eiq 'RiveRuntime|rive-ios|/librive' <<< "${linked_dependencies}"; then
-    echo "customer framework still links a Rive dependency" >&2
+    echo "customer framework still links an upstream Rive SDK dependency" >&2
     exit 1
 fi
 
@@ -87,4 +87,4 @@ fi
 
 python3 "${repository_root}/scripts/validate-privacy-manifest.py" "${privacy_manifest}"
 
-echo "customer framework audit passed: Rust runtime and exact privacy manifest present, Rive absent"
+echo "customer framework audit passed: Rust runtime and exact privacy manifest present, upstream Rive SDK binaries absent"

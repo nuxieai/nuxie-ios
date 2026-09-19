@@ -455,8 +455,8 @@ struct JourneyReleaseVerifier: Sendable {
                 }
                 let size = Int(sizeNumber.doubleValue)
                 let maximum: Int
-                if key == "renders/sha256/\(digest).riv" || key == "renders/sha256/\(digest).nux" {
-                    maximum = JourneyReleaseLimits.rivArtifactBytes
+                if key == "renders/sha256/\(digest).nux" {
+                    maximum = JourneyReleaseLimits.sceneArtifactBytes
                 } else if key == "screen-behavior/sha256/\(digest).bin" {
                     maximum = 4 * 1_024 * 1_024
                 } else if key.hasPrefix("assets/sha256/\(digest)."),
