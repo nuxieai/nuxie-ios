@@ -805,6 +805,18 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.setSemanticTextRun(captureID: captureID, name: name, text: text) }
     }
 
+    /// Execution-only access to a non-rendering value in the captured field occurrence.
+    package func readFieldString(captureID: UUID, nodeID: UInt32, name: String) async throws -> Data {
+        let state = try requireState()
+        return try await executor.call { try state.readFieldString(captureID: captureID, nodeID: nodeID, name: name) }
+    }
+
+    /// Returns whether the property changed, not whether reverse conversion accepted it.
+    package func setFieldString(captureID: UUID, nodeID: UInt32, name: String, value: Data) async throws -> Bool {
+        let state = try requireState()
+        return try await executor.call { try state.setFieldString(captureID: captureID, nodeID: nodeID, name: name, value: value) }
+    }
+
     package func setNumber(
         _ value: Float,
         path: String,
@@ -1228,6 +1240,49 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         let previous = semanticCapture
         semanticCapture = nil
         try previous?.handle.close()
+    }
+
+    func readFieldString(captureID: UUID, nodeID: UInt32, name: String) throws -> Data {
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "read field value")
+        }
+        let player = try self.player.require()
+        let snapshot = try capture.handle.require()
+        return try withStringView(name) { key in
+            var length = 0
+            try requireOK(nux_player_field_string_copy(player, snapshot, nodeID, key, nil, 0, &length),
+                operation: "measure field value")
+            guard length <= 1_048_576 else {
+                throw nativeFailure(status: NUX_STATUS_LIMIT_EXCEEDED.rawValue, operation: "read field value")
+            }
+            var value = Data(count: length)
+            let capacity = length
+            let status = value.withUnsafeMutableBytes { buffer in
+                nux_player_field_string_copy(player, snapshot, nodeID, key,
+                    buffer.bindMemory(to: UInt8.self).baseAddress, capacity, &length)
+            }
+            try requireOK(status, operation: "read field value")
+            return value
+        }
+    }
+
+    func setFieldString(captureID: UUID, nodeID: UInt32, name: String, value: Data) throws -> Bool {
+        let previous = try readFieldString(captureID: captureID, nodeID: nodeID, name: name)
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "write field value")
+        }
+        let player = try self.player.require()
+        let snapshot = try capture.handle.require()
+        let status = withStringView(name) { key in
+            value.withUnsafeBytes { buffer in
+                nux_player_field_string_set(player, snapshot, nodeID, key,
+                    NuxStringView(data: buffer.bindMemory(to: CChar.self).baseAddress, len: value.count))
+            }
+        }
+        try requireOK(status, operation: "write field value")
+        let changed = previous != value
+        if changed { try retireSemanticCapture() }
+        return changed
     }
 
     func queueSemanticAction(captureID: UUID, nodeID: UInt32, action: NuxieNativeSemanticAction) throws {
