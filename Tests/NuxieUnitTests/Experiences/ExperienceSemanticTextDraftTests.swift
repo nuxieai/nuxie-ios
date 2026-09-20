@@ -2,6 +2,30 @@ import XCTest
 @testable import Nuxie
 
 final class ExperienceSemanticTextDraftTests: XCTestCase {
+    func testSourceRefreshChangesIdleValueWithoutEmittingAUserCommit() {
+        var draft = ExperienceSemanticTextDraft(text: "initial")
+        XCTAssertTrue(draft.receiveSourceValue("external"))
+        XCTAssertEqual(draft.text, "external")
+        XCTAssertEqual(draft.acceptedText, "external")
+        XCTAssertNil(draft.requestValueChange())
+    }
+
+    func testSourceRefreshPreservesCompositionAndPendingAdmission() throws {
+        var draft = ExperienceSemanticTextDraft(text: "initial")
+        draft.present(captureID: UUID())
+        draft.replaceText("한", isComposing: true)
+        XCTAssertFalse(draft.receiveSourceValue("external"))
+        let write = try XCTUnwrap(draft.takeWrite())
+        XCTAssertFalse(draft.receiveSourceValue("external"))
+        XCTAssertNil(draft.finish(write, outcome: .accepted))
+        XCTAssertFalse(draft.receiveSourceValue("external"), "Accepted provisional composition still belongs to UIKit")
+        XCTAssertEqual(draft.text, "한")
+        draft.replaceText("한")
+        XCTAssertFalse(draft.receiveSourceValue("external"), "Source refresh cannot consume an unreported user edit")
+        XCTAssertEqual(draft.requestValueChange(), "한")
+        XCTAssertTrue(draft.receiveSourceValue("external"))
+    }
+
     func testReturnAndEditingEndedRemainDistinctAfterTextAdmission() throws {
         var draft = ExperienceSemanticTextDraft(text: "saved")
         draft.present(captureID: UUID())
