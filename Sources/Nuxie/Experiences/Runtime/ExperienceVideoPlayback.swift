@@ -27,6 +27,7 @@ final class ExperienceVideoPlayback {
         var ready = false
         var ended = false
         var seeking = false
+        var frameRequestedAfterSeek = false
         var wantsPlay = false
         var failed = false
         var disposed = false
@@ -429,12 +430,14 @@ final class ExperienceVideoPlayback {
                 decoder.generation = action.generation
                 decoder.ended = false
                 decoder.seeking = true
+                decoder.frameRequestedAfterSeek = false
                 decoder.player.pause()
                 let generation = action.generation
                 decoder.player.seek(to: CMTime(seconds: action.value, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak decoder] finished in
                     Task { @MainActor in
                         guard let self, let decoder, decoder.generation == generation, !decoder.disposed else { return }
                         decoder.seeking = false
+                        decoder.frameRequestedAfterSeek = finished
                         decoder.failed = !finished
                         if finished && decoder.wantsPlay && self.suspensionReasons.isEmpty {
                             decoder.player.playImmediately(atRate: decoder.requestedRate)
@@ -557,10 +560,16 @@ final class ExperienceVideoPlayback {
                 playing: decoder.player.timeControlStatus == .playing, available: decoder.ready && !decoder.seeking)
             guard !closed, !decoder.disposed else { continue }
             if !decoder.seeking && suspensionReasons.isEmpty {
-                let time = decoder.output.itemTime(forHostTime: CACurrentMediaTime())
-                if decoder.output.hasNewPixelBuffer(forItemTime: time) {
+                // A paused seek may select the image already served by the
+                // output. Retrieve it once for the new generation even when it
+                // is not "new", retaining AVFoundation's actual display PTS.
+                let time = decoder.frameRequestedAfterSeek
+                    ? decoder.player.currentTime()
+                    : decoder.output.itemTime(forHostTime: CACurrentMediaTime())
+                if decoder.frameRequestedAfterSeek || decoder.output.hasNewPixelBuffer(forItemTime: time) {
                     var displayTime = CMTime.invalid
                     if let buffer = decoder.output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime) {
+                        decoder.frameRequestedAfterSeek = false
                         let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
                         guard width > 0, height > 0, width <= 8192, height <= 8192, width * height <= 16_777_216 else {
                             throw ExperienceInteractiveScreenError.assetContract("decoded video frame exceeds limits")
@@ -590,7 +599,7 @@ final class ExperienceVideoPlayback {
                     }
                 }
             }
-            active = active || (suspensionReasons.isEmpty && (!decoder.ready || decoder.seeking || decoder.player.timeControlStatus != .paused))
+            active = active || (suspensionReasons.isEmpty && (!decoder.ready || decoder.seeking || decoder.frameRequestedAfterSeek || decoder.player.timeControlStatus != .paused))
         }
         return active
     }
