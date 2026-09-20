@@ -3466,12 +3466,33 @@ actor ExperienceInteractiveScreen {
 
     /// Commits scripted input through generated state and an existing VM trigger.
     /// Returns nil for an ordinary, non-scripted input.
-    func commitTextInput(inputID: String, value: String) async throws -> ExperienceInteractiveMutationResult? {
+    func commitTextInput(inputID: String, value: String, ownerInstanceID: UInt64? = nil) async throws -> ExperienceInteractiveMutationResult? {
         guard let input = textInputs[inputID] else {
             throw ExperienceInteractiveScreenError.textInputNotFound(inputID)
         }
         guard input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
+        }
+        if input.editableValueName != nil {
+            guard let ownerInstanceID else { return nil }
+            let stateCompiler = self.stateCompiler
+            return try await operationGate.withLock { [self] in
+                let current = try await runtime.fieldOwnerSnapshot(ownerInstanceID)
+                guard current.rootInstanceID == ownerInstanceID,
+                      let owner = current.instances.first(where: { $0.id == ownerInstanceID }),
+                      let reference = NuxieNativeViewModelReference(rawValue: ownerInstanceID) else {
+                    throw ExperienceInteractiveScreenError.stateContract("Native input owner is no longer present")
+                }
+                guard let paths = try stateCompiler.scriptedInputCommitPaths(
+                    nodeID: input.viewNodeId, rootSchemaIndex: owner.schemaIndex
+                ) else { return nil }
+                let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
+                let result = try await runtime.mutateFieldOwner(ownerInstanceID, mutations: [
+                    .setString(instance: reference, path: paths.value, value: Data(limited.utf8)),
+                    .fireTrigger(instance: reference, path: paths.commit),
+                ])
+                return await projectMutation(result, ignoringPrefixCount: 0, correlationID: 0)
+            }
         }
         guard let root = rootViewModelReference,
               let schema = schemaIndexByViewModel[root],
@@ -3534,7 +3555,7 @@ actor ExperienceInteractiveScreen {
         }
     }
 
-    func readSemanticText(captureID: UUID, inputID: String, nodeID: UInt32) async throws -> String {
+    func readSemanticText(captureID: UUID, inputID: String, nodeID: UInt32) async throws -> ExperienceTextInputSource {
         guard let input = textInputs[inputID], input.editable,
               let name = input.editableValueName else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
@@ -3545,7 +3566,8 @@ actor ExperienceInteractiveScreen {
             guard let text = String(data: bytes, encoding: .utf8) else {
                 throw ExperienceInteractiveScreenError.stateContract("Native input contains invalid UTF-8")
             }
-            return text
+            let owner = try await runtime.fieldViewModelInstance(captureID: captureID, nodeID: nodeID, name: name)
+            return ExperienceTextInputSource(text: text, ownerInstanceID: owner)
         }
     }
 

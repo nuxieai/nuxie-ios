@@ -8,6 +8,12 @@ enum ExperienceTextInputEventKind: String, Decodable, Equatable, Sendable {
 struct ExperienceTextInputEvent: Equatable {
     let kind: ExperienceTextInputEventKind
     let text: String
+    var ownerInstanceID: UInt64? = nil
+}
+
+struct ExperienceTextInputSource: Sendable {
+    let text: String
+    var ownerInstanceID: UInt64? = nil
 }
 
 /// Serializes one editor's native writes while retaining the latest user draft.

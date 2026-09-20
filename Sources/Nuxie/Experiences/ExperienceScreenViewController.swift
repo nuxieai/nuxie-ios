@@ -846,7 +846,7 @@ final class ExperienceScreenViewController: UIViewController {
                   let loop = self.presentationLoop else { return }
             let originatingRun = self.delegate?.screenEmissionRun(for: self)
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
-                let result = try await interactiveScreen.commitTextInput(inputID: input.inputId, value: event.text)
+                let result = try await interactiveScreen.commitTextInput(inputID: input.inputId, value: event.text, ownerInstanceID: event.ownerInstanceID)
                 return .work(requestsFrame: result != nil) { [weak self] in
                     guard let self, self.semanticInputIsEligible else { return }
                     if let result {
