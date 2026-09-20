@@ -897,10 +897,12 @@ package actor NuxieNativeRuntime {
         }
     }
 
-    package func captureSemantics(textRuns: [String] = []) async throws -> NuxieNativeSemanticCapture {
+    package func captureSemantics(textRuns: [String] = [], nativeInputs: [String] = []) async throws -> NuxieNativeSemanticCapture {
         let state = try requireState()
         let executor = self.executor
-        return try await executor.call { try state.captureSemantics(executor: executor, textRuns: textRuns) }
+        return try await executor.call {
+            try state.captureSemantics(executor: executor, textRuns: textRuns, nativeInputs: nativeInputs)
+        }
     }
 
     package func queueSemanticAction(
@@ -1006,7 +1008,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     let renderer: NuxieNativeRendererHandle
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
     private var auxiliaryPlayersNeedInitialStep = true
-    private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle, fields: [String: NuxieNativeSemanticNode], tree: NuxieNativeSemanticTree)?
+    private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle,
+        fields: [String: NuxieNativeSemanticNode], tree: NuxieNativeSemanticTree,
+        nativeInputIDs: [String: [UInt32]])?
     private var isClosed = false
 
     init(
@@ -1160,7 +1164,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
 
     func captureSemantics(
         executor: NuxieRuntimePinnedThreadExecutor,
-        textRuns: [String]
+        textRuns: [String],
+        nativeInputs: [String]
     ) throws -> NuxieNativeSemanticCapture {
         let player = try self.player.require()
         var pointer: OpaquePointer?
@@ -1200,6 +1205,25 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             let tree = try NuxieNativeSemanticTree(renderRevision: info.render_revision,
                 treeVersion: info.tree_version, nodes: nodes)
             let byID = Dictionary(uniqueKeysWithValues: tree.nodes.map { ($0.id, $0) })
+            guard Set(nativeInputs).count == nativeInputs.count else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("duplicate requested native input")
+            }
+            var inputs: [String: [NuxieNativeInputOccurrence]] = [:]
+            for name in nativeInputs {
+                var occurrences: [NuxieNativeInputOccurrence] = []
+                for node in tree.visibleReadingOrder where node.role == NuxieNativeSemanticRole.textField.rawValue {
+                    do {
+                        let geometry = try readFieldGeometry(player: player, snapshot: pointer, nodeID: node.id, name: name)
+                        occurrences.append(.init(nodeID: node.id, geometry: geometry))
+                    } catch NuxieNativeRuntimeError.callFailed(let diagnostic) where diagnostic.status == .notFound {
+                        // This field does not own the requested endpoint, or is
+                        // currently ineligible. Never borrow another field's value.
+                        continue
+                    }
+                }
+                inputs[name] = occurrences
+            }
+            let inputIDs = inputs.mapValues { $0.map(\.nodeID) }
             var fields: [String: NuxieNativeSemanticNode] = [:]
             for run in textRuns {
                 var id: UInt32 = 0
@@ -1221,14 +1245,15 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             if let previous = semanticCapture,
                previous.tree.treeVersion == tree.treeVersion,
                previous.tree.nodes == tree.nodes,
-               previous.fields == fields {
+               previous.fields == fields,
+               previous.nativeInputIDs == inputIDs {
                 id = previous.id
             } else {
                 id = UUID()
             }
             try retireSemanticCapture()
-            semanticCapture = (id, owned, fields, tree)
-            return NuxieNativeSemanticCapture(id: id, tree: tree, fieldsByTextRun: fields)
+            semanticCapture = (id, owned, fields, tree, inputIDs)
+            return NuxieNativeSemanticCapture(id: id, tree: tree, fieldsByTextRun: fields, nativeInputs: inputs)
         } catch {
             try? owned.close()
             throw error
@@ -1296,6 +1321,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
         let player = try self.player.require()
         let snapshot = try capture.handle.require()
+        return try readFieldGeometry(player: player, snapshot: snapshot, nodeID: nodeID, name: name)
+    }
+
+    private func readFieldGeometry(player: OpaquePointer, snapshot: OpaquePointer,
+        nodeID: UInt32, name: String) throws -> NuxieNativeTextInputGeometry
+    {
         var raw = NuxTextInputGeometry()
         raw.struct_size = UInt32(MemoryLayout<NuxTextInputGeometry>.size)
         try requireOK(withStringView(name) {

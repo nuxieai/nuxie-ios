@@ -148,15 +148,24 @@ package enum NuxieNativeSemanticAction: UInt32, Sendable {
 }
 
 /// Identity authorizes a request only against the retained capture in its runtime.
+package struct NuxieNativeInputOccurrence: Equatable, Sendable {
+    package let nodeID: UInt32
+    package let geometry: NuxieNativeTextInputGeometry
+}
+
 package struct NuxieNativeSemanticCapture: Sendable {
     package let id: UUID
     package let tree: NuxieNativeSemanticTree
     package let fieldsByTextRun: [String: NuxieNativeSemanticNode]
+    package let nativeInputs: [String: [NuxieNativeInputOccurrence]]
 
-    package init(id: UUID, tree: NuxieNativeSemanticTree, fieldsByTextRun: [String: NuxieNativeSemanticNode]) {
+    package init(id: UUID, tree: NuxieNativeSemanticTree,
+        fieldsByTextRun: [String: NuxieNativeSemanticNode],
+        nativeInputs: [String: [NuxieNativeInputOccurrence]] = [:]) {
         self.id = id
         self.tree = tree
         self.fieldsByTextRun = fieldsByTextRun
+        self.nativeInputs = nativeInputs
     }
 }
 
