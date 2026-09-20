@@ -1927,7 +1927,8 @@ actor ExperienceInteractiveScreen {
                 pointers: nativePointers,
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID,
-                textRunNames: capturesTextLayout ? textInputs.values.filter(\.editable).map(\.textRunName).sorted() : []
+                textRunNames: capturesTextLayout
+                    ? textInputs.values.filter { $0.editable && $0.editableValueName == nil }.map(\.textRunName).sorted() : []
             )
             if let videoPlayback {
                 let videoActive = try await videoPlayback.tick()
@@ -3493,6 +3494,9 @@ actor ExperienceInteractiveScreen {
         guard input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
+        guard input.editableValueName == nil else {
+            throw ExperienceInteractiveScreenError.stateContract("Native input requires captured occurrence ownership")
+        }
         let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
         let runtime = runtime
         return try await operationGate.withLock {
@@ -3505,7 +3509,7 @@ actor ExperienceInteractiveScreen {
         }
     }
 
-    func setSemanticText(captureID: UUID, inputID: String, value: String) async throws -> Bool {
+    func setSemanticText(captureID: UUID, inputID: String, nodeID: UInt32? = nil, value: String) async throws -> Bool {
         guard let input = textInputs[inputID] else {
             throw ExperienceInteractiveScreenError.textInputNotFound(inputID)
         }
@@ -3515,8 +3519,33 @@ actor ExperienceInteractiveScreen {
         let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
         let runtime = runtime
         return try await operationGate.withLock {
-            try await runtime.setSemanticTextRun(captureID: captureID,
+            if let name = input.editableValueName {
+                guard let nodeID else {
+                    throw ExperienceInteractiveScreenError.stateContract("Native input requires a presented occurrence")
+                }
+                return try await runtime.setFieldString(captureID: captureID,
+                    nodeID: nodeID, name: name, value: Data(limited.utf8))
+            }
+            guard nodeID == nil else {
+                throw ExperienceInteractiveScreenError.stateContract("Legacy input cannot target a native occurrence")
+            }
+            return try await runtime.setSemanticTextRun(captureID: captureID,
                 name: input.textRunName, text: Data(limited.utf8))
+        }
+    }
+
+    func readSemanticText(captureID: UUID, inputID: String, nodeID: UInt32) async throws -> String {
+        guard let input = textInputs[inputID], input.editable,
+              let name = input.editableValueName else {
+            throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
+        }
+        let runtime = runtime
+        return try await operationGate.withLock {
+            let bytes = try await runtime.readFieldString(captureID: captureID, nodeID: nodeID, name: name)
+            guard let text = String(data: bytes, encoding: .utf8) else {
+                throw ExperienceInteractiveScreenError.stateContract("Native input contains invalid UTF-8")
+            }
+            return text
         }
     }
 
@@ -3585,7 +3614,8 @@ actor ExperienceInteractiveScreen {
             state = isOccluded ? .occluded : .timeout
         }
         let runtime = runtime
-        let textRuns = textInputs.values.filter(\.editable).map(\.textRunName).sorted()
+        let textRuns = textInputs.values.filter { $0.editable && $0.editableValueName == nil }.map(\.textRunName).sorted()
+        let nativeInputs = Array(Set(textInputs.values.filter(\.editable).compactMap(\.editableValueName))).sorted()
         return try await operationGate.withLock { [self] in
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
@@ -3593,7 +3623,7 @@ actor ExperienceInteractiveScreen {
             let outcome = try await runtime.render(drawable: ready ? state : .timeout, clearColor: clearColor, completion: completion)
             let semantics: NuxieNativeSemanticCapture?
             if capturesSemantics, outcome.disposition == .presented {
-                semantics = try await runtime.captureSemantics(textRuns: textRuns)
+                semantics = try await runtime.captureSemantics(textRuns: textRuns, nativeInputs: nativeInputs)
             } else {
                 semantics = nil
             }

@@ -493,6 +493,7 @@ targets:
           - Experiences/ExperienceTextInputTypographyTests.swift
           - Experiences/SignedSemanticJourneyTests.swift
           - Fixtures/semantic_text.riv
+          - Fixtures/native_input_layout.riv
       - path: fixtures/journeys/rendered-semantic-screen-control
         type: folder
       - path: fixtures/journeys/rendered-semantic-screen-control-condition

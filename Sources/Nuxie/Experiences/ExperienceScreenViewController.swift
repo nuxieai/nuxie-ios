@@ -879,11 +879,11 @@ final class ExperienceScreenViewController: UIViewController {
         loop: ExperienceRuntimePresentationLoop
     ) {
         let semanticWriter: ExperienceTextInputOverlayBridge.SemanticTextWriter? = requiresSceneSemantics
-            ? { [weak self] captureID, inputID, text, completion in
+            ? { [weak self] captureID, target, text, completion in
                 loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
                     do {
                         let changed = try await interactiveScreen.setSemanticText(
-                            captureID: captureID, inputID: inputID, value: text)
+                            captureID: captureID, inputID: target.inputID, nodeID: target.nodeID, value: text)
                         return .work(requestsFrame: changed) { completion(.accepted) }
                     } catch NuxieNativeRuntimeError.callFailed(let diagnostic)
                         where diagnostic.status == .handleMismatch {
@@ -907,6 +907,27 @@ final class ExperienceScreenViewController: UIViewController {
                 height: screen.height
             ),
             semanticTextWriter: semanticWriter,
+            semanticTextReader: { [weak self] captureID, target, completion in
+                loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                    guard let nodeID = target.nodeID else {
+                        return .work(requestsFrame: false) {
+                            completion(.failure(ExperienceInteractiveScreenError.stateContract("Missing native input occurrence")))
+                        }
+                    }
+                    do {
+                        let value = try await interactiveScreen.readSemanticText(
+                            captureID: captureID, inputID: target.inputID, nodeID: nodeID)
+                        return .work(requestsFrame: false) { completion(.success(value)) }
+                    } catch {
+                        let stale = if case NuxieNativeRuntimeError.callFailed(let diagnostic) = error {
+                            diagnostic.status == .handleMismatch
+                        } else { false }
+                        return .work(requestsFrame: stale) { completion(.failure(error)) }
+                    }
+                }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { result in
+                    if case .failure(let error) = result { completion(.failure(error)) }
+                })
+            },
             textWriter: { inputID, text, completion in
                 loop.enqueue(
                     ExperienceRuntimePresentationQueuedWork {

@@ -182,6 +182,8 @@ struct NativeExperienceTextInput: Equatable, Sendable {
     var responseCapture: ResponseCapture? = nil
     var actionEvent: ExperienceTextInputEventKind? = nil
     var declarativeActionId: String? = nil
+    // Native endpoint discovery remains gated by signed-manifest admission.
+    var editableValueName: String? = nil
 
     func declarativeInvocation(for event: ExperienceTextInputEvent) -> ScreenActionInvocation? {
         guard event.kind == (actionEvent ?? .editingEnded), let declarativeActionId else { return nil }

@@ -44,6 +44,18 @@ struct ExperienceSemanticTextDraft {
     }
     mutating func present(captureID: UUID) { self.captureID = captureID }
 
+    /// A source update can refresh an idle editor, but cannot replace UIKit's
+    /// provisional composition or an edit still awaiting native admission.
+    mutating func receiveSourceValue(_ value: String) -> Bool {
+        guard !isComposing, inFlight == nil, !needsInitialWrite,
+              text == acceptedText, acceptedText == notifiedText,
+              pendingEvents.isEmpty, !valueChangeRequested else { return false }
+        text = value
+        acceptedText = value
+        notifiedText = value
+        return true
+    }
+
     mutating func takeWrite() -> Write? {
         guard inFlight == nil, (needsInitialWrite || text != acceptedText), let captureID else { return nil }
         let write = Write(id: UUID(), captureID: captureID, text: text)
