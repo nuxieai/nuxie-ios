@@ -285,18 +285,31 @@ package struct NuxieNativeViewModelChange: Equatable, Sendable {
     package let value: NuxieNativeViewModelValue
 }
 
+package struct NuxieNativeTextLayout: Equatable, Sendable {
+    package let transform: CGAffineTransform
+    package let bounds: CGRect
+}
+
 /// Value-owned geometry copied before the native step result is freed.
 package struct NuxieNativeTextRunGeometry: Equatable, Sendable {
-    package struct Layout: Equatable, Sendable {
-        package let transform: CGAffineTransform
-        package let bounds: CGRect
-    }
     package let renderRevision: UInt64
     package let worldTransform: CGAffineTransform
     package let contentTransform: CGAffineTransform
     package let textBounds: CGRect
-    package let layout: Layout?
+    package let layout: NuxieNativeTextLayout?
     package let firstBaseline: CGFloat?
+}
+
+/// Geometry of one presented native TextInput. Contains no editable value or
+/// selection state; the native control owns its active editing session.
+package struct NuxieNativeTextInputGeometry: Equatable, Sendable {
+    package let renderRevision: UInt64
+    package let worldTransform: CGAffineTransform
+    package let textBounds: CGRect
+    package let layout: NuxieNativeTextLayout?
+    package let firstBaseline: CGFloat?
+    package let obscured: Bool
+    package let multiline: Bool
 }
 
 /// Geometry is ancillary to already-committed step journals. A failed read
@@ -811,6 +824,15 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.readFieldString(captureID: captureID, nodeID: nodeID, name: name) }
     }
 
+    package func readFieldGeometry(captureID: UUID, nodeID: UInt32, name: String) async throws
+        -> NuxieNativeTextInputGeometry
+    {
+        let state = try requireState()
+        return try await executor.call {
+            try state.readFieldGeometry(captureID: captureID, nodeID: nodeID, name: name)
+        }
+    }
+
     /// Returns whether the property changed, not whether reverse conversion accepted it.
     package func setFieldString(captureID: UUID, nodeID: UInt32, name: String, value: Data) async throws -> Bool {
         let state = try requireState()
@@ -1264,6 +1286,39 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             try requireOK(status, operation: "read field value")
             return value
         }
+    }
+
+    func readFieldGeometry(captureID: UUID, nodeID: UInt32, name: String) throws
+        -> NuxieNativeTextInputGeometry
+    {
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "read field geometry")
+        }
+        let player = try self.player.require()
+        let snapshot = try capture.handle.require()
+        var raw = NuxTextInputGeometry()
+        raw.struct_size = UInt32(MemoryLayout<NuxTextInputGeometry>.size)
+        try requireOK(withStringView(name) {
+            nux_player_text_input_geometry(player, snapshot, nodeID, $0, &raw)
+        }, operation: "read field geometry")
+        func transform(_ value: (Float, Float, Float, Float, Float, Float)) -> CGAffineTransform {
+            CGAffineTransform(a: CGFloat(value.0), b: CGFloat(value.1),
+                c: CGFloat(value.2), d: CGFloat(value.3),
+                tx: CGFloat(value.4), ty: CGFloat(value.5))
+        }
+        let layout: NuxieNativeTextLayout? = raw.has_layout_ancestor == 1
+            ? .init(transform: transform(raw.layout_ancestor_transform),
+                bounds: CGRect(x: CGFloat(raw.layout_ancestor_min_x), y: CGFloat(raw.layout_ancestor_min_y),
+                    width: CGFloat(raw.layout_ancestor_max_x - raw.layout_ancestor_min_x),
+                    height: CGFloat(raw.layout_ancestor_max_y - raw.layout_ancestor_min_y)))
+            : nil
+        return .init(renderRevision: raw.render_revision,
+            worldTransform: transform(raw.world_transform),
+            textBounds: CGRect(x: CGFloat(raw.min_x), y: CGFloat(raw.min_y),
+                width: CGFloat(raw.max_x - raw.min_x), height: CGFloat(raw.max_y - raw.min_y)),
+            layout: layout,
+            firstBaseline: raw.has_first_baseline == 1 ? CGFloat(raw.first_baseline) : nil,
+            obscured: raw.obscured == 1, multiline: raw.multiline == 1)
     }
 
     func setFieldString(captureID: UUID, nodeID: UInt32, name: String, value: Data) throws -> Bool {
@@ -2307,7 +2362,7 @@ private final class NuxieNativePlayerStepResultHandle {
                         c: CGFloat(value.2), d: CGFloat(value.3),
                         tx: CGFloat(value.4), ty: CGFloat(value.5))
                 }
-                let layout: NuxieNativeTextRunGeometry.Layout? = raw.has_layout_ancestor == 1
+                let layout: NuxieNativeTextLayout? = raw.has_layout_ancestor == 1
                     ? .init(transform: transform(raw.layout_ancestor_transform),
                         bounds: CGRect(x: CGFloat(raw.layout_ancestor_min_x),
                             y: CGFloat(raw.layout_ancestor_min_y),
