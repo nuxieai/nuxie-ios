@@ -486,6 +486,49 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         try await runtime.close()
     }
 
+    func testNativeFieldOwnerMutationUsesTheBoundViewModelRatherThanACopy() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: try fixture(named: "native_input_owner", extension: "riv"), importMode: .portable)
+        let artboards = try await prepared.artboards()
+        let runtime = try await prepared.openSession(artboardName: XCTUnwrap(artboards.first).name,
+            player: .defaultScene, pixelWidth: 64, pixelHeight: 64, bindDefaultViewModel: true)
+        defer { Task { try? await runtime.close() } }
+        try await runtime.enableSemantics()
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        let capture = try await runtime.captureSemantics(nativeInputs: ["editable"])
+        let fields = try XCTUnwrap(capture.nativeInputs["editable"])
+        XCTAssertEqual(fields.count, 2)
+        guard fields.count == 2 else { return }
+        let firstOwner = try await runtime.fieldViewModelInstance(captureID: capture.id,
+            nodeID: fields[0].nodeID, name: "editable")
+        let secondOwner = try await runtime.fieldViewModelInstance(captureID: capture.id,
+            nodeID: fields[1].nodeID, name: "editable")
+        let owner = try XCTUnwrap(firstOwner)
+        XCTAssertEqual(secondOwner, owner)
+        let original = try await runtime.rootViewModelReference()
+        XCTAssertEqual(owner, original.rawValue)
+        let before = try await runtime.fieldOwnerSnapshot(owner)
+        XCTAssertEqual(before.values.first { $0.name == "answer" }?.value, .bytes(Data("answer".utf8)))
+        let result = try await runtime.mutateFieldOwner(owner, mutations: [
+            .setString(instance: original, path: "answer", value: Data("edited through field owner".utf8))
+        ])
+        XCTAssertEqual(result.appliedCount, 1)
+        let after = try await runtime.snapshot()
+        XCTAssertEqual(after.values.first { $0.name == "answer" }?.value,
+            .bytes(Data("edited through field owner".utf8)), "The original bound model must change")
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        _ = try await runtime.captureSemantics(nativeInputs: [])
+        do {
+            _ = try await runtime.fieldOwnerSnapshot(owner)
+            XCTFail("An input owner must be retired when its fields leave the captured input set")
+        } catch NuxieNativeRuntimeError.missingHandle {
+            // A delayed input event cannot keep using a retired owner handle.
+        }
+        try await runtime.close()
+    }
+
     func testNativeInputDiscoveryKeepsSameNamedSecureFieldsIndependent() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "native_input_occurrences", extension: "riv"), importMode: .portable)
@@ -507,9 +550,19 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(unchanged.id, capture.id)
         let otherBefore = try await runtime.readFieldString(captureID: unchanged.id,
             nodeID: fields[1].nodeID, name: "editable")
+        let unboundOwner = try await runtime.fieldViewModelInstance(captureID: unchanged.id,
+            nodeID: fields[1].nodeID, name: "editable")
+        XCTAssertNil(unboundOwner, "An unbound field must not silently target the root")
         let changed = try await runtime.setFieldString(captureID: unchanged.id,
             nodeID: fields[0].nodeID, name: "editable", value: Data("private edit".utf8))
         XCTAssertTrue(changed)
+        do {
+            _ = try await runtime.fieldViewModelInstance(captureID: unchanged.id,
+                nodeID: fields[0].nodeID, name: "editable")
+            XCTFail("Owner lookup accepted a retired capture")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
         _ = try await runtime.step(elapsedSeconds: 0)
         _ = try await render(runtime)
         let fresh = try await runtime.captureSemantics(nativeInputs: ["editable"])

@@ -144,7 +144,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     typealias SemanticTextReader = (
         _ captureID: UUID, _ target: InputTarget,
-        _ completion: @escaping @MainActor @Sendable (Result<String, Error>) -> Void
+        _ completion: @escaping @MainActor @Sendable (Result<ExperienceTextInputSource, Error>) -> Void
     ) -> Void
 
     private final class TextField: UITextField {
@@ -243,6 +243,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         var readCaptureID: UUID?
         var readRenderRevision: UInt64?
         var sourceReadID: UUID?
+        var ownerInstanceID: UInt64?
         var sourceReady = false
 
         init(target: InputTarget, input: NativeExperienceTextInput, control: Control) {
@@ -501,8 +502,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 binding.readCaptureID = nil
                 return
             }
-            guard case .success(let value) = result else { return }
-            if !binding.sourceReady {
+            guard case .success(let source) = result else { return }
+            let value = source.text
+            let ownerChanged = binding.ownerInstanceID != source.ownerInstanceID
+            binding.ownerInstanceID = source.ownerInstanceID
+            if !binding.sourceReady || ownerChanged {
                 self.semanticDrafts[binding.target] = ExperienceSemanticTextDraft(text: value)
                 binding.control.text = value
                 binding.sourceReady = true
@@ -818,7 +822,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         flushTextChange(for: control)
         if semanticTextWriter != nil {
             let events = semanticDrafts[binding.target]?.requestEvent(kind) ?? []
-            for event in events { onEditingEvent?(binding.input, event) }
+            for event in events { notifyEditingEvent(event, binding: binding) }
         } else {
             onEditingEvent?(binding.input, .init(kind: kind, text: binding.control.text))
         }
@@ -895,6 +899,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         onAcceptedTextChange?(binding.input, text)
     }
 
+    private func notifyEditingEvent(_ event: ExperienceTextInputEvent, binding: Binding) {
+        var scoped = event
+        scoped.ownerInstanceID = binding.ownerInstanceID
+        onEditingEvent?(binding.input, scoped)
+    }
+
     private func drainSemanticWrite(_ inputID: InputTarget) {
         guard !hidden, let writer = semanticTextWriter,
               let binding = bindingsByTarget[inputID], allowsEditing(binding),
@@ -917,7 +927,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             self.textValuesByTarget[inputID] = self.semanticDrafts[inputID]?.acceptedText
             if let commit { self.notifyAcceptedTextChange(commit, binding: binding) }
             let events = self.semanticDrafts[inputID]?.takeReadyEvents() ?? []
-            for event in events { self.onEditingEvent?(binding.input, event) }
+            for event in events { self.notifyEditingEvent(event, binding: binding) }
             if case .rejected = outcome { self.restoreAcceptedText(binding) }
             self.drainSemanticWrite(inputID)
         }

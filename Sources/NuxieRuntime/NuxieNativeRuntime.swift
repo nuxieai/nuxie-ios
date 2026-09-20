@@ -824,6 +824,32 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.readFieldString(captureID: captureID, nodeID: nodeID, name: name) }
     }
 
+    package func fieldViewModelInstance(captureID: UUID, nodeID: UInt32, name: String) async throws -> UInt64? {
+        let state = try requireState()
+        let executor = self.executor
+        return try await executor.call {
+            try state.fieldViewModelInstance(captureID: captureID, nodeID: nodeID, name: name, executor: executor)
+        }
+    }
+
+    package func fieldOwnerSnapshot(_ identity: UInt64) async throws -> NuxieNativeViewModelSnapshot {
+        let state = try requireState()
+        return try await executor.call { try state.fieldOwner(identity).snapshot() }
+    }
+
+    package func mutateFieldOwner(_ identity: UInt64, mutations: [NuxieNativeViewModelMutation]) async throws -> NuxieNativeViewModelMutationResult {
+        let state = try requireState()
+        return try await executor.call {
+            let handle = try state.fieldOwner(identity)
+            return try NuxieNativeViewModelHandle.mutate(mutations, correlationID: 0) { reference in
+                guard reference.rawValue == identity else {
+                    throw NuxieNativeRuntimeError.invalidNativeValue("Input mutation targets a different owner")
+                }
+                return handle
+            }
+        }
+    }
+
     package func readFieldGeometry(captureID: UUID, nodeID: UInt32, name: String) async throws
         -> NuxieNativeTextInputGeometry
     {
@@ -1000,6 +1026,11 @@ private final class NuxieNativeOwnedHandle: @unchecked Sendable {
 }
 
 private final class NuxieNativeRuntimeState: @unchecked Sendable {
+    private struct FieldOwnerKey: Hashable {
+        let nodeID: UInt32
+        let name: String
+    }
+    private var fieldOwners: [FieldOwnerKey: NuxieNativeViewModelHandle] = [:]
     let file: NuxieNativeFileHandle
     let artboard: NuxieNativeArtboardHandle
     let players: [NuxieNativePlayerHandle]
@@ -1077,6 +1108,10 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             do { try viewModel.close() } catch { firstError = firstError ?? error }
         }
         retainedViewModels.removeAll()
+        for owner in fieldOwners.values {
+            do { try owner.close() } catch { firstError = firstError ?? error }
+        }
+        fieldOwners.removeAll()
         // The renderer owns the factory domain used at import. Every bound
         // descendant, including the file itself, must be gone before it.
         var operations: [() throws -> Void] = [{ try self.retireSemanticCapture() }]
@@ -1224,6 +1259,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 inputs[name] = occurrences
             }
             let inputIDs = inputs.mapValues { $0.map(\.nodeID) }
+            for key in Array(fieldOwners.keys) where !(inputIDs[key.name]?.contains(key.nodeID) ?? false) {
+                try fieldOwners.removeValue(forKey: key)?.close()
+            }
             var fields: [String: NuxieNativeSemanticNode] = [:]
             for run in textRuns {
                 var id: UInt32 = 0
@@ -1287,6 +1325,38 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         let previous = semanticCapture
         semanticCapture = nil
         try previous?.handle.close()
+    }
+
+    func fieldOwner(_ identity: UInt64) throws -> NuxieNativeViewModelHandle {
+        for handle in fieldOwners.values where try handle.reference().rawValue == identity {
+            return handle
+        }
+        throw NuxieNativeRuntimeError.missingHandle("presented input owner")
+    }
+
+    func fieldViewModelInstance(captureID: UUID, nodeID: UInt32, name: String,
+        executor: NuxieRuntimePinnedThreadExecutor) throws -> UInt64? {
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "resolve field owner")
+        }
+        let player = try self.player.require()
+        let snapshot = try capture.handle.require()
+        return try withStringView(name) { key in
+            let ownerKey = FieldOwnerKey(nodeID: nodeID, name: name)
+            var pointer: OpaquePointer?
+            let status = nux_player_field_view_model_instance(player, snapshot, nodeID, key, &pointer)
+            if status == NUX_STATUS_NOT_FOUND.rawValue {
+                try fieldOwners.removeValue(forKey: ownerKey)?.close()
+                return nil
+            }
+            try requireOK(status, operation: "resolve field owner")
+            guard let pointer else { throw NuxieNativeRuntimeError.missingHandle("input owner") }
+            let handle = NuxieNativeViewModelHandle(executor: executor, handle: pointer)
+            let identity = try handle.reference().rawValue
+            let previous = fieldOwners.updateValue(handle, forKey: ownerKey)
+            try previous?.close()
+            return identity
+        }
     }
 
     func readFieldString(captureID: UUID, nodeID: UInt32, name: String) throws -> Data {
