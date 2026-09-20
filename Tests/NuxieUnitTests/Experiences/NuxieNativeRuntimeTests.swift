@@ -449,6 +449,70 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         try await runtime.close()
     }
 
+    func testNonRenderingFieldValueRequiresCurrentCaptureAndDoesNotChangeSemanticText() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: try fixture(named: "semantic_text", extension: "riv"), importMode: .portable)
+        let artboards = try await prepared.artboards()
+        let runtime = try await prepared.openSession(artboardName: XCTUnwrap(artboards.first).name,
+            player: .defaultScene, pixelWidth: 64, pixelHeight: 64)
+        defer { Task { try? await runtime.close() } }
+        try await runtime.enableSemantics()
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        let capture = try await runtime.captureSemantics()
+        let field = try XCTUnwrap(capture.tree.nodes.first)
+        let initial = try await runtime.readFieldString(captureID: capture.id, nodeID: field.id, name: "editable/名前")
+        XCTAssertEqual(initial, Data("value 😀".utf8))
+        let unchanged = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
+            name: "editable/名前", value: initial)
+        XCTAssertFalse(unchanged)
+        do {
+            _ = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
+                name: "editable/名前", value: Data([0xc3, 0x28]))
+            XCTFail("Invalid UTF-8 must not replace the editable value")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .invalidArgument)
+        }
+        let afterInvalidEncoding = try await runtime.readFieldString(captureID: capture.id,
+            nodeID: field.id, name: "editable/名前")
+        XCTAssertEqual(afterInvalidEncoding, initial)
+        do {
+            _ = try await runtime.readFieldString(captureID: capture.id, nodeID: field.id, name: "missing")
+            XCTFail("Missing endpoint must not fall back to another string")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .notFound)
+        }
+        let edited = Data("edited é 🔒".utf8)
+        let changed = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
+            name: "editable/名前", value: edited)
+        XCTAssertTrue(changed)
+        do {
+            _ = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
+                name: "editable/名前", value: Data("stale".utf8))
+            XCTFail("A changed value must retire the old capture")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        let fresh = try await runtime.captureSemantics()
+        let freshField = try XCTUnwrap(fresh.tree.nodes.first)
+        XCTAssertEqual(freshField.value, field.value)
+        let value = try await runtime.readFieldString(captureID: fresh.id, nodeID: freshField.id, name: "editable/名前")
+        XCTAssertEqual(value, edited)
+        let emptied = try await runtime.setFieldString(captureID: fresh.id, nodeID: freshField.id,
+            name: "editable/名前", value: Data())
+        XCTAssertTrue(emptied)
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        let emptyCapture = try await runtime.captureSemantics()
+        let emptyField = try XCTUnwrap(emptyCapture.tree.nodes.first)
+        let emptyValue = try await runtime.readFieldString(captureID: emptyCapture.id,
+            nodeID: emptyField.id, name: "editable/名前")
+        XCTAssertTrue(emptyValue.isEmpty)
+        try await runtime.close()
+    }
+
     func testSemanticTapExecutesAuthoredDropdownTransition() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "semantic_dropdown", extension: "riv"), importMode: .portable)

@@ -46,8 +46,13 @@ product audio playback or external-audio delivery contract.
 
 `semantic_text.riv` is the schema-generated runtime semantic text fixture,
 shared byte-for-byte with Android's device test asset (SHA-256
-`4e5cbeb29d08c54311b631d6fae83b3d132246670a3e574e24980b9570505f5f`).
-It exercises Unicode labels and exact text-run association, not glyph rendering.
+`fe28bef78da518159aaed81de8007feff6d56a783024d87b1c1dc6c8c6d3f7e1`).
+It exercises Unicode labels, exact text-run association, and the non-rendering
+`editable/名前` string property, not glyph rendering. The property-access tests
+require runtime `b0775349f8a6706cd94943e4e932055fbab44e07` or a release containing
+that adapter. The generator is Android's `scripts/fixtures/semantic-text.rs`,
+compiled against that runtime's `nuxie-schema`; pass this fixture path to the
+resulting generator to reproduce these bytes.
 
 `semantic_dropdown.riv` copies upstream
 `tests/unit_tests/assets/semantic/data_binding_lists.riv` at
