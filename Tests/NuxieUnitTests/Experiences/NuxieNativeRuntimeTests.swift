@@ -449,6 +449,43 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         try await runtime.close()
     }
 
+    func testNativeInputGeometryUsesCapturedFieldAndPreservesAffineLayout() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: try fixture(named: "native_input_layout", extension: "riv"), importMode: .portable)
+        let artboards = try await prepared.artboards()
+        let runtime = try await prepared.openSession(artboardName: XCTUnwrap(artboards.first).name,
+            player: .defaultScene, pixelWidth: 64, pixelHeight: 64)
+        defer { Task { try? await runtime.close() } }
+        try await runtime.enableSemantics()
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        let capture = try await runtime.captureSemantics()
+        let field = try XCTUnwrap(capture.tree.nodes.first { $0.role == NuxieNativeSemanticRole.textField.rawValue })
+        let geometry = try await runtime.readFieldGeometry(captureID: capture.id, nodeID: field.id, name: "editable")
+        XCTAssertEqual(geometry.renderRevision, capture.tree.renderRevision)
+        let layout = try XCTUnwrap(geometry.layout)
+        XCTAssertEqual(layout.bounds, CGRect(x: 0, y: 0, width: 100, height: 40))
+        XCTAssertEqual(layout.transform.a, 0, accuracy: 0.0001)
+        XCTAssertEqual(layout.transform.b, 2, accuracy: 0.0001)
+        XCTAssertEqual(layout.transform.c, -3, accuracy: 0.0001)
+        XCTAssertEqual(layout.transform.d, 0, accuracy: 0.0001)
+        XCTAssertEqual(layout.transform.tx, 24, accuracy: 0.0001)
+        XCTAssertEqual(layout.transform.ty, 24, accuracy: 0.0001)
+        XCTAssertEqual(geometry.worldTransform.tx, -9, accuracy: 0.0001)
+        XCTAssertEqual(geometry.worldTransform.ty, 38, accuracy: 0.0001)
+        XCTAssertFalse(geometry.obscured)
+        XCTAssertTrue(geometry.multiline, "TextInput's authored default is multiline")
+        XCTAssertNil(geometry.firstBaseline, "The layout-only fixture deliberately has no font")
+        try await runtime.retireSemanticCapture()
+        do {
+            _ = try await runtime.readFieldGeometry(captureID: capture.id, nodeID: field.id, name: "editable")
+            XCTFail("Retired native-field geometry must not be returned")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
+        try await runtime.close()
+    }
+
     func testNonRenderingFieldValueRequiresCurrentCaptureAndDoesNotChangeSemanticText() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "semantic_text", extension: "riv"), importMode: .portable)
@@ -463,6 +500,12 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let field = try XCTUnwrap(capture.tree.nodes.first)
         let initial = try await runtime.readFieldString(captureID: capture.id, nodeID: field.id, name: "editable/名前")
         XCTAssertEqual(initial, Data("value 😀".utf8))
+        do {
+            _ = try await runtime.readFieldGeometry(captureID: capture.id, nodeID: field.id, name: "editable/名前")
+            XCTFail("A non-rendering property must not borrow geometry from another text object")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .notFound)
+        }
         let unchanged = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
             name: "editable/名前", value: initial)
         XCTAssertFalse(unchanged)
@@ -486,6 +529,12 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let changed = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
             name: "editable/名前", value: edited)
         XCTAssertTrue(changed)
+        do {
+            _ = try await runtime.readFieldGeometry(captureID: capture.id, nodeID: field.id, name: "editable/名前")
+            XCTFail("Geometry must reject a retired capture before resolving its field")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
         do {
             _ = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
                 name: "editable/名前", value: Data("stale".utf8))
