@@ -12,9 +12,21 @@ struct ExperienceTextInputPlacement: Equatable {
     let textOrigin: CGPoint
 
     init?(geometry: NuxieNativeTextRunGeometry, viewport: ExperienceContainCenterTransform) {
-        guard geometry.renderRevision != 0, let layout = geometry.layout,
+        self.init(renderRevision: geometry.renderRevision, layout: geometry.layout,
+            contentTransform: geometry.contentTransform, firstBaseline: geometry.firstBaseline, viewport: viewport)
+    }
+
+    init?(nativeInput geometry: NuxieNativeTextInputGeometry, viewport: ExperienceContainCenterTransform) {
+        self.init(renderRevision: geometry.renderRevision, layout: geometry.layout,
+            contentTransform: geometry.worldTransform, firstBaseline: geometry.firstBaseline, viewport: viewport)
+    }
+
+    private init?(renderRevision: UInt64, layout: NuxieNativeTextLayout?,
+                  contentTransform: CGAffineTransform, firstBaseline: CGFloat?,
+                  viewport: ExperienceContainCenterTransform) {
+        guard renderRevision != 0, let layout,
               layout.bounds.width > 0, layout.bounds.height > 0,
-              Self.isFinite(layout.transform), Self.isFinite(geometry.contentTransform),
+              Self.isFinite(layout.transform), Self.isFinite(contentTransform),
               [layout.bounds.minX, layout.bounds.minY, layout.bounds.width, layout.bounds.height].allSatisfy(\.isFinite),
               Self.isInvertible(layout.transform) else { return nil }
         let localToArtboard = CGAffineTransform(translationX: layout.bounds.minX, y: layout.bounds.minY)
@@ -24,14 +36,14 @@ struct ExperienceTextInputPlacement: Equatable {
             ty: viewport.contentBounds.minY - viewport.artboardBounds.minY * viewport.scale)
         let projected = localToArtboard.concatenating(artboardToViewport)
         guard Self.isFinite(projected), Self.isInvertible(projected) else { return nil }
-        let contentToLocal = geometry.contentTransform.concatenating(localToArtboard.inverted())
+        let contentToLocal = contentTransform.concatenating(localToArtboard.inverted())
         let origin = CGPoint.zero.applying(contentToLocal)
-        let baseline = geometry.firstBaseline.map { CGPoint(x: 0, y: $0).applying(contentToLocal) }
+        let baseline = firstBaseline.map { CGPoint(x: 0, y: $0).applying(contentToLocal) }
         guard origin.x.isFinite, origin.y.isFinite,
               baseline.map({ $0.x.isFinite && $0.y.isFinite }) ?? true else { return nil }
         size = layout.bounds.size
         transform = projected
-        firstBaseline = baseline
+        self.firstBaseline = baseline
         textOrigin = origin
     }
 

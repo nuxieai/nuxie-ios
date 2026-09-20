@@ -7,6 +7,64 @@ import XCTest
 
 final class ExperienceTextInputGeometryTests: XCTestCase {
     @MainActor
+    func testNativeInputPlacementPreservesOccurrenceLayoutAndHitTesting() throws {
+        let viewport = try XCTUnwrap(ExperienceContainCenterTransform(
+            artboardBounds: CGRect(x: 0, y: 0, width: 500, height: 500),
+            viewportBounds: CGRect(x: 20, y: 30, width: 1000, height: 1000)))
+        // A nested occurrence rotates and scales a 100 x 40 field. The text
+        // starts at (7, 11) inside it; its painted bounds aren't the input box.
+        let layout = CGAffineTransform(a: 0, b: 1, c: -1.5, d: 0, tx: 212, ty: 162)
+        let text = CGAffineTransform(a: 0, b: 1, c: -1.5, d: 0, tx: 195.5, ty: 169)
+        let parent = UIView(frame: CGRect(x: 0, y: 0, width: 1100, height: 1100))
+        for obscured in [false, true] {
+            let geometry = NuxieNativeTextInputGeometry(renderRevision: 1,
+                worldTransform: text, textBounds: CGRect(x: 0, y: 0, width: 3, height: 8),
+                layout: .init(transform: layout, bounds: CGRect(x: 0, y: 0, width: 100, height: 40)),
+                firstBaseline: 9, obscured: obscured, multiline: false)
+            let placement = try XCTUnwrap(ExperienceTextInputPlacement(nativeInput: geometry, viewport: viewport))
+            XCTAssertEqual(placement.size, CGSize(width: 100, height: 40))
+            XCTAssertEqual(placement.textOrigin.x, 7, accuracy: 0.001)
+            XCTAssertEqual(placement.textOrigin.y, 11, accuracy: 0.001)
+            XCTAssertEqual(try XCTUnwrap(placement.firstBaseline).y, 20, accuracy: 0.001)
+            let field = UITextField()
+            field.isSecureTextEntry = obscured
+            parent.addSubview(field)
+            placement.apply(to: field)
+            let origin = field.convert(CGPoint.zero, to: parent)
+            XCTAssertEqual(origin.x, 444, accuracy: 0.001)
+            XCTAssertEqual(origin.y, 354, accuracy: 0.001)
+            let opposite = field.convert(CGPoint(x: 100, y: 40), to: parent)
+            XCTAssertEqual(opposite.x, 324, accuracy: 0.001)
+            XCTAssertEqual(opposite.y, 554, accuracy: 0.001)
+            let hit = try XCTUnwrap(parent.hitTest(CGPoint(x: 384, y: 454), with: nil))
+            XCTAssertTrue(hit === field || hit.isDescendant(of: field))
+            field.removeFromSuperview()
+        }
+    }
+
+    func testNativeInputPlacementRejectsUnpresentedOrInvalidLayout() throws {
+        let viewport = try XCTUnwrap(ExperienceContainCenterTransform(
+            artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
+            viewportBounds: CGRect(x: 0, y: 0, width: 100, height: 100)))
+        let valid = NuxieNativeTextLayout(transform: .identity,
+            bounds: CGRect(x: 0, y: 0, width: 100, height: 40))
+        let invalid: [NuxieNativeTextLayout?] = [nil,
+            .init(transform: .identity, bounds: .zero),
+            .init(transform: CGAffineTransform(scaleX: 0, y: 1), bounds: valid.bounds)]
+        for layout in invalid {
+            XCTAssertNil(ExperienceTextInputPlacement(nativeInput: .init(renderRevision: 1,
+                worldTransform: .identity, textBounds: .zero, layout: layout,
+                firstBaseline: nil, obscured: true, multiline: false), viewport: viewport))
+        }
+        XCTAssertNil(ExperienceTextInputPlacement(nativeInput: .init(renderRevision: 0,
+            worldTransform: .identity, textBounds: .zero, layout: valid,
+            firstBaseline: nil, obscured: false, multiline: false), viewport: viewport))
+        XCTAssertNotNil(ExperienceTextInputPlacement(nativeInput: .init(renderRevision: 1,
+            worldTransform: .identity, textBounds: .zero, layout: valid,
+            firstBaseline: nil, obscured: true, multiline: false), viewport: viewport))
+    }
+
+    @MainActor
     func testSharedAffineCornersAndNativeHitTesting() throws {
         let path = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
