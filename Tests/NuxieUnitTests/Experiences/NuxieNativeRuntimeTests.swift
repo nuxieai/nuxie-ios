@@ -486,6 +486,43 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         try await runtime.close()
     }
 
+    func testNativeInputDiscoveryKeepsSameNamedSecureFieldsIndependent() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: try fixture(named: "native_input_occurrences", extension: "riv"), importMode: .portable)
+        let artboards = try await prepared.artboards()
+        let runtime = try await prepared.openSession(artboardName: XCTUnwrap(artboards.first).name,
+            player: .defaultScene, pixelWidth: 64, pixelHeight: 64)
+        defer { Task { try? await runtime.close() } }
+        try await runtime.enableSemantics()
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        let capture = try await runtime.captureSemantics(nativeInputs: ["editable", "absent"])
+        let fields = try XCTUnwrap(capture.nativeInputs["editable"])
+        XCTAssertEqual(fields.count, 2)
+        guard fields.count == 2 else { return }
+        XCTAssertNotEqual(fields[0].nodeID, fields[1].nodeID)
+        XCTAssertTrue(fields.allSatisfy { $0.geometry.obscured })
+        XCTAssertEqual(capture.nativeInputs["absent"], [])
+        let unchanged = try await runtime.captureSemantics(nativeInputs: ["editable", "absent"])
+        XCTAssertEqual(unchanged.id, capture.id)
+        let otherBefore = try await runtime.readFieldString(captureID: unchanged.id,
+            nodeID: fields[1].nodeID, name: "editable")
+        let changed = try await runtime.setFieldString(captureID: unchanged.id,
+            nodeID: fields[0].nodeID, name: "editable", value: Data("private edit".utf8))
+        XCTAssertTrue(changed)
+        _ = try await runtime.step(elapsedSeconds: 0)
+        _ = try await render(runtime)
+        let fresh = try await runtime.captureSemantics(nativeInputs: ["editable"])
+        XCTAssertNotEqual(fresh.id, unchanged.id)
+        XCTAssertEqual(fresh.nativeInputs["editable"]?.map(\.nodeID), fields.map(\.nodeID))
+        let first = try await runtime.readFieldString(captureID: fresh.id, nodeID: fields[0].nodeID, name: "editable")
+        let other = try await runtime.readFieldString(captureID: fresh.id, nodeID: fields[1].nodeID, name: "editable")
+        XCTAssertEqual(first, Data("private edit".utf8))
+        XCTAssertEqual(other, otherBefore)
+        XCTAssertFalse(fresh.tree.nodes.contains { $0.value.contains("private edit") })
+        try await runtime.close()
+    }
+
     func testNonRenderingFieldValueRequiresCurrentCaptureAndDoesNotChangeSemanticText() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "semantic_text", extension: "riv"), importMode: .portable)
