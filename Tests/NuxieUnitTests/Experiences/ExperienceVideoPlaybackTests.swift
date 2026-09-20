@@ -298,6 +298,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testPausedSeeksRedeliverDecodedBoundaryFrames() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80,
+            pausedSeekQualification: true)
+    }
+
+    @MainActor
     func testPublishedVideoDecodesIntoMetalScene() async throws {
         try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
             viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80)
@@ -365,7 +372,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false, pausedSeekQualification: Bool = false) async throws {
         let preparationStarted = CACurrentMediaTime()
         let mediaWidth = measurement?.width ?? 64
         let mediaHeight = measurement?.height ?? 32
@@ -485,6 +492,52 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             XCTAssertEqual(occurrence.sourceComponentID, Int(target.componentId))
         }
         let videoComponent = try XCTUnwrap(videoOccurrences.first).componentID
+        if pausedSeekQualification {
+            // The shared greeting fixture normally loops; qualify inclusive
+            // end seeking without its authored wrap-to-start behavior.
+            try await runtime.videoCommand(componentID: videoComponent, kind: 9, value: 0)
+            try await runtime.videoCommand(componentID: videoComponent, kind: 1, value: 0)
+            let initialDeadline = Date().addingTimeInterval(5)
+            while host.deliveredFrames == 0 && Date() < initialDeadline {
+                _ = try await host.tick()
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertGreaterThan(host.deliveredFrames, 0, "Initial decoded frame is required")
+            // Repeat the first and final decoded images under new seek owners.
+            // Merely acknowledging currentTime is insufficient: pixels must be
+            // uploaded again even when AVFoundation says no new buffer exists.
+            for seconds in [0.0, 0.0, 1.99, 2.022, 0.0] {
+                let before = host.deliveredFrames
+                try await runtime.videoCommand(componentID: videoComponent, kind: 2, value: seconds)
+                let deadline = Date().addingTimeInterval(3)
+                while host.deliveredFrames == before && Date() < deadline {
+                    _ = try await host.tick()
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                XCTAssertGreaterThan(host.deliveredFrames, before, "Paused seek to \(seconds) must present decoded pixels")
+                guard let drawable = layer.nextDrawable() else { return XCTFail("Metal drawable unavailable") }
+                let completed = expectation(description: "paused seek pixels")
+                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                    readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
+                await fulfillment(of: [completed], timeout: 2)
+                let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
+                let offset = sampleY * stride + sampleX * 4
+                if seconds < 1 {
+                    XCTAssertGreaterThan(pixels[offset + 2], 180, "Red pixels at \(seconds): \(host.playbackDiagnostics)")
+                    XCTAssertLessThan(pixels[offset], 70, "Red pixels at \(seconds): \(host.playbackDiagnostics)")
+                } else {
+                    XCTAssertGreaterThan(pixels[offset], 180, "Blue pixels at \(seconds): \(host.playbackDiagnostics)")
+                    XCTAssertLessThan(pixels[offset + 2], 70, "Blue pixels at \(seconds): \(host.playbackDiagnostics)")
+                }
+                let delivered = host.deliveredFrames
+                for _ in 0..<10 {
+                    _ = try await host.tick()
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                XCTAssertEqual(host.deliveredFrames, delivered, "A paused seek uploads its image only once")
+            }
+            return
+        }
         // The pixels are the independent timing oracle: this fixture changes
         // red to blue at 1s. Player time is sampled around actual composition,
         // never inferred from the frame timestamp sent back into the runtime.
