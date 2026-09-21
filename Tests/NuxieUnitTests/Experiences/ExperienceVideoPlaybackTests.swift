@@ -298,6 +298,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testScrubToAudioTailEndpointSettlesWithFinalDecodedPixels() async throws {
+        try await verifyPublishedVideo(sceneName: "endpoint", artboardName: "Interactive video comparison",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80,
+            endpointScrubQualification: true)
+    }
+
+    @MainActor
     func testPausedSeeksRedeliverDecodedBoundaryFrames() async throws {
         try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
             viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80,
@@ -372,13 +379,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false, pausedSeekQualification: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false, pausedSeekQualification: Bool = false, endpointScrubQualification: Bool = false) async throws {
         let preparationStarted = CACurrentMediaTime()
         let mediaWidth = measurement?.width ?? 64
         let mediaHeight = measurement?.height ?? 32
         let directory = try videoFixtureDirectory()
         let scene = try Data(contentsOf: directory.appendingPathComponent("\(sceneName).nux"))
-        var url = directory.appendingPathComponent(measurement?.file ?? (frenchCaptions ? "multilingual.mp4" : "captions.mp4"))
+        var url = directory.appendingPathComponent(measurement?.file ?? (endpointScrubQualification ? "endpoint-audio-tail.mp4" : frenchCaptions ? "multilingual.mp4" : "captions.mp4"))
         let media = try Data(contentsOf: url)
         let digest = SHA256Provider.hexDigest(media)
         let cacheDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -395,10 +402,11 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let id = try XCTUnwrap(authored.authoredID)
         let name = "\(authored.name)-\(id)"
         var tracks: [NativeExperienceVideoAsset.CaptionTrack] = [.init(streamIndex: 2, codec: "mov_text", language: "eng", title: nil)]
+        if endpointScrubQualification { tracks = [] }
         if frenchCaptions { tracks.append(.init(streamIndex: 3, codec: "mov_text", language: "fra", title: nil)) }
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
             authoredAssetId: UInt64(id), assetUniqueName: name, sha256: digest, sizeBytes: media.count,
-            width: mediaWidth, height: mediaHeight, durationMs: 2022, videoCodec: measurement?.codec ?? "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
+            width: mediaWidth, height: mediaHeight, durationMs: endpointScrubQualification ? 2250 : 2022, videoCodec: measurement?.codec ?? "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
         struct ExportedScreen: Decodable { let width: Int; let height: Int }
         struct ExportedTargets: Decodable {
             let videoElements: [NativeExperienceVideoElement]
@@ -492,6 +500,37 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             XCTAssertEqual(occurrence.sourceComponentID, Int(target.componentId))
         }
         let videoComponent = try XCTUnwrap(videoOccurrences.first).componentID
+        if endpointScrubQualification {
+            // The audio-tail fixture ends at 2.250 s; its last video PTS
+            // is 1.9667 s. The script requests scrub(1, 0, duration), and paints
+            // green only when that request reports settled. Host delivery alone
+            // cannot prove the runtime accepted the frame or settled the request.
+            var settled = false
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline {
+                _ = try await runtime.step(elapsedSeconds: 0.01)
+                _ = try await host.tick()
+                guard let drawable = layer.nextDrawable() else { return XCTFail("Metal drawable unavailable") }
+                let completed = expectation(description: "endpoint scrub pixels")
+                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                    readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
+                await fulfillment(of: [completed], timeout: 2)
+                let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
+                let status = 588 * stride + 160 * 4
+                settled = abs(Int(pixels[status]) - 146) < 8
+                    && abs(Int(pixels[status + 1]) - 190) < 8
+                    && abs(Int(pixels[status + 2]) - 88) < 8
+                if settled {
+                    let image = sampleY * stride + sampleX * 4
+                    XCTAssertGreaterThan(pixels[image], 180, "Endpoint must show the final blue image")
+                    XCTAssertLessThan(pixels[image + 2], 70, "Endpoint must not retain the first red image")
+                    break
+                }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertTrue(settled, "Audio-tail endpoint scrub must settle: \(host.playbackDiagnostics)")
+            return
+        }
         if pausedSeekQualification {
             // The shared greeting fixture normally loops; qualify inclusive
             // end seeking without its authored wrap-to-start behavior.
