@@ -666,8 +666,8 @@ final class ExperienceScreenViewController: UIViewController {
         guard input.responseCapture == .binding else {
             return .responseSet(field: fieldKey, value: .string(text))
         }
-        guard input.secureTextEntry != true, let snapshot else {
-            throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' requires a non-secure evaluated response binding")
+        guard let snapshot else {
+            throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' requires an evaluated response binding")
         }
         var owner = snapshot.rootInstanceID
         let path = ["response", "values", fieldKey]

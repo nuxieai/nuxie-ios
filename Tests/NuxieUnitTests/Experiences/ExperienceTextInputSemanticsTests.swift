@@ -376,7 +376,9 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         XCTAssertThrowsError(try ExperienceScreenViewController.responseSetDraft(for: input, text: "raw", snapshot: ambiguous))
         var secure = makePlan(secure: true).textInputs[0]
         secure.responseCapture = .binding
-        XCTAssertThrowsError(try ExperienceScreenViewController.responseSetDraft(for: secure, text: "secret", snapshot: valid))
+        XCTAssertEqual(try ExperienceScreenViewController.responseSetDraft(for: secure, text: "secret", snapshot: valid),
+                       .responseSet(field: "name", value: .number(0.5)))
+        XCTAssertThrowsError(try ExperienceScreenViewController.responseSetDraft(for: secure, text: "secret"))
     }
 
     func testAuthoredInputActionChoosesOneEventAndUsesAcceptedValue() throws {
