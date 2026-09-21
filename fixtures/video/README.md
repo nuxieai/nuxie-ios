@@ -93,3 +93,18 @@ ffmpeg -i captions.mp4 -map 0 -vf scale=3840:2160:flags=neighbor,setsar=1,fps=60
 
 Passing loop/caption/control checks at this size is distinct from sustaining
 60 delivered frames/second; record the measured delivery rate and host.
+
+`endpoint.nux` reuses the interactive video Frame and the checked-in
+`endpoint.luau` controller. The same generator command above emits it and its
+inventory. Its controller requests `scrub(1, 0, video:duration())` and paints a
+green status strip only after the request reports `settled`. The native test
+binds `endpoint-audio-tail.mp4`: its 2.250-second media duration extends beyond the last
+video frame at 1.9667 seconds. Metal readback must show both the green strip and
+the final blue image, so an uploaded-but-rejected frame cannot pass.
+
+Regenerate the endpoint media (the video bitstream is unchanged):
+
+```sh
+ffmpeg -i greeting.mp4 -map 0:v -map 0:a -c:v copy \
+  -af apad=whole_dur=2.25 -c:a aac -t 2.25 endpoint-audio-tail.mp4
+```

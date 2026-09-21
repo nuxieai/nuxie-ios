@@ -569,6 +569,8 @@ final class ExperienceVideoPlayback {
                 if decoder.frameRequestedAfterSeek || decoder.output.hasNewPixelBuffer(forItemTime: time) {
                     var displayTime = CMTime.invalid
                     if let buffer = decoder.output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime) {
+                        let selectedBySeek = decoder.frameRequestedAfterSeek
+                        let generation = decoder.generation
                         decoder.frameRequestedAfterSeek = false
                         let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
                         guard width > 0, height > 0, width <= 8192, height <= 8192, width * height <= 16_777_216 else {
@@ -591,8 +593,28 @@ final class ExperienceVideoPlayback {
                             }
                             rgba = pixels
                         }
-                        try await runtime.videoPresent(componentID: decoder.componentID, generation: decoder.generation,
-                            seconds: displayTime.seconds.isFinite ? displayTime.seconds : clock,
+                        let presentationSeconds = displayTime.seconds.isFinite ? displayTime.seconds : clock
+                        if selectedBySeek && displayTime.seconds.isFinite {
+                            // Only a successfully completed seek can identify
+                            // its selected image at a media-duration endpoint.
+                            // Preserve the decoder's exact PTS, including when
+                            // an audio tail extends beyond the last video frame.
+                            let actions: [NuxieNativeVideoAction]
+                            do {
+                                actions = try await runtime.videoStep(componentID: decoder.componentID,
+                                    observation: 7, generation: generation, value: presentationSeconds)
+                            } catch NuxieNativeRuntimeError.callFailed(let diagnostic) where diagnostic.status == .invalidArgument {
+                                // Published runtimes predating observation 7
+                                // reject this optional receipt. Keep ordinary
+                                // seek presentation compatible with that ABI.
+                                actions = []
+                            }
+                            guard !closed, !decoder.disposed else { continue }
+                            try await apply(actions, to: decoder)
+                            guard !decoder.disposed, !decoder.seeking, decoder.generation == generation else { continue }
+                        }
+                        try await runtime.videoPresent(componentID: decoder.componentID, generation: generation,
+                            seconds: presentationSeconds,
                             width: UInt32(width), height: UInt32(height), rgba: rgba)
                         deliveredFrames += 1
                         deliveredRGBABytes += UInt64(rgba.count)
