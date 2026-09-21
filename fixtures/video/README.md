@@ -98,13 +98,14 @@ Passing loop/caption/control checks at this size is distinct from sustaining
 `endpoint.luau` controller. The same generator command above emits it and its
 inventory. Its controller requests `scrub(1, 0, video:duration())` and paints a
 green status strip only after the request reports `settled`. The native test
-binds `endpoint-audio-tail.mp4`: its 2.250-second media duration extends beyond the last
-video frame at 1.9667 seconds. Metal readback must show both the green strip and
-the final blue image, so an uploaded-but-rejected frame cannot pass.
+binds `endpoint-low-fps.mp4`: its 2-second duration extends beyond the last
+10 fps video frame at 1.9 seconds. Metal readback must show both the green strip
+and the final blue image, so an uploaded-but-rejected frame cannot pass.
 
-Regenerate the endpoint media (the video bitstream is unchanged):
+The endpoint media is the runtime's `fixtures/video/red-blue-endpoint.mp4`.
+Copy that canonical fixture from `third_party/nuxie-runtime` in the parent repo
+before running the generator; its source-generation recipe is recorded beside it.
 
-```sh
-ffmpeg -i greeting.mp4 -map 0:v -map 0:a -c:v copy \
-  -af apad=whole_dur=2.25 -c:a aac -t 2.25 endpoint-audio-tail.mp4
-```
+This covers accepting a frame actually selected by the decoder. A separate
+long audio-tail case where AVFoundation provides no image at all remains tracked
+in [UNIV-3339](https://universe.basis.dev/issue/UNIV-3339).
