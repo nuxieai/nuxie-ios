@@ -180,7 +180,8 @@ final class JourneyReleaseTests: XCTestCase {
         let source = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         for (mode, secure, hasField, accepted) in [
             ("text", false, true, true), ("text", true, true, true),
-            ("binding", false, true, true), ("binding", true, true, false),
+            ("binding", false, true, true), ("binding", true, true, true),
+            ("binding", true, false, false),
             ("binding", false, false, false), ("unknown", false, true, false),
         ] {
             var root = source

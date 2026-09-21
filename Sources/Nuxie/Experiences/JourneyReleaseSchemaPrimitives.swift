@@ -1053,8 +1053,7 @@ enum JourneyReleaseSchemaPrimitives {
             }
             if let capture = input["responseCapture"] {
                 guard let mode = capture as? String, ["text", "binding"].contains(mode),
-                      input["responseFieldKey"] != nil,
-                      mode != "binding" || (input["secureTextEntry"] as? Bool) == false else {
+                      input["responseFieldKey"] != nil else {
                     try invalid("render.textInputs[\(index)].responseCapture")
                 }
             }
