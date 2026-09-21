@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import XCTest
 @_spi(Testing) @testable import Nuxie
+@testable import NuxieTestSupport
 
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
@@ -208,6 +209,12 @@ final class JourneyReleaseTests: XCTestCase {
             (["actionEvent": "return"], true),
             (["declarativeActionId": "capture-duration"], true),
             (["actionEvent": "return", "declarativeActionId": "capture-duration"], true),
+            (["editableValueName": "duration-input"], true),
+            (["editableValueName": String(repeating: "a", count: 256)], true),
+            (["editableValueName": ""], false),
+            (["editableValueName": String(repeating: "a", count: 257)], false),
+            (["editableValueName": 1], false),
+            (["editableValueName": NSNull()], false),
             (["actionEvent": "change"], false),
             (["actionEvent": 1], false),
             (["actionEvent": NSNull()], false),
@@ -231,6 +238,61 @@ final class JourneyReleaseTests: XCTestCase {
             } else {
                 XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), "\(fields)")
             }
+        }
+    }
+
+    func testNativeEditableEndpointSurvivesSignedAcquisition() async throws {
+        let fixture = try golden(entryKey: "renderedEntry", file: "text-input-navigation.json")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        let source = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let scene = Data("acquisition-only-scene".utf8)
+        let digest = SHA256Provider.hexDigest(scene)
+        StubURLProtocol.register(matcher: { $0.url?.host == "input-acquisition.nuxie.test" }) { request in
+            (HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200,
+                httpVersion: nil, headerFields: ["Content-Length": String(scene.count),
+                "Content-Type": "application/vnd.nuxie.scene"])!, scene)
+        }
+        defer { StubURLProtocol.reset() }
+        for secure in [false, true] {
+            var root = source
+            var render = try XCTUnwrap(root["render"] as? [String: Any])
+            var inputs = try XCTUnwrap(render["textInputs"] as? [[String: Any]])
+            inputs[0]["editableValueName"] = "duration-input"
+            inputs[0]["secureTextEntry"] = secure
+            render["textInputs"] = inputs
+            render["assets"] = []
+            render["nux"] = ["contentType": "application/vnd.nuxie.scene",
+                "key": "renders/sha256/\(digest).nux", "sha256": digest, "sizeBytes": scene.count]
+            root["render"] = render
+            let leg = try XCTUnwrap(root["leg"] as? [String: Any])
+            let current = JourneyReleaseRuntime.current
+            let luau = try XCTUnwrap(current.supportedLuauRevisions.first)
+            root["requirements"] = [
+                "minimumSdkVersion": current.currentSdkVersion,
+                "runtimeRevision": try XCTUnwrap(current.supportedRuntimeRevisions.first),
+                "luau": ["revision": luau.key, "bytecodeVersions": luau.value.sorted()],
+                "sceneFormat": ["major": current.sceneFormat.major, "minor": current.sceneFormat.minor],
+                "timezoneData": ["format": "iana-tzdb", "revision": current.timezoneDataRevision,
+                    "sha256": current.timezoneDataSHA256], "requiredCapabilities": ["nux"],
+            ]
+            let release = try JourneyReleaseVerifier().authenticateJourney(
+                envelopeBytes: JSONEncoder().encode(sign(JSONSerialization.data(withJSONObject: root))),
+                authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
+                expectedIdentity: fixture.identity, expectedLegId: try XCTUnwrap(leg["id"] as? String),
+                supportedRuntime: current, replayPolicy: .active(minimumPublishedAtSeq: 0))
+            let cache = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: cache) }
+            let store = JourneyReleaseAcquisitionStore(cacheDirectory: cache,
+                urlSession: TestURLSessionProvider.createTestSession())
+            let presentation = try await store.preparePresentation(release: release,
+                delivery: .init(renderBaseUrl: "https://input-acquisition.nuxie.test/",
+                    assetBaseUrl: "https://input-acquisition.nuxie.test/"), productResolver: { _ in [] })
+            let screenID = try XCTUnwrap(inputs[0]["screenId"] as? String)
+            let artifact = try await presentation.artifactLoader(presentation.experience, nil, screenID)
+            let input = try XCTUnwrap(artifact.payload.renderPlan.textInputs.first)
+            XCTAssertEqual(input.editableValueName, "duration-input")
+            XCTAssertEqual(input.secureTextEntry, secure)
+            XCTAssertEqual(artifact.sceneBytes, scene)
         }
     }
 

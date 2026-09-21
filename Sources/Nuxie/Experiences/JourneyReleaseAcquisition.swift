@@ -310,6 +310,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let responseCapture: NativeExperienceTextInput.ResponseCapture?
         var actionEvent: ExperienceTextInputEventKind? = nil
         var declarativeActionId: String? = nil
+        var editableValueName: String? = nil
     }
 
     struct Asset: Decodable {
@@ -1685,7 +1686,8 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     responseFieldKey: $0.responseFieldKey,
                     responseCapture: $0.responseCapture,
                     actionEvent: $0.actionEvent,
-                    declarativeActionId: $0.declarativeActionId
+                    declarativeActionId: $0.declarativeActionId,
+                    editableValueName: $0.editableValueName
                 )
             },
             images: images,
