@@ -130,7 +130,10 @@ final class ExperienceScreenViewController: UIViewController {
     private let videoCaptionOverlay = ExperienceVideoCaptionOverlay()
     private let videoDecoderPool: ExperienceVideoDecoderPool?
     private var requiresSceneSemantics: Bool {
-        artifact.payload.requiredCapabilities.contains("experience-accessibility")
+        artifact.payload.requiredCapabilities.contains("experience-accessibility") ||
+            artifact.renderPlan.textInputs.contains {
+                $0.screenId == screenId && $0.editable && $0.editableValueName != nil
+            }
     }
     private lazy var semanticContainer = ExperienceSemanticAccessibilityContainer(view: surfaceView)
 
@@ -907,8 +910,10 @@ final class ExperienceScreenViewController: UIViewController {
                 height: screen.height
             ),
             semanticTextWriter: semanticWriter,
-            semanticTextReader: { [weak self] captureID, target, completion in
-                loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+            semanticTextReader: { captureID, target, completion in
+                // Source initialization also runs during first presentation, before
+                // interaction admission opens. The capture and owner fence the read.
+                loop.enqueue(ExperienceRuntimePresentationQueuedWork {
                     guard let nodeID = target.nodeID else {
                         return .work(requestsFrame: false) {
                             completion(.failure(ExperienceInteractiveScreenError.stateContract("Missing native input occurrence")))
@@ -924,7 +929,7 @@ final class ExperienceScreenViewController: UIViewController {
                         } else { false }
                         return .work(requestsFrame: stale) { completion(.failure(error)) }
                     }
-                }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { result in
+                }, completion: { result in
                     if case .failure(let error) = result { completion(.failure(error)) }
                 })
             },
