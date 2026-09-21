@@ -111,6 +111,7 @@ check-privacy-manifest:
 	@scripts/validate-privacy-manifest.py Sources/Nuxie/PrivacyInfo.xcprivacy
 
 check-public-api:
+	@bash scripts/test-swift-module-search-path.sh
 	@scripts/check-public-api.sh
 
 check-event-catalog:
