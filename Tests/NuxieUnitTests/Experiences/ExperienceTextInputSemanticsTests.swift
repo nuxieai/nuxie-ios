@@ -7,6 +7,68 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testNativePlaceholdersNeverBecomeValuesAndTrackSourceRefreshes() throws {
+        for multiline in [false, true] {
+            for secure in [false, true] {
+                let bridge = ExperienceTextInputOverlayBridge()
+                let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+                var source = ""
+                var writes: [String] = []
+                bridge.bind(screenID: "screen",
+                    renderPlan: makePlan(secure: secure, multiline: multiline, native: true),
+                    surfaceView: surface, artboardBounds: surface.bounds,
+                    semanticTextWriter: { _, _, text, done in writes.append(text); done(.accepted) },
+                    semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
+                    textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+                presentField(on: bridge)
+                let control = try XCTUnwrap(bridge.applySemantics(
+                    try nativeCapture(ids: [1], secure: secure))[1])
+                XCTAssertFalse(control.isHidden)
+                XCTAssertFalse(control.isFirstResponder, "Hints must work before focus")
+                if let field = control as? UITextField {
+                    XCTAssertEqual(field.text, "")
+                    XCTAssertEqual(field.attributedPlaceholder?.string, "Name")
+                    let color = try XCTUnwrap(field.attributedPlaceholder?.attribute(.foregroundColor,
+                        at: 0, effectiveRange: nil) as? UIColor)
+                    XCTAssertEqual(color, UIColor(red: 0x12 / 255.0, green: 0x34 / 255.0,
+                        blue: 0x56 / 255.0, alpha: 1))
+                } else {
+                    let editor = try XCTUnwrap(control as? UITextView)
+                    let hint = try XCTUnwrap(editor.subviews.compactMap { $0 as? UILabel }.first)
+                    editor.layoutIfNeeded()
+                    XCTAssertEqual(hint.text, "Name")
+                    XCTAssertFalse(hint.isHidden)
+                    XCTAssertFalse(hint.isAccessibilityElement)
+                    XCTAssertGreaterThan(hint.frame.width, 0)
+                    XCTAssertEqual(editor.text, "")
+                    XCTAssertEqual(editor.textStorage.string, "")
+                    editor.text = "draft"
+                    bridge.textViewDidChange(editor)
+                    XCTAssertTrue(hint.isHidden)
+                    editor.text = ""
+                    bridge.textViewDidChange(editor)
+                    XCTAssertFalse(hint.isHidden)
+                    XCTAssertEqual(writes, ["draft", ""], "Hints never enter the write path")
+                }
+                source = "runtime value"
+                _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: secure, revision: 2))
+                if let field = control as? UITextField {
+                    XCTAssertEqual(field.text, source)
+                    XCTAssertTrue(writes.isEmpty)
+                } else {
+                    let editor = try XCTUnwrap(control as? UITextView)
+                    XCTAssertEqual(editor.text, source)
+                    XCTAssertTrue(try XCTUnwrap(editor.subviews.compactMap { $0 as? UILabel }.first).isHidden)
+                    source = ""
+                    _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: secure, revision: 3))
+                    XCTAssertFalse(try XCTUnwrap(editor.subviews.compactMap { $0 as? UILabel }.first).isHidden)
+                }
+                bridge.clear()
+                XCTAssertNil(control.superview)
+            }
+        }
+    }
+
     func testRepeatedNativeSecureInputsReadAndWriteTheirOwnOccurrence() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
@@ -794,7 +856,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             geometry: .init(xPath: "x", yPath: "y", widthPath: "w", heightPath: "h", rotationPath: "r",
                 scaleXPath: "sx", scaleYPath: "sy"),
             style: .init(fontFamily: "system", fontWeight: "normal", fontStyle: "normal", fontSize: 16,
-                lineHeight: 20, letterSpacing: 0, color: 0, fontAssetUniqueName: "", textAlign: nil),
+                lineHeight: 20, letterSpacing: 0, color: 0xFF123456, fontAssetUniqueName: "", textAlign: nil),
             keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: nil, responseFieldKey: "name")
         input.editableValueName = native ? "editable" : nil
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "b", appId: "a", environment: "test"),
