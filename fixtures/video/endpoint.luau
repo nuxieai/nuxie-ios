@@ -1,4 +1,4 @@
--- Source-endpoint qualification: an audio tail outlasts the final video PTS.
+-- Source-endpoint qualification: the final 10 fps image is 100 ms before duration.
 return function()
     return {
         init = function(self, context)
@@ -13,7 +13,7 @@ return function()
             if not duration or duration <= 0 then return true end
             if not self.request then self.request = self.video:scrub(1, 0, duration) end
             local status = self.video:requestStatus()
-            self.settled = status and status.id == self.request and status.state == "settled" and duration >= 2.2
+            self.settled = status and status.id == self.request and status.state == "settled" and duration >= 1.99
             return not self.settled
         end,
         draw = function(self, renderer)

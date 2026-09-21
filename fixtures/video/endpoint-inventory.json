@@ -24,17 +24,17 @@
   "assets": [
     {
       "kind": "video",
-      "key": "assets/sha256/574f9efaaab7783f8aa74a8f64d34fc24126fc1dc2b571e4a1d3a6138de77501.mp4",
-      "sha256": "574f9efaaab7783f8aa74a8f64d34fc24126fc1dc2b571e4a1d3a6138de77501",
-      "sizeBytes": 22189,
+      "key": "assets/sha256/b3cfdaacce368542a7a287677d708b550ca56beb620b04764dd994edac15223f.mp4",
+      "sha256": "b3cfdaacce368542a7a287677d708b550ca56beb620b04764dd994edac15223f",
+      "sizeBytes": 21024,
       "contentType": "video/mp4",
       "sourceAssetKey": "asset:clip",
       "authoredAssetId": 0,
       "assetUniqueName": "video-clip-5afb4ece-0",
       "width": 64,
       "height": 32,
-      "durationMs": 2272,
-      "videoCodec": "avc1.42c00a",
+      "durationMs": 2022,
+      "videoCodec": "avc1.64000a",
       "audioCodec": "mp4a.40.2",
       "captionTracks": [],
       "required": true
