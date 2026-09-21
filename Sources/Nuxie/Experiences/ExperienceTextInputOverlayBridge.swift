@@ -200,10 +200,43 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         override func placeholderRect(forBounds bounds: CGRect) -> CGRect { contentRect(bounds) }
     }
 
+    /// A hint is presentation, never textStorage or a value sent to the runtime.
+    private final class TextView: UITextView {
+        let placeholderLabel = UILabel()
+
+        override init(frame: CGRect, textContainer: NSTextContainer?) {
+            super.init(frame: frame, textContainer: textContainer)
+            placeholderLabel.numberOfLines = 0
+            placeholderLabel.isUserInteractionEnabled = false
+            placeholderLabel.isAccessibilityElement = false
+            addSubview(placeholderLabel)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override var text: String! {
+            didSet { updatePlaceholder() }
+        }
+
+        func updatePlaceholder() {
+            placeholderLabel.isHidden = !(text ?? "").isEmpty || markedTextRange != nil
+            setNeedsLayout()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            let inset = textContainerInset
+            let x = inset.left + textContainer.lineFragmentPadding
+            let width = max(0, bounds.width - x - inset.right - textContainer.lineFragmentPadding)
+            let height = placeholderLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
+            placeholderLabel.frame = CGRect(x: x, y: inset.top, width: width, height: height)
+        }
+    }
+
     @MainActor
     private enum Control {
         case field(TextField)
-        case textView(UITextView)
+        case textView(TextView)
 
         var view: UIView {
             switch self {
@@ -650,7 +683,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         lastAppliedPlacements[inputID] = placement
         lastAppliedMetrics[inputID] = metrics
         applyStyle(binding.input.style, metrics: metrics, to: binding.control,
-            secure: binding.input.secureTextEntry == true)
+            secure: binding.input.secureTextEntry == true,
+            hostPlaceholder: binding.input.editableValueName != nil)
         UIView.performWithoutAnimation {
             placement.apply(to: binding.control.view)
             alignBaseline(binding, placement: placement, metrics: metrics)
@@ -666,7 +700,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         guard case .textView(let editor) = binding.control else { return }
         let manager = editor.layoutManager
         manager.ensureLayout(for: editor.textContainer)
-        guard manager.numberOfGlyphs > 0 else { return }
+        guard manager.numberOfGlyphs > 0 else {
+            editor.textContainerInset = UIEdgeInsets(top: placement.textOrigin.y,
+                left: placement.textOrigin.x, bottom: 0, right: 0)
+            return
+        }
         let firstGlyph = manager.glyphIndexForCharacter(at: 0)
         let fragment = manager.lineFragmentRect(forGlyphAt: firstGlyph, effectiveRange: nil)
         let nativeBaseline = fragment.minY + manager.location(forGlyphAt: firstGlyph).y
@@ -688,12 +726,13 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     private func makeControl(for input: NativeExperienceTextInput) -> Control {
         if input.multiline == true && input.secureTextEntry != true {
-            let value = UITextView(frame: .zero)
+            let value = TextView(frame: .zero, textContainer: nil)
             value.delegate = self
             value.backgroundColor = .clear
             value.textContainerInset = .zero
             value.textContainer.lineFragmentPadding = 0
             value.keyboardType = Self.keyboardType(input.keyboardType)
+            if input.editableValueName != nil { value.placeholderLabel.text = input.placeholder }
             return .textView(value)
         }
         let value = TextField(frame: .zero)
@@ -716,7 +755,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         _ style: NativeExperienceTextInput.Style,
         metrics: ExperienceTextInputMetrics,
         to control: Control,
-        secure: Bool
+        secure: Bool,
+        hostPlaceholder: Bool
     ) {
         let fontSize = CGFloat(metrics.fontSize)
         let font = Self.font(
@@ -749,10 +789,10 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             attributes[.kern] = CGFloat(style.letterSpacing)
             attributes[.paragraphStyle] = paragraph
             field.defaultTextAttributes = attributes
-            // Secure text is drawn by UIKit, including its placeholder. Keep
-            // the authored contrast instead of UIKit's translucent default.
-            if secure, let placeholder = field.placeholder {
-                field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: attributes)
+            if secure || hostPlaceholder, let placeholder = field.placeholder {
+                var placeholderAttributes = attributes
+                placeholderAttributes[.foregroundColor] = color
+                field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: placeholderAttributes)
             }
         case .textView(let textView):
             textView.font = font
@@ -761,6 +801,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             textView.tintColor = color
             textView.typingAttributes[.kern] = CGFloat(style.letterSpacing)
             textView.typingAttributes[.paragraphStyle] = paragraph
+            if hostPlaceholder, let placeholder = textView.placeholderLabel.text {
+                textView.placeholderLabel.attributedText = NSAttributedString(string: placeholder,
+                    attributes: [.font: font, .foregroundColor: color,
+                        .kern: CGFloat(style.letterSpacing), .paragraphStyle: paragraph])
+                textView.updatePlaceholder()
+            }
             let range = NSRange(location: 0, length: textView.textStorage.length)
             var needsParagraph = false
             textView.textStorage.enumerateAttribute(.paragraphStyle, in: range) { value, _, _ in
@@ -779,6 +825,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     func textViewDidChange(_ textView: UITextView) {
+        (textView as? TextView)?.updatePlaceholder()
         flushTextChange(for: textView)
     }
 
@@ -829,6 +876,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     func flushTextChange(for control: UIView) {
+        (control as? TextView)?.updatePlaceholder()
         guard let binding = binding(for: control) else { return }
         guard allowsEditing(binding) else { restoreAcceptedText(binding); return }
         propagateTextChange(from: control)
