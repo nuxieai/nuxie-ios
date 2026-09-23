@@ -7,6 +7,72 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testSecureDeletionPreservesCharactersAndNativeUndo() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        let surface = UIView(frame: window.bounds)
+        controller.view.addSubview(surface)
+        var source = ""
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+            surfaceView: surface, artboardBounds: surface.bounds,
+            semanticTextWriter: { _, _, text, done in source = text; done(.accepted) },
+            semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
+            textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+        defer { bridge.clear(); window.isHidden = true }
+        presentField(on: bridge)
+        let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: true))[1] as? UITextField)
+        XCTAssertTrue(field.becomeFirstResponder())
+        let undo = try XCTUnwrap(field.undoManager)
+        // Literal UTF-16 caret offsets, including deletion in the middle of text.
+        let cases: [(String, Int, String)] = [
+            ("A👩🏽‍💻Z", 8, "AZ"),
+            ("Ae\u{301}Z", 3, "AZ"),
+            ("A🇯🇵Z", 5, "AZ"),
+            ("A😀Z", 3, "AZ"),
+            ("ABC", 2, "AC"),
+        ]
+        for (original, caret, expected) in cases {
+            field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+            field.insertText(original)
+            bridge.flushTextChange(for: field)
+            XCTAssertEqual(source, original)
+            let position = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: caret))
+            field.selectedTextRange = field.textRange(from: position, to: position)
+            undo.removeAllActions()
+            undo.beginUndoGrouping()
+            field.deleteBackward()
+            undo.endUndoGrouping()
+            bridge.flushTextChange(for: field)
+            XCTAssertEqual(field.text, expected)
+            XCTAssertEqual(source, expected)
+            XCTAssertTrue(undo.canUndo)
+            undo.undo()
+            bridge.flushTextChange(for: field)
+            XCTAssertEqual(field.text, original, "Undo must restore the complete character")
+            XCTAssertEqual(source, original)
+            XCTAssertTrue(undo.canRedo)
+            undo.redo()
+            bridge.flushTextChange(for: field)
+            XCTAssertEqual(source, expected)
+        }
+        field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+        field.insertText("A😀BC")
+        let start = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: 3))
+        field.selectedTextRange = field.textRange(from: start, to: field.endOfDocument)
+        field.deleteBackward()
+        bridge.flushTextChange(for: field)
+        XCTAssertEqual(source, "A😀", "An explicit selection must not expand into the preceding emoji")
+        field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.beginningOfDocument)
+        field.deleteBackward()
+        bridge.flushTextChange(for: field)
+        XCTAssertEqual(source, "A😀", "Backspace at the beginning must be a no-op")
+    }
+
     func testMultilineAccessibilityBoundsFollowScaledAndRotatedViewport() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
