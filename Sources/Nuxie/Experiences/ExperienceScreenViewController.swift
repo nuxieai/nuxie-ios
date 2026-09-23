@@ -209,13 +209,19 @@ final class ExperienceScreenViewController: UIViewController {
         )
         view.backgroundColor = .clear
         view.clipsToBounds = true
-        view.accessibilityIdentifier = "nuxie-screen-controller-\(screenId)"
+        view.accessibilityIdentifier = presentationDiagnosticsEnabled
+            ? "nuxie-experience-surface"
+            : "nuxie-screen-controller-\(screenId)"
+        if presentationDiagnosticsEnabled {
+            view.accessibilityLabel = screenId
+            view.accessibilityValue = "first-frame-presentation:pending"
+        }
 
         surfaceView.translatesAutoresizingMaskIntoConstraints = false
-        surfaceView.accessibilityIdentifier = "nuxie-experience-surface"
-        if presentationDiagnosticsEnabled {
-            surfaceView.accessibilityValue = "first-frame-presentation:pending"
-        }
+        // Keep qualification on the containing view: the surface's explicit
+        // accessibility children are the authored controls and reading order.
+        surfaceView.accessibilityIdentifier = presentationDiagnosticsEnabled
+            ? nil : "nuxie-experience-surface"
         surfaceView.isAccessibilityElement = false
         surfaceView.isHidden = contentHidden
         view.addSubview(surfaceView)
@@ -391,7 +397,7 @@ final class ExperienceScreenViewController: UIViewController {
         guard !didReportFirstPresentation else { return }
         didReportFirstPresentation = true
         if presentationDiagnosticsEnabled {
-            surfaceView.accessibilityValue = drawable.isConfirmedDisplayPresentation
+            view.accessibilityValue = drawable.isConfirmedDisplayPresentation
                 ? "first-frame-presentation:confirmed"
                 : "first-frame-presentation:provisional"
         }
