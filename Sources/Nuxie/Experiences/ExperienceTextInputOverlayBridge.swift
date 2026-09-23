@@ -155,6 +155,28 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private final class TextField: UITextField {
         var onViewportChange: (() -> Void)?
 
+        override func deleteBackward() {
+            // Secure UIKit editing can delete a single UTF-16 unit of a joined
+            // emoji. Select the preceding composed character, then let UIKit
+            // own the edit, delegate checks, notifications and Undo transaction.
+            // Never reinterpret marked text or an explicit selection.
+            if isSecureTextEntry, markedTextRange == nil,
+               let selection = selectedTextRange, selection.isEmpty,
+               let value = text {
+                let caret = offset(from: beginningOfDocument, to: selection.start)
+                let source = value as NSString
+                if caret > 0, caret <= source.length {
+                    let character = source.rangeOfComposedCharacterSequence(at: caret - 1)
+                    if character.length > 1, NSMaxRange(character) == caret,
+                       let start = position(from: beginningOfDocument, offset: character.location),
+                       let range = textRange(from: start, to: selection.end) {
+                        selectedTextRange = range
+                    }
+                }
+            }
+            super.deleteBackward()
+        }
+
         var nativeContentOffset: CGPoint {
             let origin = textInputView.convert(CGPoint.zero, to: self)
             return CGPoint(x: editingRect(forBounds: bounds).minX - origin.x, y: 0)
