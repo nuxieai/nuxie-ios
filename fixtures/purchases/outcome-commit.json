@@ -27,7 +27,8 @@
   "A declaration's stable event identity is derived from its operation ID, so one attempted event identity across retries proves that the operation ID was retained.",
   "minimumCarrierCaptureAttempts requires capture to remain failing until at least one fewer attempt has occurred, then permits success only through retained recovery.",
   "retainedCarrierRetryRoundLimit counts recovery rounds after the initial commit, independent of each platform's capture attempts per round.",
-  "expectedCarrierCaptureAttemptDelta is a portable per-action assertion; zero on a post-limit retry proves that capture attempts stop at the cap."
+  "expectedCarrierCaptureAttemptDelta is a portable per-action assertion; zero on a post-limit retry proves that capture attempts stop at the cap.",
+  "A checkout journeyId belongs to that checkout only. Completion retains it and the canonical experience_version_id across transaction-stream and startup recovery; reusable catalog mappings must not inherit Journey ownership."
  ],
  "products": {
   "pro": {
@@ -71,7 +72,8 @@
      "entry": "checkout",
      "outcome": "verified",
      "evidence": "pro-transaction",
-     "product": "pro"
+     "product": "pro",
+     "journeyId": "checkout-journey"
     },
     {
      "entry": "transaction_stream",
@@ -102,7 +104,9 @@
      "checkout"
     ],
     "completionCarriesEvidenceIdentity": true,
-    "completionCarriesProductMapping": true
+    "completionCarriesProductMapping": true,
+    "completionJourneyId": "checkout-journey",
+    "completionExperienceVersionId": "version-pro"
    }
   },
   {
