@@ -293,6 +293,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         var readCaptureID: UUID?
         var readRenderRevision: UInt64?
         var sourceReadID: UUID?
+        var sourceWriteGeneration = UUID()
         var ownerInstanceID: UInt64?
         var sourceReady = false
         var textWriteInFlight = false
@@ -555,6 +556,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         binding.readRenderRevision = renderRevision
         let requestID = UUID()
         binding.sourceReadID = requestID
+        let writeGeneration = binding.sourceWriteGeneration
         let currentGeneration = generation
         reader(captureID, binding.target) { [weak self] result in
             guard let self, self.generation == currentGeneration,
@@ -568,6 +570,14 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             guard case .success(let source) = result else { return }
             let value = source.text
             let ownerChanged = binding.ownerInstanceID != source.ownerInstanceID
+            // An asynchronous read may finish after a newer edit was admitted.
+            // Keep owner changes authoritative, but never let an overlapping
+            // read roll the same owner's editor back to its previous value.
+            if binding.sourceReady, !ownerChanged,
+               binding.sourceWriteGeneration != writeGeneration {
+                binding.readCaptureID = nil
+                return
+            }
             binding.ownerInstanceID = source.ownerInstanceID
             if !binding.sourceReady || ownerChanged {
                 self.semanticDrafts[binding.target] = ExperienceSemanticTextDraft(text: value)
@@ -1001,10 +1011,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         let currentGeneration = generation
         let rendered = binding.target.nodeID == nil && binding.input.secureTextEntry == true ? "" : write.text
         binding.textWriteInFlight = true
+        binding.sourceWriteGeneration = UUID()
         writer(write.captureID, inputID, rendered) { [weak self] outcome in
             guard let self, self.generation == currentGeneration,
                   self.bindingsByTarget[inputID] === binding else { return }
             binding.textWriteInFlight = false
+            binding.sourceWriteGeneration = UUID()
             // Shaping may update native cursor scrolling. Reapply the host
             // viewport after the newly edited text has settled and presented.
             if case .accepted = outcome { binding.lastOffset = nil }
