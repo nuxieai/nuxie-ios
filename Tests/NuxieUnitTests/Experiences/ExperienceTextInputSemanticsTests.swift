@@ -7,6 +7,40 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testSecureSelectionSurvivesViewportRelayout() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        let surface = UIView(frame: window.bounds)
+        controller.view.addSubview(surface)
+        var source = ""
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+            surfaceView: surface, artboardBounds: surface.bounds,
+            semanticTextWriter: { _, _, text, done in source = text; done(.accepted) },
+            semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
+            textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+        defer { bridge.clear(); window.isHidden = true }
+        presentField(on: bridge)
+        let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: true))[1] as? UITextField)
+        XCTAssertTrue(field.becomeFirstResponder())
+        field.insertText("Alpha beta")
+        for (start, end) in [(9, 9), (5, 6)] {
+            let first = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: start))
+            let last = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: end))
+            field.selectedTextRange = field.textRange(from: first, to: last)
+            surface.bounds.size.width += 20
+            bridge.layout()
+            let selection = try XCTUnwrap(field.selectedTextRange)
+            XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: selection.start), start)
+            XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: selection.end), end)
+            XCTAssertEqual(field.text, "Alpha beta")
+        }
+    }
+
     func testSecureDeletionPreservesCharactersAndNativeUndo() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
