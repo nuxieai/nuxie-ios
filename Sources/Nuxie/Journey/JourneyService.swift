@@ -1175,7 +1175,8 @@ private extension JourneyService {
             reference: arm.reference,
             binding: arm.binding,
             entryCondition: arm.entryCondition,
-            context: context
+            context: context,
+            conversion: arm.conversion
         )
         let presentationReservation = await presentationReservation(
             for: release,
