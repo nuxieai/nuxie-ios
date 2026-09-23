@@ -37,61 +37,61 @@
   },
   "artifacts": {
     "full-apple": {
-      "compressedBytes": 56574696,
-      "expandedBytes": 189499814,
+      "compressedBytes": 56670290,
+      "expandedBytes": 189716856,
       "representativeLinkedBytes": {
-        "c-macos-arm64": 25974992,
-        "swift-macos-arm64": 25985968
+        "c-macos-arm64": 25994000,
+        "swift-macos-arm64": 26021488
       },
       "sliceBytes": {
-        "aarch64-apple-darwin": 35941712,
-        "aarch64-apple-ios": 37803016,
-        "aarch64-apple-ios-sim": 37787984,
-        "x86_64-apple-darwin": 37457784,
-        "x86_64-apple-ios": 38896504
+        "aarch64-apple-darwin": 35983000,
+        "aarch64-apple-ios": 37844240,
+        "aarch64-apple-ios-sim": 37829088,
+        "x86_64-apple-darwin": 37499248,
+        "x86_64-apple-ios": 38937544
       }
     },
     "ios-only": {
-      "compressedBytes": 34954169,
-      "expandedBytes": 115970713,
+      "compressedBytes": 35007253,
+      "expandedBytes": 116101363,
       "representativeLinkedBytes": {
-        "c-ios-arm64": 25942248,
-        "swift-ios-arm64": 25969496
+        "c-ios-arm64": 25977544,
+        "swift-ios-arm64": 26004800
       },
       "sliceBytes": {
-        "aarch64-apple-ios": 37803016,
-        "aarch64-apple-ios-sim": 37787984,
-        "x86_64-apple-ios": 38896504
+        "aarch64-apple-ios": 37844240,
+        "aarch64-apple-ios-sim": 37829088,
+        "x86_64-apple-ios": 38937544
       }
     }
   },
   "deltasFromBaseline": {
     "full-apple": {
-      "compressedBytes": -25504258,
-      "expandedBytes": -62539484,
+      "compressedBytes": -25408664,
+      "expandedBytes": -62322442,
       "representativeLinkedBytes": {
-        "c-macos-arm64": -5688128,
-        "swift-macos-arm64": -5789176
+        "c-macos-arm64": -5669120,
+        "swift-macos-arm64": -5753656
       },
       "sliceBytes": {
-        "aarch64-apple-darwin": -13837544,
-        "aarch64-apple-ios": -12204056,
-        "aarch64-apple-ios-sim": -12096896,
-        "x86_64-apple-darwin": -13740712,
-        "x86_64-apple-ios": -10940536
+        "aarch64-apple-darwin": -13796256,
+        "aarch64-apple-ios": -12162832,
+        "aarch64-apple-ios-sim": -12055792,
+        "x86_64-apple-darwin": -13699248,
+        "x86_64-apple-ios": -10899496
       }
     },
     "ios-only": {
-      "compressedBytes": -14222456,
-      "expandedBytes": -34955546,
+      "compressedBytes": -14169372,
+      "expandedBytes": -34824896,
       "representativeLinkedBytes": {
-        "c-ios-arm64": -5460592,
-        "swift-ios-arm64": -5527680
+        "c-ios-arm64": -5425296,
+        "swift-ios-arm64": -5492376
       },
       "sliceBytes": {
-        "aarch64-apple-ios": -12204056,
-        "aarch64-apple-ios-sim": -12096896,
-        "x86_64-apple-ios": -10940536
+        "aarch64-apple-ios": -12162832,
+        "aarch64-apple-ios-sim": -12055792,
+        "x86_64-apple-ios": -10899496
       }
     }
   }
