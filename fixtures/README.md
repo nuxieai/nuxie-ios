@@ -6,6 +6,8 @@ These JSON vectors define the contracts shared by SDK implementations.
 
 - `journeys/planes/release.json`: signed Journey release envelopes and canonical release schema.
 - `journeys/planes/admission.json`: release admission, authenticated identity, controls, render closure, boundary outputs, and host-dismiss safety.
+- `journeys/planes/conversion-delivery.json`: original Journey start and revisioned conversion context on continuation arms.
+- `journeys/planes/conversion-watch.json`: attribution across retained watches, explicit-context rejection, inclusive windows, equal-time ordering, and occurrence-time admission.
 - `journeys/planes/profile-fact-admission.json`: exact signed fact projection across multiple legs of one publication, including missing and extra delivered keys.
 - `journeys/planes/publication-admission.json`: identical publication replay, equal-sequence conflicts and newer publication admission.
 - `journeys/planes/entry-evaluation.json`: profile fact, membership, event-edge, foreground, and unknown-value admission.
