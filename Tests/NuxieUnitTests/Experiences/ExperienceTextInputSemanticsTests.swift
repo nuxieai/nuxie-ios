@@ -7,6 +7,51 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testNativeViewportWaitsForAcceptedTextAndRetriesOnlyWithFreshCapture() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        var source = "saved"
+        var textCompletion: (@MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)?
+        var offsets: [(UUID, CGPoint, @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)] = []
+        bridge.bind(screenID: "screen", renderPlan: makePlan(native: true),
+            surfaceView: surface, artboardBounds: surface.bounds,
+            semanticTextWriter: { _, _, text, done in source = text; textCompletion = done },
+            semanticContentOffsetWriter: { id, _, offset, done in offsets.append((id, offset, done)) },
+            semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
+            textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+        defer { bridge.clear() }
+        presentField(on: bridge)
+        let first = try nativeCapture(ids: [1], secure: false)
+        let field = try XCTUnwrap(bridge.applySemantics(first)[1] as? UITextField)
+        field.text = "edited"
+        bridge.flushTextChange(for: field)
+        bridge.textFieldDidChangeSelection(field)
+        XCTAssertTrue(offsets.isEmpty, "Viewport writes must not overtake an unaccepted edit")
+        try XCTUnwrap(textCompletion)(.accepted)
+
+        let second = try nativeCapture(ids: [1], secure: false, revision: 2)
+        _ = bridge.applySemantics(second)
+        XCTAssertEqual(offsets.count, 1)
+        XCTAssertEqual(offsets[0].0, second.id)
+        XCTAssertEqual(offsets[0].1, .zero, "A blurred field restores the unscrolled viewport")
+        offsets[0].2(.staleCapture)
+        bridge.textFieldDidChangeSelection(field)
+        _ = bridge.applySemantics(second)
+        XCTAssertEqual(offsets.count, 1, "Do not spin against the same stale capture")
+
+        let third = try nativeCapture(ids: [1], secure: false, revision: 3)
+        _ = bridge.applySemantics(third)
+        XCTAssertEqual(offsets.count, 2)
+        XCTAssertEqual(offsets[1].0, third.id)
+        offsets[1].2(.accepted)
+        _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false, revision: 4))
+        bridge.textFieldDidChangeSelection(field)
+        XCTAssertEqual(offsets.count, 2, "An unchanged accepted viewport needs no further writes")
+        bridge.clear()
+        offsets[1].2(.accepted)
+        XCTAssertNil(field.superview, "A late callback cannot resurrect a retired occurrence")
+    }
+
     func testNativePlaceholdersNeverBecomeValuesAndTrackSourceRefreshes() throws {
         for multiline in [false, true] {
             for secure in [false, true] {

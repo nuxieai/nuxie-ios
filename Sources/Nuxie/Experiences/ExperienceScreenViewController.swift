@@ -916,6 +916,25 @@ final class ExperienceScreenViewController: UIViewController {
                 height: screen.height
             ),
             semanticTextWriter: semanticWriter,
+            semanticContentOffsetWriter: { [weak self] captureID, target, offset, completion in
+                loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                    guard let nodeID = target.nodeID else {
+                        return .work(requestsFrame: false) { completion(.rejected) }
+                    }
+                    do {
+                        try await interactiveScreen.setSemanticInputContentOffset(captureID: captureID,
+                            inputID: target.inputID, nodeID: nodeID, offset: offset)
+                        return .work(requestsFrame: true) { completion(.accepted) }
+                    } catch NuxieNativeRuntimeError.callFailed(let diagnostic)
+                        where diagnostic.status == .handleMismatch {
+                        return .work(requestsFrame: true) { completion(.staleCapture) }
+                    } catch {
+                        return .work(requestsFrame: false) { completion(.rejected) }
+                    }
+                }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { result in
+                    if case .failure = result { completion(.rejected) }
+                })
+            },
             semanticTextReader: { captureID, target, completion in
                 // Source initialization also runs during first presentation, before
                 // interaction admission opens. The capture and owner fence the read.
