@@ -7,6 +7,62 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testInputRelayoutDoesNotReportAnUnchangedSurfaceAsNewGeometry() {
+        final class Observer: ExperienceRuntimeSurfaceViewObserver {
+            var geometryChanges = 0
+            func runtimeSurfaceViewGeometryDidChange() { geometryChanges += 1 }
+            func runtimeSurfaceViewVisibilityDidChange() {}
+            func runtimeSurfaceViewDidReceivePointerEvents(_ events: [ExperienceRuntimeViewPointerEvent]) {}
+        }
+        let observer = Observer()
+        let surface = ExperienceRuntimeSurfaceView(frame: CGRect(x: 0, y: 0, width: 320, height: 600))
+        surface.runtimeObserver = observer
+        surface.layoutSubviews()
+        let initial = observer.geometryChanges
+        let field = UITextField(frame: CGRect(x: 20, y: 20, width: 280, height: 50))
+        surface.addSubview(field)
+        field.text = ""
+        surface.layoutSubviews()
+        XCTAssertEqual(observer.geometryChanges, initial, "Relayout must not invalidate an already admitted text edit")
+        surface.bounds.size.height = 400
+        surface.layoutSubviews()
+        XCTAssertEqual(observer.geometryChanges, initial + 1, "Actual resizing must still invalidate old coordinates")
+        surface.layoutSubviews()
+        XCTAssertEqual(observer.geometryChanges, initial + 1)
+    }
+
+    func testSourceReadStartedBeforeClearCannotRestoreAcceptedOldValue() throws {
+        for secure in [false, true] {
+            let bridge = ExperienceTextInputOverlayBridge()
+            let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+            var source = "saved"
+            var deferRead = false
+            var pendingRead: (() -> Void)?
+            var events: [ExperienceTextInputEvent] = []
+            bridge.onEditingEvent = { _, event in events.append(event) }
+            bridge.bind(screenID: "screen", renderPlan: makePlan(secure: secure, native: true),
+                surfaceView: view, artboardBounds: view.bounds,
+                semanticTextWriter: { _, _, text, done in source = text; done(.accepted) },
+                semanticTextReader: { _, _, done in
+                    let snapshot = source
+                    if deferRead { pendingRead = { done(.success(.init(text: snapshot))) } }
+                    else { done(.success(.init(text: snapshot))) }
+                }, textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+            defer { bridge.clear() }
+            presentField(on: bridge)
+            let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: secure))[1] as? UITextField)
+            deferRead = true
+            _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: secure, revision: 2))
+            field.text = ""
+            field.sendActions(for: .editingChanged)
+            XCTAssertEqual(source, "")
+            try XCTUnwrap(pendingRead)()
+            XCTAssertEqual(field.text, "", "A read begun before the edit cannot undo an admitted clear")
+            bridge.textFieldDidEndEditing(field)
+            XCTAssertEqual(events.map(\.text), [""])
+        }
+    }
+
     func testNativeViewportWaitsForAcceptedTextAndRetriesOnlyWithFreshCapture() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))

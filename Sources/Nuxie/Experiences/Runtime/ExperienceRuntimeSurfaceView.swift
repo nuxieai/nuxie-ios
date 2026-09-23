@@ -22,6 +22,16 @@ final class ExperienceRuntimeSurfaceView: UIView {
 
     weak var runtimeObserver: (any ExperienceRuntimeSurfaceViewObserver)?
 
+    private struct Geometry: Equatable {
+        let bounds: CGRect
+        let origin: CGPoint
+        let horizontal: CGPoint
+        let vertical: CGPoint
+        let scale: CGFloat
+        let window: ObjectIdentifier?
+    }
+    private var presentedGeometry: Geometry?
+
     override var isHidden: Bool {
         didSet {
             if isHidden != oldValue {
@@ -54,16 +64,30 @@ final class ExperienceRuntimeSurfaceView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        updateGeometry()
+    }
+
+    private func updateGeometry() {
         let scale = window?.screen.scale ?? contentScaleFactor
         contentScaleFactor = scale
         metalLayer.contentsScale = scale
+        // UIKit relayouts this host when an embedded editor changes its text.
+        // That is not a coordinate change and must not cancel queued edits.
+        // Three points retain translation, rotation and scale in window space.
+        let geometry = Geometry(bounds: bounds,
+            origin: convert(.zero, to: window),
+            horizontal: convert(CGPoint(x: 1, y: 0), to: window),
+            vertical: convert(CGPoint(x: 0, y: 1), to: window),
+            scale: scale, window: window.map(ObjectIdentifier.init))
+        guard geometry != presentedGeometry else { return }
+        presentedGeometry = geometry
         runtimeObserver?.runtimeSurfaceViewGeometryDidChange()
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         runtimeObserver?.runtimeSurfaceViewVisibilityDidChange()
-        runtimeObserver?.runtimeSurfaceViewGeometryDidChange()
+        updateGeometry()
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
