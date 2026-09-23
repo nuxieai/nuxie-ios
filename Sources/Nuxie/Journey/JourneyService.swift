@@ -2635,6 +2635,68 @@ private extension JourneyService {
                         return
                     }
                     switch presentationResult {
+                    case .navigate(let screenId):
+                        let owner = JourneyPresentationOwner(
+                            journeyId: run.journeyId,
+                            distinctId: journal.distinctId
+                        )
+                        if let offer = leg.offers.first(where: { $0.screenId == screenId }) {
+                            let decision = await offerDecision(offer, release: release)
+                            guard executionFence.isCurrent(executionFenceToken),
+                                  await isCurrentIdentity(identityFence.token, journal: journal) else {
+                                await presenter.cancelJourneyBackNavigation(owner: owner)
+                                await finishAfterAuthorityLoss(run, leg: leg, journal: journal,
+                                    executionFenceToken: executionFenceToken)
+                                return
+                            }
+                            if decision != .eligible {
+                                await presenter.cancelJourneyBackNavigation(owner: owner)
+                                do {
+                                    try await coordinator.commit(.init(
+                                        stepId: decision == .alreadyEntitled ? offer.alreadyEntitledStepId : offer.unknownStepId,
+                                        context: run.context,
+                                        experimentExposure: nil
+                                    ))
+                                } catch {
+                                    LogWarning("JourneyService: failed to persist back-navigation alternative: \(error)")
+                                    return
+                                }
+                                continue
+                            }
+                        }
+                        let navigation = await presenter.navigateJourneyPresentation(
+                            owner: owner,
+                            screenId: screenId,
+                            transition: resolvedAction["transition"]
+                        )
+                        guard executionFence.isCurrent(executionFenceToken),
+                              await isCurrentIdentity(identityFence.token, journal: journal) else {
+                            await presenter.cancelJourneyBackNavigation(owner: owner)
+                            await finishAfterAuthorityLoss(run, leg: leg, journal: journal,
+                                executionFenceToken: executionFenceToken)
+                            return
+                        }
+                        switch navigation {
+                        case .navigated:
+                            return
+                        case .alreadyActive:
+                            // No renderer callback is produced for a no-op.
+                            await presenter.cancelJourneyBackNavigation(owner: owner)
+                            _ = await handlePresentationScreenChanged(
+                                screenId, presentedRun: run, release: release,
+                                executionFenceToken: executionFenceToken
+                            )
+                            return
+                        case .productsUnavailable:
+                            await presenter.cancelJourneyBackNavigation(owner: owner)
+                            return
+                        case .noPresentation, .declined, .failed:
+                            await presenter.cancelJourneyBackNavigation(owner: owner)
+                            await finish(run, outcome: "abandoned", leg: leg, journal: journal,
+                                dismissPresentation: dismissPresentationOnCompletion,
+                                executionFenceToken: executionFenceToken)
+                            return
+                        }
                     case .advanced(let outlet):
                         pendingPresentationPurchasePlacements.removeValue(
                             forKey: run.id

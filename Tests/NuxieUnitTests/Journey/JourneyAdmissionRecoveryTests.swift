@@ -768,7 +768,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         XCTAssertEqual(initialRuns.count, 1)
 
         let root = directory.appendingPathComponent(
-            "journey-journal-v1",
+            "journey-journal-v2",
             isDirectory: true
         )
         let customerDigest = JourneyStorageScope.testFixture.customerDigest(

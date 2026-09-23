@@ -375,6 +375,36 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    func testGoalConditionsRejectMutableStateBeforeAdmission() throws {
+        let fixture = try golden()
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+        var policy = try XCTUnwrap(leg["policy"] as? [String: Any])
+        func goal(_ expr: [String: Any]) -> [String: Any] {
+            ["criterion": ["type": "event", "eventName": "purchased", "condition": ["ir_version": 1, "expr": expr]],
+             "attribution": ["basis": "entry", "window": ["amount": 1, "unit": "day"]]]
+        }
+        policy["goal"] = goal(["type": "Pred", "op": "eq", "key": "product_id", "value": ["type": "String", "value": "premium"]])
+        leg["policy"] = policy
+        root["leg"] = leg
+        try JourneyReleaseSchemaValidator.validate(root)
+        let mutable: [[String: Any]] = [
+            ["type": "User", "op": "eq", "key": "plan", "value": ["type": "String", "value": "pro"]],
+            ["type": "Feature", "op": "has", "id": "premium"],
+            ["type": "Subscription", "op": "active"],
+            ["type": "Segment", "op": "is_member", "id": "paid"],
+            ["type": "Events.Exists", "name": "purchased"],
+            ["type": "Response.Field", "key": "answer"],
+        ]
+        for node in mutable {
+            policy["goal"] = goal(["type": "And", "args": [["type": "Bool", "value": true], node]])
+            leg["policy"] = policy
+            root["leg"] = leg
+            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), "\(node["type"] ?? "")")
+        }
+    }
+
     func testRejectsRetiredMilestoneActionsBeforeAdmission() throws {
         XCTAssertNil(JourneyActionType(rawValue: "milestone"))
         let fixture = try golden()

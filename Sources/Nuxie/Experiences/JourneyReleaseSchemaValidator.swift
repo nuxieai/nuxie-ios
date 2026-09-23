@@ -242,6 +242,20 @@ enum JourneyReleaseSchemaValidator {
         }
     }
 
+    private static func goalEvidence(_ value: Any) throws {
+        if let values = value as? [Any] {
+            for value in values { try goalEvidence(value) }
+            return
+        }
+        guard let node = value as? [String: Any] else { return }
+        if let type = node["type"] as? String {
+            guard ["Bool", "Number", "String", "Timestamp", "Duration", "List",
+                   "And", "Or", "Not", "Compare", "Event", "Pred", "PredAnd", "PredOr",
+                   "Journey.Id", "Time.Now", "Time.Ago", "Time.Window"].contains(type) else { throw invalid }
+        }
+        for value in node.values { try goalEvidence(value) }
+    }
+
     private static func validatePolicy(_ value: Any?) throws {
         let policy = try object(value, required: ["entry", "exitWhenAny"], optional: ["goal"])
         let entry = try object(policy["entry"], required: ["trigger", "frequency"], optional: ["eligibility"])
@@ -266,6 +280,9 @@ enum JourneyReleaseSchemaValidator {
         if let value = policy["goal"] {
             let goal = try object(value, required: ["criterion", "attribution"])
             try policyCriterion(goal["criterion"])
+            if let condition = try dictionary(goal["criterion"])["condition"] {
+                try goalEvidence(condition)
+            }
             let attribution = try object(goal["attribution"], required: ["basis", "window"])
             guard ["first_shown", "entry"].contains(attribution["basis"] as? String ?? ""),
                   try policyDuration(attribution["window"]) <= 90 * 86400 else { throw invalid }

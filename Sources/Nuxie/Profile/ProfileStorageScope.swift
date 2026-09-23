@@ -5,7 +5,7 @@ import Foundation
 /// endpoint environment. A cache written for another app cannot become this
 /// setup's first profile-delivery authority.
 struct ProfileStorageScope: Equatable, Hashable, Sendable {
-    private static let domain = "nuxie.profile-storage.v2\u{0}"
+    private static let domain = "nuxie.profile-storage.v3\u{0}"
 
     let cacheSubdirectory: String
     let authorityBindingFilename: String
@@ -16,7 +16,7 @@ struct ProfileStorageScope: Equatable, Hashable, Sendable {
         ))
         .map { String(format: "%02x", $0) }
         .joined()
-        cacheSubdirectory = "profiles-v2-\(digest)"
+        cacheSubdirectory = "profiles-v3-\(digest)"
         authorityBindingFilename = "\(digest).json"
     }
 }

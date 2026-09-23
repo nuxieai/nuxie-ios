@@ -351,6 +351,7 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
         }
         return await base.navigateJourneyPresentation(owner: owner, screenId: screenId, transition: transition)
     }
+    func cancelJourneyBackNavigation(owner: JourneyPresentationOwner) { base.cancelJourneyBackNavigation(owner: owner) }
     func resolveJourneyPresentationAction(owner: JourneyPresentationOwner, action: [String: JourneyReleaseJSONValue], source: ScreenEmissionSource?) -> [String: JourneyReleaseJSONValue]? {
         base.resolveJourneyPresentationAction(owner: owner, action: action, source: source)
     }

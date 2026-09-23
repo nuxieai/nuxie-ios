@@ -636,6 +636,11 @@ final class JourneyProfileCatalogTests: XCTestCase {
         XCTAssertNotEqual(first, second)
         XCTAssertNotEqual(first, development)
         XCTAssertFalse(first.cacheSubdirectory.contains("first_secret"))
+        let retiredDigest = SHA256.hash(data: Data(
+            "nuxie.profile-storage.v2\u{0}production\u{0}pk_live_first_secret".utf8
+        )).map { String(format: "%02x", $0) }.joined()
+        XCTAssertNotEqual(first.cacheSubdirectory, "profiles-v2-\(retiredDigest)")
+        XCTAssertNotEqual(first.authorityBindingFilename, "\(retiredDigest).json")
     }
 
     private func makeCatalog(
