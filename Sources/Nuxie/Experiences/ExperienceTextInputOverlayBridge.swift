@@ -147,7 +147,24 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         _ completion: @escaping @MainActor @Sendable (Result<ExperienceTextInputSource, Error>) -> Void
     ) -> Void
 
+    typealias SemanticContentOffsetWriter = (
+        _ captureID: UUID, _ target: InputTarget, _ offset: CGPoint,
+        _ completion: @escaping @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void
+    ) -> Void
+
     private final class TextField: UITextField {
+        var onViewportChange: (() -> Void)?
+
+        var nativeContentOffset: CGPoint {
+            let origin = textInputView.convert(CGPoint.zero, to: self)
+            return CGPoint(x: editingRect(forBounds: bounds).minX - origin.x, y: 0)
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            onViewportChange?()
+        }
+
         private var textOffset = CGPoint.zero
         private var presentationLineHeight: CGFloat?
         private var measuredLine: (metrics: ExperienceTextInputMetrics, height: CGFloat, baseline: CGFloat)?
@@ -278,6 +295,10 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         var sourceReadID: UUID?
         var ownerInstanceID: UInt64?
         var sourceReady = false
+        var textWriteInFlight = false
+        var offsetWriteInFlight = false
+        var lastOffset: CGPoint? = .zero
+        var offsetAttemptCaptureID: UUID?
 
         init(target: InputTarget, input: NativeExperienceTextInput, control: Control) {
             self.target = target
@@ -290,6 +311,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var artboardBounds: CGRect = .zero
     private var textWriter: TextWriter?
     private var semanticTextWriter: SemanticTextWriter?
+    private var semanticContentOffsetWriter: SemanticContentOffsetWriter?
     private var semanticTextReader: SemanticTextReader?
     private var nativeInputs: [NativeExperienceTextInput] = []
     private var metricsSnapshot: ExperienceInteractiveViewModelSnapshot?
@@ -341,6 +363,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         surfaceView: UIView,
         artboardBounds: CGRect,
         semanticTextWriter: SemanticTextWriter? = nil,
+        semanticContentOffsetWriter: SemanticContentOffsetWriter? = nil,
         semanticTextReader: SemanticTextReader? = nil,
         textWriter: @escaping TextWriter
     ) {
@@ -354,6 +377,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         self.artboardBounds = artboardBounds
         self.textWriter = textWriter
         self.semanticTextWriter = semanticTextWriter
+        self.semanticContentOffsetWriter = semanticContentOffsetWriter
         self.semanticTextReader = semanticTextReader
         if semanticTextWriter != nil { semanticFields = [:] }
         fontSHA256ByUniqueName = renderPlan.fonts.reduce(into: [:]) {
@@ -485,6 +509,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                     control.view.isAccessibilityElement = true
                     binding = Binding(target: target, input: input, control: control)
                     bindingsByTarget[target] = binding
+                    if case .field(let field) = control {
+                        field.onViewportChange = { [weak self, weak binding] in
+                            guard let self, let binding else { return }
+                            self.drainContentOffset(binding)
+                        }
+                    }
                     surfaceView.addSubview(control.view)
                 }
                 binding.nativeGeometry = occurrence.geometry
@@ -554,6 +584,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             self.semanticDrafts[binding.target]?.present(captureID: captureID)
             self.layout()
             self.drainSemanticWrite(binding.target)
+            self.drainContentOffset(binding)
         }
     }
 
@@ -597,6 +628,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         semanticFields = nil
         semanticDrafts.removeAll()
         semanticTextWriter = nil
+        semanticContentOffsetWriter = nil
         semanticTextReader = nil
         nativeInputs.removeAll()
         metricsSnapshot = nil
@@ -829,6 +861,14 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         flushTextChange(for: textView)
     }
 
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        if let binding = binding(for: scrollView) { drainContentOffset(binding) }
+    }
+
+    func textFieldDidChangeSelection(_ textField: UITextField) {
+        if let binding = binding(for: textField) { drainContentOffset(binding) }
+    }
+
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
         guard let binding = binding(for: textField), allowsEditing(binding),
               !binding.control.hasMarkedText else { return false }
@@ -861,6 +901,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private func endEditing(control: UIView) {
         if activeEditingControl === control { activeEditingControl = nil }
         emitEditingEvent(.editingEnded, for: control)
+        if let binding = binding(for: control) { drainContentOffset(binding) }
     }
 
     private func emitEditingEvent(_ kind: ExperienceTextInputEventKind, for control: UIView) {
@@ -959,9 +1000,14 @@ final class ExperienceTextInputOverlayBridge: NSObject,
               let write = semanticDrafts[inputID]?.takeWrite() else { return }
         let currentGeneration = generation
         let rendered = binding.target.nodeID == nil && binding.input.secureTextEntry == true ? "" : write.text
+        binding.textWriteInFlight = true
         writer(write.captureID, inputID, rendered) { [weak self] outcome in
             guard let self, self.generation == currentGeneration,
                   self.bindingsByTarget[inputID] === binding else { return }
+            binding.textWriteInFlight = false
+            // Shaping may update native cursor scrolling. Reapply the host
+            // viewport after the newly edited text has settled and presented.
+            if case .accepted = outcome { binding.lastOffset = nil }
             guard self.allowsEditing(binding) else {
                 self.semanticDrafts[inputID]?.withdraw()
                 self.restoreAcceptedText(binding)
@@ -978,6 +1024,39 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             for event in events { self.notifyEditingEvent(event, binding: binding) }
             if case .rejected = outcome { self.restoreAcceptedText(binding) }
             self.drainSemanticWrite(inputID)
+        }
+    }
+
+    private func drainContentOffset(_ binding: Binding) {
+        guard let writer = semanticContentOffsetWriter, binding.target.nodeID != nil,
+              allowsEditing(binding), binding.sourceReady, binding.sourceReadID == nil,
+              !binding.textWriteInFlight, !binding.offsetWriteInFlight,
+              !binding.control.hasMarkedText,
+              semanticDrafts[binding.target]?.acceptedText == binding.control.text,
+              let captureID = binding.readCaptureID,
+              binding.offsetAttemptCaptureID != captureID else { return }
+        let offset: CGPoint
+        if !binding.control.view.isFirstResponder {
+            offset = .zero
+        } else {
+            switch binding.control {
+            case .field(let field): offset = field.nativeContentOffset
+            case .textView(let view): offset = CGPoint(x: 0, y: view.contentOffset.y + view.adjustedContentInset.top)
+            }
+        }
+        guard offset.x.isFinite, offset.y.isFinite, binding.lastOffset != offset else { return }
+        binding.offsetAttemptCaptureID = captureID
+        binding.offsetWriteInFlight = true
+        let currentGeneration = generation
+        writer(captureID, binding.target, offset) { [weak self, weak binding] outcome in
+            guard let self, let binding, self.generation == currentGeneration,
+                  self.bindingsByTarget[binding.target] === binding else { return }
+            binding.offsetWriteInFlight = false
+            switch outcome {
+            case .accepted: binding.lastOffset = offset
+            case .staleCapture: break // Retry only from a fresh presented capture.
+            case .rejected: binding.lastOffset = offset // Legacy assets may lack a scroll container.
+            }
         }
     }
 

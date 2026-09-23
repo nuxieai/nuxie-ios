@@ -3555,6 +3555,18 @@ actor ExperienceInteractiveScreen {
         }
     }
 
+    func setSemanticInputContentOffset(captureID: UUID, inputID: String, nodeID: UInt32, offset: CGPoint) async throws {
+        guard let input = textInputs[inputID], input.editable,
+              let name = input.editableValueName else {
+            throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
+        }
+        let runtime = runtime
+        try await operationGate.withLock {
+            try await runtime.setFieldContentOffset(captureID: captureID, nodeID: nodeID,
+                name: name, x: Float(offset.x), y: Float(offset.y))
+        }
+    }
+
     func readSemanticText(captureID: UUID, inputID: String, nodeID: UInt32) async throws -> ExperienceTextInputSource {
         guard let input = textInputs[inputID], input.editable,
               let name = input.editableValueName else {

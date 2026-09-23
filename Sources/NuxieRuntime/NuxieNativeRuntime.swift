@@ -865,6 +865,13 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.setFieldString(captureID: captureID, nodeID: nodeID, name: name, value: value) }
     }
 
+    package func setFieldContentOffset(captureID: UUID, nodeID: UInt32, name: String, x: Float, y: Float) async throws {
+        let state = try requireState()
+        try await executor.call {
+            try state.setFieldContentOffset(captureID: captureID, nodeID: nodeID, name: name, x: x, y: y)
+        }
+    }
+
     package func setNumber(
         _ value: Float,
         path: String,
@@ -1439,6 +1446,18 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         let changed = previous != value
         if changed { try retireSemanticCapture() }
         return changed
+    }
+
+    func setFieldContentOffset(captureID: UUID, nodeID: UInt32, name: String, x: Float, y: Float) throws {
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "scroll input content")
+        }
+        let player = try self.player.require()
+        let snapshot = try capture.handle.require()
+        try requireOK(withStringView(name) {
+            nux_player_text_input_content_offset_set(player, snapshot, nodeID, $0, x, y)
+        }, operation: "scroll input content")
+        try retireSemanticCapture()
     }
 
     func queueSemanticAction(captureID: UUID, nodeID: UInt32, action: NuxieNativeSemanticAction) throws {
