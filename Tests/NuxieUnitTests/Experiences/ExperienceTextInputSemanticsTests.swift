@@ -7,6 +7,43 @@ import XCTest
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    func testMultilineAccessibilityBoundsFollowScaledAndRotatedViewport() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        controller.view.addSubview(surface)
+        bridge.bind(screenID: "screen", renderPlan: makePlan(multiline: true),
+            surfaceView: surface, artboardBounds: surface.bounds) { _, _, done in done(.success(())) }
+        defer { bridge.clear(); window.isHidden = true }
+        presentField(on: bridge)
+        let field = try XCTUnwrap(bridge.applySemantics(try capture(flags: 0))[1] as? UITextView)
+        field.bounds = CGRect(x: 0, y: 0, width: 200, height: 80)
+        field.center = CGPoint(x: 200, y: 300)
+        // Literal screen rectangles for a 200 × 80 viewport centered at (200, 300).
+        // Scrolling changes content coordinates, not the accessible viewport.
+        let cases: [(CGAffineTransform, CGRect)] = [
+            (.identity, CGRect(x: 100, y: 260, width: 200, height: 80)),
+            (.init(scaleX: 1.1, y: 1.1), CGRect(x: 90, y: 256, width: 220, height: 88)),
+            (.init(rotationAngle: .pi / 2), CGRect(x: 160, y: 200, width: 80, height: 200)),
+        ]
+        for (transform, expected) in cases {
+            field.transform = transform
+            for offset in [CGPoint.zero, CGPoint(x: 0, y: 100)] {
+                field.bounds.origin = offset
+                let actual = field.accessibilityFrame
+                XCTAssertEqual(actual.minX, expected.minX, accuracy: 0.5)
+                XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.5)
+                XCTAssertEqual(actual.width, expected.width, accuracy: 0.5)
+                XCTAssertEqual(actual.height, expected.height, accuracy: 0.5)
+            }
+        }
+    }
+
     func testInputRelayoutDoesNotReportAnUnchangedSurfaceAsNewGeometry() {
         final class Observer: ExperienceRuntimeSurfaceViewObserver {
             var geometryChanges = 0

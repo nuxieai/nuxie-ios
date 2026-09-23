@@ -221,6 +221,17 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private final class TextView: UITextView {
         let placeholderLabel = UILabel()
 
+        override var accessibilityFrame: CGRect {
+            // UITextView can apply its transform twice when reporting native
+            // accessibility bounds. Convert the visible viewport once, including
+            // ancestor transforms and the scroll view's current bounds origin.
+            get {
+                guard let window else { return super.accessibilityFrame }
+                return window.convert(convert(bounds, to: window), to: window.screen.coordinateSpace)
+            }
+            set { super.accessibilityFrame = newValue }
+        }
+
         override init(frame: CGRect, textContainer: NSTextContainer?) {
             super.init(frame: frame, textContainer: textContainer)
             placeholderLabel.numberOfLines = 0
