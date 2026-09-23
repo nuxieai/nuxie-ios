@@ -258,4 +258,31 @@ final class FeatureInfoPublicationTests: XCTestCase {
         XCTAssertNil(info.feature("bonus-credits"))
         XCTAssertEqual(info.state, .ready)
     }
+
+    @MainActor
+    func testJourneyEvidenceLookupIsIdentityScopedWithoutGlobalReadiness() {
+        let info = FeatureInfo()
+        info.beginOptimisticProjectionPublication(epoch: UUID(), distinctId: "customer-a")
+        let allowances = ["purchase": [OptimisticEntitlementAllowance(
+            featureId: "premium", kind: .boolean, unlimited: false, allowance: nil
+        )]]
+        info.replaceOptimisticProjection(
+            evidence: [.init(transactionId: "purchase", distinctId: "customer-a", backendSynced: false, revoked: false)],
+            descriptorAllowances: allowances,
+            distinctId: "customer-a"
+        )
+
+        XCTAssertEqual(info.state, .unknown)
+        XCTAssertEqual(info.optimisticAccess("premium", distinctId: "customer-a")?.allowed, true)
+        XCTAssertNil(info.optimisticAccess("premium", distinctId: "customer-b"))
+        XCTAssertNil(info.optimisticAccess("unmapped", distinctId: "customer-a"))
+
+        info.replaceOptimisticProjection(
+            evidence: [.init(transactionId: "purchase", distinctId: "customer-a", backendSynced: false, revoked: true)],
+            descriptorAllowances: allowances,
+            distinctId: "customer-a"
+        )
+        XCTAssertNil(info.optimisticAccess("premium", distinctId: "customer-a"))
+    }
+
 }

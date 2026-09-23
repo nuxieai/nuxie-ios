@@ -24,7 +24,6 @@ enum JourneyReleaseSchemaValidator {
             let renderScreens = try array(render["screens"]).map { try identifier(dictionary($0)["id"]) }
             guard Set(renderScreens) == screens, Set(renderScreens).count == renderScreens.count else { throw invalid }
         }
-        let products = try Set(array(root["products"]).map { try identifier(dictionary($0)["id"]) })
         let leg = try dictionary(root["leg"])
         for value in try array(leg["steps"]) {
             let step = try dictionary(value)
@@ -40,10 +39,6 @@ enum JourneyReleaseSchemaValidator {
                       $0["artboardId"] as? String == target["artboardId"] as? String &&
                       $0["viewNodeId"] as? String == target["viewNodeId"] as? String
                   }) else { throw invalid }
-        }
-        let gate = try dictionary(leg["entitlementGate"])
-        for product in try array(gate["products"]) {
-            guard products.contains(try identifier(dictionary(product)["productId"])) else { throw invalid }
         }
         for item in try array(root["viewModelValues"]) {
             let value = try object(item, required: ["viewModelName", "path", "value"], optional: ["instanceId", "instanceName"])
@@ -75,18 +70,11 @@ enum JourneyReleaseSchemaValidator {
 
     private static func validateLeg(_ value: Any?, placements: Set<String>) throws -> Set<String> {
         let leg = try object(value, required: ["schemaVersion", "id", "entryCondition", "entryStepId", "steps", "routes",
-            "screens", "reentry", "entitlementGate", "facts", "inputs", "outputs", "completionOutputs"])
+            "screens", "policy", "offers", "facts", "inputs", "outputs", "completionOutputs"])
         guard leg["schemaVersion"] as? String == "nuxie.experience-planes.v1" else { throw invalid }
         try digest(leg["id"])
         try validateEntry(leg["entryCondition"])
-        let reentry = try dictionary(leg["reentry"])
-        switch reentry["type"] as? String {
-        case "one_time", "every_time": _ = try object(reentry, required: ["type"])
-        case "once_per_window":
-            _ = try object(reentry, required: ["type", "windowSeconds"])
-            try integer(reentry["windowSeconds"], minimum: 1)
-        default: throw invalid
-        }
+        try validatePolicy(leg["policy"])
         let screenList = try array(leg["screens"])
         let screens = try Set(screenList.map { item -> String in
             let screen = try object(item, required: ["id", "responseCaptures"], optional: ["defaultViewModelName", "defaultInstanceId"])
@@ -141,12 +129,24 @@ enum JourneyReleaseSchemaValidator {
             guard ids.contains(try identifier(route["entryStepId"])),
                   routeKeys.insert(hostKey + [try identifier(route["eventName"])]).inserted else { throw invalid }
         }
-        let gate = try object(leg["entitlementGate"], required: ["enabled", "products"])
-        try boolean(gate["enabled"])
-        for item in try array(gate["products"]) {
-            let product = try object(item, required: ["productId", "featureIds"])
-            _ = try identifier(product["productId"])
-            _ = try identifiers(product["featureIds"])
+        var offerScreens = Set<String>()
+        let routes = try array(leg["routes"]).map { try dictionary($0) }
+        for item in try array(leg["offers"]) {
+            let offer = try object(item, required: ["screenId", "placementIds", "alreadyEntitledStepId", "unknownStepId"])
+            let screen = try identifier(offer["screenId"])
+            guard screens.contains(screen), offerScreens.insert(screen).inserted else { throw invalid }
+            let offeredPlacements = try identifiers(offer["placementIds"])
+            guard !offeredPlacements.isEmpty, Set(offeredPlacements).count == offeredPlacements.count,
+                  Set(offeredPlacements).isSubset(of: placements) else { throw invalid }
+            for (key, event) in [("alreadyEntitledStepId", Journey.Offer.alreadyEntitledEvent),
+                                 ("unknownStepId", Journey.Offer.accessUnknownEvent)] {
+                let cursor = try identifier(offer[key])
+                guard ids.contains(cursor), routes.contains(where: {
+                    let host = $0["host"] as? [String: Any]
+                    return host?["kind"] as? String == "screen" && host?["screenId"] as? String == screen &&
+                        $0["eventName"] as? String == event && $0["entryStepId"] as? String == cursor
+                }) else { throw invalid }
+            }
         }
         try validateFacts(leg)
         try boundary(leg["inputs"])
@@ -156,6 +156,132 @@ enum JourneyReleaseSchemaValidator {
             try boundary(value)
         }
         return screens
+    }
+
+    private static let policySystemEvents: Set<String> = [
+        "$identify",
+        "$app_installed",
+        "$app_updated",
+        "$app_opened",
+        "$app_backgrounded",
+        "$feature_used",
+        "$products_unavailable",
+        "$screen_shown",
+        "$screen_dismissed",
+        "$purchase_completed",
+        "$purchase_failed",
+        "$purchase_cancelled",
+        "$purchase_pending",
+        "$purchase_synced",
+        "$restore_completed",
+        "$restore_failed",
+        "$restore_no_purchases",
+        "$notifications_enabled",
+        "$notifications_denied",
+        "$permission_granted",
+        "$permission_denied",
+        "$tracking_authorized",
+        "$tracking_denied",
+        "$experience_shown",
+        "$experience_dismissed",
+        "$experience_errored",
+        "$experience_artifact_load_succeeded",
+        "$experience_artifact_load_failed",
+        "$customer_updated",
+        "$app_action_requested",
+        "$experiment_exposure",
+    ]
+
+    private static func policyEvent(_ value: Any?) throws {
+        let name = try identifier(value)
+        guard name.utf8.count <= 128, !name.hasPrefix("$") || policySystemEvents.contains(name) else { throw invalid }
+    }
+
+    private static func policyIR(_ value: Any?) throws {
+        guard let value else { return }
+        let bytes = try JSONSerialization.data(withJSONObject: value)
+        let ir = try JSONDecoder().decode(IREnvelope.self, from: bytes)
+        guard ir.ir_version == 1, ir.isSupportedByThisEngine else { throw invalid }
+        func check(_ value: Any) throws {
+            if let values = value as? [Any] { for child in values { try check(child) } }
+            if let node = value as? [String: Any] {
+                if let type = node["type"] as? String, type.hasPrefix("Events.") {
+                    if let name = node["name"] { try policyEvent(name) }
+                    if type == "Events.InOrder", let steps = node["steps"] as? [[String: Any]] {
+                        for step in steps { try policyEvent(step["name"]) }
+                    }
+                }
+                for child in node.values { try check(child) }
+            }
+        }
+        try check(value)
+    }
+
+    private static func policyDuration(_ value: Any?) throws -> Double {
+        let duration = try object(value, required: ["amount", "unit"])
+        try integer(duration["amount"], minimum: 1)
+        let units: [String: Double] = ["minute": 60, "hour": 3600, "day": 86400, "week": 604800]
+        guard let unit = duration["unit"] as? String, let multiplier = units[unit],
+              let amount = duration["amount"] as? NSNumber else { throw invalid }
+        let seconds = amount.doubleValue * multiplier
+        guard seconds * 1000 <= 9_007_199_254_740_991 else { throw invalid }
+        return seconds
+    }
+
+    private static func policyCriterion(_ value: Any?) throws {
+        let criterion = try dictionary(value)
+        switch criterion["type"] as? String {
+        case "event":
+            _ = try object(criterion, required: ["type", "eventName"], optional: ["condition"])
+            try policyEvent(criterion["eventName"])
+            try policyIR(criterion["condition"])
+        case "segment_enter", "segment_leave":
+            _ = try object(criterion, required: ["type", "segmentId"])
+            _ = try identifier(criterion["segmentId"])
+        default: throw invalid
+        }
+    }
+
+    private static func validatePolicy(_ value: Any?) throws {
+        let policy = try object(value, required: ["entry", "exitWhenAny"], optional: ["goal"])
+        let entry = try object(policy["entry"], required: ["trigger", "frequency"], optional: ["eligibility"])
+        let trigger = try dictionary(entry["trigger"])
+        switch trigger["type"] as? String {
+        case "api": _ = try object(trigger, required: ["type"])
+        case "server_event":
+            _ = try object(trigger, required: ["type", "connectorKey", "triggerKey"], optional: ["identityField", "condition"])
+            for key in ["connectorKey", "triggerKey", "identityField"] where trigger[key] != nil { _ = try identifier(trigger[key]) }
+            try policyIR(trigger["condition"])
+        default: try policyCriterion(trigger)
+        }
+        try policyIR(entry["eligibility"])
+        let frequency = try dictionary(entry["frequency"])
+        switch frequency["type"] as? String {
+        case "one_time", "every_match": _ = try object(frequency, required: ["type"])
+        case "once_per_window":
+            _ = try object(frequency, required: ["type", "window"])
+            _ = try policyDuration(frequency["window"])
+        default: throw invalid
+        }
+        if let value = policy["goal"] {
+            let goal = try object(value, required: ["criterion", "attribution"])
+            try policyCriterion(goal["criterion"])
+            let attribution = try object(goal["attribution"], required: ["basis", "window"])
+            guard ["first_shown", "entry"].contains(attribution["basis"] as? String ?? ""),
+                  try policyDuration(attribution["window"]) <= 90 * 86400 else { throw invalid }
+        }
+        for value in try array(policy["exitWhenAny"]) {
+            let exit = try dictionary(value)
+            switch exit["type"] as? String {
+            case "goal_met":
+                _ = try object(exit, required: ["type"])
+                guard policy["goal"] != nil else { throw invalid }
+            case "eligibility_lost":
+                _ = try object(exit, required: ["type"])
+                guard entry["eligibility"] != nil else { throw invalid }
+            default: try policyCriterion(exit)
+            }
+        }
     }
 
     private static func operation(_ value: Any?, screens: Set<String>, placements: Set<String>) throws {
@@ -233,7 +359,7 @@ enum JourneyReleaseSchemaValidator {
             }
         case .delay, .navigate, .back, .video, .requestNotifications,
              .requestPermission, .requestTracking, .openLink, .dismiss,
-             .updateCustomer, .milestone, .submitResponse, .appAction, .exit:
+             .updateCustomer, .submitResponse, .appAction, .exit:
             try Common.validateCanonicalJourneyAction(action, path: "leg.action", screenIDs: screens, placementIDs: placements)
         }
     }

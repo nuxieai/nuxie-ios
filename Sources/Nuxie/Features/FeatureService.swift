@@ -5,6 +5,8 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
     /// Check feature access from cache (instant, non-blocking)
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess?
 
+    func getForJourney(featureId: String, resolveUnknown: Bool) async -> FeatureAccess?
+
     /// Get all cached features from profile
     func getAllCached() async -> [String: FeatureAccess]
 
@@ -55,6 +57,12 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
 }
 
 extension FeatureServiceProtocol {
+    func getForJourney(featureId: String, resolveUnknown: Bool) async -> FeatureAccess? {
+        if let cached = await getCached(featureId: featureId, entityId: nil) { return cached }
+        guard resolveUnknown else { return nil }
+        return try? await checkWithCache(featureId: featureId, requiredBalance: nil, entityId: nil, forceRefresh: false)
+    }
+
     func invalidateAccess(featureId: String, entityId: String?, distinctId: String) async {}
 
     func applyAuthoritativeUse(
@@ -251,6 +259,24 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Get cached feature access (instant, non-blocking)
     /// First checks fresh overrides, then falls back to the profile snapshot.
+    func getForJourney(featureId: String, resolveUnknown: Bool) async -> FeatureAccess? {
+        let fence = await synchronizeCustomerScopeIfNeeded()
+        let info = featureInfo
+        let optimistic = await MainActor.run {
+            info.optimisticAccess(featureId, distinctId: fence.distinctId)
+        }
+        guard identityService.performIfCurrentIdentityFenceToken(fence, { true }) == true else { return nil }
+        if optimistic?.allowed == true { return optimistic }
+        if let cached = await getCached(featureId: featureId, entityId: nil) {
+            guard identityService.performIfCurrentIdentityFenceToken(fence, { true }) == true else { return nil }
+            return cached
+        }
+        guard resolveUnknown else { return nil }
+        let resolved = try? await checkWithCache(featureId: featureId, requiredBalance: nil, entityId: nil, forceRefresh: false)
+        guard identityService.performIfCurrentIdentityFenceToken(fence, { true }) == true else { return nil }
+        return resolved
+    }
+
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess? {
         await getCached(featureId: featureId, requiredBalance: nil, entityId: entityId)
     }

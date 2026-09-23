@@ -6,7 +6,6 @@ import Foundation
 final class JourneyEvents: Sendable {
     static let journeyStarted = "$journey_leg_started"
     static let journeyCompleted = "$journey_leg_completed"
-    static let journeyMilestone = "$journey_milestone"
 
     static let experienceShown = "$experience_shown"
     static let experienceDismissed = "$experience_dismissed"

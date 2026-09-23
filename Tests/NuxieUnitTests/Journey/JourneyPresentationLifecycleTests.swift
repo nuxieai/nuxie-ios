@@ -620,7 +620,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
             ]),
             ("purchase", [
                 "type": .string("purchase"),
-                "placementId": .object(["literal": .string("golden")]),
+                "placementId": .object(["literal": .string("golden:monthly")]),
             ]),
             ("restore", ["type": .string("restore")]),
             ("request_notifications", [
@@ -661,7 +661,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 outlets: ["next": "done"],
                 outcome: nil
             )
-            let snapshot = replacing(
+            var snapshot = replacing(
                 base,
                 steps: [
                     .init(
@@ -691,6 +691,9 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     responseCaptures: []
                 )]
             )
+            if actionFixture.type == "purchase" {
+                snapshot = try addingPurchaseOffer(snapshot)
+            }
             let identity = MockIdentityService()
             identity.setDistinctId("customer")
             let events = MockEventLog()
@@ -706,6 +709,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 identity: identity,
                 events: events,
                 directory: directory,
+                featureAccess: { _ in .notFound },
                 dispatcher: dispatcher,
                 presenter: presenter
             )
@@ -985,7 +989,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     ]),
                 ],
                 SystemEventNames.purchaseCompleted,
-                ["placement_id": "golden"],
+                ["placement_id": "golden:monthly"],
                 "completed",
                 "purchased"
             ),
@@ -1001,7 +1005,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     ]),
                 ],
                 SystemEventNames.purchaseFailed,
-                ["placement_id": "golden"],
+                ["placement_id": "golden:monthly"],
                 "failed",
                 "purchase_failed"
             ),
@@ -1017,7 +1021,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     ]),
                 ],
                 SystemEventNames.purchaseCancelled,
-                ["placement_id": "golden"],
+                ["placement_id": "golden:monthly"],
                 "cancelled",
                 "purchase_cancelled"
             ),
@@ -1061,7 +1065,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 outlets: [actionFixture.outlet: "done"],
                 outcome: nil
             )
-            let snapshot = replacing(
+            var snapshot = replacing(
                 base,
                 steps: [
                     .init(
@@ -1098,6 +1102,9 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     responseCaptures: []
                 )]
             )
+            if actionFixture.type == "purchase" {
+                snapshot = try addingPurchaseOffer(snapshot)
+            }
             let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
             let release = try XCTUnwrap(snapshot.releasesByDigest[
                 arm.reference.descriptorSha256
@@ -1114,7 +1121,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 let value = RecordingJourneyPresenter()
                 value.actionResult = .awaitingOutcome
                 if actionFixture.type == "purchase" {
-                    value.resolvedPurchasePlacementId = "golden"
+                    value.resolvedPurchasePlacementId = "golden:monthly"
                 }
                 return value
             }
@@ -1122,6 +1129,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 identity: identity,
                 events: events,
                 directory: directory,
+                featureAccess: { _ in .notFound },
                 dispatcher: dispatcher,
                 presenter: presenter
             )
@@ -1214,7 +1222,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     recordedActions.first?.action["placementId"] else {
                     return XCTFail("Expected the resolved purchase placement")
                 }
-                XCTAssertEqual(resolvedPlacement, "golden")
+                XCTAssertEqual(resolvedPlacement, "golden:monthly")
                 await service.handleEvent(NuxieEvent(
                     name: actionFixture.eventName,
                     distinctId: "customer",
@@ -1233,7 +1241,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     distinctId: "customer",
                     properties: [
                         "experience_id": "another-experience",
-                        "placement_id": "golden",
+                        "placement_id": "golden:monthly",
                     ]
                 ))
                 let runsAfterExperienceMismatch = try await journal.runs()
@@ -1280,7 +1288,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                             sequence: 1,
                             occurredAt: "2026-08-29T12:00:00.001Z",
                             name: actionFixture.eventName,
-                            payload: ["placement_id": .string("golden")]
+                            payload: ["placement_id": .string("golden:monthly")]
                         )]
                     )
                 )
@@ -1318,4 +1326,23 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
             )
         }
     }
+
+    private func addingPurchaseOffer(_ snapshot: JourneyProfileCatalog.Snapshot) throws -> JourneyProfileCatalog.Snapshot {
+        let leg = try XCTUnwrap(snapshot.releasesByDigest.values.first).descriptor.leg
+        return replacing(
+            snapshot,
+            offers: [.init(screenId: "screen_welcome", placementIds: ["golden:monthly"],
+                           alreadyEntitledStepId: "skip_offer", unknownStepId: "skip_offer")],
+            products: [releaseProductDocument(id: "monthly", storeProductId: "com.example.pro", featureIds: ["premium"])],
+            steps: leg.steps + [
+                .init(kind: .action, id: "skip_offer", action: ["type": .string("dismiss")], outlets: ["next": "offer_skipped"], outcome: nil),
+                .init(kind: .complete, id: "offer_skipped", action: nil, outlets: nil, outcome: "skipped"),
+            ],
+            routes: leg.routes + [
+                .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: Journey.Offer.alreadyEntitledEvent, entryStepId: "skip_offer"),
+                .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: Journey.Offer.accessUnknownEvent, entryStepId: "skip_offer"),
+            ]
+        )
+    }
+
 }

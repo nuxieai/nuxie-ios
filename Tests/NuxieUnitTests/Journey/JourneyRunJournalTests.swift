@@ -15,7 +15,7 @@ final class JourneyRunJournalTests: XCTestCase {
         snapshot.customer = ["plan": .string("pro"), "nullable": .null]
         let admitted = try await journal.admit(arm: candidate,
             release: release(for: candidate.reference), executionSnapshot: snapshot,
-            reentry: .init(type: .everyTime, windowSeconds: nil), entryStepId: "step", at: date(100))
+            reentry: .init(type: .everyMatch, window: nil), entryStepId: "step", at: date(100))
         XCTAssertNotNil(admitted)
         let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
         let retained = try await reopened.runs().first
@@ -77,7 +77,7 @@ final class JourneyRunJournalTests: XCTestCase {
             let forwarding = LegForwardingRecorder()
             await log.subscribeForwarding { event in await forwarding.record(event.event) }
             let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-            let admitted = try await journal.admit(arm: arm(binding: vector.binding), reentry: .init(type: .everyTime, windowSeconds: nil),
+            let admitted = try await journal.admit(arm: arm(binding: vector.binding), reentry: .init(type: .everyMatch, window: nil),
                                                    entryStepId: "step", at: date(vector.startedAtMillis / 1000))
             let run = try XCTUnwrap(admitted)
             try await journal.recordResponses(run.id, values: vector.outputs.responses)
@@ -131,7 +131,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let first = try JourneyRunJournal(directory: directory, distinctId: "../customer")
         let second = try JourneyRunJournal(directory: directory, distinctId: "../customer")
         let candidate = arm()
-        let policy = Journey.Reentry(type: .oneTime, windowSeconds: nil)
+        let policy = Journey.Frequency(type: .oneTime, window: nil)
         let at = date(100)
         async let left = first.admit(arm: candidate, reentry: policy, entryStepId: "step", at: at)
         async let right = second.admit(arm: candidate, reentry: policy, entryStepId: "step", at: at)
@@ -160,7 +160,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let candidate = arm()
         let receipt = JourneyStateArmReceipt(candidate)
         let retainedRelease = release(for: candidate.reference)
-        let policy = Journey.Reentry(type: .everyTime, windowSeconds: nil)
+        let policy = Journey.Frequency(type: .everyMatch, window: nil)
 
         async let left = first.admit(
             arm: candidate,
@@ -235,7 +235,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let secondRun = try await second.admit(
             arm: arm(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "step",
             at: date(100)
         )
@@ -247,7 +247,7 @@ final class JourneyRunJournalTests: XCTestCase {
 
         let firstRun = try await first.admit(
             arm: arm(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "step",
             at: date(101)
         )
@@ -263,7 +263,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let store = SQLiteEventStore()
         let log = try await eventLog(directory: directory, store: store, api: MockNuxieApiForQueue(), dropEvents: true)
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .oneTime, windowSeconds: nil),
+        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .oneTime, window: nil),
                                                entryStepId: "step", at: date(100))
         let run = try XCTUnwrap(admitted)
         try await journal.complete(run.id, outcome: "done", at: date(200))
@@ -286,7 +286,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let policy = Journey.Reentry(type: .oncePerWindow, windowSeconds: 100)
+        let policy = Journey.Frequency(type: .oncePerWindow, window: .init(amount: 2, unit: .minute))
         let enrolled = try await journal.admit(arm: arm(), reentry: policy, entryStepId: "step", at: date(100))
         let first = try XCTUnwrap(enrolled)
         try await finish(journal, run: first, at: 110)
@@ -299,9 +299,9 @@ final class JourneyRunJournalTests: XCTestCase {
         let mark = try await journal.checkmark(experienceId: "experience")
         XCTAssertEqual(mark?.generation, 2, "A late lower chapter cannot re-enable a consumed arm")
         XCTAssertEqual(mark?.lastEnrollmentAt, date(100))
-        let early = try await journal.admit(arm: arm(), reentry: policy, entryStepId: "step", at: date(199))
+        let early = try await journal.admit(arm: arm(), reentry: policy, entryStepId: "step", at: date(219))
         XCTAssertNil(early)
-        let allowed = try await journal.admit(arm: arm(), reentry: policy, entryStepId: "step", at: date(200))
+        let allowed = try await journal.admit(arm: arm(), reentry: policy, entryStepId: "step", at: date(220))
         XCTAssertNotNil(allowed, "The window counts from enrollment, not a continuation or completion")
     }
 
@@ -335,7 +335,7 @@ final class JourneyRunJournalTests: XCTestCase {
             defer { try? FileManager.default.removeItem(at: directory) }
             let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
             let admitted = try await journal.admit(arm: arm(binding: vector.binding),
-                reentry: .init(type: .everyTime, windowSeconds: nil), entryStepId: "step", at: date(suite.startedAtMillis / 1000))
+                reentry: .init(type: .everyMatch, window: nil), entryStepId: "step", at: date(suite.startedAtMillis / 1000))
             let run = try XCTUnwrap(admitted)
             try await journal.markStartedQueued(run)
             try await journal.recordResponses(run.id, values: vector.responses)
@@ -398,7 +398,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .oneTime, windowSeconds: nil),
+            reentry: .init(type: .oneTime, window: nil),
             entryStepId: "wait",
             at: date(100)
         )
@@ -429,7 +429,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let candidate = arm()
         let admitted = try await journal.admit(
             arm: candidate,
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait",
             at: date(100)
         )
@@ -455,7 +455,7 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertFalse(finalizedBeforeReporting)
         let blocked = try await reopened.admit(
             arm: candidate,
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait",
             at: date(260)
         )
@@ -466,7 +466,7 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertTrue(finalizedAfterReporting)
         let admittedAfterRetirement = try await reopened.admit(
             arm: candidate,
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait",
             at: date(270)
         )
@@ -481,7 +481,7 @@ final class JourneyRunJournalTests: XCTestCase {
             directory: directory,
             distinctId: "customer"
         )
-        let once = Journey.Reentry(type: .oneTime, windowSeconds: nil)
+        let once = Journey.Frequency(type: .oneTime, window: nil)
         let admittedOnce = try await journal.admit(
             arm: arm(),
             reentry: once,
@@ -521,9 +521,9 @@ final class JourneyRunJournalTests: XCTestCase {
             entryCondition: arm().entryCondition,
             context: .init(event: [:], responses: [:])
         )
-        let window = Journey.Reentry(
+        let window = Journey.Frequency(
             type: .oncePerWindow,
-            windowSeconds: 100
+            window: .init(amount: 2, unit: .minute)
         )
         let admittedWindow = try await journal.admit(
             arm: windowArm,
@@ -539,7 +539,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         try await journal.retainCheckmarks(
             liveExperiences: [:],
-            at: date(499)
+            at: date(519)
         )
         let retainedWindowCheckmark = try await journal.checkmark(
             experienceId: "window-experience"
@@ -547,7 +547,7 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertNotNil(retainedWindowCheckmark)
         try await journal.retainCheckmarks(
             liveExperiences: [:],
-            at: date(500)
+            at: date(520)
         )
         let retiredWindowCheckmark = try await journal.checkmark(
             experienceId: "window-experience"
@@ -565,7 +565,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait",
             at: date(100)
         )
@@ -610,7 +610,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 arm: candidate,
                 release: release(for: candidate.reference),
                 executionSnapshot: testJourneyExecutionSnapshot(),
-                reentry: .init(type: .everyTime, windowSeconds: nil),
+                reentry: .init(type: .everyMatch, window: nil),
                 entryStepId: "wait",
                 at: date(100),
                 profileFence: fence,
@@ -654,7 +654,7 @@ final class JourneyRunJournalTests: XCTestCase {
             arm: enrollmentArm,
             release: pin,
             executionSnapshot: testJourneyExecutionSnapshot(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "step",
             at: date(100)
         )
@@ -683,7 +683,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 arm: continuationArm,
                 release: conflictingPin,
                 executionSnapshot: testJourneyExecutionSnapshot(),
-                reentry: .init(type: .everyTime, windowSeconds: nil),
+                reentry: .init(type: .everyMatch, window: nil),
                 entryStepId: "step",
                 at: date(105)
             )
@@ -696,7 +696,7 @@ final class JourneyRunJournalTests: XCTestCase {
             arm: continuationArm,
             release: pin,
             executionSnapshot: testJourneyExecutionSnapshot(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "step",
             at: date(110)
         )
@@ -760,7 +760,7 @@ final class JourneyRunJournalTests: XCTestCase {
             release: release(for: enrollmentArm.reference),
             artifactSource: source,
             executionSnapshot: testJourneyExecutionSnapshot(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "step",
             at: date(100)
         )
@@ -783,7 +783,7 @@ final class JourneyRunJournalTests: XCTestCase {
             arm: continuationArm,
             release: release(for: continuationArm.reference),
             executionSnapshot: testJourneyExecutionSnapshot(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "step",
             at: date(110)
         )
@@ -834,7 +834,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 release: release(for: candidate.reference),
                 artifactSource: source,
                 executionSnapshot: testJourneyExecutionSnapshot(),
-                reentry: .init(type: .everyTime, windowSeconds: nil),
+                reentry: .init(type: .everyMatch, window: nil),
                 entryStepId: "step",
                 at: date(100)
             )
@@ -902,7 +902,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 release: release(for: candidate.reference),
                 artifactSource: source,
                 executionSnapshot: testJourneyExecutionSnapshot(),
-                reentry: .init(type: .everyTime, windowSeconds: nil),
+                reentry: .init(type: .everyMatch, window: nil),
                 entryStepId: "step",
                 at: date(100)
             )
@@ -970,7 +970,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 arm: candidate,
                 release: retainedRelease,
                 executionSnapshot: testJourneyExecutionSnapshot(),
-                reentry: .init(type: .everyTime, windowSeconds: nil),
+                reentry: .init(type: .everyMatch, window: nil),
                 entryStepId: "wait",
                 at: date(Double(100 + index))
             )
@@ -1007,7 +1007,7 @@ final class JourneyRunJournalTests: XCTestCase {
 
         let admitted = try await journal.admit(
             arm: candidate,
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait",
             at: date(100)
         )
@@ -1033,7 +1033,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: candidate,
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "complete",
             at: date(100)
         )
@@ -1065,7 +1065,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "survey",
             at: date(100)
         )
@@ -1109,7 +1109,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "survey",
             at: date(100)
         )
@@ -1153,9 +1153,9 @@ final class JourneyRunJournalTests: XCTestCase {
             distinctId: "customer-b"
         )
         let candidate = arm()
-        let policy = Journey.Reentry(
-            type: .everyTime,
-            windowSeconds: nil
+        let policy = Journey.Frequency(
+            type: .everyMatch,
+            window: nil
         )
         let admittedFirst = try await first.admit(
             arm: candidate,
@@ -1214,7 +1214,7 @@ final class JourneyRunJournalTests: XCTestCase {
 
         let firstRun = try await first.admit(
             arm: candidate,
-            reentry: .init(type: .oneTime, windowSeconds: nil),
+            reentry: .init(type: .oneTime, window: nil),
             entryStepId: "wait",
             at: date(100)
         )
@@ -1224,7 +1224,7 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertTrue(secondRunsBeforeAdmission.isEmpty)
         let secondRun = try await second.admit(
             arm: candidate,
-            reentry: .init(type: .oneTime, windowSeconds: nil),
+            reentry: .init(type: .oneTime, window: nil),
             entryStepId: "wait",
             at: date(100)
         )
@@ -1270,7 +1270,7 @@ final class JourneyRunJournalTests: XCTestCase {
             arm: firstArm,
             release: firstRelease,
             executionSnapshot: testJourneyExecutionSnapshot(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait",
             at: date(100)
         )
@@ -1280,7 +1280,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 arm: secondArm,
                 release: secondRelease,
                 executionSnapshot: testJourneyExecutionSnapshot(),
-                reentry: .init(type: .everyTime, windowSeconds: nil),
+                reentry: .init(type: .everyMatch, window: nil),
                 entryStepId: "wait",
                 at: date(101)
             )
@@ -1308,7 +1308,7 @@ final class JourneyRunJournalTests: XCTestCase {
             arm: candidate,
             release: release(for: candidate.reference),
             executionSnapshot: testJourneyExecutionSnapshot(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait",
             at: date(100)
         )
@@ -1350,7 +1350,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyTime, windowSeconds: nil),
+        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil),
                                                entryStepId: "condition", at: date(1))
         let run = try XCTUnwrap(admitted)
         try await journal.markStartedQueued(run)
@@ -1382,7 +1382,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait",
             at: date(1)
         )
@@ -1446,7 +1446,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "present",
             at: date(1)
         )
@@ -1491,7 +1491,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "present",
             at: date(1)
         )
@@ -1534,7 +1534,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "effect",
             at: date(100)
         )
@@ -1567,7 +1567,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let firstStore = SQLiteEventStore()
         let firstLog = try await eventLog(directory: directory, store: firstStore, api: MockNuxieApiForQueue())
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyTime, windowSeconds: nil),
+        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil),
                                                entryStepId: "survey", at: date(100))
         let run = try XCTUnwrap(admitted)
         try await journal.recordResponses(run.id, values: ["answer": .string("yes")])
@@ -1614,7 +1614,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let routes = LegRouteRecorder()
         await log.subscribeCommitted { event in await routes.record(event) }
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyTime, windowSeconds: nil),
+        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil),
                                                entryStepId: "screen", at: date(100))
         let run = try XCTUnwrap(admitted)
 
@@ -1667,7 +1667,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let api = MockNuxieApiForQueue()
         let log = try await eventLog(directory: directory, store: store, api: api)
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .oneTime, windowSeconds: nil),
+        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .oneTime, window: nil),
                                                entryStepId: "screen", at: date(100))
         let run = try XCTUnwrap(admitted)
         let reporter = JourneyReporter(journal: journal, events: log)
@@ -1681,7 +1681,7 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertTrue(runs.isEmpty)
         XCTAssertEqual(checklist?.outcome, "closed")
         XCTAssertEqual(checklist?.lastEnrollmentAt, date(100))
-        let second = try await reopened.admit(arm: arm(), reentry: .init(type: .oneTime, windowSeconds: nil),
+        let second = try await reopened.admit(arm: arm(), reentry: .init(type: .oneTime, window: nil),
                                               entryStepId: "screen", at: date(300))
         XCTAssertNil(second)
         let rows = try await store.queryEventsForUser("customer", limit: 10)
@@ -1709,7 +1709,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .oneTime, windowSeconds: nil),
+            reentry: .init(type: .oneTime, window: nil),
             entryStepId: "screen",
             at: date(100)
         )
@@ -1749,7 +1749,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         let admitted = try await journal.admit(
             arm: arm(),
-            reentry: .init(type: .oneTime, windowSeconds: nil),
+            reentry: .init(type: .oneTime, window: nil),
             entryStepId: "screen",
             at: date(100)
         )
@@ -1821,7 +1821,7 @@ final class JourneyRunJournalTests: XCTestCase {
 private extension JourneyRunJournal {
     func admit(
         arm: ArmedJourney,
-        reentry: Journey.Reentry,
+        reentry: Journey.Frequency,
         entryStepId: String,
         at: Date
     ) async throws -> JourneyRun? {

@@ -282,8 +282,12 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     defaultInstanceId: nil,
                     responseCaptures: []
                 )],
-                reentry: Journey.Reentry(type: .everyTime, windowSeconds: nil),
-                entitlementGate: Journey.EntitlementGate(enabled: false, products: []),
+                policy: .init(
+                    entry: .init(trigger: ["type": .string("api")], eligibility: nil,
+                                 frequency: .init(type: .everyMatch, window: nil)),
+                    goal: nil, exitWhenAny: []
+                ),
+                offers: [],
                 facts: JourneyFactReferences(
                     propertyKeys: [],
                     segmentIds: [],

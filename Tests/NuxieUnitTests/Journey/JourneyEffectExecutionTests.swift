@@ -10,7 +10,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         let snapshot = replacing(
             try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load()),
             entry: .init(type: .event, eventName: "startup_trigger", segmentId: nil, member: nil, condition: nil),
-            reentry: .init(type: .everyTime, windowSeconds: nil)
+            reentry: .init(type: .everyMatch, window: nil)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -53,7 +53,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         let snapshot = replacing(
             try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load()),
             entry: .init(type: .event, eventName: "startup_trigger", segmentId: nil, member: nil, condition: nil),
-            reentry: .init(type: .everyTime, windowSeconds: nil)
+            reentry: .init(type: .everyMatch, window: nil)
         )
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
         let retained = try await journal.admit(
@@ -61,7 +61,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             release: XCTUnwrap(snapshot.profile.releases.first),
             executionSnapshot: .init(delivery: snapshot.profile.delivery,
                                      assignments: snapshot.profile.facts.assignments),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "entry", at: Date(timeIntervalSince1970: 1_000)
         )
         let oldRun = try XCTUnwrap(retained)
@@ -104,7 +104,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         let snapshot = replacing(
             try await authenticatedSnapshot(fixture),
             entry: .init(type: .event, eventName: "retained_trigger", segmentId: nil, member: nil, condition: nil),
-            reentry: .init(type: .everyTime, windowSeconds: nil)
+            reentry: .init(type: .everyMatch, window: nil)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -352,13 +352,6 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             ),
             (
                 action: [
-                    "type": .string("milestone"),
-                    "milestoneId": .string("inventory_checked"),
-                ],
-                id: "00000000-0000-7000-8000-000000000212"
-            ),
-            (
-                action: [
                     "type": .string("app_action"),
                     "name": .string("open_inventory"),
                 ],
@@ -487,7 +480,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
                 member: nil,
                 condition: nil
             ),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             inputs: .init(eventFields: [eventField], responseFields: []),
             entryStepId: "send",
             steps: [send, complete]
@@ -644,16 +637,6 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
                     "type": .string("update_customer"),
                     "attributes": .object(["plan": eventValue]),
                 ],
-                outlets: ["next": "milestone"],
-                outcome: nil
-            ),
-            Journey.Step(
-                kind: .action,
-                id: "milestone",
-                action: [
-                    "type": .string("milestone"),
-                    "milestoneId": .string("inventory_checked"),
-                ],
                 outlets: ["next": "submit"],
                 outcome: nil
             ),
@@ -692,7 +675,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
                 member: nil,
                 condition: nil
             ),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             inputs: .init(eventFields: [eventField], responseFields: []),
             entryStepId: "update",
             steps: steps
@@ -729,7 +712,6 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             [
                 JourneyEvents.journeyStarted,
                 JourneyEvents.customerUpdated,
-                JourneyEvents.journeyMilestone,
                 JourneyEvents.appActionRequested,
                 JourneyEvents.journeyCompleted,
             ],
@@ -746,14 +728,6 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             customerUpdated.properties["leg_id"] as? String,
             snapshot.profile.armedLegs[0].reference.legId
         )
-        let milestone = try XCTUnwrap(events.routedEvents.first {
-            $0.name == JourneyEvents.journeyMilestone
-        })
-        XCTAssertEqual(milestone.properties["milestone_id"] as? String, "inventory_checked")
-        XCTAssertEqual(milestone.properties["experience_version_id"] as? String, snapshot.profile.armedLegs[0].reference.versionId)
-        XCTAssertEqual(milestone.properties["leg_id"] as? String, snapshot.profile.armedLegs[0].reference.legId)
-        XCTAssertEqual(milestone.properties["leg_generation"] as? Int, 0)
-
         let deliveredAction = await MainActor.run { appActions.onlyAction() }
         let action = try XCTUnwrap(deliveredAction)
         XCTAssertEqual(action.name, "open_inventory")
@@ -762,7 +736,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         XCTAssertEqual(action.experience.experienceVersion, snapshot.profile.armedLegs[0].reference.versionId)
         XCTAssertEqual(
             action.experience.journeyId,
-            milestone.properties["journey_id"] as? String
+            customerUpdated.properties["journey_id"] as? String
         )
         let appActionRequested = try XCTUnwrap(events.routedEvents.first {
             $0.name == JourneyEvents.appActionRequested
@@ -906,7 +880,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let snapshot = replacing(
             try await authenticatedSnapshot(fixture),
-            reentry: .init(type: .everyTime, windowSeconds: nil)
+            reentry: .init(type: .everyMatch, window: nil)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")

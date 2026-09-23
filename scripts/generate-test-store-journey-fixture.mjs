@@ -23,16 +23,25 @@ for (const action of ['purchase', 'restore']) {
     experienceVersionId: `test-store-${action}-v1`, buildId: `test-store-${action}-build` };
   const product = structuredClone(catalog.products[0]);
   product.store = { platform: 'google_play', productId: 'test-store-monthly', productType: 'subscription', basePlanId: 'monthly' };
+  product.entitlements = [{ id: 'test-premium-grant', featureId: 'test-premium', featureExternalId: 'premium', purchaseUsageFeatureIds: [] }];
   d.products = [product];
   d.placements = [{ id: 'test-store:monthly', productId: product.id }];
   d.leg.id = createHash('sha256').update(`test-store-${action}-leg`).digest('hex');
   d.leg.outputs = [];
-  d.leg.reentry = { type: 'one_time' };
+  d.leg.policy.entry.frequency = { type: 'one_time' };
+  d.leg.offers = [];
   d.leg.steps = [d.leg.steps[0], {
     kind: 'action', id: action, action: { type: action, ...(action === 'purchase' ? { placementId: 'test-store:monthly' } : {}) },
     outlets: action === 'purchase' ? { completed: 'done', cancelled: 'done', failed: 'done' } : { restored: 'done', noPurchases: 'done', failed: 'done' },
   }, { kind: 'complete', id: 'done', outcome: 'continue' }];
   d.leg.routes = [{ host: { kind: 'screen', screenId: 'screen_1' }, eventName: '$screen_shown', entryStepId: action }];
+  if (action === 'purchase') {
+    d.leg.steps.push({ kind: 'action', id: 'skip-offer', action: { type: 'dismiss' }, outlets: { next: 'done' } });
+    for (const eventName of ['$offer_already_entitled', '$offer_access_unknown']) {
+      d.leg.routes.push({ host: { kind: 'screen', screenId: 'screen_1' }, eventName, entryStepId: 'skip-offer' });
+    }
+    d.leg.offers = [{ screenId: 'screen_1', placementIds: ['test-store:monthly'], alreadyEntitledStepId: 'skip-offer', unknownStepId: 'skip-offer' }];
+  }
   const bytes = Buffer.from(canonical(d));
   entries[action] = { locator: { ...d.identity, legId: d.leg.id }, envelope: {
     mediaType: 'application/vnd.nuxie.journey+json', encoding: 'base64',

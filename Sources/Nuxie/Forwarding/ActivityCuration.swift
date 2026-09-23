@@ -14,7 +14,6 @@ enum ActivityCuration {
     SystemEventNames.featureUsed,
     JourneyEvents.journeyStarted,
     JourneyEvents.journeyCompleted,
-    JourneyEvents.journeyMilestone,
     SystemEventNames.notificationsDenied,
     SystemEventNames.notificationsEnabled,
     SystemEventNames.permissionDenied,
@@ -88,11 +87,6 @@ enum ActivityCuration {
       }
       guard let outcome = nonemptyString(properties, "outcome") else { return missing(internalName) }
       return .journeyCompleted(ref, legId: legId, generation: number.intValue, outcome: outcome)
-    case JourneyEvents.journeyMilestone:
-      guard let ref = experienceRef(properties),
-            let milestoneId = string(properties, "milestone_id")
-      else { return missing(internalName) }
-      return .milestoneReached(ref, milestoneId: milestoneId)
     case SystemEventNames.purchaseCompleted:
       return purchaseInfo(properties).map(NuxieActivity.purchaseCompleted)
     case SystemEventNames.purchaseFailed:

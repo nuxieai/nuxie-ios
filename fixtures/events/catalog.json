@@ -738,54 +738,6 @@
     "status": "active",
     "wire": true
   },
-  "$journey_milestone": {
-    "authoredBy": "platform",
-    "beforeSend": "governed",
-    "constant": "JourneyEvents.journeyMilestone",
-    "docs": true,
-    "emitters": [
-      "Sources/Nuxie/Journey/Execution/JourneyEffectDispatcher.swift"
-    ],
-    "endpoint": "batch",
-    "fixtures": [],
-    "forwarding": "milestoneReached",
-    "lane": "captureStableSystemEvent",
-    "persists": true,
-    "properties": {
-      "experience_id": {
-        "required": true,
-        "source": "authenticated Journey run",
-        "type": "String"
-      },
-      "experience_version_id": {
-        "required": true,
-        "source": "authenticated Journey run",
-        "type": "String"
-      },
-      "journey_id": {
-        "required": true,
-        "source": "authenticated Journey run",
-        "type": "String"
-      },
-      "leg_generation": {
-        "required": true,
-        "source": "authenticated Journey run",
-        "type": "Int"
-      },
-      "leg_id": {
-        "required": true,
-        "source": "authenticated Journey run",
-        "type": "String"
-      },
-      "milestone_id": {
-        "required": true,
-        "source": "authored MilestoneAction id",
-        "type": "String"
-      }
-    },
-    "status": "active",
-    "wire": true
-  },
   "$notifications_denied": {
     "authoredBy": "platform",
     "beforeSend": [

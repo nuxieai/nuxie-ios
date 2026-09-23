@@ -279,6 +279,7 @@ extension JourneyTestCase {
     func makeRenderedJourneyTestContext(
         snapshot: JourneyProfileCatalog.Snapshot? = nil,
         presenterAvailable: Bool = true,
+        featureAccess: @escaping JourneyService.FeatureAccessLookup = { _ in nil },
         preparedTriggerBeforeSend:
             (@Sendable (NuxieEvent) -> NuxieEvent?)? = nil
     ) async throws -> RenderedJourneyTestContext {
@@ -309,6 +310,7 @@ extension JourneyTestCase {
                 identity: identity,
                 events: events,
                 directory: directory,
+                featureAccess: featureAccess,
                 presenter: presenter
             )
             await service.initialize()
@@ -908,8 +910,8 @@ extension JourneyTestCase {
     func replacing(
         _ snapshot: JourneyProfileCatalog.Snapshot,
         entry: JourneyEntryCondition? = nil,
-        reentry: Journey.Reentry? = nil,
-        entitlementGate: Journey.EntitlementGate? = nil,
+        reentry: Journey.Frequency? = nil,
+        offers: [Journey.Offer]? = nil,
         products: [JourneyReleaseJSONValue]? = nil,
         inputs: Journey.Boundary? = nil,
         completionOutputs: [String: Journey.Boundary]? = nil,
@@ -937,8 +939,16 @@ extension JourneyTestCase {
             steps: steps ?? originalLeg.steps,
             routes: routes ?? originalLeg.routes,
             screens: screens ?? originalLeg.screens,
-            reentry: reentry ?? originalLeg.reentry,
-            entitlementGate: entitlementGate ?? originalLeg.entitlementGate,
+            policy: .init(
+                entry: .init(
+                    trigger: originalLeg.policy.entry.trigger,
+                    eligibility: originalLeg.policy.entry.eligibility,
+                    frequency: reentry ?? originalLeg.policy.entry.frequency
+                ),
+                goal: originalLeg.policy.goal,
+                exitWhenAny: originalLeg.policy.exitWhenAny
+            ),
+            offers: offers ?? originalLeg.offers,
             facts: factReferences ?? originalLeg.facts,
             inputs: inputs ?? originalLeg.inputs,
             outputs: originalLeg.outputs,
@@ -1076,8 +1086,8 @@ extension JourneyTestCase {
             steps: originalLeg.steps,
             routes: originalLeg.routes,
             screens: [],
-            reentry: originalLeg.reentry,
-            entitlementGate: originalLeg.entitlementGate,
+            policy: originalLeg.policy,
+            offers: [],
             facts: originalLeg.facts,
             inputs: originalLeg.inputs,
             outputs: originalLeg.outputs,

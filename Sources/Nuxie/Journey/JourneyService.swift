@@ -127,6 +127,7 @@ actor JourneyService {
     private var storageScope: JourneyStorageScope?
     private let acceptsProfileAuthorityScope: Bool
     private let featureAccess: FeatureAccessLookup
+    private let offerFeatureAccess: FeatureAccessLookup
     private let storeEntitlements: StoreEntitlementLookup
     private let dispatcher: any JourneyDispatching
     private let presenter: (any JourneyPresenting)?
@@ -196,6 +197,7 @@ actor JourneyService {
         journalDirectory: URL?,
         storageScope: JourneyStorageScope? = .testFixture,
         featureAccess: @escaping FeatureAccessLookup,
+        offerFeatureAccess: FeatureAccessLookup? = nil,
         storeEntitlements: @escaping StoreEntitlementLookup = { [] },
         dispatcher: any JourneyDispatching,
         presenter: (any JourneyPresenting)? = nil,
@@ -227,6 +229,7 @@ actor JourneyService {
         self.storageScope = storageScope
         acceptsProfileAuthorityScope = storageScope == nil
         self.featureAccess = featureAccess
+        self.offerFeatureAccess = offerFeatureAccess ?? featureAccess
         self.storeEntitlements = storeEntitlements
         self.dispatcher = dispatcher
         self.presenter = presenter
@@ -1151,12 +1154,7 @@ private extension JourneyService {
             history: history,
             features: features
         ) else { return }
-        let entitlementSuppressed = await entitlementGateSuppresses(
-            release.descriptor.leg.entitlementGate,
-            release: release,
-            features: features
-        )
-        guard !entitlementSuppressed, isCurrent(state) else { return }
+        guard isCurrent(state) else { return }
 
         // The optimistic start check is deliberately repeated after every
         // suspending gate and immediately before the first durable side effect.
@@ -1208,7 +1206,7 @@ private extension JourneyService {
                         assignments: state.snapshot.profile.facts.assignments,
                         customer: try state.snapshot.profile.facts.customerValues()
                     ),
-                    reentry: release.descriptor.leg.reentry,
+                    reentry: release.descriptor.leg.policy.entry.frequency,
                     entryStepId: release.descriptor.leg.entryStepId,
                     at: dateProvider.now(),
                     profileFence: profileFence,
@@ -1283,49 +1281,21 @@ private extension JourneyService {
         )
     }
 
-    private func entitlementGateSuppresses(
-        _ gate: Journey.EntitlementGate,
+    private func offerDecision(
+        _ offer: Journey.Offer,
         release: AuthenticatedJourneyRelease,
-        features: IRFeatureQueries
-    ) async -> Bool {
-        guard gate.enabled, !gate.products.isEmpty else { return false }
-        let entitledStoreProductIds = await storeEntitlements()
-        if !entitledStoreProductIds.isEmpty,
-           let releaseProducts = try? decodeJourneyDocuments(
-               JourneyReleaseProductDocument.self,
-               from: release.descriptor.products
-           ) {
-            let ownedProducts = releaseProducts.filter {
-                $0.store.platform == "apple_app_store"
-                    && entitledStoreProductIds.contains($0.store.productId)
-            }
-            let ownedProductIds = Set(ownedProducts.map(\.id))
-            for gatedProduct in gate.products {
-                if ownedProductIds.contains(gatedProduct.productId) {
-                    return true
-                }
-                let requiredFeatures = Set(gatedProduct.featureIds)
-                guard !requiredFeatures.isEmpty else { continue }
-                if ownedProducts.contains(where: { owned in
-                    requiredFeatures.isSubset(of: Set(owned.entitlements.map {
-                        $0.featureId ?? $0.id
-                    }))
-                }) {
-                    return true
-                }
-            }
-        }
-        for product in gate.products where !product.featureIds.isEmpty {
-            var fullyGranted = true
-            for featureId in product.featureIds {
-                if !(await features.has(featureId)) {
-                    fullyGranted = false
-                    break
-                }
-            }
-            if fullyGranted { return true }
-        }
-        return false
+        placementId: String? = nil
+    ) async -> JourneyOfferAccess.Decision {
+        guard let products = try? decodeJourneyDocuments(JourneyReleaseProductDocument.self, from: release.descriptor.products),
+              let placements = try? decodeJourneyDocuments(JourneyReleasePlacementDocument.self, from: release.descriptor.placements) else { return .unknown }
+        if let placementId, !offer.placementIds.contains(placementId) { return .unknown }
+        return await JourneyOfferAccess.evaluate(
+            placementIds: placementId.map { [$0] } ?? offer.placementIds,
+            products: products,
+            placements: placements,
+            ownedStoreProductIds: await storeEntitlements(),
+            featureAccess: offerFeatureAccess
+        )
     }
 
     private func presentationReservation(
@@ -2317,6 +2287,27 @@ private extension JourneyService {
                         )
                         return
                     }
+                    if let offer = leg.offers.first(where: { $0.screenId == screenId }) {
+                        let decision = await offerDecision(offer, release: release)
+                        guard executionFence.isCurrent(executionFenceToken),
+                              await isCurrentIdentity(identityFence.token, journal: journal) else {
+                                await finishAfterAuthorityLoss(run, leg: leg, journal: journal, executionFenceToken: executionFenceToken)
+                                return
+                            }
+                        if decision != .eligible {
+                            do {
+                                try await coordinator.commit(.init(
+                                    stepId: decision == .alreadyEntitled ? offer.alreadyEntitledStepId : offer.unknownStepId,
+                                    context: run.context,
+                                    experimentExposure: nil
+                                ))
+                            } catch {
+                                LogWarning("JourneyService: failed to persist offer alternative: \(error)")
+                                return
+                            }
+                            continue
+                        }
+                    }
                     do {
                         guard let admission = journalCommitAdmission(
                             journal: journal,
@@ -2586,6 +2577,37 @@ private extension JourneyService {
                                 executionFenceToken: executionFenceToken
                             )
                             return
+                        }
+                        if let offer = JourneyOfferAccess.offer(forPurchaseStep: command.step.id, in: leg) {
+                            let decision = await offerDecision(offer, release: release, placementId: placementId)
+                            guard executionFence.isCurrent(executionFenceToken),
+                                  await isCurrentIdentity(identityFence.token, journal: journal) else {
+                                await finishAfterAuthorityLoss(run, leg: leg, journal: journal, executionFenceToken: executionFenceToken)
+                                return
+                            }
+                            if decision != .eligible {
+                                do {
+                                    try await coordinator.commit(.init(
+                                        stepId: decision == .alreadyEntitled ? offer.alreadyEntitledStepId : offer.unknownStepId,
+                                        context: run.context,
+                                        experimentExposure: nil
+                                    ))
+                                } catch {
+                                    LogWarning("JourneyService: failed to persist checkout alternative: \(error)")
+                                    return
+                                }
+                                continue
+                            }
+                        } else {
+                            let placements = try? decodeJourneyDocuments(JourneyReleasePlacementDocument.self, from: release.descriptor.placements)
+                            let products = try? decodeJourneyDocuments(JourneyReleaseProductDocument.self, from: release.descriptor.products)
+                            let productId = placements?.first(where: { $0.id == placementId })?.productId
+                            guard products?.first(where: { $0.id == productId })?.type == "consumable" else {
+                                await finish(run, outcome: "abandoned", leg: leg, journal: journal,
+                                    dismissPresentation: dismissPresentationOnCompletion,
+                                    executionFenceToken: executionFenceToken)
+                                return
+                            }
                         }
                         pendingPresentationPurchasePlacements[run.id] =
                             placementId

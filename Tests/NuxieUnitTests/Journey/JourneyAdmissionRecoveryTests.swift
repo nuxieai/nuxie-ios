@@ -38,7 +38,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let snapshot = replacing(
             try await authenticatedSnapshot(fixture),
-            reentry: .init(type: .everyTime, windowSeconds: nil)
+            reentry: .init(type: .everyMatch, window: nil)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -95,7 +95,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let snapshot = replacing(
             try await authenticatedSnapshot(fixture),
-            reentry: .init(type: .everyTime, windowSeconds: nil)
+            reentry: .init(type: .everyMatch, window: nil)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -302,7 +302,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
                 member: nil,
                 condition: nil
             ),
-            reentry: .init(type: .everyTime, windowSeconds: nil),
+            reentry: .init(type: .everyMatch, window: nil),
             inputs: .init(eventFields: [eventField], responseFields: []),
             completionOutputs: [
                 "continue": .init(
@@ -383,7 +383,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
                 member: nil,
                 condition: nil
             ),
-            reentry: .init(type: .everyTime, windowSeconds: nil)
+            reentry: .init(type: .everyMatch, window: nil)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -480,16 +480,52 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         XCTAssertEqual(accessCount, 2)
     }
 
-    func testEntitlementGateSuppressesAProductWhoseFullGrantIsPresent() async throws {
+    func testOfferAdmissionSelectsExplicitAlternativesBeforeShowingAPaywall() async throws {
+        for decision in ["owned", "unknown", "eligible"] {
+            let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+            let original = try await authenticatedRenderedSnapshot(fixture)
+            let leg = try XCTUnwrap(original.releasesByDigest.values.first).descriptor.leg
+            let snapshot = replacing(
+                original,
+                offers: [.init(screenId: "screen_welcome", placementIds: ["golden:monthly"],
+                               alreadyEntitledStepId: "owned", unknownStepId: "unknown")],
+                products: [releaseProductDocument(id: "monthly", storeProductId: "com.example.pro", featureIds: ["premium"])],
+                steps: leg.steps + [
+                    .init(kind: .action, id: "owned", action: ["type": .string("send_event"), "eventName": .string("offer_owned")], outlets: ["next": "owned_done"], outcome: nil),
+                    .init(kind: .action, id: "unknown", action: ["type": .string("send_event"), "eventName": .string("offer_unknown")], outlets: ["next": "unknown_done"], outcome: nil),
+                    .init(kind: .complete, id: "owned_done", action: nil, outlets: nil, outcome: "owned"),
+                    .init(kind: .complete, id: "unknown_done", action: nil, outlets: nil, outcome: "unknown"),
+                ],
+                routes: leg.routes + [
+                    .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: Journey.Offer.alreadyEntitledEvent, entryStepId: "owned"),
+                    .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: Journey.Offer.accessUnknownEvent, entryStepId: "unknown"),
+                ]
+            )
+            let context = try await makeRenderedJourneyTestContext(snapshot: snapshot, featureAccess: { _ in
+                switch decision {
+                case "owned": return FeatureAccess(allowed: true, unlimited: true, balance: nil, type: .boolean)
+                case "eligible": return .notFound
+                default: return nil
+                }
+            })
+            defer { removeTemporaryDirectoryIfPresent(context.directory) }
+            await context.service.profileDidCommit(snapshot, distinctId: "customer")
+            let request = await MainActor.run { context.presenter.request }
+            if decision == "eligible" {
+                XCTAssertEqual(request?.screenId, "screen_welcome")
+            } else {
+                XCTAssertNil(request, "An ineligible offer must not become visible")
+                let checkmark = try await context.journal.checkmark(experienceId: snapshot.profile.armedLegs[0].reference.experienceId)
+                XCTAssertEqual(checkmark?.outcome, decision)
+            }
+        }
+    }
+
+    func testOwnedAccessDoesNotSuppressTheEntireJourney() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
-        let snapshot = replacing(
-            try await authenticatedSnapshot(fixture),
-            entitlementGate: .init(enabled: true, products: [
-                .init(productId: "pro", featureIds: ["premium"])
-            ])
-        )
+        let snapshot = try await authenticatedSnapshot(fixture)
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
         let events = MockEventLog()
@@ -498,71 +534,20 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             identity: identity,
             events: events,
             directory: directory,
-            featureAccess: { featureId in
-                guard featureId == "premium" else { return nil }
-                return FeatureAccess(
-                    allowed: true,
-                    unlimited: true,
-                    balance: nil,
-                    type: .boolean
-                )
+            featureAccess: { _ in
+                FeatureAccess(allowed: true, unlimited: true, balance: nil, type: .boolean)
+            },
+            storeEntitlements: {
+                XCTFail("Admission must not read StoreKit to suppress a whole Journey")
+                return ["com.example.pro"]
             }
         )
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
 
-        XCTAssertTrue(events.routedEvents.isEmpty)
-    }
-
-    func testEntitlementGateWaitsForStoreKitAndSuppressesAnOwnedGrant() async throws {
-        let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let fixture = try JourneyPlaneProfileTestFixture.load()
-        let snapshot = replacing(
-            try await authenticatedSnapshot(fixture),
-            entitlementGate: .init(enabled: true, products: [
-                .init(productId: "pro", featureIds: ["premium"])
-            ]),
-            products: [
-                releaseProductDocument(
-                    id: "pro",
-                    storeProductId: "com.example.pro",
-                    featureIds: ["premium"]
-                ),
-                releaseProductDocument(
-                    id: "pro-plus",
-                    storeProductId: "com.example.pro-plus",
-                    featureIds: ["premium", "plus"]
-                ),
-            ]
-        )
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let lookupGate = JourneyScreenCommitGate()
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            storeEntitlements: {
-                await lookupGate.suspend()
-                return ["com.example.pro-plus"]
-            }
-        )
-
-        await service.initialize()
-        let commit = Task {
-            await service.profileDidCommit(snapshot, distinctId: "customer")
-        }
-        await lookupGate.waitUntilEntered()
-        XCTAssertTrue(events.routedEvents.isEmpty)
-
-        await lookupGate.release()
-        await commit.value
-
-        XCTAssertTrue(events.routedEvents.isEmpty)
+        XCTAssertTrue(events.routedEvents.contains { $0.name == JourneyEvents.journeyStarted })
+        XCTAssertTrue(events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
     }
 
     func testProfileWithdrawalKeepsAParkedRunAcrossRelaunchUntilItsPinnedContinuationCompletes() async throws {
@@ -965,7 +950,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
                 delivery: snapshot.profile.delivery,
                 assignments: snapshot.profile.facts.assignments
             ),
-            reentry: .init(type: .oneTime, windowSeconds: nil),
+            reentry: .init(type: .oneTime, window: nil),
             entryStepId: "wait",
             at: Date(timeIntervalSince1970: 1_000)
         )
@@ -1054,7 +1039,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
                 delivery: snapshot.profile.delivery,
                 assignments: snapshot.profile.facts.assignments
             ),
-            reentry: .init(type: .oneTime, windowSeconds: nil),
+            reentry: .init(type: .oneTime, window: nil),
             entryStepId: "wait",
             at: Date(timeIntervalSince1970: 1_000)
         )

@@ -118,7 +118,6 @@ final class ForwardedActivityEncodingTests: XCTestCase {
     "experienceErrored": .experienceErrored(ref, message: "failed"),
     "journeyStarted": .journeyStarted(ref, legId: "leg-1", generation: 2),
     "journeyCompleted": .journeyCompleted(ref, legId: "leg-1", generation: 2, outcome: "continue"),
-    "milestoneReached": .milestoneReached(ref, milestoneId: "milestone-1"),
     "purchaseCompleted": .purchaseCompleted(purchase),
     "purchaseFailed": .purchaseFailed(unresolvedPurchase, message: "failed"),
     "purchaseCancelled": .purchaseCancelled(purchase),

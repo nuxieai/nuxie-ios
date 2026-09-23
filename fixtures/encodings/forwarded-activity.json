@@ -55,16 +55,6 @@
       ]
     },
     {
-      "case": "milestoneReached",
-      "wireName": "milestone_reached",
-      "propertyKeys": [
-        "experience_id",
-        "experience_version",
-        "journey_id",
-        "milestone_id"
-      ]
-    },
-    {
       "case": "purchaseCompleted",
       "wireName": "purchase_completed",
       "propertyKeys": [

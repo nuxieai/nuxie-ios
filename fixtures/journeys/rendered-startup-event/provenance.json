@@ -1,8 +1,12 @@
 {
   "publisherSourceCommit": "12ed2fa1480c5cb50c18c3479c2d897bb13f16c7",
-  "descriptorSha256": "7049e2377c7ddc9af380dacc63f24c595bcae7f4576b5abcebafbeedbd9d2799",
+  "descriptorSha256": "aef74d242c339434f5cf6f47ec2163e07244c54c0bb0c4243163de51458dc31b",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
   "qualification": "Test-authored event-entry signed Journey; reuses unchanged publisher-generated render and screen-action artifacts. Not a live publisher release qualification.",
   "sourceFixture": "journeys/rendered-screen-control",
-  "sourceDescriptorSha256": "67d534e89101a23b180caf30bbf23836a73a77a5e9d3bfd34b1789b00cbd93af"
+  "sourceDescriptorSha256": "67d534e89101a23b180caf30bbf23836a73a77a5e9d3bfd34b1789b00cbd93af",
+  "descriptorRefresh": {
+    "reason": "Explicit Experience policy and offer contract; published render and asset bytes unchanged",
+    "previousDescriptorSha256": "7049e2377c7ddc9af380dacc63f24c595bcae7f4576b5abcebafbeedbd9d2799"
+  }
 }
