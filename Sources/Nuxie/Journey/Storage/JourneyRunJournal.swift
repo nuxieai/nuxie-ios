@@ -149,7 +149,7 @@ enum JourneyJournalError {
 /// journal reads, migrates, or deletes event history or commerce evidence.
 struct JourneyRunJournal {
     fileprivate struct Snapshot {
-        var schemaVersion = "nuxie.journey-journal.v1"
+        var schemaVersion = "nuxie.journey-journal.v2"
         var runs: [String: JourneyRun] = [:]
         var checklist: [String: JourneyCheckmark] = [:]
         var stateArmReceipts: Set<JourneyStateArmReceipt> = []
@@ -177,7 +177,7 @@ struct JourneyRunJournal {
     ) throws {
         self.distinctId = distinctId
         self.beforePersist = beforePersist
-        let root = directory.appendingPathComponent("journey-journal-v1", isDirectory: true)
+        let root = directory.appendingPathComponent("journey-journal-v2", isDirectory: true)
         self.root = root
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let digest = storageScope.customerDigest(distinctId: distinctId)
@@ -1042,7 +1042,7 @@ struct JourneyRunJournal {
         guard FileManager.default.fileExists(atPath: file.path) else { return .init() }
         let bytes = try BoundedFileIO.read(at: file, maximumBytes: maximumBytes).data
         let state = try ExactJSONCodec.decode(Snapshot.self, from: bytes)
-        guard state.schemaVersion == "nuxie.journey-journal.v1" else { throw JourneyJournalError.unsupportedVersion }
+        guard state.schemaVersion == "nuxie.journey-journal.v2" else { throw JourneyJournalError.unsupportedVersion }
         return state
     }
 

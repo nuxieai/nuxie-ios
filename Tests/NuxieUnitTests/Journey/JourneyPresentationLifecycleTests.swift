@@ -1327,6 +1327,75 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         }
     }
 
+    func testBackNavigationRechecksOfferAccessBeforeRevealingTheTarget() async throws {
+        for decision in ["owned", "unknown", "eligible"] {
+            let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+            let base = try await authenticatedRenderedSnapshot(fixture)
+            let leg = try XCTUnwrap(base.releasesByDigest.values.first).descriptor.leg
+            let snapshot = replacing(
+                base,
+                offers: [.init(screenId: "screen_welcome", placementIds: ["golden:monthly"],
+                               alreadyEntitledStepId: "owned", unknownStepId: "unknown")],
+                products: [releaseProductDocument(id: "monthly", storeProductId: "com.example.pro", featureIds: ["premium"])],
+                steps: leg.steps + [
+                    .init(kind: .action, id: "back", action: ["type": .string("back")], outlets: [:], outcome: nil),
+                    .init(kind: .complete, id: "owned", action: nil, outlets: nil, outcome: "owned"),
+                    .init(kind: .complete, id: "unknown", action: nil, outlets: nil, outcome: "unknown"),
+                ],
+                routes: leg.routes + [
+                    .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: "go_back", entryStepId: "back"),
+                    .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: Journey.Offer.alreadyEntitledEvent, entryStepId: "owned"),
+                    .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: Journey.Offer.accessUnknownEvent, entryStepId: "unknown"),
+                ]
+            )
+            // The first check admits the offer. Access changes while the user
+            // has a presentation open, before a back action targets that offer.
+            let access = SequencedFeatureAccess(decision == "unknown" ? [false] : [false, decision == "owned"])
+            let context = try await makeRenderedJourneyTestContext(snapshot: snapshot,
+                featureAccess: { _ in await access.next() })
+            defer { removeTemporaryDirectoryIfPresent(context.directory) }
+            await context.service.profileDidCommit(snapshot, distinctId: "customer")
+            let presented = await MainActor.run { context.presenter.request }
+            let request = try XCTUnwrap(presented)
+            let initialNavigations = await MainActor.run {
+                context.presenter.actionResult = .navigate(screenId: "screen_welcome")
+                return context.presenter.navigationScreenIds.count
+            }
+            let accepted = await request.onEmissionBatch(presentationBatch(
+                request: request,
+                invocationId: "back-offer-\(decision)",
+                emissions: [.init(id: "00000000-0000-7000-8000-000000000901", sequence: 0,
+                    occurredAt: "2026-08-29T12:00:00Z", name: "go_back", payload: [:])]
+            ))
+            XCTAssertTrue(accepted)
+            for _ in 0..<200 {
+                let settled = await MainActor.run {
+                    context.presenter.cancelledBackNavigations > 0 ||
+                        context.presenter.navigationScreenIds.count > initialNavigations
+                }
+                if settled { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let navigations = await MainActor.run { context.presenter.navigationScreenIds.count }
+            let cancellations = await MainActor.run { context.presenter.cancelledBackNavigations }
+            let checks = await access.readCount()
+            XCTAssertEqual(checks, 2, decision)
+            XCTAssertEqual(navigations - initialNavigations, decision == "eligible" ? 1 : 0, decision)
+            XCTAssertEqual(cancellations, decision == "eligible" ? 0 : 1, decision)
+            if decision != "eligible" {
+                // Completed runs may already be retired after their reports
+                // are queued. The durable checkmark owns the final outcome.
+                let experienceId = snapshot.profile.armedLegs[0].reference.experienceId
+                for _ in 0..<200 {
+                    if try await context.journal.checkmark(experienceId: experienceId)?.outcome == decision { break }
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                let checkmark = try await context.journal.checkmark(experienceId: experienceId)
+                XCTAssertEqual(checkmark?.outcome, decision)
+            }
+        }
+    }
+
     private func addingPurchaseOffer(_ snapshot: JourneyProfileCatalog.Snapshot) throws -> JourneyProfileCatalog.Snapshot {
         let leg = try XCTUnwrap(snapshot.releasesByDigest.values.first).descriptor.leg
         return replacing(

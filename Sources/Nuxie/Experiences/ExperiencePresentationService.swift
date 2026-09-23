@@ -492,6 +492,11 @@ final class ExperiencePresentationService {
         }
     }
 
+    func cancelJourneyBackNavigation(owner: JourneyPresentationOwner) {
+        guard ownsJourneyPresentation(owner: owner) else { return }
+        (currentRuntimeDelegate as? JourneyRuntimeDelegate)?.cancelBackNavigation()
+    }
+
     func resolveJourneyPresentationAction(
         owner: JourneyPresentationOwner,
         action: [String: JourneyReleaseJSONValue],
@@ -569,19 +574,9 @@ final class ExperiencePresentationService {
                   let target = delegate.prepareBackNavigation(steps: steps) else {
                 return .failed
             }
-            switch await controller.navigateAndWaitResult(
-                to: target,
-                transition: journeyFoundationValue(action["transition"])
-            ) {
-            case .navigated, .alreadyActive:
-                result = .handled
-            case .productsUnavailable:
-                delegate.cancelBackNavigation()
-                result = .productsUnavailable
-            case .failed:
-                delegate.cancelBackNavigation()
-                result = .failed
-            }
+            // Resolve history first; JourneyService checks the target offer
+            // before asking the presenter to reveal it.
+            result = .navigate(screenId: target)
 
         case .video:
             guard let command = try? JourneyVideoAction(action: action),

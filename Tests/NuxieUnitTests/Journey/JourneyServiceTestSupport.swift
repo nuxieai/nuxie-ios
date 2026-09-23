@@ -1490,6 +1490,7 @@ final class RecordingJourneyPresenter {
     var result = JourneyPresentationResult.shown
     var automaticallyRevealsShownPresentation = true
     var navigationResult = JourneyPresentationNavigationResult.navigated
+    private(set) var cancelledBackNavigations = 0
     var actionResult = JourneyPresentationActionResult.handled
     var resolvedPurchasePlacementId: String?
     var presentHandler:
@@ -1572,6 +1573,11 @@ final class RecordingJourneyPresenter {
             return .declined
         }
         return navigationResult
+    }
+
+    func cancelJourneyBackNavigation(owner: JourneyPresentationOwner) {
+        guard ownsJourneyPresentation(owner: owner) else { return }
+        cancelledBackNavigations += 1
     }
 
     func resolveJourneyPresentationAction(

@@ -6,6 +6,28 @@ import XCTest
 #endif
 
 final class JourneyRunJournalTests: XCTestCase {
+    func testPolicyCutIgnoresRetiredJournalWithoutTouchingPurchaseEvidence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let retired = directory.appendingPathComponent("journey-journal-v1", isDirectory: true)
+        try FileManager.default.createDirectory(at: retired, withIntermediateDirectories: true)
+        let oldFile = retired.appendingPathComponent(
+            "\(JourneyStorageScope.testFixture.customerDigest(distinctId: "customer")).json"
+        )
+        // Malformed retired state proves it is never decoded or migrated.
+        let retiredBytes = Data("retired milestone journal".utf8)
+        try retiredBytes.write(to: oldFile)
+        let commerceFile = directory.appendingPathComponent("purchase-evidence-sentinel")
+        let commerceBytes = Data("verified purchase evidence".utf8)
+        try commerceBytes.write(to: commerceFile)
+
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let runs = try await journal.runs()
+        XCTAssertTrue(runs.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: oldFile), retiredBytes)
+        XCTAssertEqual(try Data(contentsOf: commerceFile), commerceBytes)
+    }
+
     func testCustomerPropertiesSurviveJournalReopening() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -217,7 +239,7 @@ final class JourneyRunJournalTests: XCTestCase {
             distinctId: "customer-a"
         )
         let pinRoot = directory
-            .appendingPathComponent("journey-journal-v1", isDirectory: true)
+            .appendingPathComponent("journey-journal-v2", isDirectory: true)
             .appendingPathComponent("release-pins", isDirectory: true)
         let firstPinDirectory = pinRoot.appendingPathComponent(
             JourneyStorageScope.testFixture.customerDigest(
@@ -851,7 +873,7 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertTrue(runs.isEmpty)
         XCTAssertNil(retainedRelease)
         let pinDirectory = directory
-            .appendingPathComponent("journey-journal-v1/release-pins")
+            .appendingPathComponent("journey-journal-v2/release-pins")
             .appendingPathComponent(
                 JourneyStorageScope.testFixture.customerDigest(
                     distinctId: "customer"
@@ -1321,7 +1343,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
 
         let pinFile = directory
-            .appendingPathComponent("journey-journal-v1", isDirectory: true)
+            .appendingPathComponent("journey-journal-v2", isDirectory: true)
             .appendingPathComponent("release-pins", isDirectory: true)
             .appendingPathComponent(
                 JourneyStorageScope.testFixture.customerDigest(
@@ -1725,7 +1747,7 @@ final class JourneyRunJournalTests: XCTestCase {
             distinctId: "customer"
         )
         let customerPins = directory
-            .appendingPathComponent("journey-journal-v1", isDirectory: true)
+            .appendingPathComponent("journey-journal-v2", isDirectory: true)
             .appendingPathComponent("release-pins", isDirectory: true)
             .appendingPathComponent(customerDigest, isDirectory: true)
         try FileManager.default.removeItem(at: customerPins)
@@ -1760,7 +1782,7 @@ final class JourneyRunJournalTests: XCTestCase {
             distinctId: "customer"
         )
         let customerPins = directory
-            .appendingPathComponent("journey-journal-v1", isDirectory: true)
+            .appendingPathComponent("journey-journal-v2", isDirectory: true)
             .appendingPathComponent("release-pins", isDirectory: true)
             .appendingPathComponent(customerDigest, isDirectory: true)
         let recoveryJournal = try JourneyRunJournal(

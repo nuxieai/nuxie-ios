@@ -150,6 +150,7 @@ struct JourneyPresentationPermissionEvent: Equatable, Sendable {
 }
 
 enum JourneyPresentationActionResult: Equatable, Sendable {
+    case navigate(screenId: String)
     case advanced(outlet: String)
     case permissionResolved(
         outlet: String,
@@ -195,6 +196,9 @@ protocol JourneyPresenting: AnyObject, Sendable {
         screenId: String,
         transition: JourneyReleaseJSONValue?
     ) async -> JourneyPresentationNavigationResult
+
+    @MainActor
+    func cancelJourneyBackNavigation(owner: JourneyPresentationOwner)
 
     @MainActor
     func resolveJourneyPresentationAction(

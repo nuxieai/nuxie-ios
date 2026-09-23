@@ -814,8 +814,13 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     service.journeyProfileRefreshDidComplete()
 
                     let actionResult = await action.value
-                    expect(actionResult).to(equal(.handled))
+                    expect(actionResult).to(equal(.navigate(screenId: screenID)))
                     expect(completed.isSignaled).to(beTrue())
+                    expect(controller.navigationScreenIds).to(beEmpty())
+                    let navigation = await service.navigateJourneyPresentation(
+                        owner: request.owner, screenId: screenID, transition: nil
+                    )
+                    expect(navigation).to(equal(.navigated))
                     expect(controller.navigationScreenIds).to(equal([screenID]))
                     expect(service.isExperiencePresented).to(beTrue())
                     await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
