@@ -132,6 +132,45 @@ final class FeatureServiceTests: AsyncSpec {
                 storageURLs.removeAll()
             }
 
+            it("keeps unresolved Journey admission local and resolves an unknown offer through the feature service") {
+                await featureCheck.setResponse(FeatureCheckResult(
+                    customerId: "customer-123", featureId: "premium", requiredBalance: 1,
+                    code: "feature_found", allowed: false, unlimited: false, balance: nil,
+                    type: .boolean, preview: nil
+                ))
+                let before = await featureService.getForJourney(featureId: "premium", resolveUnknown: false)
+                expect(before).to(beNil())
+                let localRequests = await featureCheck.recordedRequestCount()
+                expect(localRequests).to(equal(0))
+
+                let resolved = await featureService.getForJourney(featureId: "premium", resolveUnknown: true)
+                expect(resolved?.allowed).to(beFalse())
+                let resolvedRequests = await featureCheck.recordedRequestCount()
+                expect(resolvedRequests).to(equal(1))
+            }
+
+            it("uses existing optimistic evidence for Journey access without replacing server authority") {
+                let info = featureInfo!
+                await MainActor.run {
+                    info.beginOptimisticProjectionPublication(epoch: UUID(), distinctId: "customer-123")
+                    info.replaceOptimisticProjection(
+                        evidence: [.init(transactionId: "purchase", distinctId: "customer-123", backendSynced: false, revoked: false)],
+                        descriptorAllowances: ["purchase": [.init(featureId: "premium", kind: .boolean, unlimited: false, allowance: nil)]],
+                        distinctId: "customer-123"
+                    )
+                }
+                let access = await featureService.getForJourney(featureId: "premium", resolveUnknown: true)
+                expect(access?.allowed).to(beTrue())
+                let serverCache = await featureService.getCached(featureId: "premium", entityId: nil)
+                expect(serverCache).to(beNil())
+                let requests = await featureCheck.recordedRequestCount()
+                expect(requests).to(equal(0))
+
+                mockIdentityService.setDistinctId("customer-other")
+                let otherCustomer = await featureService.getForJourney(featureId: "premium", resolveUnknown: false)
+                expect(otherCustomer).to(beNil())
+            }
+
             for aggregateUnlimited in [false, true] {
                 it("queries entity authority when only aggregate profile authority is available (unlimited=\(aggregateUnlimited))") {
                     mockProfileService.setProfileResponse(TestJourneyProfile.response(features: [

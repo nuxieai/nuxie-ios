@@ -143,6 +143,17 @@ public final class FeatureInfo: ObservableObject {
         all[featureId]
     }
 
+    /// Local purchase evidence can answer offer eligibility before profile publication is ready.
+    internal func optimisticAccess(_ featureId: String, distinctId: String) -> FeatureAccess? {
+        guard distinctId == projectionDistinctId,
+              let overlay = OptimisticEntitlementProjection.derive(
+                evidence: projectionEvidence,
+                descriptorAllowances: projectionDescriptorAllowances,
+                distinctId: distinctId
+              )?[featureId] else { return nil }
+        return wideningJoin(authoritative: nil, overlay: overlay)
+    }
+
     /// Get the balance for a metered feature
     /// - Parameter featureId: The feature identifier
     /// - Returns: Current balance, nil if feature not found or is boolean type

@@ -192,8 +192,6 @@ struct JourneyEffectDispatcher {
             return await sendEvent(request)
         case .updateCustomer:
             return await updateCustomer(request)
-        case .milestone:
-            return await milestone(request)
         case .submitResponse:
             return .outlet("next")
         case .appAction:
@@ -270,27 +268,6 @@ struct JourneyEffectDispatcher {
             request: request
         ) else { return .failed }
         return .outlet("next")
-    }
-
-    private func milestone(
-        _ request: JourneyDispatchRequest
-    ) async -> JourneyDispatchResult {
-        guard let action = decode(Milestone.self, request.action) else { return .failed }
-        var properties = legAttribution(request)
-        properties["milestone_id"] = action.milestoneId
-        guard let _ = await events.captureAndRouteSystemEvent(
-                .init(
-                    name: JourneyEvents.journeyMilestone,
-                    properties: properties,
-                    eventId: request.effectId,
-                    distinctId: request.distinctId
-                ),
-                admission: eventCommitAdmission(request)
-              ),
-              await requestIsCurrent(request) else {
-            return .failed
-        }
-        return await requestIsCurrent(request) ? .outlet("next") : .failed
     }
 
     private func appAction(
@@ -469,10 +446,6 @@ private struct SendEvent: Decodable {
 
 private struct UpdateCustomer: Decodable {
     let attributes: ExactJSONObject<JourneyValue>
-}
-
-private struct Milestone: Decodable {
-    let milestoneId: String
 }
 
 private struct AppActionEffect: Decodable {

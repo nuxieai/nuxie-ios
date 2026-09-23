@@ -1,12 +1,11 @@
 {
   "contract": "published-native-text-input-response",
   "publisherSourceCommit": "912d65ed1ad26913b8e6406ddced780e5f30bd17",
-  "descriptorSha256": "cc69b172a5a38742e013e0bfe960d8f982f92537c3a2795e386d03a38ec46900",
+  "descriptorSha256": "c7e83621a22bfdd307373726686346513480f94764cbd874189ae2e28e4cd63a",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
   "qualification": "Android API 36: real runtime glyph changes, presentation navigation and durable Journey responses. Additional platform qualification is tracked in the parent repository.",
   "descriptorRefresh": {
-    "script": "scripts/refresh-signed-fixtures.mjs",
-    "reason": "Explicit CDN font source declarations; published render and asset bytes unchanged",
-    "previousDescriptorSha256": "3aeaa213f51b8878d51981ebc2393703c1e9b7d76d3abfcb2bbfb2eec486211b"
+    "reason": "Explicit Experience policy and offer contract; published render and asset bytes unchanged",
+    "previousDescriptorSha256": "cc69b172a5a38742e013e0bfe960d8f982f92537c3a2795e386d03a38ec46900"
   }
 }

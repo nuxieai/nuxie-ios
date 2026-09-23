@@ -23,7 +23,6 @@ enum JourneyActionType: String, Codable, Sendable {
 
     case sendEvent = "send_event"
     case updateCustomer = "update_customer"
-    case milestone
     case submitResponse = "submit_response"
     case appAction = "app_action"
     case exit

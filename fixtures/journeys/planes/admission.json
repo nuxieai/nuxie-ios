@@ -212,19 +212,30 @@
       "descriptor": {}
     },
     {
-      "name": "zero reentry window",
+      "name": "zero frequency window",
       "valid": false,
       "entry": "entry",
       "leg": {
-        "reentry": {
-          "type": "once_per_window",
-          "windowSeconds": 0
+        "policy": {
+          "entry": {
+            "trigger": {
+              "type": "api"
+            },
+            "frequency": {
+              "type": "once_per_window",
+              "window": {
+                "amount": 0,
+                "unit": "minute"
+              }
+            }
+          },
+          "exitWhenAny": []
         }
       },
       "descriptor": {}
     },
     {
-      "name": "boolean entitlement gate",
+      "name": "retired entitlement gate rejected",
       "valid": false,
       "entry": "entry",
       "leg": {
@@ -618,12 +629,12 @@
       "leg": {
         "outputs": [
           {
-            "key": "é",
+            "key": "\u00e9",
             "type": "boolean",
             "required": false
           },
           {
-            "key": "é",
+            "key": "e\u0301",
             "type": "boolean",
             "required": false
           }
@@ -633,12 +644,12 @@
             "eventFields": [],
             "responseFields": [
               {
-                "key": "é",
+                "key": "\u00e9",
                 "type": "boolean",
                 "required": false
               },
               {
-                "key": "é",
+                "key": "e\u0301",
                 "type": "boolean",
                 "required": false
               }
@@ -663,12 +674,12 @@
                 {
                   "type": "User",
                   "op": "is_set",
-                  "key": "é"
+                  "key": "e\u0301"
                 },
                 {
                   "type": "User",
                   "op": "is_set",
-                  "key": "é"
+                  "key": "\u00e9"
                 }
               ]
             }
@@ -676,8 +687,8 @@
         },
         "facts": {
           "propertyKeys": [
-            "é",
-            "é"
+            "e\u0301",
+            "\u00e9"
           ],
           "segmentIds": [],
           "experimentIds": []
@@ -700,12 +711,12 @@
                 {
                   "type": "User",
                   "op": "is_set",
-                  "key": "é"
+                  "key": "e\u0301"
                 },
                 {
                   "type": "User",
                   "op": "is_set",
-                  "key": "é"
+                  "key": "\u00e9"
                 }
               ]
             }
@@ -713,7 +724,7 @@
         },
         "facts": {
           "propertyKeys": [
-            "é"
+            "\u00e9"
           ],
           "segmentIds": [],
           "experimentIds": []

@@ -13,7 +13,7 @@ actor JourneyProfileCatalog {
         /// policy differs, so it is only authoritative when no enrollment arm
         /// for that experience is present. The remaining identity fields make
         /// malformed but authenticated ties deterministic.
-        var liveReentryPolicies: [String: Journey.Reentry] {
+        var liveReentryPolicies: [String: Journey.Frequency] {
             var selected: [String: ReentryCandidate] = [:]
             for arm in profile.armedLegs {
                 guard let release = releasesByDigest[
@@ -41,7 +41,7 @@ actor JourneyProfileCatalog {
             let versionId: String
             let buildId: String
             let descriptorSHA256: String
-            let reentry: Journey.Reentry
+            let reentry: Journey.Frequency
 
             init(
                 isEnrollment: Bool,
@@ -55,7 +55,7 @@ actor JourneyProfileCatalog {
                 versionId = identity.experienceVersionId
                 buildId = identity.buildId
                 descriptorSHA256 = release.descriptorSHA256
-                reentry = release.descriptor.leg.reentry
+                reentry = release.descriptor.leg.policy.entry.frequency
             }
 
             func outranks(_ other: Self) -> Bool {

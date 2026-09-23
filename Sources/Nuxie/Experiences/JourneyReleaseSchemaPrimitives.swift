@@ -534,7 +534,6 @@ enum JourneyReleaseSchemaPrimitives {
         case "experiment": required = ["type", "experimentId", "name", "variants"]; optional = ["description", "hypothesis"]
         case "send_event": required = ["type", "eventName"]; optional = ["payload"]
         case "update_customer": required = ["type", "attributes"]; optional = []
-        case "milestone": required = ["type", "milestoneId"]; optional = []
         case "submit_response": required = ["type"]; optional = []
         case "purchase": required = ["type", "placementId"]; optional = ["onCompleted", "onFailed", "onCancelled"]
         case "restore": required = ["type", "onRestored", "onNoPurchases", "onFailed"]; optional = []
@@ -548,7 +547,7 @@ enum JourneyReleaseSchemaPrimitives {
         default: try invalid("\(path).type")
         }
         _ = try object(action, required: required, optional: optional, path: path)
-        for field in ["screenId", "eventName", "experimentId", "milestoneId", "permissionType", "accountRef", "toolKey", "featureId", "nodeId"] where action[field] != nil {
+        for field in ["screenId", "eventName", "experimentId", "permissionType", "accountRef", "toolKey", "featureId", "nodeId"] where action[field] != nil {
             try identifier(action[field], path: "\(path).\(field)")
         }
         if type == "navigate", let screenID = action["screenId"] as? String, !screenIDs.contains(screenID) {

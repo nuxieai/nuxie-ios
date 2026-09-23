@@ -208,10 +208,10 @@ final class NuxieCore: @unchecked Sendable {
         // The publishable key is rotatable and must not address durable runs.
         storageScope: nil,
         featureAccess: { featureId in
-          await builtFeatureService.get().getCached(
-            featureId: featureId,
-            entityId: nil
-          )
+          await builtFeatureService.get().getForJourney(featureId: featureId, resolveUnknown: false)
+        },
+        offerFeatureAccess: { featureId in
+          await builtFeatureService.get().getForJourney(featureId: featureId, resolveUnknown: true)
         },
         storeEntitlements: {
           guard !configuration.testStoreEnabled else { return [] }

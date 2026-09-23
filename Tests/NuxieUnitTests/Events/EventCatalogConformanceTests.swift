@@ -74,7 +74,6 @@ $feature_used	featureCommand|storePreparedEventInHistory	governed|governed	/even
 $identify	processCapture	governed	batch	true	true
 $journey_leg_started	captureStableSystemEvent	governed	batch	true	true
 $journey_leg_completed	captureStableSystemEvent	governed	batch	true	true
-$journey_milestone	captureStableSystemEvent	governed	batch	true	true
 $notifications_denied	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
 $notifications_enabled	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
 $permission_denied	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
@@ -105,7 +104,6 @@ $tracking_denied	processCapture|captureStableSystemEvent	governed|governed	batch
         ("JourneyEvents.experimentExposure", JourneyEvents.experimentExposure),
         ("JourneyEvents.journeyStarted", JourneyEvents.journeyStarted),
         ("JourneyEvents.journeyCompleted", JourneyEvents.journeyCompleted),
-        ("JourneyEvents.journeyMilestone", JourneyEvents.journeyMilestone),
         ("SystemEventNames.appBackgrounded", SystemEventNames.appBackgrounded),
         ("SystemEventNames.appInstalled", SystemEventNames.appInstalled),
         ("SystemEventNames.appOpened", SystemEventNames.appOpened),
@@ -150,7 +148,6 @@ $tracking_denied	processCapture|captureStableSystemEvent	governed|governed	batch
         "$identify": "hidden: identity and PII event",
         "$journey_leg_started": "journeyStarted",
         "$journey_leg_completed": "journeyCompleted",
-        "$journey_milestone": "milestoneReached",
         "$notifications_denied": "permissionResolved",
         "$notifications_enabled": "permissionResolved",
         "$permission_denied": "permissionResolved",
@@ -286,17 +283,7 @@ $tracking_denied	processCapture|captureStableSystemEvent	governed|governed	batch
             XCTAssertEqual(completed.properties[property]?.required, true, property)
         }
 
-        let milestone = try XCTUnwrap(catalog[JourneyEvents.journeyMilestone])
-        for property in [
-            "journey_id",
-            "experience_id",
-            "experience_version_id",
-            "leg_id",
-            "leg_generation",
-            "milestone_id",
-        ] {
-            XCTAssertEqual(milestone.properties[property]?.required, true, property)
-        }
+
     }
 
     func testForwardingMatchesRevisionThreeCurationTableExactly() throws {

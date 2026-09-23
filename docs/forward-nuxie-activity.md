@@ -59,7 +59,6 @@ These fields do not change the flat activity name or properties.
 | `$experience_errored` | `experienceErrored` |
 | `$journey_leg_started` | `journeyStarted` |
 | `$journey_leg_completed` | `journeyCompleted` |
-| `$journey_milestone` | `milestoneReached` |
 | `$experiment_exposure` | `experimentExposure` |
 | `$purchase_completed` | `purchaseCompleted` |
 | `$purchase_failed` | `purchaseFailed` |

@@ -8,7 +8,7 @@ The SDK runs only the Journey release system. A profile supplies an authenticate
 
 A started run durably reports `$journey_leg_started`. It reports `$journey_leg_completed` before retiring the run, with its outcome and declared buffered outputs. Both reports use stable ids, so storage retries and process restarts cannot duplicate them. Report queue time is the local completion boundary; future continuation arrives as another armed release in a later profile.
 
-Answers produced by response controls stay in the Journey journal until completion. The controls themselves are renderer inputs and never enter EventLog. Screens and milestones emit ordinary observable facts carrying Journey and leg attribution.
+Answers produced by response controls stay in the Journey journal until completion. The controls themselves are renderer inputs and never enter EventLog. Screen telemetry and authored ordinary events carry Journey and leg attribution.
 
 ## Experiments
 

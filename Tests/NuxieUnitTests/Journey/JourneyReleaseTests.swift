@@ -375,6 +375,26 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    func testRejectsRetiredMilestoneActionsBeforeAdmission() throws {
+        XCTAssertNil(JourneyActionType(rawValue: "milestone"))
+        let fixture = try golden()
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        try JourneyReleaseSchemaValidator.validate(root)
+        var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+        var steps = try XCTUnwrap(leg["steps"] as? [[String: Any]])
+        let originalEntry = try XCTUnwrap(leg["entryStepId"] as? String)
+        steps.append(["kind": "action", "id": "evidence", "action": ["type": "send_event", "eventName": "completed"], "outlets": ["next": originalEntry]])
+        leg["entryStepId"] = "evidence"
+        leg["steps"] = steps
+        root["leg"] = leg
+        try JourneyReleaseSchemaValidator.validate(root)
+        steps[steps.count - 1]["action"] = ["type": "milestone", "milestoneId": "completed"]
+        leg["steps"] = steps
+        root["leg"] = leg
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
+    }
+
     func testRejectsReservedAuthoredEventNamesBeforeAdmission() throws {
         let fixture = try golden()
         let bytes = try XCTUnwrap(

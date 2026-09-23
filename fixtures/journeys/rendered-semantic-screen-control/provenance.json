@@ -1,6 +1,10 @@
 {
   "publisherSourceCommit": "db3c00f2bb2fa24e1e120ec6281153e69f5aa60d",
-  "descriptorSha256": "64c6c3f2a1df9622b0a64ded2ff15531b5ace03864d871856612073697d5fc9e",
+  "descriptorSha256": "2d125d6fc9ff78e79356b519706ea7faf0dd4cc345ca9d11aedda5cd64aa4a9b",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "qualification": "Test-authored signed Journey and screen-actions artifact around actual publisher-generated render bytes; not a full production publisher release qualification."
+  "qualification": "Test-authored signed Journey and screen-actions artifact around actual publisher-generated render bytes; not a full production publisher release qualification.",
+  "descriptorRefresh": {
+    "reason": "Explicit Experience policy and offer contract; published render and asset bytes unchanged",
+    "previousDescriptorSha256": "64c6c3f2a1df9622b0a64ded2ff15531b5ace03864d871856612073697d5fc9e"
+  }
 }

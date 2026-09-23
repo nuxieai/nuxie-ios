@@ -16,13 +16,12 @@ All three paths apply `beforeSend`. Returning `nil` is a terminal privacy decisi
 | --- | --- | --- |
 | `$journey_leg_started` | A Journey began an authenticated release leg. | stable |
 | `$journey_leg_completed` | The leg ended and queued its declared outputs and outcome. | stable |
-| `$journey_milestone` | The Journey reached an authored milestone. | stable |
 | `$experiment_exposure` | A selected experiment variant became visible. | stable |
 | `$screen_shown` | A Journey screen became visible. | stable |
 | `$screen_dismissed` | A Journey screen was dismissed or replaced. | stable |
 | `$products_unavailable` | Required live products could not be resolved before presentation. | stable |
 
-Leg lifecycle and milestone facts carry `journey_id`, `experience_id`, `experience_version_id`, `leg_id`, and `leg_generation`. A completion also carries `started_at`, `completed_at`, `outcome`, and the exact declared `outputs`. Experiment exposure carries the Journey, experience/version, leg identity, selected variant, holdout flag, and whether the selection came from the profile assignment or the authored fallback. Assignment alone never emits an exposure.
+Leg lifecycle facts carry `journey_id`, `experience_id`, `experience_version_id`, `leg_id`, and `leg_generation`. A completion also carries `started_at`, `completed_at`, `outcome`, and the exact declared `outputs`. Experiment exposure carries the Journey, experience/version, leg identity, selected variant, holdout flag, and whether the selection came from the profile assignment or the authored fallback. Assignment alone never emits an exposure.
 
 ## Experience and host effects
 

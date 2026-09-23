@@ -214,7 +214,7 @@ final class JourneyProfileCatalogTests: XCTestCase {
         let originalArm = try XCTUnwrap(fixture.profile.armedLegs.first)
         let current = try updatedRelease(
             fixture: fixture,
-            reentry: ["type": "every_time"]
+            reentry: ["type": "every_match"]
         )
         let continuation = ArmedJourney(
             reference: originalArm.reference,
@@ -260,7 +260,7 @@ final class JourneyProfileCatalogTests: XCTestCase {
                 ]
             )
 
-            XCTAssertEqual(policy.type, .everyTime)
+            XCTAssertEqual(policy.type, .everyMatch)
             XCTAssertNil(policy.windowSeconds)
         }
     }
@@ -744,7 +744,11 @@ final class JourneyProfileCatalogTests: XCTestCase {
         identity["publishedAtSeq"] = original.locator.publishedAtSeq + 1
         descriptor["identity"] = identity
         var leg = try XCTUnwrap(descriptor["leg"] as? [String: Any])
-        leg["reentry"] = reentry
+        var policy = try XCTUnwrap(leg["policy"] as? [String: Any])
+        var entryPolicy = try XCTUnwrap(policy["entry"] as? [String: Any])
+        entryPolicy["frequency"] = reentry
+        policy["entry"] = entryPolicy
+        leg["policy"] = policy
         if let factReferences {
             leg["facts"] = factReferences
         }

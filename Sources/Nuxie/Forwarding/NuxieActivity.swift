@@ -67,8 +67,6 @@ public enum NuxieActivity: Sendable {
   case journeyStarted(ExperienceRef, legId: String, generation: Int)
   /// A pinned Journey completed its local program.
   case journeyCompleted(ExperienceRef, legId: String, generation: Int, outcome: String)
-  /// A journey milestone was reached.
-  case milestoneReached(ExperienceRef, milestoneId: String)
   /// A presentation-scoped purchase completed.
   case purchaseCompleted(PurchaseInfo)
   /// A presentation-scoped purchase failed.
@@ -206,7 +204,6 @@ extension NuxieActivity {
     case .experienceErrored: "experience_errored"
     case .journeyStarted: "journey_started"
     case .journeyCompleted: "journey_completed"
-    case .milestoneReached: "milestone_reached"
     case .purchaseCompleted: "purchase_completed"
     case .purchaseFailed: "purchase_failed"
     case .purchaseCancelled: "purchase_cancelled"
@@ -250,9 +247,6 @@ extension NuxieActivity {
          .experienceLoadFailed(let ref, let message):
       properties.add(ref)
       properties["message"] = .string(message)
-    case .milestoneReached(let ref, let milestoneId):
-      properties.add(ref)
-      properties["milestone_id"] = .string(milestoneId)
     case .purchaseCompleted(let info),
          .purchaseCancelled(let info),
          .purchasePending(let info):

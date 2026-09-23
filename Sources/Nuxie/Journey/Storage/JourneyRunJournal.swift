@@ -72,7 +72,7 @@ struct JourneyRun {
     let reference: ArmedJourney.Reference
     let executionSnapshot: ExecutionSnapshot
     let artifactSHA256s: [String]
-    let reentry: Journey.Reentry
+    let reentry: Journey.Frequency
     let startedAt: Date
     let isEnrollment: Bool
     let startedEventId: String
@@ -118,7 +118,7 @@ struct JourneyCheckmark {
     let completedAt: Date
     /// Reentry counts new journeys, not completion time or continuation legs.
     let lastEnrollmentAt: Date?
-    let reentry: Journey.Reentry
+    let reentry: Journey.Frequency
     let lastSeenLiveAt: Date
 
     init(
@@ -127,7 +127,7 @@ struct JourneyCheckmark {
         outcome: String,
         completedAt: Date,
         lastEnrollmentAt: Date?,
-        reentry: Journey.Reentry,
+        reentry: Journey.Frequency,
         lastSeenLiveAt: Date
     ) {
         self.journeyId = journeyId
@@ -202,7 +202,7 @@ struct JourneyRunJournal {
         release: JourneyReleaseProfileEntry,
         artifactSource: JourneyReleaseArtifactSource? = nil,
         executionSnapshot: JourneyRun.ExecutionSnapshot,
-        reentry: Journey.Reentry,
+        reentry: Journey.Frequency,
         entryStepId: String,
         at: Date,
         profileFence: JourneyProfileFence? = nil,
@@ -261,7 +261,7 @@ struct JourneyRunJournal {
                     case .oncePerWindow:
                         guard let window = reentry.windowSeconds, window > 0 else { throw JourneyJournalError.invalidState }
                         if at.timeIntervalSince(last) < Double(window) { return nil }
-                    case .everyTime: break
+                    case .everyMatch: break
                     }
                 }
                 journeyId = UUID.v7().uuidString.lowercased()
@@ -408,7 +408,7 @@ struct JourneyRunJournal {
     /// Keep checkmarks while an experience is delivered, then for its authored
     /// reentry window.
     func retainCheckmarks(
-        liveExperiences: [String: Journey.Reentry],
+        liveExperiences: [String: Journey.Frequency],
         at: Date
     ) async throws {
         try await update { state in
@@ -437,7 +437,7 @@ struct JourneyRunJournal {
                         >= Double(window) {
                         state.checklist.removeValue(forKey: experienceId)
                     }
-                case .oneTime, .everyTime:
+                case .oneTime, .everyMatch:
                     state.checklist.removeValue(forKey: experienceId)
                 }
             }
@@ -1092,7 +1092,7 @@ extension JourneyRun: Codable, Sendable {
             throw JourneyJournalError.invalidState
         }
         reentry = try container.decode(
-            Journey.Reentry.self,
+            Journey.Frequency.self,
             forKey: .reentry
         )
         startedAt = try container.decode(Date.self, forKey: .startedAt)
@@ -1176,7 +1176,7 @@ extension JourneyCheckmark: Codable, Sendable {
                 forKey: .lastEnrollmentAt
             ),
             reentry: try container.decode(
-                Journey.Reentry.self,
+                Journey.Frequency.self,
                 forKey: .reentry
             ),
             lastSeenLiveAt: try container.decode(
