@@ -3,6 +3,32 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 final class JourneyPlaneProfileTests: XCTestCase {
+    func testSharedConversionDeliveryVectors() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/conversion-delivery.json")
+        let vectors = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        for vector in try XCTUnwrap(vectors["vectors"] as? [[String: Any]]) {
+            var root = try fixture()
+            var arms = try XCTUnwrap(root["armedLegs"] as? [[String: Any]])
+            arms[0]["conversion"] = vector["conversion"]
+            if vector["bindingType"] as? String == "new" { arms[0]["binding"] = ["type": "new"] }
+            root["armedLegs"] = arms
+            let bytes = try JSONSerialization.data(withJSONObject: root)
+            if vector["valid"] as? Bool == true {
+                let conversion = try XCTUnwrap(JourneyPlaneProfile.decode(bytes).armedLegs.first?.conversion)
+                XCTAssertEqual(conversion.startedAt, 100)
+                XCTAssertEqual(conversion.revision, 3)
+                let expected = try XCTUnwrap(vector["conversion"] as? [String: Any])
+                XCTAssertEqual(conversion.basis?.eventId, (expected["basis"] as? [String: Any])?["eventId"] as? String)
+                XCTAssertEqual(conversion.conversion?.eventId, (expected["conversion"] as? [String: Any])?["eventId"] as? String)
+            } else {
+                XCTAssertThrowsError(try JourneyPlaneProfile.decode(bytes), String(describing: vector["name"]))
+            }
+        }
+    }
+
     func testOrdinalFactNamesRemainDistinctAtEntryEvaluation() async throws {
         var root = try fixture()
         root["facts"] = try JSONSerialization.jsonObject(with: Data(#"{"properties":{"é":{"present":true,"value":false},"e\u0301":{"present":true,"value":true}},"memberships":{"é":false,"e\u0301":true},"assignments":{"é":{"variantId":"one","isHoldout":false},"e\u0301":{"variantId":"two","isHoldout":true}}}"#.utf8))

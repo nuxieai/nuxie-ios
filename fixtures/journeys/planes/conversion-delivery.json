@@ -1,0 +1,146 @@
+{
+  "vectors": [
+    {
+      "name": "pending",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3
+      },
+      "valid": true
+    },
+    {
+      "name": "basis",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3,
+        "basis": {
+          "eventId": "shown",
+          "occurredAt": 150
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "converted",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3,
+        "basis": {
+          "eventId": "shown",
+          "occurredAt": 150
+        },
+        "conversion": {
+          "eventId": "goal",
+          "occurredAt": 200
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "conversion_without_basis",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3,
+        "conversion": {
+          "eventId": "goal",
+          "occurredAt": 200
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "basis_before_entry",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3,
+        "basis": {
+          "eventId": "shown",
+          "occurredAt": 99
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "conversion_before_basis",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3,
+        "basis": {
+          "eventId": "shown",
+          "occurredAt": 150
+        },
+        "conversion": {
+          "eventId": "goal",
+          "occurredAt": 149
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "fractional_revision",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 1.5
+      },
+      "valid": false
+    },
+    {
+      "name": "boolean_revision",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": true
+      },
+      "valid": false
+    },
+    {
+      "name": "null_basis",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3,
+        "basis": null
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown_field",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3,
+        "unexpected": true
+      },
+      "valid": false
+    },
+    {
+      "name": "empty_event_id",
+      "bindingType": "continue",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3,
+        "basis": {
+          "eventId": "",
+          "occurredAt": 150
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "new_with_measurement",
+      "bindingType": "new",
+      "conversion": {
+        "startedAt": 100,
+        "revision": 3
+      },
+      "valid": false
+    }
+  ]
+}

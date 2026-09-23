@@ -1,6 +1,16 @@
 import Foundation
 
 struct ArmedJourney {
+    struct Conversion: Codable, Equatable, Sendable {
+        struct Occurrence: Codable, Equatable, Sendable {
+            let eventId: String
+            let occurredAt: Int
+        }
+        let startedAt: Int
+        let revision: Int
+        let basis: Occurrence?
+        let conversion: Occurrence?
+    }
     struct Reference {
         let experienceId: String
         let versionId: String
@@ -21,6 +31,7 @@ struct ArmedJourney {
     let binding: Binding
     let entryCondition: JourneyEntryCondition
     let context: Context
+    var conversion: Conversion? = nil
 }
 
 struct JourneyReleaseProfileEntry {
@@ -75,7 +86,9 @@ struct JourneyPlaneProfile {
         // entries to unfetched so an authored fallback variant still runs.
         _ = try entries(facts["assignments"])
         for value in try list(root["armedLegs"]) {
-            let arm = try exact(value, ["reference", "binding", "entryCondition", "context"])
+            let armValue = try record(value)
+            let arm = try exact(armValue, Set(["reference", "binding", "entryCondition", "context"])
+                .union(armValue["conversion"] == nil ? [] : ["conversion"]))
             let reference = try exact(arm["reference"], ["experienceId", "versionId", "legId", "descriptorSha256"])
             try id(reference["experienceId"]); try id(reference["versionId"])
             try digest(reference["legId"]); try digest(reference["descriptorSha256"])
@@ -90,6 +103,10 @@ struct JourneyPlaneProfile {
                       CFGetTypeID(generation) != CFBooleanGetTypeID(), generation.doubleValue.rounded() == generation.doubleValue,
                       (0...9_007_199_254_740_991).contains(generation.doubleValue) else { throw invalid }
             default: throw invalid
+            }
+            if let measurement = arm["conversion"] {
+                guard binding["type"] as? String == "continue" else { throw invalid }
+                try validateConversion(measurement)
             }
             try JourneyReleaseSchemaValidator.validateEntry(arm["entryCondition"])
             let context = try exact(arm["context"], ["event", "responses"])
@@ -134,6 +151,30 @@ struct JourneyPlaneProfile {
     }
 
     private static var invalid: JourneyReleaseAuthenticationError { .invalidDescriptor }
+    private static func validateConversion(_ value: Any) throws {
+        let object = try record(value)
+        _ = try exact(object, Set(["startedAt", "revision"])
+            .union(["basis", "conversion"].filter { object[$0] != nil }))
+        func integer(_ value: Any?) throws -> Double {
+            guard let number = value as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.rounded() == number.doubleValue,
+                  (0...9_007_199_254_740_991).contains(number.doubleValue) else { throw invalid }
+            return number.doubleValue
+        }
+        func occurrence(_ value: Any) throws -> Double {
+            let item = try exact(value, ["eventId", "occurredAt"])
+            guard let id = item["eventId"] as? String, !id.isEmpty, id.utf16.count <= 1024 else { throw invalid }
+            return try integer(item["occurredAt"])
+        }
+        let start = try integer(object["startedAt"])
+        _ = try integer(object["revision"])
+        let basis = try object["basis"].map(occurrence)
+        if let basis, basis < start { throw invalid }
+        if let converted = object["conversion"] {
+            guard let basis, try occurrence(converted) >= basis else { throw invalid }
+        }
+    }
     private static func entries(_ value: Any?) throws -> [(String, Any)] {
         guard let value = value as? NSDictionary else { throw invalid }
         return try value.map { key, value in
