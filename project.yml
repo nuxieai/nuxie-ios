@@ -214,6 +214,10 @@ targets:
     sources:
       - path: Tests/NuxieUnitTests
         name: NuxieUnitTests
+        excludes:
+          # UIKit scenes and target-action delivery require the app host.
+          # The full suite runs in the mandatory NuxieExperienceInputTests target.
+          - Experiences/ExperienceTextInputSemanticsTests.swift
       - path: Examples/Adapters/NuxieProviderCheckoutRoute.swift
       - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
