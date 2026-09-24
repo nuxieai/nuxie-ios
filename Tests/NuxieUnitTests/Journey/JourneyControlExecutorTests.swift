@@ -99,8 +99,9 @@ final class JourneyControlExecutorTests: XCTestCase {
 
         var assignments: ExactJSONObject<JourneyFactTable.Assignment?> = [:]
         assignments["experiment_new"] = .init(
+            source: .profile,
             variantId: "assigned",
-            isHoldout: true
+            isHoldout: false
         )
         guard case .advance(_, _, let assigned?) = executor.evaluate(
             step: step,
@@ -112,7 +113,19 @@ final class JourneyControlExecutorTests: XCTestCase {
         XCTAssertFalse(assigned.isHoldout)
         XCTAssertEqual(assigned.source, .profile)
 
+        for (source, expected) in [
+            (JourneyFactTable.Assignment.Source.override, JourneyControlExecutor.ExperimentSelection.Source.override),
+            (.fixed, .fixed),
+        ] {
+            assignments["experiment_new"] = .init(source: source, variantId: "assigned", isHoldout: false)
+            guard case .advance(_, _, let selection?) = executor.evaluate(
+                step: step, context: context, assignments: assignments, nowMillis: 0
+            ) else { return XCTFail("expected selected control") }
+            XCTAssertEqual(selection.source, expected)
+        }
+
         assignments["experiment_new"] = .init(
+            source: .profile,
             variantId: "removed",
             isHoldout: false
         )
