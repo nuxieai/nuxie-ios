@@ -19,6 +19,69 @@ private final class RecoveryAdmission: @unchecked Sendable {
 }
 
 final class CommittedRouteRecoveryTests: XCTestCase {
+    func testStableBatchDeliveryAdmissionsAreAtomicAndNeverRefreshedOnRetry() async throws {
+        for store: any EventStoreProtocol in [SQLiteEventStore(), MockEventStore()] {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("stable-route-admission-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try await store.initialize(path: directory)
+            let timestamp = Date()
+            let events = try ["first", "second"].map {
+                try StoredEvent(id: $0, name: "outcome", properties: [:],
+                    timestamp: timestamp, distinctId: "customer-a")
+            }
+            func originalAdmission(_ id: String) -> CommittedRouteAdmission {
+                .init(sessionId: "original", subscribers: [7: 1], stableRouteEventId: id)
+            }
+            // The first capture succeeds inside the transaction; staging the
+            // second without a sequence must roll back both captures.
+            let invalid = events.enumerated().map { index, event in
+                StableEventCaptureRecord(eventId: event.id, event: event, recordedAt: timestamp,
+                    routeAdmission: index == 0 ? nil : originalAdmission(event.id))
+            }
+            do {
+                _ = try await store.commitStableCaptureBatchAndStageRoutes(invalid,
+                    assigningCommitSequence: false, admission: nil)
+                XCTFail("A batch with an unorderable local route must roll back")
+            } catch {}
+            let rolledBackCount = try await store.getEventCount()
+            let rolledBackRoutes = try await store.queryPendingStableRoutes(distinctId: "customer-a", limit: 2)
+            XCTAssertEqual(rolledBackCount, 0)
+            XCTAssertTrue(rolledBackRoutes.isEmpty)
+            let records = events.map {
+                StableEventCaptureRecord(eventId: $0.id, event: $0, recordedAt: timestamp,
+                    routeAdmission: originalAdmission($0.id))
+            }
+            let committed = try await store.commitStableCaptureBatchAndStageRoutes(records,
+                assigningCommitSequence: true, admission: nil)
+            XCTAssertEqual(committed.map(\.commitSequence), [0, 1])
+            try await store.checkpointCommittedRoute(eventId: "first", sessionId: "original", nextSubscriber: 1)
+            let replacement = CommittedRouteAdmission(sessionId: "replacement",
+                subscribers: [7: 2], stableRouteEventId: "first")
+            _ = try await store.commitStableCaptureAndStageRoute(eventId: "first", event: nil,
+                recordedAt: timestamp, assigningCommitSequence: true, admission: nil,
+                routeAdmission: replacement)
+            let first = try await store.firstPendingCommittedRoute(sessionId: "original")
+            let refreshed = try await store.firstPendingCommittedRoute(sessionId: "replacement")
+            XCTAssertEqual(first?.event.id, "first")
+            XCTAssertEqual(first?.admission, originalAdmission("first"))
+            XCTAssertEqual(first?.nextSubscriber, 1)
+            XCTAssertNil(refreshed)
+            try await store.markStableRouteDelivered(eventId: "first")
+            try await store.acknowledgeCommittedRoute(eventId: "first", sessionId: "original")
+            let replay = try await store.commitStableCaptureAndStageRoute(eventId: "first", event: nil,
+                recordedAt: timestamp, assigningCommitSequence: true, admission: nil,
+                routeAdmission: replacement)
+            XCTAssertFalse(replay.localRoutePending)
+            let second = try await store.firstPendingCommittedRoute(sessionId: "original")
+            let restaged = try await store.firstPendingCommittedRoute(sessionId: "replacement")
+            XCTAssertEqual(second?.event.id, "second")
+            XCTAssertNil(restaged)
+            await store.close()
+        }
+    }
+
     func testHistoryPruningRetainsLocalDeliveryUntilAcknowledged() async throws {
         for pruneByAge in [true, false] {
             let directory = FileManager.default.temporaryDirectory
