@@ -675,6 +675,17 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
+    public func visitPendingStableRoutes(
+        distinctId: String,
+        visitor: @escaping @Sendable (StoredEvent) async -> Bool
+    ) async throws -> Bool {
+        let pending = try await queryPendingStableRoutes(distinctId: distinctId, limit: .max)
+        for event in pending {
+            guard await visitor(event) else { return false }
+        }
+        return true
+    }
+
     public func markStableRouteDelivered(eventId: String) async throws {
         try lock.withLock {
             if _shouldFailMarkDelivered {
