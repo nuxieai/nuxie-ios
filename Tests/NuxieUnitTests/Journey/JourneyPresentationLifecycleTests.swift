@@ -77,7 +77,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         XCTAssertEqual(shown.properties["screen_id"] as? String, "screen_welcome")
         XCTAssertEqual(shown.properties["journey_id"] as? String, request.owner.journeyId)
         XCTAssertEqual(shown.properties["experience_version_id"] as? String, "version_golden")
-        XCTAssertNil(shown.properties["experience_version_id"])
+        XCTAssertNil(shown.properties["experience_version"])
         XCTAssertEqual(shown.properties["leg_generation"] as? Int, 0)
         let dismissed = try XCTUnwrap(events.routedEvents.first {
             $0.name == SystemEventNames.screenDismissed
