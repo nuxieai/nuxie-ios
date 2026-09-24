@@ -911,6 +911,7 @@ extension JourneyTestCase {
         _ snapshot: JourneyProfileCatalog.Snapshot,
         entry: JourneyEntryCondition? = nil,
         reentry: Journey.Frequency? = nil,
+        policy: Journey.Policy? = nil,
         offers: [Journey.Offer]? = nil,
         products: [JourneyReleaseJSONValue]? = nil,
         inputs: Journey.Boundary? = nil,
@@ -939,7 +940,7 @@ extension JourneyTestCase {
             steps: steps ?? originalLeg.steps,
             routes: routes ?? originalLeg.routes,
             screens: screens ?? originalLeg.screens,
-            policy: .init(
+            policy: policy ?? .init(
                 entry: .init(
                     trigger: originalLeg.policy.entry.trigger,
                     eligibility: originalLeg.policy.entry.eligibility,

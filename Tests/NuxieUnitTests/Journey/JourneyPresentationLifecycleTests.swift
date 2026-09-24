@@ -364,12 +364,32 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
     }
 
     func testRenderedRouteNavigatesWithinTheOwnedSurfaceWithoutPresentingAgain() async throws {
+        try await assertNavigationRemainsInteractive(policy: nil)
+    }
+
+    func testConversionKeepsTheVisibleDevicePortionInteractiveWithExitEnabled() async throws {
+        try await assertNavigationAfterConversion(exitEnabled: true)
+    }
+
+    func testConversionKeepsTheVisibleDevicePortionInteractiveWithExitDisabled() async throws {
+        try await assertNavigationAfterConversion(exitEnabled: false)
+    }
+
+    private func assertNavigationAfterConversion(exitEnabled: Bool) async throws {
+        let exits = exitEnabled ? #"[{"type":"goal_met"}]"# : "[]"
+        let policy = try ExactJSONCodec.decode(Journey.Policy.self, from: Data((
+            #"{"entry":{"trigger":{"type":"event","eventName":"$app_opened"},"frequency":{"type":"one_time"}},"goal":{"criterion":{"type":"event","eventName":"reading_completed"},"attribution":{"basis":"first_shown","window":{"amount":1,"unit":"hour"}}},"exitWhenAny":"# + exits + "}"
+        ).utf8))
+        try await assertNavigationRemainsInteractive(policy: policy)
+    }
+
+    private func assertNavigationRemainsInteractive(policy: Journey.Policy?) async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
-        let snapshot = renderedNavigationSnapshot(
+        let snapshot = replacing(renderedNavigationSnapshot(
             try await authenticatedRenderedSnapshot(fixture)
-        )
+        ), policy: policy)
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
         let events = MockEventLog()
@@ -379,6 +399,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
             identity: identity,
             events: events,
             directory: directory,
+            dateProvider: MockDateProvider(initialDate: Date()),
             presenter: presenter
         )
 
@@ -386,6 +407,32 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         await service.profileDidCommit(snapshot, distinctId: "customer")
         let presentedRequest = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(presentedRequest)
+        if policy != nil {
+            // The real presenter captures this event after display. This presenter
+            // records surface ownership only, so provide that boundary evidence.
+            _ = await events.captureAndRouteSystemEvent(.init(
+                name: JourneyEvents.experienceShown,
+                properties: [
+                    "journey_id": request.owner.journeyId,
+                    "experience_id": "experience_golden",
+                    "experience_version_id": "version_golden",
+                ],
+                eventId: "presentation-shown", distinctId: "customer"
+            ))
+            _ = await events.captureAndRouteSystemEvent(.init(
+                name: "reading_completed", properties: nil,
+                eventId: "reading-outcome", distinctId: "customer"
+            ))
+            let outcome = try XCTUnwrap(events.routedEvents.first { $0.id == "reading-outcome" })
+            await service.handleEvent(outcome)
+            let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            let watches = try await journal.conversionWatches()
+            XCTAssertEqual(watches[request.owner.journeyId]?.conversion?.eventId, "reading-outcome")
+            let finished = await MainActor.run { presenter.finishedOwners.count }
+            let shutdown = await MainActor.run { presenter.shutdownOwners.count }
+            XCTAssertEqual(finished, 0)
+            XCTAssertEqual(shutdown, 0)
+        }
         let navigated = expectation(description: "owned surface navigated")
         await MainActor.run {
             presenter.onNavigate = { screenId in
