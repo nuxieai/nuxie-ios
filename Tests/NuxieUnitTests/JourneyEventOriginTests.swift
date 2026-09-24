@@ -1,6 +1,9 @@
 import Foundation
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
+#if SWIFT_PACKAGE
+@testable import NuxieTestSupport
+#endif
 
 final class JourneyEventOriginTests: XCTestCase {
     private let origin = JourneyEventOrigin(
@@ -10,6 +13,46 @@ final class JourneyEventOriginTests: XCTestCase {
         source: .deviceAction, stepId: "finished",
         occurrenceId: "019c0644-fc00-7000-8000-000000000002"
     )
+
+    func testStableCaptureKeepsOriginThroughRedactionReopenAndBatchDelivery() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = NuxieConfiguration(apiKey: "test-origin")
+        configuration.testingOverrides.customStoragePath = directory
+        configuration.testingOverrides.flushAt = 100
+        configuration.beforeSend = { event in
+            NuxieEvent(id: event.id, name: event.name, distinctId: event.distinctId,
+                properties: ["redacted": true], timestamp: event.timestamp)
+        }
+        let api = MockNuxieApiForQueue()
+        let first = EventLog(identity: MockIdentityService(), dateProvider: MockDateProvider(),
+            apiClient: api, store: SQLiteEventStore())
+        try await first.configure(configuration: configuration)
+        let captured = await first.captureAndRouteSystemEvent(.init(
+            name: "finished", properties: ["secret": "removed"], eventId: origin.occurrenceId,
+            distinctId: "customer", journeyOrigin: origin
+        ))
+        XCTAssertEqual(captured?.event.journeyOrigin, origin)
+        XCTAssertNil(captured?.event.properties["secret"])
+        await first.close()
+
+        let reopened = EventLog(identity: MockIdentityService(), dateProvider: MockDateProvider(),
+            apiClient: api, store: SQLiteEventStore())
+        try await reopened.configure(configuration: configuration)
+        let duplicate = await reopened.captureAndRouteSystemEvent(.init(
+            name: "finished", properties: [:], eventId: origin.occurrenceId,
+            distinctId: "customer", journeyOrigin: origin
+        ))
+        XCTAssertEqual(duplicate?.event.journeyOrigin, origin)
+        XCTAssertEqual(duplicate?.isNewlyCommitted, false)
+        let flushed = await reopened.flushEvents()
+        XCTAssertTrue(flushed)
+        let batches = await api.allBatchesSent
+        let delivered = try XCTUnwrap(batches.flatMap { $0 }.first { $0.idempotencyKey == origin.occurrenceId })
+        XCTAssertEqual(delivered.journeyOrigin, origin)
+        XCTAssertNil(delivered.properties?["secret"])
+        await reopened.close()
+    }
 
     func testInternalOriginSurvivesBothWireLanesOutsideAnalytics() throws {
         let event = NuxieEvent(

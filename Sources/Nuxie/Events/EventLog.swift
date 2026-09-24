@@ -1038,9 +1038,11 @@ actor EventLog: EventLogProtocol {
     let originalEvent = NuxieEvent(
       id: request.eventId,
       name: request.name,
+      forwardingName: request.name,
       distinctId: request.distinctId,
       properties: scopedProperties,
-      timestamp: occurredAt
+      timestamp: occurredAt,
+      journeyOrigin: request.journeyOrigin
     )
     guard let beforeSend = configuration?.beforeSend else {
       return originalEvent
@@ -1056,7 +1058,8 @@ actor EventLog: EventLogProtocol {
         forwardingName: originalEvent.forwardingName,
         distinctId: request.distinctId,
         properties: transformedProperties,
-        timestamp: occurredAt
+        timestamp: occurredAt,
+        journeyOrigin: request.journeyOrigin
       )
     }
   }
@@ -1254,7 +1257,8 @@ actor EventLog: EventLogProtocol {
         forwardingName: request.name,
         distinctId: storedEvent.distinctId,
         properties: storedEvent.getPropertiesDict(),
-        timestamp: storedEvent.timestamp
+        timestamp: storedEvent.timestamp,
+        journeyOrigin: storedEvent.journeyOrigin
       ), isNewlyCommitted: isNew, localRoutePending: localRoutePending)
     case .dropped:
       return DurableTriggerCapture(
@@ -1284,7 +1288,8 @@ actor EventLog: EventLogProtocol {
       forwardingName: event.forwardingName,
       distinctId: transformed.distinctId,
       properties: transformed.properties,
-      timestamp: transformed.timestamp
+      timestamp: transformed.timestamp,
+      journeyOrigin: event.journeyOrigin
     )
   }
 
@@ -1585,8 +1590,8 @@ actor EventLog: EventLogProtocol {
         guard let pending = eligible else { return }
         let stored = pending.event
         let routed = RoutedCommittedEvent(
-          event: NuxieEvent(id: stored.id, name: stored.name, distinctId: stored.distinctId,
-            properties: stored.getPropertiesDict(), timestamp: stored.timestamp),
+          event: NuxieEvent(id: stored.id, name: stored.name, forwardingName: stored.name, distinctId: stored.distinctId,
+            properties: stored.getPropertiesDict(), timestamp: stored.timestamp, journeyOrigin: stored.journeyOrigin),
           subscriberAdmissions: pending.admission.subscribers,
           stableRouteEventId: pending.admission.stableRouteEventId,
           hasDurableAdmission: true
@@ -1951,9 +1956,11 @@ actor EventLog: EventLogProtocol {
         NuxieEvent(
           id: row.id,
           name: row.name,
+          forwardingName: row.name,
           distinctId: row.distinctId,
           properties: row.getPropertiesDict(),
-          timestamp: row.timestamp
+          timestamp: row.timestamp,
+          journeyOrigin: row.journeyOrigin
         )
       }
     } catch {
@@ -2893,13 +2900,15 @@ actor EventLog: EventLogProtocol {
       name: event.name,
       properties: event.properties,
       timestamp: event.timestamp,
-      distinctId: event.distinctId
+      distinctId: event.distinctId,
+      journeyOrigin: event.journeyOrigin
     )) ?? StoredEvent(
       id: event.id,
       name: event.name,
       properties: Data(),
       timestamp: event.timestamp,
-      distinctId: event.distinctId
+      distinctId: event.distinctId,
+      journeyOrigin: event.journeyOrigin
     )
   }
 
@@ -3053,8 +3062,8 @@ extension EventLog {
     guard activeStableRouteIds.insert(stored.id).inserted else { return true }
     await deliverOrRetainCommittedRoute(RoutedCommittedEvent(
       event: NuxieEvent(
-        id: stored.id, name: stored.name, distinctId: stored.distinctId,
-        properties: stored.getPropertiesDict(), timestamp: stored.timestamp
+        id: stored.id, name: stored.name, forwardingName: stored.name, distinctId: stored.distinctId,
+        properties: stored.getPropertiesDict(), timestamp: stored.timestamp, journeyOrigin: stored.journeyOrigin
       ),
       subscriberAdmissions: admissions,
       stableRouteEventId: stored.id

@@ -194,7 +194,7 @@
       }
     },
     {
-      "name": "valid explicit context selects older",
+      "name": "internal authored origin selects older",
       "watches": {
         "old": {
           "journeyId": "old",
@@ -253,6 +253,16 @@
           "journey_id": "old",
           "experience_id": "experience-old",
           "experience_version_id": "version-old"
+        },
+        "journeyOrigin": {
+          "journeyId": "old",
+          "experienceId": "experience-old",
+          "versionId": "version-old",
+          "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generation": 0,
+          "source": "device_action",
+          "stepId": "send",
+          "occurrenceId": "outcome"
         }
       },
       "acceptedAt": 2000,
@@ -862,6 +872,219 @@
         "properties": {
           "verified_purchase": "true",
           "paid": "true"
+        }
+      },
+      "acceptedAt": 2000,
+      "expectedConversions": {}
+    },
+    {
+      "name": "raw matching IDs cannot manufacture direct context",
+      "watches": {
+        "old": {
+          "journeyId": "old",
+          "experienceId": "experience-old",
+          "versionId": "version-old",
+          "policyHash": "pinned-policy",
+          "goal": {
+            "criterion": {
+              "type": "event",
+              "eventName": "outcome"
+            },
+            "attribution": {
+              "basis": "first_shown",
+              "window": {
+                "amount": 1,
+                "unit": "minute"
+              }
+            }
+          },
+          "startedAt": 0,
+          "basis": {
+            "eventId": "basis-old",
+            "occurredAt": 100
+          }
+        },
+        "new": {
+          "journeyId": "new",
+          "experienceId": "experience-new",
+          "versionId": "version-new",
+          "policyHash": "pinned-policy",
+          "goal": {
+            "criterion": {
+              "type": "event",
+              "eventName": "outcome"
+            },
+            "attribution": {
+              "basis": "first_shown",
+              "window": {
+                "amount": 1,
+                "unit": "minute"
+              }
+            }
+          },
+          "startedAt": 0,
+          "basis": {
+            "eventId": "basis-new",
+            "occurredAt": 1000
+          }
+        }
+      },
+      "event": {
+        "id": "outcome",
+        "name": "outcome",
+        "occurredAt": 2000,
+        "properties": {
+          "journey_id": "old",
+          "experience_id": "experience-old",
+          "experience_version_id": "version-old"
+        }
+      },
+      "acceptedAt": 2000,
+      "expectedConversions": {}
+    },
+    {
+      "name": "internal origin survives analytics redaction",
+      "watches": {
+        "old": {
+          "journeyId": "old",
+          "experienceId": "experience-old",
+          "versionId": "version-old",
+          "policyHash": "pinned-policy",
+          "goal": {
+            "criterion": {
+              "type": "event",
+              "eventName": "outcome"
+            },
+            "attribution": {
+              "basis": "first_shown",
+              "window": {
+                "amount": 1,
+                "unit": "minute"
+              }
+            }
+          },
+          "startedAt": 0,
+          "basis": {
+            "eventId": "basis-old",
+            "occurredAt": 100
+          }
+        },
+        "new": {
+          "journeyId": "new",
+          "experienceId": "experience-new",
+          "versionId": "version-new",
+          "policyHash": "pinned-policy",
+          "goal": {
+            "criterion": {
+              "type": "event",
+              "eventName": "outcome"
+            },
+            "attribution": {
+              "basis": "first_shown",
+              "window": {
+                "amount": 1,
+                "unit": "minute"
+              }
+            }
+          },
+          "startedAt": 0,
+          "basis": {
+            "eventId": "basis-new",
+            "occurredAt": 1000
+          }
+        }
+      },
+      "event": {
+        "id": "outcome",
+        "name": "outcome",
+        "occurredAt": 2000,
+        "properties": {},
+        "journeyOrigin": {
+          "journeyId": "old",
+          "experienceId": "experience-old",
+          "versionId": "version-old",
+          "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generation": 0,
+          "source": "device_action",
+          "stepId": "send",
+          "occurrenceId": "outcome"
+        }
+      },
+      "acceptedAt": 2000,
+      "expectedConversions": {
+        "old": "outcome"
+      }
+    },
+    {
+      "name": "origin bound to another occurrence cannot convert",
+      "watches": {
+        "old": {
+          "journeyId": "old",
+          "experienceId": "experience-old",
+          "versionId": "version-old",
+          "policyHash": "pinned-policy",
+          "goal": {
+            "criterion": {
+              "type": "event",
+              "eventName": "outcome"
+            },
+            "attribution": {
+              "basis": "first_shown",
+              "window": {
+                "amount": 1,
+                "unit": "minute"
+              }
+            }
+          },
+          "startedAt": 0,
+          "basis": {
+            "eventId": "basis-old",
+            "occurredAt": 100
+          }
+        },
+        "new": {
+          "journeyId": "new",
+          "experienceId": "experience-new",
+          "versionId": "version-new",
+          "policyHash": "pinned-policy",
+          "goal": {
+            "criterion": {
+              "type": "event",
+              "eventName": "outcome"
+            },
+            "attribution": {
+              "basis": "first_shown",
+              "window": {
+                "amount": 1,
+                "unit": "minute"
+              }
+            }
+          },
+          "startedAt": 0,
+          "basis": {
+            "eventId": "basis-new",
+            "occurredAt": 1000
+          }
+        }
+      },
+      "event": {
+        "id": "outcome",
+        "name": "outcome",
+        "occurredAt": 2000,
+        "properties": {
+          "journey_id": "old",
+          "experience_id": "experience-old",
+          "experience_version_id": "version-old"
+        },
+        "journeyOrigin": {
+          "journeyId": "old",
+          "experienceId": "experience-old",
+          "versionId": "version-old",
+          "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generation": 0,
+          "source": "device_action",
+          "stepId": "send",
+          "occurrenceId": "other"
         }
       },
       "acceptedAt": 2000,

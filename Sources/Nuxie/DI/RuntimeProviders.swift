@@ -7,6 +7,7 @@ struct StableSystemEventCaptureRequest: @unchecked Sendable {
     let properties: [String: Any]?
     let eventId: String
     let distinctId: String
+    var journeyOrigin: JourneyEventOrigin? = nil
 }
 
 /// Fire-and-forget entry point for SDK-authored events. Internal services use

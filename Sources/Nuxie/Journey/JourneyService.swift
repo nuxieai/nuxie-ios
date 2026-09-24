@@ -3043,8 +3043,8 @@ private extension JourneyService {
                     guard let properties = try JSONSerialization.jsonObject(with: stored.properties) as? [String: Any] else {
                         throw EventStorageError.invalidProperties
                     }
-                    let event = NuxieEvent(id: stored.id, name: stored.name, distinctId: stored.distinctId,
-                        properties: properties, timestamp: stored.timestamp)
+                    let event = NuxieEvent(id: stored.id, name: stored.name, forwardingName: stored.name, distinctId: stored.distinctId,
+                        properties: properties, timestamp: stored.timestamp, journeyOrigin: stored.journeyOrigin)
                     let watches = try await journal.conversionWatches()
                     var matching = Set<String>()
                     if let occurrence = JourneyConversionWatch.normalized(event, acceptedAt: item.acceptedAt) {

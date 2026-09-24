@@ -296,7 +296,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 request.name,
                 properties: request.properties,
                 eventId: request.eventId,
-                distinctId: request.distinctId
+                distinctId: request.distinctId,
+                admission: nil,
+                journeyOrigin: request.journeyOrigin
             )
         }
     }
@@ -311,7 +313,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 properties: request.properties,
                 eventId: request.eventId,
                 distinctId: request.distinctId,
-                admission: admission
+                admission: admission,
+                journeyOrigin: request.journeyOrigin
             )
         }
     }
@@ -328,7 +331,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 eventId: request.eventId,
                 distinctId: request.distinctId,
                 occurredAt: occurredAt,
-                admission: admission
+                admission: admission,
+                journeyOrigin: request.journeyOrigin
             )
         }
     }
@@ -399,9 +403,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 original = NuxieEvent(
                     id: item.request.eventId,
                     name: item.request.name,
+                    forwardingName: item.request.name,
                     distinctId: item.request.distinctId,
                     properties: item.request.properties ?? [:],
-                    timestamp: item.occurredAt
+                    timestamp: item.occurredAt,
+                    journeyOrigin: item.request.journeyOrigin
                 )
                 transformed = event
             case .unprepared:
@@ -411,9 +417,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 original = NuxieEvent(
                     id: item.request.eventId,
                     name: item.request.name,
+                    forwardingName: item.request.name,
                     distinctId: item.request.distinctId,
                     properties: enriched,
-                    timestamp: item.occurredAt
+                    timestamp: item.occurredAt,
+                    journeyOrigin: item.request.journeyOrigin
                 )
                 transformed = await applyBeforeSend(to: original).map {
                     var properties = $0.properties
@@ -424,7 +432,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                         forwardingName: original.forwardingName,
                         distinctId: item.request.distinctId,
                         properties: properties,
-                        timestamp: item.occurredAt
+                        timestamp: item.occurredAt,
+                    journeyOrigin: item.request.journeyOrigin
                     )
                 }
             }
@@ -910,7 +919,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         eventId: String,
         distinctId: String,
         occurredAt: Date = Date(),
-        admission: (any StableEventCaptureCommitAdmission)?
+        admission: (any StableEventCaptureCommitAdmission)?,
+        journeyOrigin: JourneyEventOrigin? = nil
     ) async -> DurableTriggerCapture? {
         if let existing = lock.withLock({ _stableCaptures[eventId] }) {
             return DurableTriggerCapture(
@@ -924,9 +934,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         let original = NuxieEvent(
             id: eventId,
             name: event,
+            forwardingName: event,
             distinctId: distinctId,
             properties: enriched,
-            timestamp: occurredAt
+            timestamp: occurredAt,
+            journeyOrigin: journeyOrigin
         )
         let transformed = await applyBeforeSend(to: original).map {
             NuxieEvent(
@@ -935,7 +947,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 forwardingName: original.forwardingName,
                 distinctId: distinctId,
                 properties: $0.properties,
-                timestamp: occurredAt
+                timestamp: occurredAt,
+            journeyOrigin: journeyOrigin
             )
         }
         let candidate = transformed.map {

@@ -228,7 +228,17 @@ struct JourneyEffectDispatcher {
                     name: action.eventName,
                     properties: properties,
                     eventId: request.effectId,
-                    distinctId: request.distinctId
+                    distinctId: request.distinctId,
+                    journeyOrigin: .init(
+                        journeyId: request.journeyId,
+                        experienceId: request.reference.experienceId,
+                        versionId: request.reference.versionId,
+                        legId: request.reference.legId,
+                        generation: request.generation,
+                        source: .deviceAction,
+                        stepId: request.stepId,
+                        occurrenceId: request.effectId
+                    )
                 ),
                 admission: eventCommitAdmission(request)
               ),
