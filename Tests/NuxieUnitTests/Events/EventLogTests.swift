@@ -314,7 +314,7 @@ final class EventLogTests: AsyncSpec {
                         await received.append(event.name)
                     }
                     try await log.configure(configuration: testConfig)
-                    mockStore.shouldFailMarkDelivered = true
+                    mockStore.shouldFailStableRouteAcknowledgement = true
                     let request = StableSystemEventCaptureRequest(
                         name: "route-with-transient-ack-failure",
                         properties: nil,
@@ -340,10 +340,14 @@ final class EventLogTests: AsyncSpec {
                         request.eventId,
                     ]))
 
-                    mockStore.shouldFailMarkDelivered = false
+                    expect(mockStore.pendingCommittedRoutes.map(\.event.id)).to(equal([
+                        request.eventId,
+                    ]))
+                    mockStore.shouldFailStableRouteAcknowledgement = false
                     let recovered = await log.drainCommittedRouting()
 
                     expect(recovered).to(beTrue())
+                    expect(mockStore.pendingCommittedRoutes).to(beEmpty())
                     expect(mockStore.pendingStableRouteIds).to(beEmpty())
                     await expect { await received.names }.to(equal([
                         "route-with-transient-ack-failure",

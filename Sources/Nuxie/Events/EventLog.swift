@@ -132,15 +132,18 @@ private struct RoutedCommittedEvent: Sendable {
   let event: NuxieEvent
   let subscriberAdmissions: [UInt64: UInt64]
   let stableRouteEventId: String?
+  let hasDurableAdmission: Bool
 
   init(
     event: NuxieEvent,
     subscriberAdmissions: [UInt64: UInt64],
-    stableRouteEventId: String? = nil
+    stableRouteEventId: String? = nil,
+    hasDurableAdmission: Bool = false
   ) {
     self.event = event
     self.subscriberAdmissions = subscriberAdmissions
     self.stableRouteEventId = stableRouteEventId
+    self.hasDurableAdmission = hasDurableAdmission
   }
 }
 
@@ -557,6 +560,7 @@ actor EventLog: EventLogProtocol {
   private nonisolated let routeContinuation: AsyncStream<RouteCommand>.Continuation
   private nonisolated let committedAdmissionRegistry =
     CommittedEventAdmissionRegistry()
+  private let committedRouteSessionId = UUID().uuidString
   private var routeWorker: Task<Void, Never>?
   private var routingDeferred = false
   private var routingDeferralGeneration: UInt64 = 0
@@ -597,7 +601,7 @@ actor EventLog: EventLogProtocol {
   }
   private var subscribers: [Subscriber] = []
   // Preserve the failed subscriber and every later route in capture order.
-  private var failedCommittedRoutes: [(event: RoutedCommittedEvent, subscriber: Int)] = []
+  private var failedCommittedRoutes: [(event: RoutedCommittedEvent, subscriber: Int, awaitingAcknowledgement: Bool)] = []
   private var forwardingSubscribers: [ForwardingSubscriber] = []
 
   // MARK: - Delivery (durable queue + bounded in-memory window)
@@ -738,6 +742,7 @@ actor EventLog: EventLogProtocol {
       try await store.initialize(
         path: snapshot?.internalConfiguration.customStoragePath
       )
+      try await store.discardOtherCommittedRouteSessions(keeping: committedRouteSessionId)
       _ = try await store.readOrInitializeHistoryCoverage(
         startingAt: dateProvider.now()
       )
@@ -1125,7 +1130,8 @@ actor EventLog: EventLogProtocol {
           event: nil,
           recordedAt: attemptedTimestamp,
           assigningCommitSequence: true,
-          admission: admission
+          admission: admission,
+          routeAdmission: committedRouteAdmission(subscriberAdmissions, stableEventId: request.eventId)
         )
         guard commit.commitSequence != nil else {
           throw EventStorageError.insertFailed(NSError(
@@ -1165,7 +1171,8 @@ actor EventLog: EventLogProtocol {
           event: storedEvent,
           recordedAt: attemptedTimestamp,
           assigningCommitSequence: true,
-          admission: admission
+          admission: admission,
+          routeAdmission: committedRouteAdmission(subscriberAdmissions, stableEventId: request.eventId)
         )
       } else {
         commit = try await store.commitStableCapture(
@@ -1443,6 +1450,9 @@ actor EventLog: EventLogProtocol {
       await deliverOrRetainCommittedRoute(routed)
 
     case .barrier(let cont):
+      if failedCommittedRoutes.first?.awaitingAcknowledgement == true {
+        await retryFailedCommittedRoutes()
+      }
       cont.resume()
 
     case .shutdown:
@@ -1450,15 +1460,52 @@ actor EventLog: EventLogProtocol {
     }
   }
 
+  private func committedRouteAdmission(
+    _ subscribers: [UInt64: UInt64], stableEventId: String? = nil
+  ) -> CommittedRouteAdmission {
+    .init(sessionId: committedRouteSessionId, subscribers: subscribers,
+      stableRouteEventId: stableEventId)
+  }
+
+  private func checkpointCommittedRoute(_ routed: RoutedCommittedEvent, nextSubscriber: Int) async {
+    guard routed.hasDurableAdmission else { return }
+    do {
+      try await store.checkpointCommittedRoute(eventId: routed.event.id,
+        sessionId: committedRouteSessionId, nextSubscriber: nextSubscriber)
+    } catch {
+      // The route worker still owns the exact retry position in memory.
+      LogWarning("EventLog: failed to checkpoint local subscriber delivery")
+    }
+  }
+
+  private func acknowledgeCommittedRoute(_ routed: RoutedCommittedEvent) async -> Bool {
+    await acknowledgeStableRouteIfNeeded(routed.stableRouteEventId)
+    if let eventId = routed.stableRouteEventId,
+       failedStableRouteAcknowledgementIds.contains(eventId) {
+      return false
+    }
+    guard routed.hasDurableAdmission else { return true }
+    do {
+      try await store.acknowledgeCommittedRoute(eventId: routed.event.id,
+        sessionId: committedRouteSessionId)
+      return true
+    } catch {
+      LogWarning("EventLog: failed to acknowledge local subscriber delivery")
+      return false
+    }
+  }
+
   private func deliverOrRetainCommittedRoute(_ routed: RoutedCommittedEvent) async {
     guard failedCommittedRoutes.isEmpty else {
-      failedCommittedRoutes.append((routed, 0))
+      failedCommittedRoutes.append((routed, 0, false))
       return
     }
     if let failed = await firstFailedSubscriber(routed, startingAt: 0) {
-      failedCommittedRoutes.append((routed, failed))
-    } else {
-      await acknowledgeStableRouteIfNeeded(routed.stableRouteEventId)
+      failedCommittedRoutes.append((routed, failed, false))
+      await checkpointCommittedRoute(routed, nextSubscriber: failed)
+    } else if !(await acknowledgeCommittedRoute(routed)) {
+      failedCommittedRoutes.append((routed, subscribers.count, true))
+      await checkpointCommittedRoute(routed, nextSubscriber: subscribers.count)
     }
   }
 
@@ -1474,12 +1521,19 @@ actor EventLog: EventLogProtocol {
 
   private func retryFailedCommittedRoutes() async {
     while let first = failedCommittedRoutes.first {
-      if let failed = await firstFailedSubscriber(first.event, startingAt: first.subscriber) {
+      if !first.awaitingAcknowledgement,
+         let failed = await firstFailedSubscriber(first.event, startingAt: first.subscriber) {
         failedCommittedRoutes[0].subscriber = failed
+        await checkpointCommittedRoute(first.event, nextSubscriber: failed)
+        return
+      }
+      failedCommittedRoutes[0].subscriber = subscribers.count
+      failedCommittedRoutes[0].awaitingAcknowledgement = true
+      guard await acknowledgeCommittedRoute(first.event) else {
+        await checkpointCommittedRoute(first.event, nextSubscriber: subscribers.count)
         return
       }
       failedCommittedRoutes.removeFirst()
-      await acknowledgeStableRouteIfNeeded(first.event.stableRouteEventId)
     }
   }
 
@@ -1551,7 +1605,8 @@ actor EventLog: EventLogProtocol {
       deliveryState: deliveryState,
       origin: origin,
       assigningCommitSequence: true,
-      acceptedAt: receivedAt
+      acceptedAt: receivedAt,
+      routeAdmission: routeToSubscribers ? committedRouteAdmission(subscriberAdmissions) : nil
     )
     guard let commitSequence = commit.commitSequence else {
       throw EventStorageError.insertFailed(NSError(
@@ -1630,7 +1685,8 @@ actor EventLog: EventLogProtocol {
         .event(RoutedCommittedEvent(
           event: $0,
           subscriberAdmissions: subscriberAdmissions,
-          stableRouteEventId: stableRouteEventId
+          stableRouteEventId: stableRouteEventId,
+          hasDurableAdmission: true
         ))
       } ?? .skipped
     ))
@@ -3040,7 +3096,8 @@ extension EventLog {
         StableEventCaptureRecord(
           eventId: value.item.request.eventId,
           event: value.event.map { makeStoredEvent(from: $0) },
-          recordedAt: attemptedTimestamp
+          recordedAt: attemptedTimestamp,
+          routeAdmission: committedRouteAdmission(subscriberAdmissions, stableEventId: value.item.request.eventId)
         )
       }
       let commits = try await store.commitStableCaptureBatchAndStageRoutes(
