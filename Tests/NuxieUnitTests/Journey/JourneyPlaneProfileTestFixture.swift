@@ -38,7 +38,7 @@ struct JourneyPlaneProfileTestFixture {
         let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
         let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
         let root: [String: Any] = [
-            "schemaVersion": "nuxie.journey-plane-profile.v1",
+            "schemaVersion": "nuxie.journey-plane-profile.v2",
             "status": "ok",
             "delivery": [
                 "renderBaseUrl": "https://renders.example.com/",

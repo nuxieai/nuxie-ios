@@ -25,10 +25,11 @@ protocol JourneyServiceProtocol: JourneyProfileConsuming {
     func finishStartupRouting() async
     func initialize() async
     func handleEvent(_ event: NuxieEvent) async
+    @discardableResult
     func handleEvent(
         _ event: NuxieEvent,
         admittedProfileGeneration: UInt64?
-    ) async
+    ) async -> Bool
     func eventAdmissionGeneration() -> UInt64
     func onAppDidEnterBackground() async
     func onAppWillEnterForeground() async
@@ -640,10 +641,11 @@ extension JourneyService {
         )
     }
 
+    @discardableResult
     func handleEvent(
         _ event: NuxieEvent,
         admittedProfileGeneration: UInt64?
-    ) async {
+    ) async -> Bool {
         let traceTimestamp = ExperiencePresentationTimestamp.now(
             wallClock: dateProvider.now()
         )
@@ -659,13 +661,14 @@ extension JourneyService {
                 )
             }
         }
-        let directlyRoutedRunId = await presentationPublications
-            .consumeDirectRoute(eventId: event.id)
         guard initialized,
               event.distinctId == identity.getDistinctId(),
               event.name != JourneyEvents.journeyStarted,
-              event.name != JourneyEvents.journeyCompleted else { return }
+              event.name != JourneyEvents.journeyCompleted else { return true }
 
+        guard await recoverConversionOccurrences(throughEventId: event.id) else { return false }
+        let directlyRoutedRunId = await presentationPublications
+            .consumeDirectRoute(eventId: event.id)
         await resumeParkedRuns(
             event: event,
             excludingRunId: directlyRoutedRunId
@@ -676,12 +679,12 @@ extension JourneyService {
         )
         guard let state = currentProfileState() else {
             await scheduleNextWake()
-            return
+            return true
         }
-        guard isCurrent(state) else { return }
+        guard isCurrent(state) else { return true }
         guard admittedProfileGeneration == state.generation else {
             await scheduleNextWake()
-            return
+            return true
         }
         for arm in state.snapshot.profile.armedLegs
         where arm.entryCondition.type == .event
@@ -694,6 +697,7 @@ extension JourneyService {
             )
         }
         await scheduleNextWake()
+        return true
     }
 }
 
@@ -976,6 +980,16 @@ private extension JourneyService {
 
     private func recoverJournal(_ opened: JourneyRunJournal, generation: UInt64) async {
         do {
+            guard let storageScope else { throw JourneyJournalError.invalidState }
+            // EventLog is configured before recovery; preparation must not await it.
+            try await events.bindConversionAuthority(storageScope)
+            // Entry routing must admit its watch before later captured goals drain.
+            let firstPendingRoute = try await events.firstPendingStableRouteEventId(
+                distinctId: opened.distinctId
+            )
+            guard await recoverConversionOccurrences(throughEventId: firstPendingRoute) else {
+                throw JourneyJournalError.invalidState
+            }
             try await recoverPendingPresentationPublications(in: opened)
             guard try await JourneyExperimentExposureReporter(journal: opened, events: events)
                 .stagePending(),
@@ -1208,6 +1222,7 @@ private extension JourneyService {
                         customer: try state.snapshot.profile.facts.customerValues()
                     ),
                     reentry: release.descriptor.leg.policy.entry.frequency,
+                    policy: release.descriptor.leg.policy,
                     entryStepId: release.descriptor.leg.entryStepId,
                     at: dateProvider.now(),
                     profileFence: profileFence,
@@ -3009,6 +3024,43 @@ private extension JourneyService {
             executionFenceToken: executionFenceToken,
             requireCurrentIdentity: false
         )
+    }
+
+    /// The inbox owns retry; the journal receipt closes the crash window between
+    /// applying measurement and acknowledging its capture. Recovery does not
+    /// route old events back through presentation or entry actions.
+    private func recoverConversionOccurrences(throughEventId: String? = nil) async -> Bool {
+        guard let journal, isCurrentIdentity(journal: journal) else { return false }
+        let executionFenceToken = executionFence.token()
+        do {
+            while isCurrentIdentity(journal: journal) {
+                let pending = try await events.pendingConversionOccurrences(distinctId: journal.distinctId, limit: 100, throughEventId: throughEventId)
+                if pending.isEmpty { return true }
+                guard let admission = journalCommitAdmission(journal: journal,
+                    executionFenceToken: executionFenceToken) else { return false }
+                for item in pending {
+                    let stored = item.event
+                    guard let properties = try JSONSerialization.jsonObject(with: stored.properties) as? [String: Any] else {
+                        throw EventStorageError.invalidProperties
+                    }
+                    let event = NuxieEvent(id: stored.id, name: stored.name, distinctId: stored.distinctId,
+                        properties: properties, timestamp: stored.timestamp)
+                    let watches = try await journal.conversionWatches()
+                    var matching = Set<String>()
+                    if let occurrence = JourneyConversionWatch.normalized(event, acceptedAt: item.acceptedAt) {
+                        for watch in watches.values where await watch.matches(occurrence) {
+                            matching.insert(watch.journeyId)
+                        }
+                    }
+                    guard try await journal.recordConversionOccurrence(event, acceptedAt: item.acceptedAt,
+                        matching: matching, admission: admission, processingAt: dateProvider.now()) else { return false }
+                    try await events.acknowledgeConversionOccurrence(eventId: event.id, distinctId: journal.distinctId)
+                }
+            }
+        } catch {
+            LogError("Failed to recover Journey conversion measurement: \(error)")
+        }
+        return false
     }
 
     private func journalCommitAdmission(

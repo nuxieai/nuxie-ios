@@ -6,6 +6,114 @@ import XCTest
 #endif
 
 final class JourneyRunJournalTests: XCTestCase {
+    func testConversionWatchSurvivesCompletionAndReopeningWithoutReleasePin() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let policy = try ExactJSONCodec.decode(Journey.Policy.self, from: Data(#"{"entry":{"trigger":{"type":"event","eventName":"start"},"frequency":{"type":"every_match"}},"goal":{"criterion":{"type":"event","eventName":"done"},"attribution":{"basis":"entry","window":{"amount":1,"unit":"day"}}},"exitWhenAny":[]}"#.utf8))
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: policy.entry.frequency,
+            policy: policy, entryStepId: "step", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.complete(run.id, outcome: "done", at: date(200))
+        try await journal.markCompletionQueued(run)
+        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let runs = try await reopened.runs()
+        XCTAssertTrue(runs.isEmpty)
+        let pin = try await reopened.releasePin(descriptorSHA256: candidate.reference.descriptorSha256)
+        XCTAssertNil(pin)
+        let watches = try await reopened.conversionWatches()
+        let watch = try XCTUnwrap(watches[run.journeyId])
+        XCTAssertEqual(watch.basis?.occurredAt, 100_000)
+        XCTAssertEqual(watch.legCompletedAt, 200_000)
+        let event = NuxieEvent(id: "outcome", name: "done", distinctId: "customer", timestamp: date(300))
+        let matches = await watch.matches(event)
+        XCTAssertTrue(matches)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(identity.performWithCurrentIdentityFence("customer", { _ in () }))
+        let executionFence = JourneyProfileFence()
+        let staleAdmission = JourneyCommitAdmission(identity: identity, identityFenceToken: identityFence.token,
+            executionFence: executionFence, executionFenceToken: executionFence.token())
+        _ = executionFence.advance()
+        let rejectedCommit = try await reopened.recordConversionOccurrence(event, acceptedAt: date(300), matching: [run.journeyId], admission: staleAdmission)
+        XCTAssertFalse(rejectedCommit)
+        let rejected = try await reopened.conversionWatches()
+        XCTAssertNil(rejected[run.journeyId]?.conversion)
+        let admission = JourneyCommitAdmission(identity: identity, identityFenceToken: identityFence.token,
+            executionFence: executionFence, executionFenceToken: executionFence.token())
+        let committed = try await reopened.recordConversionOccurrence(event, acceptedAt: date(300), matching: [run.journeyId], admission: admission)
+        XCTAssertTrue(committed)
+        let persisted = try await JourneyRunJournal(directory: directory, distinctId: "customer").conversionWatches()
+        XCTAssertEqual(persisted[run.journeyId]?.conversion?.eventId, "outcome")
+        // Simulate a crash before inbox acknowledgement. A newer eligible
+        // continuation arrives before replay; the same occurrence must not
+        // credit it after already converting the original Journey.
+        var continuation = arm(binding: .init(type: .continuation, journeyId: "another", generation: 1))
+        continuation.conversion = .init(startedAt: 250_000, revision: 1,
+            basis: .init(eventId: "another", occurredAt: 250_000), conversion: nil)
+        let continued = try await reopened.admit(arm: continuation, release: release(for: continuation.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: policy.entry.frequency,
+            policy: policy, entryStepId: "step", at: date(400))
+        XCTAssertNotNil(continued)
+        let retryJournal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let retry = try await retryJournal.recordConversionOccurrence(event, acceptedAt: date(300),
+            matching: [run.journeyId, "another"], admission: admission, processingAt: date(400))
+        XCTAssertTrue(retry)
+        let afterRetry = try await retryJournal.conversionWatches()
+        XCTAssertNil(afterRetry["another"]?.conversion)
+        XCTAssertEqual(afterRetry[run.journeyId]?.conversion?.eventId, "outcome")
+        XCTAssertTrue(watch.shouldRetain(at: 86_500_000, executing: false))
+        XCTAssertFalse(watch.shouldRetain(at: 86_500_001 + JourneyConversionWatch.backdateMillis, executing: false))
+    }
+
+    func testReturningCustomerCanMeasureAnAbandonedJourneyWithoutResumingIt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let policy = try ExactJSONCodec.decode(Journey.Policy.self, from: Data(#"{"entry":{"trigger":{"type":"event","eventName":"start"},"frequency":{"type":"every_match"}},"goal":{"criterion":{"type":"event","eventName":"done"},"attribution":{"basis":"entry","window":{"amount":1,"unit":"day"}}},"exitWhenAny":[]}"#.utf8))
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: policy.entry.frequency,
+            policy: policy, entryStepId: "step", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let token = try XCTUnwrap(identity.performWithCurrentIdentityFence("customer", { _ in () }))
+        let execution = JourneyProfileFence()
+        let oldAdmission = JourneyCommitAdmission(identity: identity, identityFenceToken: token.token,
+            executionFence: execution, executionFenceToken: execution.token())
+        identity.setDistinctId("other")
+        try await journal.abandonAll(at: date(200))
+        let event = NuxieEvent(id: "late", name: "done", distinctId: "customer", timestamp: date(300))
+        let rejected = try await journal.recordConversionOccurrence(event, acceptedAt: date(300),
+            matching: [run.journeyId], admission: oldAdmission)
+        XCTAssertFalse(rejected)
+        identity.setDistinctId("customer")
+        let returned = try XCTUnwrap(identity.performWithCurrentIdentityFence("customer", { _ in () }))
+        let newAdmission = JourneyCommitAdmission(identity: identity, identityFenceToken: returned.token,
+            executionFence: execution, executionFenceToken: execution.token())
+        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let measured = try await reopened.recordConversionOccurrence(event, acceptedAt: date(300),
+            matching: [run.journeyId], admission: newAdmission)
+        XCTAssertTrue(measured)
+        let watches = try await reopened.conversionWatches()
+        XCTAssertEqual(watches[run.journeyId]?.conversion?.eventId, "late")
+        let runs = try await reopened.runs()
+        XCTAssertEqual(runs.first?.completion?.outcome, "abandoned")
+    }
+
+    func testConversionOccurrenceTimeAdmission() {
+        let future = NuxieEvent(id: "future", name: "done", distinctId: "customer", timestamp: date(500))
+        XCTAssertEqual(JourneyConversionWatch.normalized(future, acceptedAt: date(300))?.timestamp, date(300))
+        let stale = NuxieEvent(id: "stale", name: "done", distinctId: "customer", timestamp: date(1))
+        XCTAssertNil(JourneyConversionWatch.normalized(stale, acceptedAt: date(31 * 86_400)))
+        let invalid = NuxieEvent(id: "invalid", name: "done", distinctId: "customer", timestamp: Date(timeIntervalSince1970: .infinity))
+        XCTAssertNil(JourneyConversionWatch.normalized(invalid, acceptedAt: date(300)))
+    }
+
     func testPolicyCutIgnoresRetiredJournalWithoutTouchingPurchaseEvidence() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

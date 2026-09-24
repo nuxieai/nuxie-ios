@@ -37,6 +37,7 @@ private struct PurchaseOutcomeCommitFixture: Decodable {
 
     struct Action: Decodable {
         let entry: String
+        let journeyId: String?
         let operation: String?
         let outcome: String
         let evidence: String?
@@ -64,6 +65,8 @@ private struct PurchaseOutcomeCommitFixture: Decodable {
         let completionSources: [String]
         let completionCarriesEvidenceIdentity: Bool
         let completionCarriesProductMapping: Bool
+        let completionJourneyId: String?
+        let completionExperienceVersionId: String?
         let completionEventIdsDistinct: Bool?
         let minimumCarrierCaptureAttempts: Int?
         let successfulCarrierCaptures: Int?
@@ -96,6 +99,8 @@ private struct RecordedPurchaseOutcomeEvent: Sendable {
     let storeProductId: String?
     let placementId: String?
     let experienceId: String?
+    let journeyId: String?
+    let experienceVersionId: String?
     let displayPrice: String?
     let price: Double?
 }
@@ -253,6 +258,8 @@ private final class PurchaseOutcomeEventSink {
             storeProductId: properties?["store_product_id"] as? String,
             placementId: properties?["placement_id"] as? String,
             experienceId: properties?["experience_id"] as? String,
+            journeyId: properties?["journey_id"] as? String,
+            experienceVersionId: properties?["experience_version_id"] as? String,
             displayPrice: properties?["display_price"] as? String,
             price: properties?["price"] as? Double
         )
@@ -696,7 +703,14 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
             let product = try makeProduct(key: productKey)
             storeAdapter.setPurchaseResult(try nativeResult(for: action))
             do {
-                let result = try await service.purchase(product)
+                let correlation = action.journeyId.map {
+                    CommerceOutcomeCorrelation(
+                        eventId: "fixture-checkout-\($0)",
+                        distinctId: identity.getDistinctId(),
+                        journeyId: $0
+                    )
+                }
+                let result = try await service.purchase(product, outcomeCorrelation: correlation)
                 _ = await result.syncTask?.value
                 return nil
             } catch StoreKitError.purchaseCancelled {
@@ -1349,6 +1363,14 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
             && completed.allSatisfy { harness.carriesKnownEvidenceIdentity($0) }
         let hasProductMapping = !completed.isEmpty
             && completed.allSatisfy { harness.carriesKnownProductMapping($0) }
+        if let journeyId = expectation.completionJourneyId {
+            XCTAssertFalse(completed.isEmpty, vector.name)
+            XCTAssertTrue(completed.allSatisfy { $0.journeyId == journeyId }, vector.name)
+        }
+        if let versionId = expectation.completionExperienceVersionId {
+            XCTAssertFalse(completed.isEmpty, vector.name)
+            XCTAssertTrue(completed.allSatisfy { $0.experienceVersionId == versionId }, vector.name)
+        }
         let serverSyncRequests = await harness.syncAPI.requestCount
         let scheduledSyncTasks = harness.syncTaskProbe.count
         let overlayEverPresent = await harness.projection.overlayEverPresent

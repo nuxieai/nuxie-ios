@@ -5,8 +5,9 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-const root = fileURLToPath(new URL('..', import.meta.url));
-const files = execFileSync('git', ['ls-files', 'fixtures', 'Tests'], { cwd: root, encoding: 'utf8' })
+const root = resolve(process.argv[2] ?? fileURLToPath(new URL('..', import.meta.url)));
+const paths = process.argv.slice(3);
+const files = execFileSync('git', ['ls-files', ...(paths.length ? paths : ['fixtures', 'Tests'])], { cwd: root, encoding: 'utf8' })
   .trim().split('\n').filter((name) => name.endsWith('.json'));
 const key = createPrivateKey({ key: Buffer.concat([
   Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.alloc(32, 0x42),

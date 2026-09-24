@@ -2,7 +2,6 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$repo_root/scripts/swift-module-search-path.sh"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/nuxie-public-api.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
@@ -29,16 +28,20 @@ extract_platform() {
   local baseline_digest="$scratch/Nuxie-$name-baseline.json"
   local sdk_path
   local bin_path
-  local module_path
 
   sdk_path="$(xcrun --sdk "$sdk_name" --show-sdk-path)"
-  swift build --target Nuxie --triple "$target" --sdk "$sdk_path" >/dev/null
-  bin_path="$(swift build --show-bin-path --triple "$target" --sdk "$sdk_path")"
-  module_path="$(swift_module_search_path "$bin_path" Nuxie)"
+  if [[ "$name" == "macos" ]]; then
+    make build-macos >&2
+    bin_path="$repo_root/DerivedData/Build/Products/Debug"
+  else
+    make build-ios-device >&2
+    bin_path="$repo_root/DerivedData/Build/Products/Release-iphoneos"
+  fi
   xcrun swift-api-digester \
     -dump-sdk \
     -module Nuxie \
-    -I "$module_path" \
+    -F "$bin_path" \
+    -I "$bin_path" \
     -target "$target" \
     -sdk "$sdk_path" \
     -o "$digest" \
@@ -59,7 +62,8 @@ extract_platform() {
       -diagnose-sdk \
       -baseline-path "$baseline_digest" \
       -module Nuxie \
-      -I "$module_path" \
+      -F "$bin_path" \
+      -I "$bin_path" \
       -target "$target" \
       -sdk "$sdk_path" \
       -swift-only \

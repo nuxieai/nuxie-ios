@@ -4,6 +4,49 @@ import Foundation
 /// Mock implementation of EventLog for testing
 // @unchecked Sendable: all mutable state is serialized through `lock`.
 public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
+    private var _firstPendingStableRouteEventId: String?
+    public var firstPendingRouteEventId: String? {
+        get { lock.withLock { _firstPendingStableRouteEventId } }
+        set { lock.withLock { _firstPendingStableRouteEventId = newValue } }
+    }
+    public func firstPendingStableRouteEventId(distinctId: String) async throws -> String? {
+        lock.withLock {
+            _routedEvents.first { $0.id == _firstPendingStableRouteEventId && $0.distinctId == distinctId }?.id
+        }
+    }
+
+    private var conversionAcknowledgements: Set<String> = []
+    private var boundConversionScope: JourneyStorageScope?
+    public func bindConversionAuthority(_ scope: JourneyStorageScope) async throws {
+        try lock.withLock {
+            guard boundConversionScope == nil || boundConversionScope == scope else { throw EventStorageError.invalidProperties }
+            boundConversionScope = scope
+        }
+    }
+
+    public func pendingConversionOccurrences(distinctId: String, limit: Int, throughEventId: String?) async throws -> [PendingConversionOccurrence] {
+        try lock.withLock {
+            let end: Int
+            if let throughEventId {
+                guard !conversionAcknowledgements.contains(throughEventId),
+                      let index = _routedEvents.firstIndex(where: { $0.id == throughEventId && $0.distinctId == distinctId }) else { return [] }
+                end = index + 1
+            } else { end = _routedEvents.count }
+            return try _routedEvents.prefix(end).filter { $0.distinctId == distinctId && !conversionAcknowledgements.contains($0.id) }
+                .prefix(max(1, min(limit, 1000))).map {
+                    .init(event: try StoredEvent(id: $0.id, name: $0.name, properties: $0.properties,
+                        timestamp: $0.timestamp, distinctId: $0.distinctId), acceptedAt: $0.timestamp)
+                }
+        }
+    }
+    public func acknowledgeConversionOccurrence(eventId: String, distinctId: String) async throws {
+        lock.withLock {
+            if _routedEvents.contains(where: { $0.id == eventId && $0.distinctId == distinctId }) {
+                conversionAcknowledgements.insert(eventId)
+            }
+        }
+    }
+
     private struct CommittedSubscriber {
         let identifier: UInt64
         let filter: (@Sendable (NuxieEvent) -> Bool)?
@@ -542,6 +585,15 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         return admissions
     }
 
+    public func subscribeAcknowledgingCommitted(
+        reservation: CommittedEventAdmissionReservation,
+        handler: @escaping AcknowledgingCommittedEventHandler
+    ) async {
+        await subscribeCommitted(where: nil, reservation: reservation) { event, admission in
+            _ = await handler(event, admission)
+        }
+    }
+
     public func subscribeForwarding(
         when isEnabled: @escaping @Sendable () -> Bool,
         handler: @escaping ForwardingEventHandler
@@ -786,12 +838,14 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         lock.withLock {
             // `identity` is wired once by MockFactory and survives resets.
             _routedEvents.removeAll()
+            conversionAcknowledgements.removeAll()
             _trackedEvents.removeAll()
             _eventHandlers.removeAll()
             _preparedTriggerBeforeSend = nil
             _prepareEventPropertiesHandler = nil
             _drainHandler = nil
             _replayPendingRoutesHandler = nil
+            _firstPendingStableRouteEventId = nil
             _resumeRoutingHandler = nil
             _committedRoutingDrainCallCount = 0
             _capturedEventObserver = nil

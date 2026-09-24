@@ -383,6 +383,7 @@ final class ForwardingPersistenceTests: XCTestCase {
     configuration.testingOverrides.suppressBackgroundWork = true
     var overrides = NuxieCoreOverrides()
     overrides.api = MockNuxieApi()
+    overrides.journeys = ForwardingJourneyConsumer()
     try sdk.setup(with: configuration, overrides: overrides)
 
     let core = try XCTUnwrap(sdk.core)
@@ -440,10 +441,7 @@ final class ForwardingPersistenceTests: XCTestCase {
         distinctId: "customer-1"
       )
     )
-    // captureSystemEvent's Bool also reflects journey routing, which this
-    // minimal core cannot satisfy; durable capture and forwarding are what
-    // this test pins, and the delegate snapshot below asserts both.
-    _ = purchaseSyncedCaptured
+    XCTAssertTrue(purchaseSyncedCaptured)
 
     core.eventLog.track(
       JourneyEvents.experienceDismissed,
@@ -687,7 +685,9 @@ final class ForwardingPersistenceTests: XCTestCase {
       by: { $0 }
     ).mapValues(\.count)
     let expectedStoreCalls = [
+      "acknowledgeConversionOccurrence": 1,
       "advanceHistoryCoverage": 1,
+      "bindConversionAuthority": 1,
       "close": 1,
       "commitStableCapture": 1,
       "commitStableCaptureAndStageRoute": 2,
@@ -704,10 +704,12 @@ final class ForwardingPersistenceTests: XCTestCase {
       "insert": 1,
       "markDelivered": 1,
       "markStableRouteDelivered": 2,
+      "pendingConversionOccurrences": 1,
+      "pruneConversionOccurrences": 1,
       "pruneHistory": 1,
       "queryEventsForUser": 4,
       "queryPendingDelivery": 1,
-      "queryPendingStableRoutes": 2,
+      "queryPendingStableRoutes": 3,
       "queryRecentEvents": 1,
       "queryStableCapture": 2,
       "readOrInitializeHistoryCoverage": 1,
@@ -785,4 +787,23 @@ final class ForwardingPersistenceTests: XCTestCase {
       .deletingLastPathComponent()
       .deletingLastPathComponent()
   }
+}
+
+
+private actor ForwardingJourneyConsumer: JourneyServiceProtocol {
+  func handleEvent(_ event: NuxieEvent) async {}
+  func handleEvent(_ event: NuxieEvent, admittedProfileGeneration: UInt64?) async -> Bool { true }
+  nonisolated func eventAdmissionGeneration() -> UInt64 { 0 }
+  func initialize() async {}
+  func onAppWillEnterForeground() async {}
+  func onAppBecameActive() async {}
+  func onAppDidEnterBackground() async {}
+  func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
+  func profileDidCommit(_ snapshot: JourneyProfileCatalog.Snapshot,
+    artifacts: PreparedJourneyArtifacts?, authority: ProfileDeliveryAuthority,
+    admissionGeneration: UInt64, distinctId: String) async {}
+  func profileDidWithdraw(authority: ProfileDeliveryAuthority?, admissionGeneration: UInt64,
+    distinctId: String) async {}
+  func profileDidClear(distinctId: String, admissionGeneration: UInt64) async {}
+  func profileDidClearAll(admissionGeneration: UInt64) async {}
 }

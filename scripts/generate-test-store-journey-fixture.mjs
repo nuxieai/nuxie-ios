@@ -47,7 +47,7 @@ for (const action of ['purchase', 'restore']) {
     mediaType: 'application/vnd.nuxie.journey+json', encoding: 'base64',
     descriptorSha256: createHash('sha256').update(bytes).digest('hex'), descriptorSizeBytes: bytes.length,
     descriptorBytesBase64: bytes.toString('base64'), signature: { version: 1, algorithm: 'ed25519',
-      keyId: 'TEST_ONLY_DEV_KEYPAIR', signatureBase64: sign(null, Buffer.concat([Buffer.from('nuxie.journey-release.v1\0'), bytes]), key).toString('base64') },
+      keyId: 'TEST_ONLY_DEV_KEYPAIR', signatureBase64: sign(null, Buffer.concat([Buffer.from('nuxie.journey-release.v2\0'), bytes]), key).toString('base64') },
   } };
 }
 const directory = new URL('../fixtures/journeys/planes/', import.meta.url);

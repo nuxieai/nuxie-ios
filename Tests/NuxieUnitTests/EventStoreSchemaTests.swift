@@ -21,7 +21,160 @@ final class EventStoreSchemaTests: XCTestCase {
         temporaryRoot = nil
     }
 
-    func testFreshStoreInstallsTheCompleteSchemaAsVersionTwo() async throws {
+    func testConversionExpiryIsInclusiveScopedAndLeavesEventDeliveryIntact() async throws {
+        let first = SQLiteEventStore(conversionCaptureScope: "first")
+        let other = SQLiteEventStore(conversionCaptureScope: "other")
+        try await first.initialize(path: temporaryRoot)
+        try await other.initialize(path: temporaryRoot)
+        let accepted = Date(timeIntervalSince1970: 100)
+        for (store, id) in [(first, "first-event"), (other, "other-event")] {
+            let event = try StoredEvent(id: id, name: "outcome", timestamp: accepted, distinctId: "customer")
+            _ = try await store.insert(event, deliveryState: .pending, origin: .device,
+                assigningCommitSequence: true, acceptedAt: accepted)
+        }
+        let boundary = accepted.addingTimeInterval(Double(PendingConversionOccurrence.retentionMillis) / 1000)
+        let atBoundary = try await first.pruneConversionOccurrences(at: boundary)
+        XCTAssertEqual(atBoundary, 0)
+        let expired = try await first.pruneConversionOccurrences(at: boundary.addingTimeInterval(0.001))
+        XCTAssertEqual(expired, 1)
+        let gone = try await first.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertTrue(gone.isEmpty)
+        let isolated = try await other.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertEqual(isolated.map { $0.event.id }, ["other-event"])
+        let analytics = try await first.queryEvent(id: "first-event")
+        XCTAssertNotNil(analytics)
+        let delivery = try await first.queryPendingDelivery(limit: 10)
+        XCTAssertEqual(Set(delivery.map(\.id)), ["first-event", "other-event"])
+        let rolledBackClock = try await first.pruneConversionOccurrences(at: accepted)
+        XCTAssertEqual(rolledBackClock, 0)
+        await first.close()
+        await other.close()
+    }
+
+    func testConversionInboxUsesAuthenticatedAppScopeAndSurvivesCredentialRotation() async throws {
+        let original = SQLiteEventStore(conversionCaptureScope: "old-key")
+        try await original.initialize(path: temporaryRoot)
+        let event = try StoredEvent(id: "goal", name: "outcome", distinctId: "customer")
+        _ = try await original.insert(event, deliveryState: .pending, origin: .device, assigningCommitSequence: true)
+        let app = JourneyStorageScope(authority: .init(appId: "app-a", environment: "production"))
+        try await original.bindConversionAuthority(app)
+        await original.close()
+
+        for (key, authority) in [
+            ("other-key", ProfileDeliveryAuthority(appId: "app-b", environment: "production")),
+            ("test-key", ProfileDeliveryAuthority(appId: "app-a", environment: "test"))
+        ] {
+            let other = SQLiteEventStore(conversionCaptureScope: key)
+            try await other.initialize(path: temporaryRoot)
+            try await other.bindConversionAuthority(JourneyStorageScope(authority: authority))
+            let invisible = try await other.pendingConversionOccurrences(distinctId: "customer")
+            XCTAssertTrue(invisible.isEmpty)
+            try await other.acknowledgeConversionOccurrence(eventId: "goal", distinctId: "customer")
+            do {
+                try await other.bindConversionAuthority(app)
+                XCTFail("A bound credential cannot be reassigned to another app/environment")
+            } catch { }
+            await other.close()
+        }
+
+        let rotated = SQLiteEventStore(conversionCaptureScope: "new-key")
+        try await rotated.initialize(path: temporaryRoot)
+        let unbound = try await rotated.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertTrue(unbound.isEmpty)
+        try await rotated.bindConversionAuthority(app)
+        let pending = try await rotated.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertEqual(pending.map { $0.event.id }, ["goal"])
+        await rotated.close()
+        let reopened = SQLiteEventStore(conversionCaptureScope: "new-key")
+        try await reopened.initialize(path: temporaryRoot)
+        let restored = try await reopened.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertEqual(restored.map { $0.event.id }, ["goal"])
+        try await reopened.acknowledgeConversionOccurrence(eventId: "goal", distinctId: "customer")
+        await reopened.close()
+    }
+
+    func testConversionInboxCutoffDoesNotConsumeEventsBeyondCurrentRoute() async throws {
+        let store = SQLiteEventStore()
+        try await store.initialize(path: temporaryRoot)
+        for id in ["entry", "later-goal"] {
+            let event = try StoredEvent(id: id, name: id, distinctId: "customer")
+            _ = try await store.insert(event, deliveryState: .pending, origin: .device, assigningCommitSequence: true)
+        }
+        let prefix = try await store.pendingConversionOccurrences(distinctId: "customer", throughEventId: "entry")
+        XCTAssertEqual(prefix.map { $0.event.id }, ["entry"])
+        try await store.acknowledgeConversionOccurrence(eventId: "entry", distinctId: "customer")
+        let repeated = try await store.pendingConversionOccurrences(distinctId: "customer", throughEventId: "entry")
+        XCTAssertTrue(repeated.isEmpty)
+        let remainder = try await store.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertEqual(remainder.map { $0.event.id }, ["later-goal"])
+        await store.close()
+    }
+
+    func testConversionInboxSurvivesHistoryDeletionAndReopenUntilScopedAcknowledgement() async throws {
+        let store = SQLiteEventStore()
+        try await store.initialize(path: temporaryRoot)
+        let event = try StoredEvent(id: "goal", name: "outcome", properties: ["product": "pro"],
+            timestamp: Date(timeIntervalSince1970: 100), distinctId: "customer")
+        _ = try await store.insert(event, deliveryState: .pending, origin: .device,
+            assigningCommitSequence: true, acceptedAt: Date(timeIntervalSince1970: 200))
+        _ = try await store.insert(event, deliveryState: .pending, origin: .device,
+            assigningCommitSequence: true, acceptedAt: Date(timeIntervalSince1970: 300))
+        await store.close()
+        let database = try openDatabase()
+        try execute("DELETE FROM events;", on: database)
+        sqlite3_close(database)
+        try await store.initialize(path: temporaryRoot)
+        _ = try await store.insert(event, deliveryState: .pending, origin: .device,
+            assigningCommitSequence: true, acceptedAt: Date(timeIntervalSince1970: 400))
+        let pending = try await store.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual(pending.first?.event.id, "goal")
+        XCTAssertEqual(pending.first?.acceptedAt, Date(timeIntervalSince1970: 200))
+        let other = try await store.pendingConversionOccurrences(distinctId: "other")
+        XCTAssertTrue(other.isEmpty)
+        try await store.acknowledgeConversionOccurrence(eventId: "goal", distinctId: "other")
+        let retained = try await store.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertEqual(retained.count, 1)
+        try await store.acknowledgeConversionOccurrence(eventId: "goal", distinctId: "customer")
+        let acknowledged = try await store.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertTrue(acknowledged.isEmpty)
+        await store.close()
+    }
+
+    func testStableCaptureStagesConversionWithOriginalAcceptanceTime() async throws {
+        let store = SQLiteEventStore()
+        try await store.initialize(path: temporaryRoot)
+        let event = try StoredEvent(id: "purchase", name: SystemEventNames.purchaseCompleted,
+            timestamp: Date(timeIntervalSince1970: 100), distinctId: "customer")
+        _ = try await store.commitStableCapture(eventId: event.id, event: event,
+            recordedAt: Date(timeIntervalSince1970: 200), assigningCommitSequence: true, admission: nil)
+        _ = try await store.commitStableCapture(eventId: event.id, event: event,
+            recordedAt: Date(timeIntervalSince1970: 300), assigningCommitSequence: true, admission: nil)
+        let pending = try await store.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual(pending.first?.acceptedAt, Date(timeIntervalSince1970: 200))
+        await store.close()
+    }
+
+    func testConversionInboxWriteFailureRollsBackEventInsert() async throws {
+        let store = SQLiteEventStore()
+        try await store.initialize(path: temporaryRoot)
+        let database = try openDatabase()
+        try execute("CREATE TRIGGER reject_conversion BEFORE INSERT ON conversion_event_inbox BEGIN SELECT RAISE(ABORT, 'injected failure'); END;", on: database)
+        sqlite3_close(database)
+        let event = try StoredEvent(id: "atomic", name: "outcome", distinctId: "customer")
+        do {
+            _ = try await store.insert(event, deliveryState: .pending, origin: .device, assigningCommitSequence: true)
+            XCTFail("Capture must not commit without its conversion occurrence")
+        } catch { }
+        let captured = try await store.queryEvent(id: "atomic")
+        XCTAssertNil(captured)
+        let pending = try await store.pendingConversionOccurrences(distinctId: "customer")
+        XCTAssertTrue(pending.isEmpty)
+        await store.close()
+    }
+
+    func testFreshStoreInstallsTheCompleteSchemaAsVersionThree() async throws {
         let store = SQLiteEventStore()
         try await store.initialize(path: temporaryRoot)
         await store.close()
@@ -29,7 +182,7 @@ final class EventStoreSchemaTests: XCTestCase {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
-        XCTAssertEqual(try userVersion(in: database), 2)
+        XCTAssertEqual(try userVersion(in: database), 3)
         XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM pragma_table_info('events');", in: database), 7)
         XCTAssertEqual(
             try scalarInt(
@@ -91,7 +244,7 @@ final class EventStoreSchemaTests: XCTestCase {
         )
     }
 
-    func testReopensValidVersionTwoWithoutMutatingItsSchema() async throws {
+    func testUpgradesValidVersionTwoWithoutDeletingEvents() async throws {
         let firstStore = SQLiteEventStore()
         try await firstStore.initialize(path: temporaryRoot)
         await firstStore.close()
@@ -106,7 +259,7 @@ final class EventStoreSchemaTests: XCTestCase {
 
         let reopenedDatabase = try openDatabase()
         defer { sqlite3_close(reopenedDatabase) }
-        XCTAssertEqual(try userVersion(in: reopenedDatabase), 2)
+        XCTAssertEqual(try userVersion(in: reopenedDatabase), 3)
         XCTAssertEqual(
             try scalarInt("PRAGMA schema_version;", in: reopenedDatabase),
             initialSchemaVersion
@@ -157,7 +310,7 @@ final class EventStoreSchemaTests: XCTestCase {
             """
             CREATE TABLE future_data (value TEXT NOT NULL);
             INSERT INTO future_data (value) VALUES ('keep-me');
-            PRAGMA user_version = 3;
+            PRAGMA user_version = 4;
             """,
             on: database
         )
@@ -165,11 +318,11 @@ final class EventStoreSchemaTests: XCTestCase {
         sqlite3_close(database)
 
         let store = SQLiteEventStore()
-        await assertSchemaFailure(store, targetVersion: 3, operation: "validate user_version")
+        await assertSchemaFailure(store, targetVersion: 4, operation: "validate user_version")
 
         let rejectedDatabase = try openDatabase()
         defer { sqlite3_close(rejectedDatabase) }
-        XCTAssertEqual(try userVersion(in: rejectedDatabase), 3)
+        XCTAssertEqual(try userVersion(in: rejectedDatabase), 4)
         XCTAssertEqual(try scalarInt("PRAGMA schema_version;", in: rejectedDatabase), schemaVersionBefore)
         XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM future_data;", in: rejectedDatabase), 1)
     }

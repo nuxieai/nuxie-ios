@@ -76,6 +76,8 @@ struct PurchaseStorageScope: Codable, Equatable, Hashable, Sendable {
 }
 
 struct PurchaseCommercialContext: Codable, Equatable, Sendable {
+    /// Checkout ownership, never populated by reusable catalog resolution.
+    var journeyId: String?
     let release: AuthenticatedJourneyReleaseID
     let placementId: String
     let productId: String
@@ -92,7 +94,8 @@ struct PurchaseCommercialContext: Codable, Equatable, Sendable {
         productId: String,
         storeProductId: String,
         displayPrice: String? = nil,
-        price: Double? = nil
+        price: Double? = nil,
+        journeyId: String? = nil
     ) {
         self.release = release
         self.placementId = placementId
@@ -100,6 +103,7 @@ struct PurchaseCommercialContext: Codable, Equatable, Sendable {
         self.storeProductId = storeProductId
         self.displayPrice = displayPrice
         self.price = price
+        self.journeyId = journeyId
     }
 
     var appId: String { release.identity.appId }
@@ -122,11 +126,15 @@ func purchaseCompletionProperties(
         "placement_id": context.placementId,
         "store_product_id": context.storeProductId,
         "experience_id": context.experienceId,
+        "experience_version_id": context.release.identity.experienceVersionId,
         "source": source.rawValue,
         "test_store": testStore,
     ]
     if let transactionId {
         properties["transaction_id"] = transactionId
+    }
+    if let journeyId = context.journeyId {
+        properties["journey_id"] = journeyId
     }
     if let displayPrice = context.displayPrice {
         properties["display_price"] = displayPrice

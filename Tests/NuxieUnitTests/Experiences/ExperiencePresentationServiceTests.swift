@@ -948,7 +948,8 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(controller.purchaseRequests.first?.correlation).to(equal(
                         CommerceOutcomeCorrelation(
                             eventId: "effect-purchase",
-                            distinctId: "user-1"
+                            distinctId: "user-1",
+                            journeyId: "journey-owner"
                         )
                     ))
                     expect(controller.restoreCorrelations.first ?? nil).to(equal(

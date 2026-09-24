@@ -40,7 +40,7 @@ const entry = { locator: { ...descriptor.identity, legId: descriptor.leg.id }, e
   ...original.envelope, descriptorSha256: sha256(bytes), descriptorSizeBytes: bytes.length,
   descriptorBytesBase64: bytes.toString('base64'), signature: {
     ...original.envelope.signature,
-    signatureBase64: sign(null, Buffer.concat([Buffer.from('nuxie.journey-release.v1\0'), bytes]), key).toString('base64'),
+    signatureBase64: sign(null, Buffer.concat([Buffer.from('nuxie.journey-release.v2\0'), bytes]), key).toString('base64'),
   },
 } };
 mkdirSync(target, { recursive: true });

@@ -618,8 +618,13 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
     }
 
-    func testCanonicalCompletionPayloadChangesOnlyInSourceProvenance() {
-        let context = commercialContext()
+    func testCanonicalCompletionPayloadChangesOnlyInSourceProvenance() throws {
+        var context = commercialContext()
+        context.journeyId = "checkout-journey"
+        let recoveredContext = try JSONDecoder().decode(
+            PurchaseCommercialContext.self,
+            from: JSONEncoder().encode(context)
+        )
         let directCallback = purchaseCompletionProperties(
             context: context,
             transactionId: "transaction-1",
@@ -627,7 +632,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             source: .checkout
         )
         let storeUpdateRecovery = purchaseCompletionProperties(
-            context: context,
+            context: recoveredContext,
             transactionId: "transaction-1",
             testStore: false,
             source: .transactionStream
@@ -658,6 +663,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
                 "placement_id": "placement-1",
                 "store_product_id": "store-product-1",
                 "experience_id": "experience-1",
+                "experience_version_id": "version-1",
+                "journey_id": "checkout-journey",
                 "test_store": false,
                 "transaction_id": "transaction-1",
                 "display_price": "$9.99",

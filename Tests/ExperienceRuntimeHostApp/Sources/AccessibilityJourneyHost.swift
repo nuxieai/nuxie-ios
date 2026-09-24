@@ -106,7 +106,7 @@ private struct AccessibilityFixture {
         // The envelope is copied intact. Normal SDK authentication and artifact
         // hash verification remain responsible for accepting the signed bytes.
         profile = try JSONSerialization.data(withJSONObject: [
-            "schemaVersion": "nuxie.journey-plane-profile.v1", "status": "ok",
+            "schemaVersion": "nuxie.journey-plane-profile.v2", "status": "ok",
             "delivery": [
                 "renderBaseUrl": "https://semantic.sdk-fixtures.nuxie.test/",
                 "assetBaseUrl": "https://semantic.sdk-fixtures.nuxie.test/",

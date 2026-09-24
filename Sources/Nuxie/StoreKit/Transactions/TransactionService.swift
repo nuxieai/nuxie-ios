@@ -38,6 +38,13 @@ struct PurchaseSyncResult: Sendable {
 struct CommerceOutcomeCorrelation: Equatable, Sendable {
     let eventId: String
     let distinctId: String
+    let journeyId: String?
+
+    init(eventId: String, distinctId: String, journeyId: String? = nil) {
+        self.eventId = eventId
+        self.distinctId = distinctId
+        self.journeyId = journeyId
+    }
 }
 
 enum PendingPurchaseOwnershipResolution: Sendable {
@@ -420,6 +427,9 @@ actor TransactionService {
         _ product: StoreProduct,
         outcomeCorrelation: CommerceOutcomeCorrelation? = nil
     ) async throws -> PurchaseSyncResult {
+        // Work on a checkout-owned value; catalog products remain reusable.
+        var product = product
+        product.purchaseContext?.journeyId = outcomeCorrelation?.journeyId
         LogDebug("TransactionService: Starting purchase for product: \(product.productId)")
 
         var activeCheckoutKeyToClear: String?
