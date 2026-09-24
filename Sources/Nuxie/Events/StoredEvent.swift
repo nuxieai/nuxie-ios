@@ -29,6 +29,7 @@ struct StoredEvent: Codable, Sendable {
     /// Distinct ID associated with the event (identified or anonymous).
     /// Always present for SDK-generated events.
     let distinctId: String
+    let journeyOrigin: JourneyEventOrigin?
     
     /// Origin of the committed fact. Device events are the default.
     public var origin: StoredEventOrigin {
@@ -50,12 +51,14 @@ struct StoredEvent: Codable, Sendable {
         name: String,
         properties: [String: Any] = [:],
         timestamp: Date = Date(),
-        distinctId: String
+        distinctId: String,
+        journeyOrigin: JourneyEventOrigin? = nil
     ) throws {
         self.id = id
         self.name = name
         self.timestamp = timestamp
         self.distinctId = distinctId
+        self.journeyOrigin = journeyOrigin
         
         // Preserve nested NSDictionary keys in declared leg outputs. Bridging
         // through AnyCodable's Swift dictionaries can merge Unicode spellings.
@@ -75,13 +78,15 @@ struct StoredEvent: Codable, Sendable {
         name: String,
         properties: Data,
         timestamp: Date,
-        distinctId: String
+        distinctId: String,
+        journeyOrigin: JourneyEventOrigin? = nil
     ) {
         self.id = id
         self.name = name
         self.properties = properties
         self.timestamp = timestamp
         self.distinctId = distinctId
+        self.journeyOrigin = journeyOrigin
     }
     
     /// Get properties as decoded [String: AnyCodable] dictionary (lazy decoding)

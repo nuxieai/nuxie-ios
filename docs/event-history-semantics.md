@@ -113,16 +113,17 @@ query.
 
 ## Schema and authoring guidance
 
-`event_history_metadata` is part of the complete schema v3, alongside stable
+`event_history_metadata` is part of the complete schema v4, alongside stable
 route receipts, the conversion inbox, and process-scoped subscriber delivery.
 Fresh-store table creation, required-column and index verification, and the
-`user_version = 3` write occur in one transaction. The singleton coverage row is established when
+`user_version = 4` write occur in one transaction. The singleton coverage row is established when
 `EventLog` first opens that fresh store and its monotonic `coverage_start_ms` is
 preserved across reopen. An empty unversioned database is initialized; a
 nonempty unversioned store, v1 store, unknown future version, or malformed
-supported schema is rejected without mutation. The verified v2-to-v3 upgrade
-adds delivery and conversion metadata without replaying historical events as
-new conversions. Database reset
+supported schema is rejected without mutation. Verified v2/v3 upgrades preserve ordinary event evidence, add any missing
+conversion metadata, and add a nullable `journey_origin` column without replaying
+historical events as new conversions. Authored origin remains separate from
+analytics properties and survives database reopen and pending delivery. Database reset
 remains the only operation that intentionally discards the watermark.
 
 After this change, an existing unbounded condition may stop qualifying on a

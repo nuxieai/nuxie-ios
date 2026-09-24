@@ -13,6 +13,9 @@ public struct NuxieEvent: @unchecked Sendable {
     /// Capture-time name used only for forwarding classification. A
     /// beforeSend rename changes `name` but does not change this value.
     let forwardingName: String
+
+    /// Internal context is separate from host-supplied analytics properties.
+    let journeyOrigin: JourneyEventOrigin?
     
     /// User identifier (distinct ID)
     public let distinctId: String
@@ -40,6 +43,7 @@ public struct NuxieEvent: @unchecked Sendable {
         self.id = id
         self.name = name
         self.forwardingName = name
+        self.journeyOrigin = nil
         self.distinctId = distinctId
         self.properties = properties
         self.timestamp = timestamp
@@ -51,11 +55,13 @@ public struct NuxieEvent: @unchecked Sendable {
         forwardingName: String,
         distinctId: String,
         properties: [String: Any],
-        timestamp: Date
+        timestamp: Date,
+        journeyOrigin: JourneyEventOrigin? = nil
     ) {
         self.id = id
         self.name = name
         self.forwardingName = forwardingName
+        self.journeyOrigin = journeyOrigin
         self.distinctId = distinctId
         self.properties = properties
         self.timestamp = timestamp
