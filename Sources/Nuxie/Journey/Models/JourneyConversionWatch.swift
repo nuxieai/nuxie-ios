@@ -108,8 +108,8 @@ struct JourneyConversionWatch: Codable, Sendable {
         guard raw.isFinite, received.isFinite, raw >= 0, received >= 0,
               raw <= 9_007_199_254_740_991, received <= 9_007_199_254_740_991,
               raw >= received - Double(backdateMillis) else { return nil }
-        return NuxieEvent(id: event.id, name: event.name, distinctId: event.distinctId,
-            properties: event.properties, timestamp: Date(timeIntervalSince1970: Double(Int(min(raw, received))) / 1000))
+        return NuxieEvent(id: event.id, name: event.name, forwardingName: event.forwardingName, distinctId: event.distinctId,
+            properties: event.properties, timestamp: Date(timeIntervalSince1970: Double(Int(min(raw, received))) / 1000), journeyOrigin: event.journeyOrigin)
     }
 
     /// Apply only a committed occurrence. The server reconciles canonical
@@ -121,25 +121,31 @@ struct JourneyConversionWatch: Codable, Sendable {
         guard event.name != "$purchase_completed", event.name != "$purchase_synced" else { return }
         guard let event = normalized(event, acceptedAt: acceptedAt) else { return }
         let time = millis(event.timestamp)
-        let direct = event.properties["journey_id"] as? String
+        let reportedJourney = event.properties["journey_id"] as? String
         let hasContext = ["journey_id", "experience_id", "experience_version_id"].contains { event.properties[$0] != nil }
         if hasContext {
-            guard let direct, let watch = watches[direct],
+            guard let reportedJourney, let watch = watches[reportedJourney],
                   event.properties["experience_id"] as? String == watch.experienceId,
                   event.properties["experience_version_id"] as? String == watch.versionId else { return }
         }
-        if event.name == JourneyEvents.experienceShown, let direct, var watch = watches[direct],
+        if event.name == JourneyEvents.experienceShown, let reportedJourney, var watch = watches[reportedJourney],
            watch.goal.attribution.basis == .firstShown, time >= watch.startedAt,
            watch.basis == nil {
             watch.basis = .init(eventId: event.id, occurredAt: time)
-            watches[direct] = watch
+            watches[reportedJourney] = watch
         }
+        let direct = event.journeyOrigin?.journeyId
+        if let origin = event.journeyOrigin {
+            guard origin.occurrenceId == event.id, let watch = watches[origin.journeyId],
+                  origin.experienceId == watch.experienceId, origin.versionId == watch.versionId else { return }
+            if hasContext, reportedJourney != origin.journeyId { return }
+        } else if hasContext { return }
         let eligible = watches.values.filter { watch in
             guard matching.contains(watch.journeyId), let basis = watch.basis,
                   let window = watch.goal.windowMillis,
                   time >= basis.occurredAt, time <= basis.occurredAt + window else { return false }
             if time == basis.occurredAt && !basis.eventId.utf16.lexicographicallyPrecedes(event.id.utf16) { return false }
-            return !hasContext || watch.journeyId == direct
+            return direct == nil || watch.journeyId == direct
         }.sorted { left, right in
             if left.basis!.occurredAt != right.basis!.occurredAt { return left.basis!.occurredAt > right.basis!.occurredAt }
             return left.journeyId.utf16.lexicographicallyPrecedes(right.journeyId.utf16)

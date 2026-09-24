@@ -520,6 +520,16 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             snapshot.profile.armedLegs[0].reference.legId
         )
         XCTAssertEqual(authored.properties["leg_generation"] as? Int, 0)
+        let origin = try XCTUnwrap(authored.journeyOrigin)
+        XCTAssertEqual(origin.journeyId, authored.properties["journey_id"] as? String)
+        XCTAssertEqual(origin.experienceId, "experience_golden")
+        XCTAssertEqual(origin.versionId, snapshot.profile.armedLegs[0].reference.versionId)
+        XCTAssertEqual(origin.legId, snapshot.profile.armedLegs[0].reference.legId)
+        XCTAssertEqual(origin.generation, 0)
+        XCTAssertEqual(origin.source, .deviceAction)
+        XCTAssertEqual(origin.occurrenceId, authored.id)
+        XCTAssertFalse(origin.stepId.isEmpty)
+
         XCTAssertEqual(
             events.routedEvents.last?.properties["outcome"] as? String,
             "continue"

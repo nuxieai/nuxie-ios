@@ -10,6 +10,7 @@ final class JourneyConversionWatchTests: XCTestCase {
             let name: String
             let occurredAt: Int
             let properties: [String: String]
+            let journeyOrigin: JourneyEventOrigin?
         }
         let name: String
         let watches: [String: JourneyConversionWatch]
@@ -34,9 +35,10 @@ final class JourneyConversionWatchTests: XCTestCase {
         let corpus = try ExactJSONCodec.decode(Corpus.self, from: Data(contentsOf: url))
         for vector in corpus.vectors {
             var watches = vector.watches
-            let event = NuxieEvent(id: vector.event.id, name: vector.event.name, distinctId: "customer",
+            let event = NuxieEvent(id: vector.event.id, name: vector.event.name, forwardingName: vector.event.name, distinctId: "customer",
                 properties: vector.event.properties,
-                timestamp: Date(timeIntervalSince1970: Double(vector.event.occurredAt) / 1000))
+                timestamp: Date(timeIntervalSince1970: Double(vector.event.occurredAt) / 1000),
+                journeyOrigin: vector.event.journeyOrigin)
             let accepted = Date(timeIntervalSince1970: Double(vector.acceptedAt) / 1000)
             var matching = Set<String>()
             if let normalized = JourneyConversionWatch.normalized(event, acceptedAt: accepted) {
