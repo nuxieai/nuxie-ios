@@ -1,0 +1,31 @@
+{
+  "description": "A terminal dismiss reached before offer presentation completes the Journey without fabricating screen lifecycle or conversion evidence. Visible presentation dismissal remains renderer-owned.",
+  "cases": [
+    {
+      "name": "owned offer dismissal",
+      "access": "owned",
+      "action": {
+        "type": "dismiss",
+        "reason": "already_entitled"
+      },
+      "outcome": "already_entitled"
+    },
+    {
+      "name": "unknown optional offer dismissal",
+      "access": "unknown",
+      "action": {
+        "type": "dismiss",
+        "reason": "access_unavailable"
+      },
+      "outcome": "access_unavailable"
+    },
+    {
+      "name": "dismiss without reason",
+      "access": "unknown",
+      "action": {
+        "type": "dismiss"
+      },
+      "outcome": "completed"
+    }
+  ]
+}
