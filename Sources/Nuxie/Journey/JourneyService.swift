@@ -2435,6 +2435,7 @@ private extension JourneyService {
                         release: release,
                         delivery: executionSnapshot.delivery,
                         pinnedArtifacts: pinnedArtifacts,
+                        responseValues: presentedRun.context.responses,
                         screenId: screenId,
                         owner: .init(
                             journeyId: run.journeyId,
