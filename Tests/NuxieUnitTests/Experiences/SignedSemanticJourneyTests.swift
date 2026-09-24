@@ -173,11 +173,20 @@ final class SignedSemanticJourneyTests: XCTestCase {
             } else {
                 let button = try XCTUnwrap(button(in: presentations.currentExperienceViewController?.view))
                 XCTAssertTrue(button.accessibilityTraits.contains(.button))
+                let activationStartedAt = Date()
                 XCTAssertTrue(button.accessibilityActivate())
                 if scenario == .success || scenario == .condition {
                     try await waitUntil("Authored navigation must follow durable emission admission") { observer.navigationResponses != nil && observer.accepted.count == 1 }
                     XCTAssertEqual(observer.navigationResponses?["selection"], .string("pro"))
                     XCTAssertEqual(observer.accepted.first?.emissions.map(\.name), [JourneyResponseControlNames.responseSet, "script_control_activated"])
+                    for emission in try XCTUnwrap(observer.accepted.first).emissions {
+                        let occurredAt = try XCTUnwrap(JourneyPresentationEventProjector.date(emission.occurredAt))
+                        // Millisecond wire precision must not move an action before
+                        // its activation or the display that made it possible.
+                        XCTAssertGreaterThanOrEqual(occurredAt.timeIntervalSince1970,
+                            activationStartedAt.timeIntervalSince1970 - 0.001)
+                        XCTAssertLessThanOrEqual(occurredAt, Date())
+                    }
                     let stored = try await journal.runs()
                     XCTAssertEqual(stored.first?.context.responses["selection"], .string("pro"))
                     XCTAssertTrue(presentations.isExperiencePresented)

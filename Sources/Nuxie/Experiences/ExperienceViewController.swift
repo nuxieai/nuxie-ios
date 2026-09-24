@@ -496,7 +496,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         self.videoDecoderPool = videoDecoderPool
         self.screenEmissionDispatcher = ScreenEmissionDispatcher(
             createId: { UUID.v7().uuidString },
-            now: { Date().ISO8601Format() },
+            now: { Date().ISO8601Format(.init(includingFractionalSeconds: true)) },
             executeScriptAction: { input in
                 throw ScreenEmissionDispatchError.scriptActionMissing(
                     actionId: input.actionId
