@@ -19,6 +19,96 @@ private final class RecoveryAdmission: @unchecked Sendable {
 }
 
 final class CommittedRouteRecoveryTests: XCTestCase {
+    func testHistoryPruningRetainsLocalDeliveryUntilAcknowledged() async throws {
+        for pruneByAge in [true, false] {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("route-retention-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = SQLiteEventStore()
+            try await store.initialize(path: directory)
+            let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+            _ = try await store.readOrInitializeHistoryCoverage(startingAt: timestamp)
+            let ordinary = try StoredEvent(id: "ordinary", name: "outcome", properties: [:],
+                timestamp: timestamp, distinctId: "customer-a")
+            let stable = try StoredEvent(id: "stable", name: "outcome", properties: [:],
+                timestamp: timestamp, distinctId: "customer-a")
+            _ = try await store.insert(ordinary, deliveryState: .pending, origin: .device,
+                assigningCommitSequence: true, routeAdmission: .init(
+                    sessionId: "session", subscribers: [1: 1], stableRouteEventId: nil))
+            _ = try await store.commitStableCaptureAndStageRoute(eventId: stable.id,
+                event: stable, recordedAt: timestamp, assigningCommitSequence: true, admission: nil)
+            try await store.markDelivered(ids: [ordinary.id, stable.id])
+            let cutoff = pruneByAge ? timestamp.addingTimeInterval(1) : timestamp
+            let keeping = pruneByAge ? 100 : 0
+            let retained = try await store.pruneHistory(keeping: keeping, olderThan: cutoff)
+            XCTAssertEqual(retained.ageDeleted + retained.countDeleted, 0)
+            let pendingOrdinary = try await store.firstPendingCommittedRoute(sessionId: "session")
+            let pendingStable = try await store.queryPendingStableRoutes(distinctId: "customer-a", limit: 1)
+            XCTAssertEqual(pendingOrdinary?.event.id, ordinary.id)
+            XCTAssertEqual(pendingStable.map(\.id), [stable.id])
+            try await store.acknowledgeCommittedRoute(eventId: ordinary.id, sessionId: "session")
+            try await store.markStableRouteDelivered(eventId: stable.id)
+            let released = try await store.pruneHistory(keeping: keeping, olderThan: cutoff)
+            XCTAssertEqual(released.ageDeleted + released.countDeleted, 2)
+            await store.close()
+        }
+    }
+
+    func testCommittedRouteAdmissionIsAtomicAndRetainsItsOriginalRetryPosition() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("route-checkpoint-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SQLiteEventStore()
+        try await store.initialize(path: directory)
+        let event = try StoredEvent(id: "outcome", name: "outcome", properties: [:],
+            timestamp: Date(), distinctId: "customer-a")
+        let originalAdmission = CommittedRouteAdmission(
+            sessionId: "original-session", subscribers: [7: UInt64.max], stableRouteEventId: nil
+        )
+        do {
+            _ = try await store.insert(event, deliveryState: .pending, origin: .device,
+                assigningCommitSequence: false, routeAdmission: originalAdmission)
+            XCTFail("Routing without a commit sequence must roll back the event and inbox")
+        } catch {}
+        let rolledBackCount = try await store.getEventCount()
+        let rolledBackInbox = try await store.pendingConversionOccurrences(distinctId: "customer-a")
+        XCTAssertEqual(rolledBackCount, 0)
+        XCTAssertTrue(rolledBackInbox.isEmpty)
+        let inserted = try await store.insert(event, deliveryState: .pending, origin: .device,
+            assigningCommitSequence: true, routeAdmission: originalAdmission)
+        XCTAssertEqual(inserted.commitSequence, 0)
+        let replacement = CommittedRouteAdmission(
+            sessionId: "replacement-session", subscribers: [7: 2], stableRouteEventId: nil
+        )
+        let duplicate = try await store.insert(event, deliveryState: .pending, origin: .device,
+            assigningCommitSequence: true, routeAdmission: replacement)
+        XCTAssertFalse(duplicate.newlyDurable)
+        let replacementRoute = try await store.firstPendingCommittedRoute(sessionId: replacement.sessionId)
+        XCTAssertNil(replacementRoute)
+        try await store.checkpointCommittedRoute(eventId: event.id,
+            sessionId: originalAdmission.sessionId, nextSubscriber: 2)
+        await store.close()
+        let reopened = SQLiteEventStore()
+        try await reopened.initialize(path: directory)
+        let pending = try await reopened.firstPendingCommittedRoute(sessionId: originalAdmission.sessionId)
+        XCTAssertEqual(pending?.admission, originalAdmission)
+        XCTAssertEqual(pending?.nextSubscriber, 2)
+        XCTAssertEqual(pending?.event.id, event.id)
+        try await reopened.acknowledgeCommittedRoute(eventId: event.id, sessionId: replacement.sessionId)
+        let stillPending = try await reopened.firstPendingCommittedRoute(sessionId: originalAdmission.sessionId)
+        XCTAssertNotNil(stillPending)
+        try await reopened.discardOtherCommittedRouteSessions(keeping: replacement.sessionId)
+        let discarded = try await reopened.firstPendingCommittedRoute(sessionId: originalAdmission.sessionId)
+        XCTAssertNil(discarded)
+        let retainedEventCount = try await reopened.getEventCount()
+        let retainedInbox = try await reopened.pendingConversionOccurrences(distinctId: "customer-a")
+        XCTAssertEqual(retainedEventCount, 1)
+        XCTAssertEqual(retainedInbox.map(\.event.id), [event.id])
+        await reopened.close()
+    }
+
     func testPagedVisitAcknowledgesTheEntireOriginalPrefixBeforeNewCaptures() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("route-pages-\(UUID().uuidString)")

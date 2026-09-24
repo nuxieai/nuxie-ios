@@ -32,6 +32,20 @@ struct EventStoreInsertCommit: Sendable {
   let commitSequence: UInt64?
 }
 
+/// Process-local subscriber authority captured before asynchronous enrichment.
+/// Stable receipts and the conversion inbox independently survive a restart.
+struct CommittedRouteAdmission: Codable, Sendable, Equatable {
+  let sessionId: String
+  let subscribers: [UInt64: UInt64]
+  let stableRouteEventId: String?
+}
+
+struct PendingCommittedRouteDelivery: Sendable {
+  let event: StoredEvent
+  let admission: CommittedRouteAdmission
+  var nextSubscriber: Int
+}
+
 struct StableEventCaptureCommit: Sendable {
   let outcome: StableEventCaptureOutcome
   let commitSequence: UInt64?
@@ -102,8 +116,13 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
     deliveryState: EventDeliveryState,
     origin: StoredEventOrigin,
     assigningCommitSequence: Bool,
-    acceptedAt: Date
+    acceptedAt: Date,
+    routeAdmission: CommittedRouteAdmission?
   ) async throws -> EventStoreInsertCommit
+  func firstPendingCommittedRoute(sessionId: String) async throws -> PendingCommittedRouteDelivery?
+  func checkpointCommittedRoute(eventId: String, sessionId: String, nextSubscriber: Int) async throws
+  func acknowledgeCommittedRoute(eventId: String, sessionId: String) async throws
+  func discardOtherCommittedRouteSessions(keeping sessionId: String) async throws
 
   /// Read or atomically establish the terminal outcome for a stable event ID.
   /// A dropped outcome is deliberately separate from event history/delivery.
@@ -187,6 +206,14 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
 }
 
 extension EventStoreProtocol {
+  func insert(_ event: StoredEvent, deliveryState: EventDeliveryState,
+              origin: StoredEventOrigin, assigningCommitSequence: Bool,
+              acceptedAt: Date) async throws -> EventStoreInsertCommit {
+    try await insert(event, deliveryState: deliveryState, origin: origin,
+                     assigningCommitSequence: assigningCommitSequence,
+                     acceptedAt: acceptedAt, routeAdmission: nil)
+  }
+
   func insert(_ event: StoredEvent, deliveryState: EventDeliveryState,
               origin: StoredEventOrigin, assigningCommitSequence: Bool) async throws -> EventStoreInsertCommit {
     try await insert(event, deliveryState: deliveryState, origin: origin,
@@ -288,6 +315,15 @@ actor SQLiteEventStore: EventStoreProtocol {
       capture_scope TEXT PRIMARY KEY,
       authority_scope TEXT NOT NULL
     );
+    CREATE TABLE committed_route_deliveries (
+      event_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      commit_sequence INTEGER NOT NULL,
+      admission BLOB NOT NULL,
+      next_subscriber INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+    );
+    CREATE INDEX idx_committed_routes_session ON committed_route_deliveries(session_id, commit_sequence);
     """
 
   private let createHistoryMetadataSQL = """
@@ -559,6 +595,14 @@ actor SQLiteEventStore: EventStoreProtocol {
     try verifyStableEventRoutesTable(targetVersion: version)
     try verifyHistoryMetadataTable(targetVersion: version)
     if version >= 3 {
+      let routes = try tableColumns(named: "committed_route_deliveries", targetVersion: version)
+      guard routes.count == 5, routes["event_id"]?.primaryKeyPosition == 1,
+            routes["session_id"]?.isNotNull == true, routes["commit_sequence"]?.type == "INTEGER",
+            routes["admission"]?.type == "BLOB", routes["next_subscriber"]?.type == "INTEGER" else {
+        throw schemaError(targetVersion: version, operation: "verify committed routing", code: SQLITE_SCHEMA,
+                          message: "Invalid committed route delivery queue")
+      }
+      try verifyIndex(named: "idx_committed_routes_session", expectedColumns: [("session_id", false), ("commit_sequence", false)], targetVersion: version)
       let columns = try tableColumns(named: "conversion_event_inbox", targetVersion: version)
       guard columns.count == 5, columns["scope"]?.type == "TEXT", columns["scope"]?.isNotNull == true,
             columns["event_id"]?.primaryKeyPosition == 1,
@@ -1031,7 +1075,8 @@ actor SQLiteEventStore: EventStoreProtocol {
     deliveryState: EventDeliveryState,
     origin: StoredEventOrigin,
     assigningCommitSequence: Bool,
-    acceptedAt: Date = Date()
+    acceptedAt: Date = Date(),
+    routeAdmission: CommittedRouteAdmission? = nil
   ) throws -> EventStoreInsertCommit {
     guard db != nil else { throw EventStorageError.databaseNotInitialized }
     let previousSequence = nextCommitSequence
@@ -1039,12 +1084,85 @@ actor SQLiteEventStore: EventStoreProtocol {
     do {
       let result = try insertWithConversion(event, deliveryState: deliveryState, origin: origin,
                                            assigningCommitSequence: assigningCommitSequence, acceptedAt: acceptedAt)
+      if result.newlyDurable, let routeAdmission {
+        guard let sequence = result.commitSequence else { throw EventStorageError.invalidProperties }
+        try stageCommittedRoute(eventId: event.id, sequence: sequence, admission: routeAdmission)
+      }
       try executeSchemaSQL("RELEASE capture_with_conversion;", targetVersion: 3, operation: "commit capture")
       return result
     } catch {
       _ = sqlite3_exec(db, "ROLLBACK TO capture_with_conversion; RELEASE capture_with_conversion;", nil, nil, nil)
       nextCommitSequence = previousSequence
       throw error
+    }
+  }
+
+  private func withCommittedRouteStatement<T>(
+    _ sql: String, _ body: (OpaquePointer?) throws -> T
+  ) throws -> T {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw EventStorageError.queryFailed(NSError(domain: "Nuxie.EventStore", code: 71,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]))
+    }
+    return try body(statement)
+  }
+
+  private func stageCommittedRoute(
+    eventId: String, sequence: UInt64, admission: CommittedRouteAdmission
+  ) throws {
+    guard sequence <= UInt64(Int64.max) else { throw EventStorageError.invalidProperties }
+    let bytes = try JSONEncoder().encode(admission)
+    try withCommittedRouteStatement("INSERT OR IGNORE INTO committed_route_deliveries(event_id, session_id, commit_sequence, admission) VALUES (?, ?, ?, ?);") { statement in
+      sqlite3_bind_text(statement, 1, eventId, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_text(statement, 2, admission.sessionId, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_int64(statement, 3, Int64(sequence))
+      _ = bytes.withUnsafeBytes { sqlite3_bind_blob(statement, 4, $0.baseAddress, Int32(bytes.count), SQLITE_TRANSIENT) }
+      guard sqlite3_step(statement) == SQLITE_DONE else { throw EventStorageError.invalidProperties }
+    }
+  }
+
+  public func firstPendingCommittedRoute(sessionId: String) throws -> PendingCommittedRouteDelivery? {
+    try withCommittedRouteStatement("SELECT event_id, admission, next_subscriber FROM committed_route_deliveries WHERE session_id = ? ORDER BY commit_sequence LIMIT 1;") { statement in
+      sqlite3_bind_text(statement, 1, sessionId, -1, SQLITE_TRANSIENT)
+      let result = sqlite3_step(statement)
+      if result == SQLITE_DONE { return nil }
+      guard result == SQLITE_ROW, let id = sqlite3_column_text(statement, 0),
+            let blob = sqlite3_column_blob(statement, 1) else { throw EventStorageError.invalidProperties }
+      let eventId = String(cString: id)
+      let bytes = Data(bytes: blob, count: Int(sqlite3_column_bytes(statement, 1)))
+      let admission = try JSONDecoder().decode(CommittedRouteAdmission.self, from: bytes)
+      let nextSubscriber = Int(sqlite3_column_int64(statement, 2))
+      guard admission.sessionId == sessionId, nextSubscriber >= 0,
+            let event = try queryEvent(id: eventId) else { throw EventStorageError.invalidProperties }
+      return PendingCommittedRouteDelivery(event: event, admission: admission, nextSubscriber: nextSubscriber)
+    }
+  }
+
+  public func checkpointCommittedRoute(eventId: String, sessionId: String, nextSubscriber: Int) throws {
+    guard nextSubscriber >= 0 else { throw EventStorageError.invalidProperties }
+    try withCommittedRouteStatement("UPDATE committed_route_deliveries SET next_subscriber = ? WHERE event_id = ? AND session_id = ?;") { statement in
+      sqlite3_bind_int64(statement, 1, Int64(nextSubscriber))
+      sqlite3_bind_text(statement, 2, eventId, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_text(statement, 3, sessionId, -1, SQLITE_TRANSIENT)
+      guard sqlite3_step(statement) == SQLITE_DONE, sqlite3_changes(db) == 1 else { throw EventStorageError.invalidProperties }
+    }
+  }
+
+  public func acknowledgeCommittedRoute(eventId: String, sessionId: String) throws {
+    try withCommittedRouteStatement("DELETE FROM committed_route_deliveries WHERE event_id = ? AND session_id = ?;") { statement in
+      sqlite3_bind_text(statement, 1, eventId, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_text(statement, 2, sessionId, -1, SQLITE_TRANSIENT)
+      guard sqlite3_step(statement) == SQLITE_DONE else { throw EventStorageError.invalidProperties }
+    }
+  }
+
+  public func discardOtherCommittedRouteSessions(keeping sessionId: String) throws {
+    try withCommittedRouteStatement("DELETE FROM committed_route_deliveries WHERE session_id != ?;") { statement in
+      sqlite3_bind_text(statement, 1, sessionId, -1, SQLITE_TRANSIENT)
+      guard sqlite3_step(statement) == SQLITE_DONE else { throw EventStorageError.invalidProperties }
     }
   }
 
@@ -2032,6 +2150,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       DELETE FROM events
       WHERE timestamp < ?
         AND delivery_state = ?
+        AND \(Self.noPendingLocalRoutes)
         AND origin != 'server';
       """
     var statement: OpaquePointer?
@@ -2057,6 +2176,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       SELECT MAX(timestamp) FROM (
         SELECT timestamp FROM events
         WHERE delivery_state = ?
+          AND \(Self.noPendingLocalRoutes)
           AND origin != 'server'
         ORDER BY timestamp ASC, id ASC
         LIMIT ?
@@ -2079,6 +2199,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       DELETE FROM events WHERE id IN (
         SELECT id FROM events
         WHERE delivery_state = ?
+          AND \(Self.noPendingLocalRoutes)
           AND origin != 'server'
         ORDER BY timestamp ASC, id ASC
         LIMIT ?
@@ -2099,6 +2220,17 @@ actor SQLiteEventStore: EventStoreProtocol {
     let boundary = newestDeletedMs == Int64.max ? Int64.max : newestDeletedMs + 1
     return (boundary, deleted)
   }
+
+  /// Network acknowledgement does not release a record still owed to local
+  /// subscribers. Both retention selectors must use the same predicate.
+  private static let noPendingLocalRoutes = """
+    NOT EXISTS (
+      SELECT 1 FROM committed_route_deliveries WHERE event_id = events.id
+    ) AND NOT EXISTS (
+      SELECT 1 FROM stable_event_routes
+      WHERE event_id = events.id AND delivery_state = \(EventDeliveryState.pending.rawValue)
+    )
+    """
 
   private func updateCoverageWithinTransaction(to startingMs: Int64) throws {
     guard let db else { throw EventStorageError.databaseNotInitialized }
