@@ -136,7 +136,7 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
     admission: (any StableEventCaptureBatchCommitAdmission)?
   ) async throws -> [StableEventCaptureCommit]
   func queryPendingStableRoutes(
-    distinctId: String
+    distinctId: String, limit: Int
   ) async throws -> [StoredEvent]
   func markStableRouteDelivered(eventId: String) async throws
   @discardableResult
@@ -1626,7 +1626,7 @@ actor SQLiteEventStore: EventStoreProtocol {
   }
 
   public func queryPendingStableRoutes(
-    distinctId: String
+    distinctId: String, limit: Int
   ) throws -> [StoredEvent] {
     guard let db else { throw EventStorageError.databaseNotInitialized }
     var statement: OpaquePointer?
@@ -1636,7 +1636,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       FROM stable_event_routes
       JOIN events ON events.id = stable_event_routes.event_id
       WHERE stable_event_routes.delivery_state = ? AND events.user_id = ?
-      ORDER BY stable_event_routes.rowid ASC;
+      ORDER BY stable_event_routes.rowid ASC LIMIT ?;
       """
     guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
       throw EventStorageError.queryFailed(NSError(
@@ -1647,6 +1647,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
     sqlite3_bind_int(statement, 1, EventDeliveryState.pending.rawValue)
     sqlite3_bind_text(statement, 2, distinctId, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_int64(statement, 3, Int64(max(0, limit)))
     var eventIds: [String] = []
     while true {
       let result = sqlite3_step(statement)

@@ -486,7 +486,7 @@ final class EventStorageTests: AsyncSpec {
                 }
                 expect(committed.localRoutePending).to(beTrue())
                 let initiallyPending = try await internalEventStore.queryPendingStableRoutes(
-                    distinctId: "customer-a"
+                    distinctId: "customer-a", limit: 100
                 )
                 expect(initiallyPending.map(\.id)).to(equal([event.id]))
 
@@ -497,7 +497,7 @@ final class EventStorageTests: AsyncSpec {
                 )
 
                 let reopenedPending = try await internalEventStore.queryPendingStableRoutes(
-                    distinctId: "customer-a"
+                    distinctId: "customer-a", limit: 100
                 )
                 expect(reopenedPending.map(\.id)).to(equal([event.id]))
                 let replay = try await internalEventStore
@@ -518,7 +518,7 @@ final class EventStorageTests: AsyncSpec {
                     eventId: event.id
                 )
                 let deliveredPending = try await internalEventStore.queryPendingStableRoutes(
-                    distinctId: "customer-a"
+                    distinctId: "customer-a", limit: 100
                 )
                 expect(deliveredPending).to(beEmpty())
                 let acknowledgedReplay = try await internalEventStore

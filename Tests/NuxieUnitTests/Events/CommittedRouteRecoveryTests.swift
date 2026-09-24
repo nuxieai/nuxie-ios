@@ -36,8 +36,18 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         }
         let drained = await original.drainCommittedRouting()
         XCTAssertFalse(drained)
-        let pendingBeforeClose = try await originalStore.queryPendingStableRoutes(distinctId: "customer-a")
+        let pendingBeforeClose = try await originalStore.queryPendingStableRoutes(distinctId: "customer-a", limit: 100)
         XCTAssertEqual(pendingBeforeClose.map(\.id), ["entry", "goal"])
+        let firstPending = try await originalStore.queryPendingStableRoutes(
+            distinctId: "customer-a", limit: 1
+        )
+        XCTAssertEqual(firstPending.map(\.id), ["entry"])
+        let noRows = try await originalStore.queryPendingStableRoutes(
+            distinctId: "customer-a", limit: 0
+        )
+        XCTAssertTrue(noRows.isEmpty)
+        let firstPendingId = try await original.firstPendingStableRouteEventId(distinctId: "customer-a")
+        XCTAssertEqual(firstPendingId, "entry")
         await original.close()
 
         identity.setDistinctId("customer-b")
@@ -56,7 +66,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         XCTAssertTrue(otherCustomer)
         let otherCustomerRoutes = await recovered.snapshot()
         XCTAssertEqual(otherCustomerRoutes, [])
-        let retained = try await reopenedStore.queryPendingStableRoutes(distinctId: "customer-a")
+        let retained = try await reopenedStore.queryPendingStableRoutes(distinctId: "customer-a", limit: 100)
         XCTAssertEqual(retained.map(\.id), ["entry", "goal"])
 
         identity.setDistinctId("customer-a")
@@ -64,7 +74,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         XCTAssertTrue(replayed)
         let recoveredIds = await recovered.snapshot()
         XCTAssertEqual(recoveredIds, ["entry", "goal"])
-        let remaining = try await reopenedStore.queryPendingStableRoutes(distinctId: "customer-a")
+        let remaining = try await reopenedStore.queryPendingStableRoutes(distinctId: "customer-a", limit: 100)
         XCTAssertTrue(remaining.isEmpty)
         let deliveryCount = try await reopenedStore.getPendingDeliveryCount()
         XCTAssertEqual(deliveryCount, 2)
