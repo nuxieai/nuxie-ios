@@ -58,6 +58,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public var pendingStableRouteIds: [String] {
         lock.withLock { _pendingStableRouteIds }
     }
+    public var pendingCommittedRoutes: [PendingCommittedRouteDelivery] {
+        lock.withLock { _committedRoutes }
+    }
     public var historyCoverageStart: Date? {
         get { lock.withLock { _historyCoverageStart } }
         set { lock.withLock { _historyCoverageStart = newValue } }
@@ -77,6 +80,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _shouldFailQuery = false
     private var _shouldFailIRQuery = false
     private var _shouldFailMarkDelivered = false
+    private var _shouldFailStableRouteAcknowledgement = false
     private var _pendingDeliveryQueryDelay: TimeInterval = 0
     private var _pendingInsertDelayNanoseconds: UInt64 = 0
     private var _suspendNextInsert = false
@@ -113,6 +117,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public var shouldFailIRQuery: Bool {
         get { lock.withLock { _shouldFailIRQuery } }
         set { lock.withLock { _shouldFailIRQuery = newValue } }
+    }
+    public var shouldFailStableRouteAcknowledgement: Bool {
+        get { lock.withLock { _shouldFailStableRouteAcknowledgement } }
+        set { lock.withLock { _shouldFailStableRouteAcknowledgement = newValue } }
     }
     public var shouldFailMarkDelivered: Bool {
         get { lock.withLock { _shouldFailMarkDelivered } }
@@ -750,7 +758,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
 
     public func markStableRouteDelivered(eventId: String) async throws {
         try lock.withLock {
-            if _shouldFailMarkDelivered {
+            if _shouldFailMarkDelivered || _shouldFailStableRouteAcknowledgement {
                 throw mockError(4, "Mock mark stable route delivered error")
             }
             _pendingStableRouteIds.removeAll { $0 == eventId }

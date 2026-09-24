@@ -19,6 +19,48 @@ private final class RecoveryAdmission: @unchecked Sendable {
 }
 
 final class CommittedRouteRecoveryTests: XCTestCase {
+    func testLiveCapturePersistsOriginalAdmissionsAndAcknowledgesOnlyAfterDelivery() async throws {
+        let store = MockEventStore()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let log = EventLog(identity: identity, dateProvider: MockDateProvider(),
+            apiClient: MockNuxieApi(), store: store)
+        let configuration = NuxieConfiguration(apiKey: "test-api-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        let generation = RecoveryAdmission()
+        let firstSubscriber = RecoveredRouteRecorder()
+        let lastSubscriber = RecoveredRouteRecorder()
+        await log.subscribeCommitted { event in await firstSubscriber.append(event.name) }
+        let reservation = log.reserveCommittedAdmission { generation.value }
+        await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, admission in
+            guard generation.value == 2 else { return false }
+            guard admission == 1 else { return false }
+            await lastSubscriber.append(event.name)
+            return true
+        }
+        try await log.configure(configuration: configuration)
+        log.track("ordinary")
+        _ = await log.captureAndRouteSystemEvent(.init(name: "stable", properties: nil,
+            eventId: "stable", distinctId: "customer-a"))
+        await log.drain()
+        let retained = store.pendingCommittedRoutes
+        XCTAssertEqual(retained.map(\.event.name), ["ordinary", "stable"])
+        XCTAssertEqual(retained.first?.nextSubscriber, 1)
+        XCTAssertEqual(retained.last?.nextSubscriber, 0)
+        XCTAssertTrue(retained.allSatisfy {
+            $0.admission.subscribers[reservation.subscriberIdentifier] == 1
+        })
+        generation.advance()
+        let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
+        XCTAssertTrue(recovered)
+        XCTAssertTrue(store.pendingCommittedRoutes.isEmpty)
+        let firstNames = await firstSubscriber.snapshot()
+        let lastNames = await lastSubscriber.snapshot()
+        XCTAssertEqual(firstNames, ["ordinary", "stable"])
+        XCTAssertEqual(lastNames, ["ordinary", "stable"])
+        await log.close()
+    }
+
     func testStableBatchDeliveryAdmissionsAreAtomicAndNeverRefreshedOnRetry() async throws {
         for store: any EventStoreProtocol in [SQLiteEventStore(), MockEventStore()] {
             let directory = FileManager.default.temporaryDirectory

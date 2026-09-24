@@ -685,6 +685,9 @@ final class ForwardingPersistenceTests: XCTestCase {
       by: { $0 }
     ).mapValues(\.count)
     let expectedStoreCalls = [
+      "acknowledgeCommittedRoute": 1,
+      "checkpointCommittedRoute": 1,
+      "discardOtherCommittedRouteSessions": 1,
       "acknowledgeConversionOccurrence": 1,
       "advanceHistoryCoverage": 1,
       "bindConversionAuthority": 1,
