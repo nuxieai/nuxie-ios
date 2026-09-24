@@ -663,15 +663,15 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
 
     public func queryPendingStableRoutes(
-        distinctId: String
+        distinctId: String, limit: Int
     ) async throws -> [StoredEvent] {
         try lock.withLock {
             if _shouldFailQuery { throw mockError(3, "Mock query error") }
-            return _pendingStableRouteIds.compactMap { eventId in
-                _storedEvents.first {
+            return Array(_pendingStableRouteIds.lazy.compactMap { eventId in
+                self._storedEvents.first {
                     $0.id == eventId && $0.distinctId == distinctId
                 }
-            }
+            }.prefix(max(0, limit)))
         }
     }
 

@@ -2855,7 +2855,7 @@ extension EventLog {
   func firstPendingStableRouteEventId(distinctId: String) async throws -> String? {
     await ready.wait()
     guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
-    return try await store.queryPendingStableRoutes(distinctId: distinctId).first?.id
+    return try await store.queryPendingStableRoutes(distinctId: distinctId, limit: 1).first?.id
   }
 
   func bindConversionAuthority(_ scope: JourneyStorageScope) async throws {
@@ -2880,7 +2880,7 @@ extension EventLog {
     var recovered: [RoutedCommittedEvent] = []
     let admissions = committedAdmissionRegistry.capture()
     for stored in try await store.queryPendingStableRoutes(
-      distinctId: distinctId
+      distinctId: distinctId, limit: .max
     ) where activeStableRouteIds.insert(stored.id).inserted {
       recovered.append(RoutedCommittedEvent(
         event: NuxieEvent(
@@ -2930,7 +2930,7 @@ extension EventLog {
         return false
       }
       return try await store.queryPendingStableRoutes(
-        distinctId: distinctId
+        distinctId: distinctId, limit: 1
       ).isEmpty
     } catch {
       LogWarning("EventLog: failed to replay pending stable local routes")
