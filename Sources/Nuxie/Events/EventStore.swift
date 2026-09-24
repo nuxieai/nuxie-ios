@@ -138,6 +138,12 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
   func queryPendingStableRoutes(
     distinctId: String, limit: Int
   ) async throws -> [StoredEvent]
+  /// Visits the pending prefix present when recovery starts, loading at most
+  /// one page at a time. Returning false leaves later routes pending.
+  func visitPendingStableRoutes(
+    distinctId: String,
+    visitor: @escaping @Sendable (StoredEvent) async -> Bool
+  ) async throws -> Bool
   func markStableRouteDelivered(eventId: String) async throws
   @discardableResult
   func deleteStableDropsOlderThan(_ olderThan: Date) async throws -> Int
@@ -1628,41 +1634,84 @@ actor SQLiteEventStore: EventStoreProtocol {
   public func queryPendingStableRoutes(
     distinctId: String, limit: Int
   ) throws -> [StoredEvent] {
+    try pendingStableRoutePage(distinctId: distinctId, after: 0, through: .max, limit: limit)
+      .map(\.event)
+  }
+
+  public func visitPendingStableRoutes(
+    distinctId: String,
+    visitor: @escaping @Sendable (StoredEvent) async -> Bool
+  ) async throws -> Bool {
+    let upperBound = try stableRouteUpperBound()
+    var cursor: Int64 = 0
+    while true {
+      let page = try pendingStableRoutePage(
+        distinctId: distinctId, after: cursor, through: upperBound, limit: 100
+      )
+      guard let last = page.last else { return true }
+      for route in page {
+        guard await visitor(route.event) else { return false }
+      }
+      cursor = last.sequence
+    }
+  }
+
+  private func stableRouteUpperBound() throws -> Int64 {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(rowid), 0) FROM stable_event_routes;", -1, &statement, nil) == SQLITE_OK,
+          sqlite3_step(statement) == SQLITE_ROW else {
+      throw EventStorageError.queryFailed(NSError(
+        domain: "Nuxie.EventStore", code: 58,
+        userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
+      ))
+    }
+    return sqlite3_column_int64(statement, 0)
+  }
+
+  private func pendingStableRoutePage(
+    distinctId: String, after: Int64, through: Int64, limit: Int
+  ) throws -> [(sequence: Int64, event: StoredEvent)] {
     guard let db else { throw EventStorageError.databaseNotInitialized }
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
     let sql = """
-      SELECT events.id
+      SELECT stable_event_routes.rowid, events.id
       FROM stable_event_routes
       JOIN events ON events.id = stable_event_routes.event_id
       WHERE stable_event_routes.delivery_state = ? AND events.user_id = ?
+        AND stable_event_routes.rowid > ? AND stable_event_routes.rowid <= ?
       ORDER BY stable_event_routes.rowid ASC LIMIT ?;
       """
     guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
       throw EventStorageError.queryFailed(NSError(
-        domain: "Nuxie.EventStore",
-        code: 58,
+        domain: "Nuxie.EventStore", code: 58,
         userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
       ))
     }
     sqlite3_bind_int(statement, 1, EventDeliveryState.pending.rawValue)
     sqlite3_bind_text(statement, 2, distinctId, -1, SQLITE_TRANSIENT)
-    sqlite3_bind_int64(statement, 3, Int64(max(0, limit)))
-    var eventIds: [String] = []
+    sqlite3_bind_int64(statement, 3, after)
+    sqlite3_bind_int64(statement, 4, through)
+    sqlite3_bind_int64(statement, 5, Int64(max(0, limit)))
+    var routes: [(sequence: Int64, event: StoredEvent)] = []
     while true {
       let result = sqlite3_step(statement)
       if result == SQLITE_DONE { break }
       guard result == SQLITE_ROW,
-            let bytes = sqlite3_column_text(statement, 0) else {
+            let bytes = sqlite3_column_text(statement, 1) else {
         throw EventStorageError.queryFailed(NSError(
-          domain: "Nuxie.EventStore",
-          code: 59,
+          domain: "Nuxie.EventStore", code: 59,
           userInfo: [NSLocalizedDescriptionKey: sqliteMessage()]
         ))
       }
-      eventIds.append(String(cString: bytes))
+      let sequence = sqlite3_column_int64(statement, 0)
+      if let event = try queryEvent(id: String(cString: bytes)) {
+        routes.append((sequence: sequence, event: event))
+      }
     }
-    return try eventIds.compactMap { try queryEvent(id: $0) }
+    return routes
   }
 
   public func markStableRouteDelivered(eventId: String) throws {

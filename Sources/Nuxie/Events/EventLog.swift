@@ -78,7 +78,11 @@ private enum RouteResolution: Sendable {
 
 private enum RouteCommand: Sendable {
   case retryFailedDeliveries
-  case resumeAfterRecovery([RoutedCommittedEvent], generation: UInt64)
+  case recoverStableRoutes(
+    distinctId: String, generation: UInt64, admissions: [UInt64: UInt64],
+    completion: CheckedContinuation<Bool, Never>?
+  )
+  case resumeAfterRecovery(generation: UInt64)
   case resolved(sequence: UInt64, RouteResolution)
   /// Storage failures have no durable commit sequence to order against.
   case undurable(RoutedCommittedEvent)
@@ -1387,23 +1391,21 @@ actor EventLog: EventLogProtocol {
 
   func resumeCommittedRouting(ifGeneration generation: UInt64) async {
     guard generation == routingDeferralGeneration else { return }
-    routeContinuation.yield(.resumeAfterRecovery([], generation: generation))
+    routeContinuation.yield(.resumeAfterRecovery(generation: generation))
   }
 
   private func processRoute(_ cmd: RouteCommand) async {
     switch cmd {
-    case .resumeAfterRecovery(let recovered, let generation):
-      guard generation == routingDeferralGeneration else {
-        for event in recovered {
-          if let id = event.stableRouteEventId { activeStableRouteIds.remove(id) }
-        }
-        return
-      }
+    case .recoverStableRoutes(let distinctId, let generation, let admissions, let completion):
+      let recovered = await recoverStableRoutes(
+        distinctId: distinctId, generation: generation, admissions: admissions
+      )
+      completion?.resume(returning: recovered)
+      return
+    case .resumeAfterRecovery(let generation):
+      guard generation == routingDeferralGeneration else { return }
       routingDeferred = false
       await retryFailedCommittedRoutes()
-      for routed in recovered {
-        await deliverOrRetainCommittedRoute(routed)
-      }
       let buffered = deferredRouteCommands
       deferredRouteCommands.removeAll()
       for command in buffered { await processRoute(command) }
@@ -1424,7 +1426,7 @@ actor EventLog: EventLogProtocol {
     case .retryFailedDeliveries:
       await retryFailedCommittedRoutes()
 
-    case .resumeAfterRecovery:
+    case .resumeAfterRecovery, .recoverStableRoutes:
       return
 
     case .resolved(let sequence, let resolution):
@@ -2876,25 +2878,46 @@ extension EventLog {
     try await store.acknowledgeConversionOccurrence(eventId: eventId, distinctId: distinctId)
   }
 
-  private func pendingStableRoutes(distinctId: String) async throws -> [RoutedCommittedEvent] {
-    var recovered: [RoutedCommittedEvent] = []
-    let admissions = committedAdmissionRegistry.capture()
-    for stored in try await store.queryPendingStableRoutes(
-      distinctId: distinctId, limit: .max
-    ) where activeStableRouteIds.insert(stored.id).inserted {
-      recovered.append(RoutedCommittedEvent(
-        event: NuxieEvent(
-          id: stored.id,
-          name: stored.name,
-          distinctId: stored.distinctId,
-          properties: stored.getPropertiesDict(),
-          timestamp: stored.timestamp
-        ),
-        subscriberAdmissions: admissions,
-        stableRouteEventId: stored.id
-      ))
+  private func recoverStableRoutes(
+    distinctId: String, generation: UInt64, admissions: [UInt64: UInt64]
+  ) async -> Bool {
+    guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
+    do {
+      await retryFailedCommittedRoutes()
+      guard failedCommittedRoutes.isEmpty else { return false }
+      let visited = try await store.visitPendingStableRoutes(distinctId: distinctId) { [weak self] stored in
+        guard let self else { return false }
+        return await self.deliverRecoveredStableRoute(
+          stored, generation: generation, admissions: admissions
+        )
+      }
+      guard visited, !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
+      guard await retryFailedStableRouteAcknowledgements() else { return false }
+      // The serial route worker holds subsequent commands until every page
+      // of the retained prefix has completed under the same admissions.
+      await processRoute(.resumeAfterRecovery(generation: generation))
+      guard failedCommittedRoutes.isEmpty else { return false }
+      return try await store.queryPendingStableRoutes(distinctId: distinctId, limit: 1).isEmpty
+    } catch {
+      LogWarning("EventLog: failed to replay pending stable local routes")
+      return false
     }
-    return recovered
+  }
+
+  private func deliverRecoveredStableRoute(
+    _ stored: StoredEvent, generation: UInt64, admissions: [UInt64: UInt64]
+  ) async -> Bool {
+    guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
+    guard activeStableRouteIds.insert(stored.id).inserted else { return true }
+    await deliverOrRetainCommittedRoute(RoutedCommittedEvent(
+      event: NuxieEvent(
+        id: stored.id, name: stored.name, distinctId: stored.distinctId,
+        properties: stored.getPropertiesDict(), timestamp: stored.timestamp
+      ),
+      subscriberAdmissions: admissions,
+      stableRouteEventId: stored.id
+    ))
+    return failedCommittedRoutes.isEmpty
   }
 
   @discardableResult
@@ -2914,27 +2937,18 @@ extension EventLog {
     guard !closeFlag.isClosed else { return false }
     await ready.wait()
     guard !closeFlag.isClosed else { return false }
-    do {
-      let generation = routingDeferralGeneration
-      let recovered = try await pendingStableRoutes(distinctId: distinctId)
-      if routingDeferred {
-        routeContinuation.yield(.resumeAfterRecovery(recovered, generation: generation))
-      } else {
-        routeContinuation.yield(.retryFailedDeliveries)
-        for event in recovered { routeContinuation.yield(.undurable(event)) }
-      }
-      guard !Self.isOnCommittedRouteWorker else { return false }
-      await drainRouteWorker()
-      guard failedCommittedRoutes.isEmpty else { return false }
-      guard await retryFailedStableRouteAcknowledgements() else {
-        return false
-      }
-      return try await store.queryPendingStableRoutes(
-        distinctId: distinctId, limit: 1
-      ).isEmpty
-    } catch {
-      LogWarning("EventLog: failed to replay pending stable local routes")
+    let generation = routingDeferralGeneration
+    let admissions = committedAdmissionRegistry.capture()
+    guard !Self.isOnCommittedRouteWorker else {
+      routeContinuation.yield(.recoverStableRoutes(
+        distinctId: distinctId, generation: generation, admissions: admissions, completion: nil
+      ))
       return false
+    }
+    return await withCheckedContinuation { completion in
+      routeContinuation.yield(.recoverStableRoutes(
+        distinctId: distinctId, generation: generation, admissions: admissions, completion: completion
+      ))
     }
   }
 
