@@ -196,7 +196,10 @@ struct JourneyEffectDispatcher {
             return .outlet("next")
         case .appAction:
             return await appAction(request)
-        case .exit:
+        case .exit, .dismiss:
+            // An owned surface handles dismiss before this seam. An offer may
+            // bypass presentation entirely; its terminal dismiss still ends
+            // execution without inventing screen lifecycle events.
             guard let action = decode(Exit.self, request.action) else { return .failed }
             if let reason = action.reason, !reason.isEmpty {
                 return .complete(reason)
