@@ -72,7 +72,8 @@ extension BatchEventItem {
             // NSNumber bridging so Int- and Double-typed amounts both lift
             // (a native Swift Int fails a direct `as? Double` cast).
             value: (event.properties["value"] as? NSNumber)?.doubleValue,
-            entityId: event.properties["entityId"] as? String
+            entityId: event.properties["entityId"] as? String,
+            journeyOrigin: event.journeyOrigin
         )
     }
 }
@@ -86,6 +87,7 @@ struct BatchEventItem: Codable, Sendable {
     public let idempotencyKey: String?
     public let value: Double?
     public let entityId: String?
+    let journeyOrigin: JourneyEventOrigin?
     
     public init(
         event: String,
@@ -95,7 +97,8 @@ struct BatchEventItem: Codable, Sendable {
         properties: [String: Any]? = nil,
         idempotencyKey: String? = nil,
         value: Double? = nil,
-        entityId: String? = nil
+        entityId: String? = nil,
+        journeyOrigin: JourneyEventOrigin? = nil
     ) {
         self.event = event
         self.distinctId = distinctId
@@ -107,6 +110,7 @@ struct BatchEventItem: Codable, Sendable {
         self.idempotencyKey = idempotencyKey
         self.value = value
         self.entityId = entityId
+        self.journeyOrigin = journeyOrigin
     }
     
     enum CodingKeys: String, CodingKey {
@@ -118,6 +122,7 @@ struct BatchEventItem: Codable, Sendable {
         case idempotencyKey = "idempotency_key"
         case value
         case entityId
+        case journeyOrigin
     }
 }
 
@@ -161,7 +166,8 @@ extension EventRequest {
             properties: event.properties,
             idempotencyKey: event.id,
             value: (event.properties["value"] as? NSNumber)?.doubleValue,
-            entityId: event.properties["entityId"] as? String
+            entityId: event.properties["entityId"] as? String,
+            journeyOrigin: event.journeyOrigin
         )
     }
 }
@@ -175,6 +181,7 @@ struct EventRequest: Codable {
     let idempotencyKey: String?
     let value: Double?
     let entityId: String?
+    let journeyOrigin: JourneyEventOrigin?
     
     init(
         event: String,
@@ -184,7 +191,8 @@ struct EventRequest: Codable {
         properties: [String: Any]? = nil,
         idempotencyKey: String? = nil,
         value: Double? = nil,
-        entityId: String? = nil
+        entityId: String? = nil,
+        journeyOrigin: JourneyEventOrigin? = nil
     ) {
         self.event = event
         self.distinctId = distinctId
@@ -194,6 +202,7 @@ struct EventRequest: Codable {
         self.idempotencyKey = idempotencyKey
         self.value = value
         self.entityId = entityId
+        self.journeyOrigin = journeyOrigin
     }
     
     enum CodingKeys: String, CodingKey {
@@ -205,5 +214,6 @@ struct EventRequest: Codable {
         case idempotencyKey = "idempotency_key"
         case value
         case entityId
+        case journeyOrigin
     }
 }

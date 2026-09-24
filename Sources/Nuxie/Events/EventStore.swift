@@ -275,7 +275,7 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Properties
 
-  private static let currentSchemaVersion: Int32 = 3
+  private static let currentSchemaVersion: Int32 = 4
 
   // nonisolated(unsafe): accessed from the actor's methods (isolated) and
   // from deinit, which has exclusive access to the last reference.
@@ -294,7 +294,8 @@ actor SQLiteEventStore: EventStoreProtocol {
         timestamp INTEGER NOT NULL,
         user_id TEXT NOT NULL,
         delivery_state INTEGER NOT NULL DEFAULT 2,
-        origin TEXT NOT NULL DEFAULT 'device'
+        origin TEXT NOT NULL DEFAULT 'device',
+        journey_origin BLOB
     );
     """
 
@@ -356,19 +357,19 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   private let insertEventSQL = """
     INSERT OR IGNORE INTO events (
-      id, name, properties, timestamp, user_id, delivery_state, origin
-    ) VALUES (?, ?, ?, ?, ?, ?, ?);
+      id, name, properties, timestamp, user_id, delivery_state, origin, journey_origin
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
     """
 
   private let queryEventsSQL = """
-    SELECT id, name, properties, timestamp, user_id
+    SELECT id, name, properties, timestamp, user_id, journey_origin
     FROM events
     ORDER BY timestamp DESC
     LIMIT ?;
     """
 
   private let queryEventByIdSQL = """
-    SELECT id, name, properties, timestamp, user_id
+    SELECT id, name, properties, timestamp, user_id, journey_origin
     FROM events
     WHERE id = ?
     LIMIT 1;
@@ -465,18 +466,21 @@ actor SQLiteEventStore: EventStoreProtocol {
         )
       }
       try installCurrentSchema()
-      LogInfo("Event store schema v3 installed")
+      LogInfo("Event store schema v4 installed")
 
 
-    case 2:
-      // Preserve ordinary event and purchase evidence; this upgrade does not
-      // revive any retired Journey contracts or infer conversions from history.
-      try verifySchemaObjects(targetVersion: 2)
-      try executeSchemaSQL("BEGIN IMMEDIATE;", targetVersion: 3, operation: "begin conversion inbox upgrade")
+    case 2, 3:
+      // Preserve ordinary event and purchase evidence; no retired Journey
+      // contracts are imported or converted into authority.
+      try verifySchemaObjects(targetVersion: version)
+      try executeSchemaSQL("BEGIN IMMEDIATE;", targetVersion: 4, operation: "begin event origin upgrade")
       do {
-        try executeSchemaSQL(createConversionInboxSQL, targetVersion: 3, operation: "create conversion inbox")
+        if version == 2 {
+          try executeSchemaSQL(createConversionInboxSQL, targetVersion: 4, operation: "create conversion inbox")
+        }
+        try executeSchemaSQL("ALTER TABLE events ADD COLUMN journey_origin BLOB;", targetVersion: 4, operation: "add event origin")
         try verifyCurrentSchema()
-        try executeSchemaSQL("PRAGMA user_version = 3; COMMIT;", targetVersion: 3, operation: "commit conversion inbox upgrade")
+        try executeSchemaSQL("PRAGMA user_version = 4; COMMIT;", targetVersion: 4, operation: "commit event origin upgrade")
       } catch {
         _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
         throw error
@@ -492,7 +496,7 @@ actor SQLiteEventStore: EventStoreProtocol {
         targetVersion: version,
         operation: "validate user_version",
         code: SQLITE_SCHEMA,
-        message: "Event-store schema v\(version) is unsupported; expected v3"
+        message: "Event-store schema v\(version) is unsupported; expected v4"
       )
     }
   }
@@ -781,7 +785,8 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let columns = try tableColumns(named: "events", targetVersion: targetVersion)
-    guard columns.count == 7,
+    guard columns.count == (targetVersion >= 4 ? 8 : 7),
+          (targetVersion < 4 || columns["journey_origin"]?.type.caseInsensitiveCompare("BLOB") == .orderedSame),
           let id = columns["id"],
           id.type.caseInsensitiveCompare("TEXT") == .orderedSame,
           id.primaryKeyPosition == 1,
@@ -806,7 +811,7 @@ actor SQLiteEventStore: EventStoreProtocol {
         code: SQLITE_SCHEMA,
         message: "events must exactly define id TEXT PRIMARY KEY, name TEXT NOT NULL, "
           + "properties BLOB NOT NULL, timestamp INTEGER NOT NULL, user_id TEXT NOT NULL, "
-          + "delivery_state INTEGER NOT NULL DEFAULT 2, and origin TEXT NOT NULL DEFAULT 'device'"
+          + "delivery_state INTEGER NOT NULL DEFAULT 2, origin TEXT NOT NULL DEFAULT 'device', and (v4+) journey_origin BLOB"
       )
     }
     return columns
@@ -1237,6 +1242,15 @@ actor SQLiteEventStore: EventStoreProtocol {
 
     sqlite3_bind_int(statement, 6, deliveryState.rawValue)
     sqlite3_bind_text(statement, 7, origin.rawValue, -1, SQLITE_TRANSIENT)
+    if let journeyOrigin = event.journeyOrigin {
+      let data = try JSONEncoder().encode(journeyOrigin)
+      _ = data.withUnsafeBytes { bytes in
+        sqlite3_bind_blob(statement, 8, bytes.baseAddress, Int32(bytes.count), SQLITE_TRANSIENT)
+      }
+    } else {
+      sqlite3_bind_null(statement, 8)
+    }
+
 
     // Execute
     if sqlite3_step(statement) != SQLITE_DONE {
@@ -2002,8 +2016,17 @@ actor SQLiteEventStore: EventStoreProtocol {
       timestamp: Date(
         timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0
       ),
-      distinctId: String(cString: sqlite3_column_text(statement, 4))
+      distinctId: String(cString: sqlite3_column_text(statement, 4)),
+      journeyOrigin: try readJourneyOrigin(statement)
     )
+  }
+
+  private func readJourneyOrigin(_ statement: OpaquePointer?) throws -> JourneyEventOrigin? {
+    guard sqlite3_column_type(statement, 5) != SQLITE_NULL else { return nil }
+    guard let blob = sqlite3_column_blob(statement, 5) else { throw EventStorageError.invalidProperties }
+    return try JSONDecoder().decode(JourneyEventOrigin.self, from: Data(
+      bytes: blob, count: Int(sqlite3_column_bytes(statement, 5))
+    ))
   }
 
   /// Query recent events from the database
@@ -2061,7 +2084,8 @@ actor SQLiteEventStore: EventStoreProtocol {
         name: name,
         properties: propertiesData,
         timestamp: timestamp,
-        distinctId: distinctId
+        distinctId: distinctId,
+        journeyOrigin: try readJourneyOrigin(statement)
       )
 
       events.append(event)
@@ -2582,7 +2606,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     var sql = """
-      SELECT id, name, properties, timestamp, user_id
+      SELECT id, name, properties, timestamp, user_id, journey_origin
       FROM events
       WHERE user_id = ? AND name = ?
       """
@@ -2632,7 +2656,8 @@ actor SQLiteEventStore: EventStoreProtocol {
         name: name,
         properties: Data(bytes: propertiesBlob, count: Int(sqlite3_column_bytes(statement, 2))),
         timestamp: Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0),
-        distinctId: distinctId
+        distinctId: distinctId,
+        journeyOrigin: try readJourneyOrigin(statement)
       ))
     }
     return events
@@ -2689,7 +2714,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let sql = """
-      SELECT id, name, properties, timestamp, user_id
+      SELECT id, name, properties, timestamp, user_id, journey_origin
       FROM events
       WHERE user_id = ?
       ORDER BY timestamp DESC
@@ -2743,7 +2768,8 @@ actor SQLiteEventStore: EventStoreProtocol {
         name: name,
         properties: propertiesData,
         timestamp: timestamp,
-        distinctId: distinctId
+        distinctId: distinctId,
+        journeyOrigin: try readJourneyOrigin(statement)
       )
 
       events.append(event)
@@ -2762,7 +2788,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let sql = """
-      SELECT id, name, properties, timestamp, user_id
+      SELECT id, name, properties, timestamp, user_id, journey_origin
       FROM events
       WHERE delivery_state = ?
       ORDER BY timestamp ASC, id ASC
@@ -2794,7 +2820,8 @@ actor SQLiteEventStore: EventStoreProtocol {
         name: String(cString: nameText),
         properties: Data(bytes: propertiesBlob, count: Int(sqlite3_column_bytes(statement, 2))),
         timestamp: Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0),
-        distinctId: String(cString: userIdText)
+        distinctId: String(cString: userIdText),
+        journeyOrigin: try readJourneyOrigin(statement)
       ))
     }
     return events
