@@ -367,7 +367,7 @@
         "source": "JourneyEvents.experienceDismissedProperties journey snapshot",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": true,
         "source": "presented experience version",
         "type": "String"
@@ -415,7 +415,7 @@
         "source": "JourneyEvents.experienceErroredProperties journey snapshot",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": true,
         "source": "presented experience version",
         "type": "String"
@@ -448,7 +448,7 @@
         "source": "JourneyEvents.experienceShownProperties journey snapshot",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": true,
         "source": "presented experience version",
         "type": "String"
@@ -770,7 +770,7 @@
         "source": "requesting Journey experience when scoped",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
         "type": "String"
@@ -829,7 +829,7 @@
         "source": "requesting Journey experience when scoped",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
         "type": "String"
@@ -888,7 +888,7 @@
         "source": "requesting Journey experience when scoped",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
         "type": "String"
@@ -952,7 +952,7 @@
         "source": "requesting Journey experience when scoped",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
         "type": "String"
@@ -1003,7 +1003,7 @@
         "source": "active Journey Experience id",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": true,
         "source": "active Journey Experience version",
         "type": "String"
@@ -1290,7 +1290,7 @@
         "source": "accepted commercial transaction context when available",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": false,
         "source": "accepted commercial transaction context when available",
         "type": "String"
@@ -1469,7 +1469,7 @@
         "source": "active Journey Experience id",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": true,
         "source": "active Journey Experience version",
         "type": "String"
@@ -1527,7 +1527,7 @@
         "source": "active Journey Experience id",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": true,
         "source": "active Journey Experience version",
         "type": "String"
@@ -1588,7 +1588,7 @@
         "source": "requesting Journey experience when scoped",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
         "type": "String"
@@ -1647,7 +1647,7 @@
         "source": "requesting Journey experience when scoped",
         "type": "String"
       },
-      "experience_version": {
+      "experience_version_id": {
         "required": false,
         "source": "requesting Journey experience when scoped",
         "type": "String"

@@ -573,7 +573,7 @@ private struct JourneyPresentationEventAttribution {
         var attributed = properties
         attributed["journey_id"] = journeyId
         attributed["experience_id"] = experienceId
-        attributed["experience_version"] = experienceVersionId
+        attributed["experience_version_id"] = experienceVersionId
         attributed["leg_id"] = legId
         attributed["leg_generation"] = legGeneration
         return attributed
@@ -585,7 +585,7 @@ private struct JourneyPresentationEventAttribution {
         var attributed = values
         attributed["journey_id"] = .string(journeyId)
         attributed["experience_id"] = .string(experienceId)
-        attributed["experience_version"] = .string(experienceVersionId)
+        attributed["experience_version_id"] = .string(experienceVersionId)
         attributed["leg_id"] = .string(legId)
         attributed["leg_generation"] = .number(Double(legGeneration))
         return attributed

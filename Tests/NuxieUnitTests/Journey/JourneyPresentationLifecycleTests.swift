@@ -76,7 +76,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         })
         XCTAssertEqual(shown.properties["screen_id"] as? String, "screen_welcome")
         XCTAssertEqual(shown.properties["journey_id"] as? String, request.owner.journeyId)
-        XCTAssertEqual(shown.properties["experience_version"] as? String, "version_golden")
+        XCTAssertEqual(shown.properties["experience_version_id"] as? String, "version_golden")
         XCTAssertNil(shown.properties["experience_version_id"])
         XCTAssertEqual(shown.properties["leg_generation"] as? Int, 0)
         let dismissed = try XCTUnwrap(events.routedEvents.first {
@@ -90,7 +90,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         )
         XCTAssertEqual(dismissed.properties["journey_id"] as? String, request.owner.journeyId)
         XCTAssertEqual(
-            dismissed.properties["experience_version"] as? String,
+            dismissed.properties["experience_version_id"] as? String,
             "version_golden"
         )
     }
@@ -995,7 +995,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
             request.owner.journeyId
         )
         XCTAssertEqual(
-            permissionEvent.properties["experience_version"] as? String,
+            permissionEvent.properties["experience_version_id"] as? String,
             "version_golden"
         )
         let completion = try XCTUnwrap(events.routedEvents.first {
