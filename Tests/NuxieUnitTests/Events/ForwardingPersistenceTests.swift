@@ -688,6 +688,8 @@ final class ForwardingPersistenceTests: XCTestCase {
       "acknowledgeCommittedRoute": 1,
       "checkpointCommittedRoute": 1,
       "discardOtherCommittedRouteSessions": 1,
+      "firstPendingCommittedRoute": 1,
+      "hasPendingCommittedRoute": 1,
       "acknowledgeConversionOccurrence": 1,
       "advanceHistoryCoverage": 1,
       "bindConversionAuthority": 1,

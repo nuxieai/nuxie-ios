@@ -19,6 +19,85 @@ private final class RecoveryAdmission: @unchecked Sendable {
 }
 
 final class CommittedRouteRecoveryTests: XCTestCase {
+    func testBestEffortFallbackIsBoundedAndKeepsItsPlaceBetweenDurableCaptures() async throws {
+        let store = MockEventStore()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let log = EventLog(identity: identity, dateProvider: MockDateProvider(),
+            apiClient: MockNuxieApi(), store: store)
+        let configuration = NuxieConfiguration(apiKey: "test-api-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        configuration.testingOverrides.maxQueueSize = 2
+        let generation = RecoveryAdmission()
+        let received = RecoveredRouteRecorder()
+        let reservation = log.reserveCommittedAdmission { generation.value }
+        await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, admission in
+            guard generation.value == 2, admission == 1 else { return false }
+            await received.append(event.name)
+            return true
+        }
+        try await log.configure(configuration: configuration)
+        log.track("before")
+        await log.drain()
+        store.shouldFailStore = true
+        for index in 0..<3 { log.track("undurable-\(index)") }
+        await log.drain()
+        store.shouldFailStore = false
+        log.track("after")
+        await log.drain()
+        let buffered = await log.bufferedCommittedRouteCount
+        XCTAssertEqual(buffered, 3, "One durable retry plus two best-effort events")
+        XCTAssertEqual(store.pendingCommittedRoutes.map(\.event.name), ["before", "after"])
+        generation.advance()
+        let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
+        XCTAssertTrue(recovered)
+        let delivered = await received.snapshot()
+        XCTAssertEqual(delivered, ["before", "undurable-0", "undurable-1", "after"])
+        XCTAssertTrue(store.pendingCommittedRoutes.isEmpty)
+        await log.close()
+    }
+
+    func testFailedSubscriberKeepsDurableBacklogOnDiskAndReplaysInCaptureOrder() async throws {
+        let stores: [any EventStoreProtocol] = [MockEventStore(), SQLiteEventStore()]
+        for store in stores {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("live-backlog-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer-a")
+            let log = EventLog(identity: identity, dateProvider: MockDateProvider(),
+                apiClient: MockNuxieApi(), store: store)
+            let configuration = NuxieConfiguration(apiKey: "test-api-key")
+            configuration.testingOverrides.suppressBackgroundWork = true
+            configuration.testingOverrides.customStoragePath = directory
+            let generation = RecoveryAdmission()
+            let received = RecoveredRouteRecorder()
+            let reservation = log.reserveCommittedAdmission { generation.value }
+            await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, admission in
+                guard generation.value == 2, admission == 1 else { return false }
+                await received.append(event.name)
+                return true
+            }
+            try await log.configure(configuration: configuration)
+            let expected = (0..<257).map { "captured-\($0)" }
+            for name in expected { log.track(name) }
+            await log.drain()
+            let buffered = await log.bufferedCommittedRouteCount
+            XCTAssertEqual(buffered, 1)
+            let storedCount = try await store.getEventCount()
+            XCTAssertEqual(storedCount, expected.count)
+            generation.advance()
+            let replayed = await log.replayPendingStableRoutes(distinctId: "customer-a")
+            XCTAssertTrue(replayed)
+            let delivered = await received.snapshot()
+            XCTAssertEqual(delivered, expected)
+            let remaining = await log.bufferedCommittedRouteCount
+            XCTAssertEqual(remaining, 0)
+            await log.close()
+        }
+    }
+
     func testLiveCapturePersistsOriginalAdmissionsAndAcknowledgesOnlyAfterDelivery() async throws {
         let store = MockEventStore()
         let identity = MockIdentityService()

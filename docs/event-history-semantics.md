@@ -18,14 +18,16 @@ An event-query source explicitly reports one of two coverage states:
 Production `EventLog` always reports a retained window backed by durable SQLite
 metadata. A fresh database establishes its starting timestamp at the first SDK
 open. The boundary survives process restarts and is cleared only when the event
-database itself is reset. Databases that do not exactly match the current v2
-schema are rejected; the SDK has no legacy event-store reader or migration path.
+database itself is reset. The current schema is v3. A verified v2 store upgrades
+transactionally while retaining event and purchase evidence; unsupported or
+malformed layouts are rejected without mutation.
 
 The boundary is monotonic. Age and count retention advance it only when rows
 are actually removed, and the deletion plus metadata update commit in one
 SQLite transaction. Count pruning moves it one persisted timestamp tick past
 the newest removed row so equal timestamps cannot straddle a claimed window.
-Pending rows are never reaped. If an old pending row is acknowledged later, the
+Rows awaiting network or local subscriber delivery are never reaped. If an old
+pending row is acknowledged later, the
 retention pass either deletes it and atomically preserves/advances the boundary,
 or leaves both history and boundary unchanged. Wall-clock rollback cannot move
 the persisted boundary backward.
@@ -49,6 +51,21 @@ and sends it through batch delivery. Its UUIDv7 remains the wire
 store and batch transport under a producer-supplied id; the producing state
 machine advances only after durable capture. Renderer response controls update
 the Journey journal directly and do not enter EventLog.
+
+Local subscriber delivery records preserve eligibility captured with the event
+and the next subscriber to retry. Ordinary capture, stable capture, and batches
+write that metadata in the same transaction as their events. A refused event
+holds later deliveries in capture order; the worker retains the current retry
+and loads durable followers one at a time. A single ordinary-event cache keeps
+fresh capture usable through transient history-query failures. Events that
+cannot persist use a best-effort buffer limited by `maxQueueSize`; additional
+unpersisted events are dropped with a warning when that buffer is full.
+
+Process-local subscriber authority is discarded on the next SDK open. Stable
+route receipts and the conversion inbox survive independently: retained stable
+routes recover under authenticated current Journey state, while discovering
+old event or purchase history does not create a new conversion. Network
+acknowledgement alone never releases an event still awaiting local delivery.
 
 Ordinary `useFeatureAndWait` calls use a separate v1 Feature-command journal,
 not an undelivered history row. The final command is written atomically before
@@ -96,12 +113,16 @@ query.
 
 ## Schema and authoring guidance
 
-`event_history_metadata` is part of the complete schema v2. Fresh-store table
-creation, required-column and index verification, and the `user_version = 1`
-write occur in one transaction. The singleton coverage row is established when
+`event_history_metadata` is part of the complete schema v3, alongside stable
+route receipts, the conversion inbox, and process-scoped subscriber delivery.
+Fresh-store table creation, required-column and index verification, and the
+`user_version = 3` write occur in one transaction. The singleton coverage row is established when
 `EventLog` first opens that fresh store and its monotonic `coverage_start_ms` is
-preserved across reopen. A version 0 store, a version greater than 1, or a v1
-store missing the metadata table is rejected without mutation. Database reset
+preserved across reopen. An empty unversioned database is initialized; a
+nonempty unversioned store, v1 store, unknown future version, or malformed
+supported schema is rejected without mutation. The verified v2-to-v3 upgrade
+adds delivery and conversion metadata without replaying historical events as
+new conversions. Database reset
 remains the only operation that intentionally discards the watermark.
 
 After this change, an existing unbounded condition may stop qualifying on a
