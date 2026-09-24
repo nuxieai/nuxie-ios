@@ -1387,7 +1387,7 @@ final class ExperiencePresentationService {
         deviceProperties.merging([
             "journey_id": context.owner.journeyId,
             "experience_id": context.experienceId,
-            "experience_version": experienceVersionId,
+            "experience_version_id": experienceVersionId,
         ]) { _, identity in identity }
     }
 }

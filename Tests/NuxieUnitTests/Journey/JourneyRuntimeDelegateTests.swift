@@ -516,7 +516,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             XCTAssertEqual(event.distinctId, "customer")
             XCTAssertEqual(event.properties["journey_id"] as? String, request.owner.journeyId)
             XCTAssertEqual(event.properties["experience_id"] as? String, "experience_golden")
-            XCTAssertEqual(event.properties["experience_version"] as? String, "version_golden")
+            XCTAssertEqual(event.properties["experience_version_id"] as? String, "version_golden")
         }
         let unsupported = try XCTUnwrap(permissionEvents.first {
             $0.name == SystemEventNames.permissionDenied
@@ -1032,7 +1032,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             ["monthly", "yearly"]
         )
         XCTAssertEqual(
-            unavailable.properties["experience_version"] as? String,
+            unavailable.properties["experience_version_id"] as? String,
             "version_golden"
         )
         XCTAssertEqual(
