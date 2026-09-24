@@ -24,10 +24,10 @@ struct JourneyReporter {
                 try await journal.markStartedQueued(run)
             }
             if run.completion != nil {
-                // A shown experiment decision owns its exposure record before
+                // A selected experiment decision owns its exposure record before
                 // the terminal run can be removed from the journal.
                 guard !run.experimentExposures.contains(where: {
-                    $0.shownAt != nil && !$0.queued
+                    !$0.queued
                 }) else { continue }
                 guard await queue(run, completion: true) else { continue }
                 try await journal.markCompletionQueued(run)
@@ -73,8 +73,7 @@ struct JourneyReporter {
 
 extension JourneyReporter: Sendable {}
 
-/// Flushes only experiment decisions whose selected variant reached a visible
-/// surface. The journal keeps the stable event ID until EventLog accepts it,
+/// Flushes committed selector decisions, including holdouts and render failures. The journal keeps the stable event ID until EventLog accepts it,
 /// so a crash or transient storage failure cannot duplicate an exposure.
 struct JourneyExperimentExposureReporter: Sendable {
     private struct Projection {
@@ -90,11 +89,11 @@ struct JourneyExperimentExposureReporter: Sendable {
     func stagePending() async throws -> Bool {
         for run in try await journal.runs() {
             for exposure in run.experimentExposures
-            where exposure.shownAt != nil && !exposure.queued {
+            where !exposure.queued {
                 let projection = projection(exposure, run: run)
                 guard await captureStableSystemEvent(
                     projection.eventName, properties: projection.properties,
-                    eventId: exposure.eventId, admission: nil
+                    eventId: exposure.eventId, occurredAt: exposure.selectedAt, admission: nil
                 ) != nil else { return false }
             }
         }
@@ -106,12 +105,13 @@ struct JourneyExperimentExposureReporter: Sendable {
     ) async throws -> Bool {
         for run in try await journal.runs() {
             for exposure in run.experimentExposures
-            where exposure.shownAt != nil && !exposure.queued {
+            where !exposure.queued {
                 let projection = projection(exposure, run: run)
                 let capture = await captureStableSystemEvent(
                     projection.eventName,
                     properties: projection.properties,
                     eventId: exposure.eventId,
+                    occurredAt: exposure.selectedAt,
                     admission: admission
                 )
                 guard capture != nil else { return false }
@@ -131,13 +131,15 @@ struct JourneyExperimentExposureReporter: Sendable {
         _ name: String,
         properties: sending [String: Any],
         eventId: String,
+        occurredAt: Date,
         admission: JourneyCommitAdmission?
     ) async -> DurableTriggerCapture? {
         let request = StableSystemEventCaptureRequest(
             name: name,
             properties: properties,
             eventId: eventId,
-            distinctId: journal.distinctId
+            distinctId: journal.distinctId,
+            occurredAt: occurredAt
         )
         if let admission {
             return await events.captureAndRouteSystemEvent(
@@ -155,17 +157,16 @@ struct JourneyExperimentExposureReporter: Sendable {
         var properties: [String: Any] = [
             "journey_id": run.journeyId,
             "experience_id": run.reference.experienceId,
-            "experience_version": run.reference.versionId,
+            "experience_version_id": run.reference.versionId,
             "leg_id": run.reference.legId,
             "leg_generation": run.generation,
             "experiment_key": exposure.experimentId,
+            "step_id": exposure.stepId,
             "variant_key": exposure.variantId,
         ]
-        properties["assignment_source"] = exposure.kind == .assigned
-            ? "profile"
-            : "fallback"
+        properties["assignment_source"] = exposure.kind == .assigned ? "profile" : exposure.kind.rawValue
         switch exposure.kind {
-        case .assigned:
+        case .assigned, .override, .fixed:
             properties["is_holdout"] = exposure.isHoldout
         case .fallback:
             properties["is_holdout"] = false

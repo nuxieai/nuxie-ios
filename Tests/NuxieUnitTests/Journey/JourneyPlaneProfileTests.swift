@@ -37,7 +37,7 @@ final class JourneyPlaneProfileTests: XCTestCase {
 
     func testOrdinalFactNamesRemainDistinctAtEntryEvaluation() async throws {
         var root = try fixture()
-        root["facts"] = try JSONSerialization.jsonObject(with: Data(#"{"properties":{"é":{"present":true,"value":false},"e\u0301":{"present":true,"value":true}},"memberships":{"é":false,"e\u0301":true},"assignments":{"é":{"variantId":"one","isHoldout":false},"e\u0301":{"variantId":"two","isHoldout":true}}}"#.utf8))
+        root["facts"] = try JSONSerialization.jsonObject(with: Data(#"{"properties":{"é":{"present":true,"value":false},"e\u0301":{"present":true,"value":true}},"memberships":{"é":false,"e\u0301":true},"assignments":{"é":{"variantId":"one","isHoldout":false,"source":"profile"},"e\u0301":{"variantId":"two","isHoldout":true,"source":"profile"}}}"#.utf8))
         let profile = try JourneyPlaneProfile.decode(JSONSerialization.data(withJSONObject: root))
         XCTAssertEqual(profile.facts.properties.count, 2)
         XCTAssertEqual(profile.facts.properties["é"]?.value?.value as? Bool, false)
@@ -72,7 +72,7 @@ final class JourneyPlaneProfileTests: XCTestCase {
             "missing_holdout": ["variantId": "variant_a"],
             "empty_variant": ["variantId": "", "isHoldout": false],
             "wrong_holdout": ["variantId": "variant_a", "isHoldout": "false"],
-            "valid": ["variantId": "variant_b", "isHoldout": true],
+            "valid": ["variantId": "variant_b", "isHoldout": true, "source": "override"],
         ]
         root["facts"] = facts
 

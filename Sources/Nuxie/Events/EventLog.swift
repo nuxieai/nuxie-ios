@@ -1176,7 +1176,7 @@ actor EventLog: EventLogProtocol {
 
       let transformedEvent = try await prepareStableSystemEvent(
         request,
-        occurredAt: occurredAt ?? attemptedTimestamp,
+        occurredAt: occurredAt ?? request.occurredAt ?? attemptedTimestamp,
         preservesJourneyCompletionOutputs:
           request.name == JourneyEvents.journeyCompleted
       )

@@ -16,6 +16,10 @@ struct JourneyFactTable {
     }
 
     struct Assignment {
+        enum Source: String, Codable, Sendable {
+            case profile, override, fixed
+        }
+        let source: Source
         let variantId: String
         let isHoldout: Bool
     }
@@ -211,14 +215,16 @@ extension JourneyFactTable: Codable, Sendable {
         from value: JourneyReleaseJSONValue
     ) -> Assignment? {
         guard case .object(let object) = value,
-              object.count == 2,
+              object.count == 3,
+              case .string(let rawSource)? = object["source"],
+              let source = Assignment.Source(rawValue: rawSource),
               case .string(let variantId)? = object["variantId"],
               !variantId.isEmpty,
               variantId.utf16.count <= 256,
               case .bool(let isHoldout)? = object["isHoldout"] else {
             return nil
         }
-        return Assignment(variantId: variantId, isHoldout: isHoldout)
+        return Assignment(source: source, variantId: variantId, isHoldout: isHoldout)
     }
 }
 extension JourneyFactTable.Assignment: Codable, Sendable {}
