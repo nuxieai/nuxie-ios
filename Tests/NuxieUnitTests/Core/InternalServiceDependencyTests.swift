@@ -109,39 +109,103 @@ final class InternalServiceDependencyTests: XCTestCase {
 
     func testTransactionObserverReturnsOnlyActiveCurrentEntitlementProductIds() async {
         let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        let serviceBox = LateBound<TransactionService>()
+        let ownership = InMemoryPurchaseAccountOwnershipStore()
+        let evidence = InMemoryTransactionEvidenceStore()
         let settings = NuxieRuntimeSettings(
             configuration: NuxieConfiguration(apiKey: "entitlement-snapshot")
         )
         let features = FeatureService(
             api: mocks.nuxieApi,
-            identity: mocks.identityService,
+            identity: identity,
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
             cacheTTL: NuxieInternalConfiguration().featureCacheTTL
         )
+        let token = PurchaseStorageScope.testFixture.appAccountToken(
+            distinctId: identity.getDistinctId()
+        )
+        let legacyToken = UUID()
+        XCTAssertTrue(ownership.upsert(.init(
+            scope: .testFixture, appAccountToken: legacyToken,
+            distinctId: identity.getDistinctId()
+        )))
+        evidence.save(["transaction-conflict": StoredTransactionEvidence(
+            transactionJws: "verified", transactionId: "transaction-conflict",
+            originalTransactionId: "original-conflict", productId: "conflict",
+            distinctId: "previous-customer", recordedAt: Date(), isRevoked: false
+        )])
         let currentEntitlements = [
-            recoveryItem(productId: "active"),
-            recoveryItem(productId: "revoked", isRevoked: true),
-            recoveryItem(productId: "upgraded", isUpgraded: true),
-            recoveryItem(productId: "active"),
+            recoveryItem(productId: "active", appAccountToken: token),
+            recoveryItem(productId: "revoked", appAccountToken: token, isRevoked: true),
+            recoveryItem(productId: "upgraded", appAccountToken: token, isUpgraded: true),
+            recoveryItem(productId: "active", appAccountToken: token),
+            recoveryItem(productId: "unattributed"),
+            recoveryItem(productId: "legacy", appAccountToken: legacyToken),
+            recoveryItem(productId: "conflict", appAccountToken: token),
         ]
         let observer = TransactionObserver(
             api: mocks.nuxieApi,
             features: features,
-            identity: mocks.identityService,
+            identity: identity,
             settings: settings,
             eventSink: EventSink(),
-            transactionServiceProvider: { fatalError("unused in this test") },
+            transactionServiceProvider: { serviceBox.get() },
+            evidenceStore: evidence,
             recoverySources: StoreTransactionRecoverySources(
                 unfinished: { [] },
                 currentEntitlements: { currentEntitlements }
             )
         )
 
+        serviceBox.set(TransactionService(
+            productService: mocks.productService,
+            transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            accountOwnershipStore: ownership,
+            dateProvider: mocks.dateProvider,
+            settings: settings,
+            eventSink: EventSink()
+        ))
         let productIds = await observer.currentEntitledStoreProductIds()
+        XCTAssertEqual(productIds, ["active", "legacy"])
 
-        XCTAssertEqual(productIds, ["active"])
+        identity.setDistinctId("next-customer")
+        let nextCustomerProducts = await observer.currentEntitledStoreProductIds()
+        XCTAssertTrue(nextCustomerProducts.isEmpty)
+    }
+
+    func testStoreEntitlementSnapshotRejectsIdentityRoundTripDuringScan() async {
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        let originalId = identity.getDistinctId()
+        let token = PurchaseStorageScope.testFixture.appAccountToken(distinctId: originalId)
+        let item = recoveryItem(productId: "active", appAccountToken: token)
+        let observer = TransactionObserver(
+            api: mocks.nuxieApi,
+            features: FeatureService(
+                api: mocks.nuxieApi, identity: identity, profile: mocks.profileService,
+                dateProvider: mocks.dateProvider, featureInfo: FeatureInfo(),
+                cacheTTL: NuxieInternalConfiguration().featureCacheTTL
+            ),
+            identity: identity,
+            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "identity-scan")),
+            eventSink: EventSink(),
+            transactionServiceProvider: { fatalError("deterministic ownership needs no lookup") },
+            evidenceStore: InMemoryTransactionEvidenceStore(),
+            recoverySources: StoreTransactionRecoverySources(
+                unfinished: { [] },
+                currentEntitlements: {
+                    identity.setDistinctId("another-customer")
+                    identity.setDistinctId(originalId)
+                    return [item]
+                }
+            )
+        )
+        let products = await observer.currentEntitledStoreProductIds()
+        XCTAssertTrue(products.isEmpty)
     }
 
     func testCoreWiresEachProductAuthorityAdmissionToOneLifecycleGatedRecovery() async throws {
@@ -261,6 +325,7 @@ final class InternalServiceDependencyTests: XCTestCase {
 
     private func recoveryItem(
         productId: String,
+        appAccountToken: UUID? = nil,
         isRevoked: Bool = false,
         isUpgraded: Bool = false
     ) -> StoreTransactionRecoveryItem {
@@ -269,7 +334,7 @@ final class InternalServiceDependencyTests: XCTestCase {
                 transactionId: "transaction-\(productId)",
                 originalTransactionId: "original-\(productId)",
                 productId: productId,
-                appAccountToken: nil,
+                appAccountToken: appAccountToken,
                 isRevoked: isRevoked,
                 isUpgraded: isUpgraded,
                 finish: {}

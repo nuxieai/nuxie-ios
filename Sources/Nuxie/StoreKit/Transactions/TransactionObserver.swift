@@ -1931,12 +1931,36 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     func currentEntitledStoreProductIds() async -> Set<String> {
-        Set(await currentEntitlementRecoveryTransactions().compactMap { item in
+        let distinctId = identityService.getDistinctId()
+        guard let identity = identityService.performWithCurrentIdentityFence(
+            distinctId, { _ in () }
+        ) else { return [] }
+        let items = await currentEntitlementRecoveryTransactions()
+        let retained = storedEvidence()
+        guard !evidenceStoreUnreadable else { return [] }
+        var products: Set<String> = []
+        for item in items {
             let update = item.update
-            return !update.isRevoked && !update.isUpgraded
-                ? update.productId
-                : nil
-        })
+            guard !update.isRevoked && !update.isUpgraded else { continue }
+            if let evidence = retained[update.transactionId] {
+                guard evidence.distinctId == distinctId,
+                      !evidence.isRevoked else { continue }
+            } else if update.appAccountToken == purchaseStorageScope.appAccountToken(
+                distinctId: distinctId
+            ) {
+                // Fresh verified evidence can precede receipt reconciliation.
+            } else {
+                guard update.appAccountToken != nil else { continue }
+                let owner = await transactionServiceProvider().purchaseAccountOwner(
+                    appAccountToken: update.appAccountToken
+                )
+                guard owner.readableValue == distinctId else { continue }
+            }
+            products.insert(update.productId)
+        }
+        return identityService.performIfCurrentIdentityFenceToken(identity.token) {
+            products
+        } ?? []
     }
 
     func recordVerifiedPurchase(
