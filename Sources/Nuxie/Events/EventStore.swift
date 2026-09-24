@@ -21,6 +21,12 @@ struct EventHistoryPruneResult: Equatable, Sendable {
   let coverageStartingAt: Date
 }
 
+struct PendingConversionOccurrence: Sendable {
+  static let retentionMillis = 120 * 86_400_000
+  let event: StoredEvent
+  let acceptedAt: Date
+}
+
 struct EventStoreInsertCommit: Sendable {
   let newlyDurable: Bool
   let commitSequence: UInt64?
@@ -76,7 +82,14 @@ protocol StableEventCaptureBatchCommitAdmission:
 
 /// Persistence surface the event log writes through. One implementation
 /// (SQLite) in production; mocks in tests.
-protocol EventStoreProtocol: Sendable {
+protocol ConversionOccurrenceQueue: Sendable {
+  func bindConversionAuthority(_ scope: JourneyStorageScope) async throws
+  func pendingConversionOccurrences(distinctId: String, limit: Int, throughEventId: String?) async throws -> [PendingConversionOccurrence]
+  func acknowledgeConversionOccurrence(eventId: String, distinctId: String) async throws
+}
+
+protocol EventStoreProtocol: ConversionOccurrenceQueue {
+  func pruneConversionOccurrences(at: Date) async throws -> Int
   func initialize(path: URL?) async throws
   func reset() async
   func close() async
@@ -88,7 +101,8 @@ protocol EventStoreProtocol: Sendable {
     _ event: StoredEvent,
     deliveryState: EventDeliveryState,
     origin: StoredEventOrigin,
-    assigningCommitSequence: Bool
+    assigningCommitSequence: Bool,
+    acceptedAt: Date
   ) async throws -> EventStoreInsertCommit
 
   /// Read or atomically establish the terminal outcome for a stable event ID.
@@ -167,6 +181,12 @@ protocol EventStoreProtocol: Sendable {
 }
 
 extension EventStoreProtocol {
+  func insert(_ event: StoredEvent, deliveryState: EventDeliveryState,
+              origin: StoredEventOrigin, assigningCommitSequence: Bool) async throws -> EventStoreInsertCommit {
+    try await insert(event, deliveryState: deliveryState, origin: origin,
+                     assigningCommitSequence: assigningCommitSequence, acceptedAt: Date())
+  }
+
   func insert(
     _ event: StoredEvent,
     deliveryState: EventDeliveryState,
@@ -201,13 +221,14 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Properties
 
-  private static let currentSchemaVersion: Int32 = 2
+  private static let currentSchemaVersion: Int32 = 3
 
   // nonisolated(unsafe): accessed from the actor's methods (isolated) and
   // from deinit, which has exclusive access to the last reference.
   private nonisolated(unsafe) var db: OpaquePointer?
   private(set) var dbPath: String?
   private var nextCommitSequence: UInt64 = 0
+  private let conversionCaptureScope: String
 
   // MARK: - SQL Statements
 
@@ -247,6 +268,22 @@ actor SQLiteEventStore: EventStoreProtocol {
     );
     """
 
+  private let createConversionInboxSQL = """
+    CREATE TABLE conversion_event_inbox (
+      event_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      payload BLOB NOT NULL,
+      accepted_at INTEGER NOT NULL,
+      scope TEXT NOT NULL
+    );
+    CREATE INDEX idx_conversion_inbox_user ON conversion_event_inbox(scope, user_id);
+    CREATE INDEX idx_conversion_inbox_expiry ON conversion_event_inbox(scope, accepted_at);
+    CREATE TABLE conversion_scope_bindings (
+      capture_scope TEXT PRIMARY KEY,
+      authority_scope TEXT NOT NULL
+    );
+    """
+
   private let createHistoryMetadataSQL = """
     CREATE TABLE IF NOT EXISTS event_history_metadata (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -278,7 +315,8 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Initialization
 
-  public init() {
+  public init(conversionCaptureScope: String = "test-fixture") {
+    self.conversionCaptureScope = "capture-" + conversionCaptureScope
   }
 
   deinit {
@@ -347,8 +385,9 @@ actor SQLiteEventStore: EventStoreProtocol {
     LogInfo("Event database initialized at: \(dbPath)")
   }
 
-  /// Install the sole current schema. Pre-GA layouts from the retired runtime
-  /// and unknown future versions are rejected without mutation.
+  /// Add the conversion inbox to the established event store without changing
+  /// retained events. Retired runtime layouts and unknown future versions are
+  /// rejected without mutation.
   private func prepareCurrentSchema() throws {
     let version = try readUserVersion(targetVersion: nil)
 
@@ -363,8 +402,22 @@ actor SQLiteEventStore: EventStoreProtocol {
         )
       }
       try installCurrentSchema()
-      LogInfo("Event store schema v2 installed")
+      LogInfo("Event store schema v3 installed")
 
+
+    case 2:
+      // Preserve ordinary event and purchase evidence; this upgrade does not
+      // revive any retired Journey contracts or infer conversions from history.
+      try verifySchemaObjects(targetVersion: 2)
+      try executeSchemaSQL("BEGIN IMMEDIATE;", targetVersion: 3, operation: "begin conversion inbox upgrade")
+      do {
+        try executeSchemaSQL(createConversionInboxSQL, targetVersion: 3, operation: "create conversion inbox")
+        try verifyCurrentSchema()
+        try executeSchemaSQL("PRAGMA user_version = 3; COMMIT;", targetVersion: 3, operation: "commit conversion inbox upgrade")
+      } catch {
+        _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+        throw error
+      }
 
     // Pre-GA hard cut: old event stores are deliberately unsupported. There
     // is no migration path from the retired journey ownership protocol.
@@ -376,7 +429,7 @@ actor SQLiteEventStore: EventStoreProtocol {
         targetVersion: version,
         operation: "validate user_version",
         code: SQLITE_SCHEMA,
-        message: "Event-store schema v\(version) is unsupported; expected v2"
+        message: "Event-store schema v\(version) is unsupported; expected v3"
       )
     }
   }
@@ -458,6 +511,7 @@ actor SQLiteEventStore: EventStoreProtocol {
           operation: "create event index"
         )
       }
+      try executeSchemaSQL(createConversionInboxSQL, targetVersion: targetVersion, operation: "create conversion inbox")
       try verifyCurrentSchema()
       try executeSchemaSQL(
         "PRAGMA user_version = \(targetVersion);",
@@ -498,6 +552,27 @@ actor SQLiteEventStore: EventStoreProtocol {
     try verifyStableEventDropsTable(targetVersion: version)
     try verifyStableEventRoutesTable(targetVersion: version)
     try verifyHistoryMetadataTable(targetVersion: version)
+    if version >= 3 {
+      let columns = try tableColumns(named: "conversion_event_inbox", targetVersion: version)
+      guard columns.count == 5, columns["scope"]?.type == "TEXT", columns["scope"]?.isNotNull == true,
+            columns["event_id"]?.primaryKeyPosition == 1,
+            columns["event_id"]?.type == "TEXT", columns["user_id"]?.type == "TEXT",
+            columns["user_id"]?.isNotNull == true, columns["payload"]?.type == "BLOB",
+            columns["payload"]?.isNotNull == true, columns["accepted_at"]?.type == "INTEGER",
+            columns["accepted_at"]?.isNotNull == true else {
+        throw schemaError(targetVersion: version, operation: "verify conversion inbox", code: SQLITE_SCHEMA,
+                          message: "Invalid durable conversion inbox")
+      }
+      try verifyIndex(named: "idx_conversion_inbox_user", expectedColumns: [("scope", false), ("user_id", false)], targetVersion: version)
+      try verifyIndex(named: "idx_conversion_inbox_expiry", expectedColumns: [("scope", false), ("accepted_at", false)], targetVersion: version)
+      let bindings = try tableColumns(named: "conversion_scope_bindings", targetVersion: version)
+      guard bindings.count == 2, bindings["capture_scope"]?.type == "TEXT",
+            bindings["capture_scope"]?.primaryKeyPosition == 1,
+            bindings["authority_scope"]?.type == "TEXT", bindings["authority_scope"]?.isNotNull == true else {
+        throw schemaError(targetVersion: version, operation: "verify conversion scope", code: SQLITE_SCHEMA,
+                          message: "Invalid authenticated conversion scope bindings")
+      }
+    }
     let requiredIndexes: [(name: String, columns: [(String, Bool)])] = [
       ("idx_events_delivery", [("delivery_state", false), ("timestamp", false)]),
       ("idx_events_timestamp", [("timestamp", false)]),
@@ -949,7 +1024,27 @@ actor SQLiteEventStore: EventStoreProtocol {
     _ event: StoredEvent,
     deliveryState: EventDeliveryState,
     origin: StoredEventOrigin,
-    assigningCommitSequence: Bool
+    assigningCommitSequence: Bool,
+    acceptedAt: Date = Date()
+  ) throws -> EventStoreInsertCommit {
+    guard db != nil else { throw EventStorageError.databaseNotInitialized }
+    let previousSequence = nextCommitSequence
+    try executeSchemaSQL("SAVEPOINT capture_with_conversion;", targetVersion: 3, operation: "begin capture")
+    do {
+      let result = try insertWithConversion(event, deliveryState: deliveryState, origin: origin,
+                                           assigningCommitSequence: assigningCommitSequence, acceptedAt: acceptedAt)
+      try executeSchemaSQL("RELEASE capture_with_conversion;", targetVersion: 3, operation: "commit capture")
+      return result
+    } catch {
+      _ = sqlite3_exec(db, "ROLLBACK TO capture_with_conversion; RELEASE capture_with_conversion;", nil, nil, nil)
+      nextCommitSequence = previousSequence
+      throw error
+    }
+  }
+
+  private func insertWithConversion(
+    _ event: StoredEvent, deliveryState: EventDeliveryState, origin: StoredEventOrigin,
+    assigningCommitSequence: Bool, acceptedAt: Date
   ) throws -> EventStoreInsertCommit {
     LogDebug("SQLiteEventStore.insert - id: \(event.id), name: \(event.name)")
     
@@ -995,6 +1090,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     
     let newlyDurable = sqlite3_changes(db) == 1
     if newlyDurable {
+      try stageConversionOccurrence(event, acceptedAt: acceptedAt)
       LogDebug("Successfully inserted event into database: \(event.name)")
     } else {
       guard let stored = try queryEvent(id: event.id) else {
@@ -1016,6 +1112,146 @@ actor SQLiteEventStore: EventStoreProtocol {
       newlyDurable: newlyDurable,
       commitSequence: takeCommitSequence(if: assigningCommitSequence)
     )
+  }
+
+  /// The retained horizon includes the longest attribution window and accepted
+  /// offline backdating. Expiring measurement never deletes analytics or delivery.
+  func pruneConversionOccurrences(at now: Date) throws -> Int {
+    guard db != nil else { throw EventStorageError.databaseNotInitialized }
+    let millis = try Self.historyMilliseconds(for: now, rounding: .toNearestOrAwayFromZero)
+    let floor = millis.subtractingReportingOverflow(Int64(PendingConversionOccurrence.retentionMillis))
+    guard !floor.overflow else { throw EventStorageError.invalidProperties }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, "DELETE FROM conversion_event_inbox WHERE scope = ? AND accepted_at < ?;", -1, &statement, nil) == SQLITE_OK else {
+      throw EventStorageError.queryFailed(NSError(domain: "SQLite", code: 66))
+    }
+    sqlite3_bind_text(statement, 1, try conversionScope(), -1, SQLITE_TRANSIENT)
+    sqlite3_bind_int64(statement, 2, floor.partialValue)
+    guard sqlite3_step(statement) == SQLITE_DONE else { throw EventStorageError.queryFailed(NSError(domain: "SQLite", code: 67)) }
+    return Int(sqlite3_changes(db))
+  }
+
+  private func conversionScope() throws -> String {
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, "SELECT authority_scope FROM conversion_scope_bindings WHERE capture_scope = ?;", -1, &statement, nil) == SQLITE_OK else {
+      throw EventStorageError.invalidProperties
+    }
+    sqlite3_bind_text(statement, 1, conversionCaptureScope, -1, SQLITE_TRANSIENT)
+    switch sqlite3_step(statement) {
+    case SQLITE_DONE: return conversionCaptureScope
+    case SQLITE_ROW:
+      guard let text = sqlite3_column_text(statement, 0) else { throw EventStorageError.invalidProperties }
+      return String(cString: text)
+    default: throw EventStorageError.invalidProperties
+    }
+  }
+
+  /// Called only with profile-authenticated authority. The mapping is immutable:
+  /// a credential cannot move old captures to another app or environment.
+  func bindConversionAuthority(_ scope: JourneyStorageScope) throws {
+    guard db != nil else { throw EventStorageError.databaseNotInitialized }
+    try executeSchemaSQL("SAVEPOINT bind_conversion_scope;", targetVersion: 3, operation: "begin scope binding")
+    do {
+      let existing = try conversionScope()
+      let target = scope.conversionNamespace
+      guard existing == conversionCaptureScope || existing == target else { throw EventStorageError.invalidProperties }
+      for sql in [
+        "INSERT OR IGNORE INTO conversion_scope_bindings(authority_scope, capture_scope) VALUES (?1, ?2);",
+        "UPDATE conversion_event_inbox SET scope = ?1 WHERE scope = ?2;"
+      ] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw EventStorageError.invalidProperties }
+        sqlite3_bind_text(statement, 1, target, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(statement, 2, conversionCaptureScope, -1, SQLITE_TRANSIENT)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw EventStorageError.invalidProperties }
+      }
+      try executeSchemaSQL("RELEASE bind_conversion_scope;", targetVersion: 3, operation: "commit scope binding")
+    } catch {
+      _ = sqlite3_exec(db, "ROLLBACK TO bind_conversion_scope; RELEASE bind_conversion_scope;", nil, nil, nil)
+      throw error
+    }
+  }
+
+  func pendingConversionOccurrences(distinctId: String, limit: Int = 100, throughEventId: String? = nil) throws -> [PendingConversionOccurrence] {
+    guard db != nil else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    let cutoff = throughEventId == nil ? "" : " AND rowid <= (SELECT rowid FROM conversion_event_inbox WHERE event_id = ?4 AND user_id = ?1 AND scope = ?2)"
+    let sql = "SELECT payload, accepted_at FROM conversion_event_inbox WHERE user_id = ?1 AND scope = ?2" + cutoff + " ORDER BY rowid LIMIT ?3;"
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw EventStorageError.queryFailed(NSError(domain: "SQLite", code: 62))
+    }
+    sqlite3_bind_text(statement, 1, distinctId, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_text(statement, 2, try conversionScope(), -1, SQLITE_TRANSIENT)
+    sqlite3_bind_int(statement, 3, Int32(max(1, min(limit, 1000))))
+    if let throughEventId { sqlite3_bind_text(statement, 4, throughEventId, -1, SQLITE_TRANSIENT) }
+    var result: [PendingConversionOccurrence] = []
+    while true {
+      let status = sqlite3_step(statement)
+      if status == SQLITE_DONE { return result }
+      guard status == SQLITE_ROW, let blob = sqlite3_column_blob(statement, 0) else {
+        throw EventStorageError.queryFailed(NSError(domain: "SQLite", code: 63))
+      }
+      let bytes = Data(bytes: blob, count: Int(sqlite3_column_bytes(statement, 0)))
+      let event = try ExactJSONCodec.decode(StoredEvent.self, from: bytes)
+      guard event.distinctId == distinctId else { throw EventStorageError.invalidProperties }
+      result.append(.init(event: event,
+        acceptedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 1)) / 1000)))
+    }
+  }
+
+  func acknowledgeConversionOccurrence(eventId: String, distinctId: String) throws {
+    guard db != nil else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, "DELETE FROM conversion_event_inbox WHERE event_id = ? AND user_id = ? AND scope = ?;", -1, &statement, nil) == SQLITE_OK else {
+      throw EventStorageError.queryFailed(NSError(domain: "SQLite", code: 64))
+    }
+    sqlite3_bind_text(statement, 1, eventId, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_text(statement, 2, distinctId, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_text(statement, 3, try conversionScope(), -1, SQLITE_TRANSIENT)
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw EventStorageError.queryFailed(NSError(domain: "SQLite", code: 65))
+    }
+  }
+
+  private func stageConversionOccurrence(_ event: StoredEvent, acceptedAt: Date) throws {
+    _ = try pruneConversionOccurrences(at: acceptedAt)
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    let sql = "INSERT OR IGNORE INTO conversion_event_inbox(event_id, user_id, payload, accepted_at, scope) VALUES (?, ?, ?, ?, ?);"
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw EventStorageError.queryFailed(NSError(domain: "SQLite", code: 60))
+    }
+    let payload = try ExactJSONCodec.encode(event)
+    sqlite3_bind_text(statement, 1, event.id, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_text(statement, 2, event.distinctId, -1, SQLITE_TRANSIENT)
+    _ = payload.withUnsafeBytes { sqlite3_bind_blob(statement, 3, $0.baseAddress, Int32($0.count), SQLITE_TRANSIENT) }
+    sqlite3_bind_int64(statement, 4, try Self.historyMilliseconds(for: acceptedAt, rounding: .toNearestOrAwayFromZero))
+    sqlite3_bind_text(statement, 5, try conversionScope(), -1, SQLITE_TRANSIENT)
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw EventStorageError.insertFailed(NSError(domain: "SQLite", code: 61))
+    }
+    if sqlite3_changes(db) == 0 {
+      // History may already have been pruned while measurement is pending.
+      // Preserve the first acceptance, and reject conflicting stable identity.
+      var existing: OpaquePointer?
+      defer { sqlite3_finalize(existing) }
+      guard sqlite3_prepare_v2(db, "SELECT payload FROM conversion_event_inbox WHERE event_id = ? AND scope = ?;", -1, &existing, nil) == SQLITE_OK else {
+        throw EventStorageError.invalidProperties
+      }
+      sqlite3_bind_text(existing, 1, event.id, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_text(existing, 2, try conversionScope(), -1, SQLITE_TRANSIENT)
+      guard sqlite3_step(existing) == SQLITE_ROW, let blob = sqlite3_column_blob(existing, 0) else {
+        throw EventStorageError.invalidProperties
+      }
+      let retained = try ExactJSONCodec.decode(StoredEvent.self,
+        from: Data(bytes: blob, count: Int(sqlite3_column_bytes(existing, 0))))
+      guard retained.isByteEquivalent(to: event) else { throw EventStorageError.invalidProperties }
+    }
   }
 
   public func queryStableCapture(
@@ -1276,7 +1512,8 @@ actor SQLiteEventStore: EventStoreProtocol {
         event,
         deliveryState: .pending,
         origin: .device,
-        assigningCommitSequence: false
+        assigningCommitSequence: false,
+        acceptedAt: recordedAt
       )
       guard let canonical = try queryEvent(id: eventId) else {
         throw EventStorageError.queryFailed(

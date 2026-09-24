@@ -430,7 +430,8 @@ final class TransactionServiceTests: AsyncSpec {
 
                     let correlation = CommerceOutcomeCorrelation(
                         eventId: "00000000-0000-7000-8000-000000000701",
-                        distinctId: "test-user"
+                        distinctId: "test-user",
+                        journeyId: "checkout-journey"
                     )
                     let purchase = Task {
                         try await transactionService.purchase(
@@ -456,6 +457,8 @@ final class TransactionServiceTests: AsyncSpec {
                     expect(record?.distinctId) == "test-user"
                     expect(record?.commercialContext.placementId) == "placement"
                     expect(record?.commercialContext.productId) == "product"
+                    expect(record?.commercialContext.journeyId) == "checkout-journey"
+                    expect(mockProduct.purchaseContext?.journeyId).to(beNil())
                     expect(record?.commercialContext.release.identity.experienceId) ==
                         "experience-1"
                     expect(record?.productFeatureIds) == [

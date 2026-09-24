@@ -1876,8 +1876,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ]
                     if let context = acceptedEvidence?.commercialContext {
                         properties["experience_id"] = context.experienceId
-                        properties["experience_version"] =
+                        properties["experience_version_id"] =
                             context.release.identity.experienceVersionId
+                        properties["journey_id"] = context.journeyId
                         properties["placement_id"] = context.placementId
                     }
                     eventSink.emit(
@@ -2080,8 +2081,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 ]
                 if let context = evidence.commercialContext {
                     purchaseSyncedProperties["experience_id"] = context.experienceId
-                    purchaseSyncedProperties["experience_version"] =
+                    purchaseSyncedProperties["experience_version_id"] =
                         context.release.identity.experienceVersionId
+                    purchaseSyncedProperties["journey_id"] = context.journeyId
                     purchaseSyncedProperties["placement_id"] = context.placementId
                 }
                 let purchaseSynced = await eventSink.capture(.init(

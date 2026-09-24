@@ -266,6 +266,48 @@ final class EventLogTests: AsyncSpec {
                     expect(mockStore.pendingStableRouteIds).to(beEmpty())
                 }
 
+                it("reports failed delivery even when storage produced no durable route receipt") {
+                    let reservation = log.reserveCommittedAdmission { 1 }
+                    await log.subscribeAcknowledgingCommitted(reservation: reservation) { _, _ in false }
+                    try await log.configure(configuration: testConfig)
+                    mockStore.shouldFailStore = true
+                    log.track("undurable-route")
+                    await log.drain()
+                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                    let recovered = await log.replayPendingStableRoutes(distinctId: mockIdentity.getDistinctId())
+                    expect(recovered).to(beFalse())
+                }
+
+                it("retains failed subscriber delivery and prevents later routes overtaking it") {
+                    let earlier = ReceivedEvents()
+                    let later = ReceivedEvents()
+                    let allow = AdmissionGeneration(0)
+                    await log.subscribeCommitted { event in await earlier.append(event.name) }
+                    let reservation = log.reserveCommittedAdmission { 1 }
+                    await log.subscribeAcknowledgingCommitted(reservation: reservation) { _, _ in
+                        allow.value == 1
+                    }
+                    await log.subscribeCommitted { event in await later.append(event.name) }
+                    try await log.configure(configuration: testConfig)
+                    for name in ["first", "second"] {
+                        _ = await log.captureAndRouteSystemEvent(.init(
+                            name: name, properties: nil, eventId: name, distinctId: "customer-a"
+                        ))
+                    }
+                    let firstDrain = await log.drainCommittedRouting()
+                    expect(firstDrain).to(beFalse())
+                    await expect { await earlier.names }.to(equal(["first"]))
+                    await expect { await later.names }.to(beEmpty())
+                    expect(mockStore.pendingStableRouteIds).to(equal(["first", "second"]))
+
+                    allow.set(1)
+                    let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
+                    expect(recovered).to(beTrue())
+                    await expect { await earlier.names }.to(equal(["first", "second"]))
+                    await expect { await later.names }.to(equal(["first", "second"]))
+                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                }
+
                 it("retries a failed stable-route acknowledgement without rerouting") {
                     let received = ReceivedEvents()
                     await log.subscribeCommitted { event in

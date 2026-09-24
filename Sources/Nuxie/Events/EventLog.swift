@@ -77,6 +77,7 @@ private enum RouteResolution: Sendable {
 }
 
 private enum RouteCommand: Sendable {
+  case retryFailedDeliveries
   case resumeAfterRecovery([RoutedCommittedEvent], generation: UInt64)
   case resolved(sequence: UInt64, RouteResolution)
   /// Storage failures have no durable commit sequence to order against.
@@ -113,6 +114,7 @@ typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
 typealias CommittedEventAdmissionProvider = @Sendable () -> UInt64?
 typealias AdmittedCommittedEventHandler =
   @Sendable (NuxieEvent, UInt64?) async -> Void
+typealias AcknowledgingCommittedEventHandler = @Sendable (NuxieEvent, UInt64?) async -> Bool
 typealias ForwardingEventHandler = @Sendable (DurableForwardingEvent) async -> Void
 
 /// Reserves a committed subscriber's stable identifier before asynchronous
@@ -321,6 +323,7 @@ protocol EventIdentityMigrating: AnyObject, Sendable {
 
 /// Protocol for the unified event log: capture → enrich → persist → deliver → query.
 protocol EventLogProtocol:
+  ConversionOccurrenceQueue,
   EventQuerySource,
   EventQueueLifecycle,
   EventIdentityMigrating,
@@ -332,6 +335,8 @@ protocol EventLogProtocol:
   @discardableResult
   func deferCommittedRouting() async -> UInt64
   func resumeCommittedRouting(ifGeneration: UInt64) async
+
+  func firstPendingStableRouteEventId(distinctId: String) async throws -> String?
 
   func configure(configuration: NuxieSetupConfiguration?) async throws
 
@@ -364,6 +369,11 @@ protocol EventLogProtocol:
     where filter: (@Sendable (NuxieEvent) -> Bool)?,
     admission: @escaping CommittedEventAdmissionProvider,
     handler: @escaping AdmittedCommittedEventHandler
+  ) async
+
+  func subscribeAcknowledgingCommitted(
+    reservation: CommittedEventAdmissionReservation,
+    handler: @escaping AcknowledgingCommittedEventHandler
   ) async
 
   /// Subscribe only to rows made newly durable by this process. This stream
@@ -579,9 +589,11 @@ actor EventLog: EventLogProtocol {
   private struct Subscriber {
     let identifier: UInt64
     let filter: (@Sendable (NuxieEvent) -> Bool)?
-    let handler: AdmittedCommittedEventHandler
+    let handler: AcknowledgingCommittedEventHandler
   }
   private var subscribers: [Subscriber] = []
+  // Preserve the failed subscriber and every later route in capture order.
+  private var failedCommittedRoutes: [(event: RoutedCommittedEvent, subscriber: Int)] = []
   private var forwardingSubscribers: [ForwardingSubscriber] = []
 
   // MARK: - Delivery (durable queue + bounded in-memory window)
@@ -618,6 +630,7 @@ actor EventLog: EventLogProtocol {
     dateProvider: DateProviderProtocol,
     apiClient: EventTransport,
     store: EventStoreProtocol? = nil,
+    conversionCaptureScope: String = "test-fixture",
     maxEventsStored: Int = 10_000,
     cleanupThresholdDays: Int = 30,
     cleanupCheckInterval: Int = 100
@@ -625,7 +638,7 @@ actor EventLog: EventLogProtocol {
     self.identityService = identity
     self.dateProvider = dateProvider
     self.apiClient = apiClient
-    self.store = store ?? SQLiteEventStore()
+    self.store = store ?? SQLiteEventStore(conversionCaptureScope: conversionCaptureScope)
     self.maxEventsStored = maxEventsStored
     self.cleanupThresholdDays = cleanupThresholdDays
     self.cleanupCheckInterval = cleanupCheckInterval
@@ -768,7 +781,7 @@ actor EventLog: EventLogProtocol {
     subscribers.append(Subscriber(
       identifier: identifier,
       filter: filter,
-      handler: { event, _ in await handler(event) }
+      handler: { event, _ in await handler(event); return true }
     ))
   }
 
@@ -790,7 +803,7 @@ actor EventLog: EventLogProtocol {
     subscribers.append(Subscriber(
       identifier: reservation.subscriberIdentifier,
       filter: filter,
-      handler: handler
+      handler: { event, admission in await handler(event, admission); return true }
     ))
   }
 
@@ -804,6 +817,13 @@ actor EventLog: EventLogProtocol {
       reservation: reserveCommittedAdmission(admission: admission),
       handler: handler
     )
+  }
+
+  func subscribeAcknowledgingCommitted(
+    reservation: CommittedEventAdmissionReservation,
+    handler: @escaping AcknowledgingCommittedEventHandler
+  ) {
+    subscribers.append(Subscriber(identifier: reservation.subscriberIdentifier, filter: nil, handler: handler))
   }
 
   public func subscribeForwarding(
@@ -1380,9 +1400,9 @@ actor EventLog: EventLogProtocol {
         return
       }
       routingDeferred = false
+      await retryFailedCommittedRoutes()
       for routed in recovered {
-        await routeToCommittedSubscribers(routed)
-        await acknowledgeStableRouteIfNeeded(routed.stableRouteEventId)
+        await deliverOrRetainCommittedRoute(routed)
       }
       let buffered = deferredRouteCommands
       deferredRouteCommands.removeAll()
@@ -1401,6 +1421,9 @@ actor EventLog: EventLogProtocol {
       }
     }
     switch cmd {
+    case .retryFailedDeliveries:
+      await retryFailedCommittedRoutes()
+
     case .resumeAfterRecovery:
       return
 
@@ -1411,13 +1434,11 @@ actor EventLog: EventLogProtocol {
       ) {
         nextRouteSequenceToDeliver &+= 1
         guard case .event(let routed) = next else { continue }
-        await routeToCommittedSubscribers(routed)
-        await acknowledgeStableRouteIfNeeded(routed.stableRouteEventId)
+        await deliverOrRetainCommittedRoute(routed)
       }
 
     case .undurable(let routed):
-      await routeToCommittedSubscribers(routed)
-      await acknowledgeStableRouteIfNeeded(routed.stableRouteEventId)
+      await deliverOrRetainCommittedRoute(routed)
 
     case .barrier(let cont):
       cont.resume()
@@ -1427,15 +1448,36 @@ actor EventLog: EventLogProtocol {
     }
   }
 
-  private func routeToCommittedSubscribers(
-    _ routed: RoutedCommittedEvent
-  ) async {
-    for subscriber in subscribers {
+  private func deliverOrRetainCommittedRoute(_ routed: RoutedCommittedEvent) async {
+    guard failedCommittedRoutes.isEmpty else {
+      failedCommittedRoutes.append((routed, 0))
+      return
+    }
+    if let failed = await firstFailedSubscriber(routed, startingAt: 0) {
+      failedCommittedRoutes.append((routed, failed))
+    } else {
+      await acknowledgeStableRouteIfNeeded(routed.stableRouteEventId)
+    }
+  }
+
+  private func firstFailedSubscriber(_ routed: RoutedCommittedEvent, startingAt: Int) async -> Int? {
+    for (index, subscriber) in subscribers.enumerated().dropFirst(startingAt) {
       if let filter = subscriber.filter, !filter(routed.event) { continue }
-      await subscriber.handler(
-        routed.event,
-        routed.subscriberAdmissions[subscriber.identifier]
-      )
+      guard await subscriber.handler(routed.event, routed.subscriberAdmissions[subscriber.identifier]) else {
+        return index
+      }
+    }
+    return nil
+  }
+
+  private func retryFailedCommittedRoutes() async {
+    while let first = failedCommittedRoutes.first {
+      if let failed = await firstFailedSubscriber(first.event, startingAt: first.subscriber) {
+        failedCommittedRoutes[0].subscriber = failed
+        return
+      }
+      failedCommittedRoutes.removeFirst()
+      await acknowledgeStableRouteIfNeeded(first.event.stableRouteEventId)
     }
   }
 
@@ -1506,7 +1548,8 @@ actor EventLog: EventLogProtocol {
       makeStoredEvent(from: event),
       deliveryState: deliveryState,
       origin: origin,
-      assigningCommitSequence: true
+      assigningCommitSequence: true,
+      acceptedAt: receivedAt
     )
     guard let commitSequence = commit.commitSequence else {
       throw EventStorageError.insertFailed(NSError(
@@ -2809,6 +2852,30 @@ extension RoutedStableSystemEventCapturing {
 }
 
 extension EventLog {
+  func firstPendingStableRouteEventId(distinctId: String) async throws -> String? {
+    await ready.wait()
+    guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
+    return try await store.queryPendingStableRoutes(distinctId: distinctId).first?.id
+  }
+
+  func bindConversionAuthority(_ scope: JourneyStorageScope) async throws {
+    await ready.wait()
+    guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
+    try await store.bindConversionAuthority(scope)
+  }
+
+  func pendingConversionOccurrences(distinctId: String, limit: Int, throughEventId: String?) async throws -> [PendingConversionOccurrence] {
+    await ready.wait()
+    guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
+    _ = try await store.pruneConversionOccurrences(at: dateProvider.now())
+    return try await store.pendingConversionOccurrences(distinctId: distinctId, limit: limit, throughEventId: throughEventId)
+  }
+
+  func acknowledgeConversionOccurrence(eventId: String, distinctId: String) async throws {
+    guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
+    try await store.acknowledgeConversionOccurrence(eventId: eventId, distinctId: distinctId)
+  }
+
   private func pendingStableRoutes(distinctId: String) async throws -> [RoutedCommittedEvent] {
     var recovered: [RoutedCommittedEvent] = []
     let admissions = committedAdmissionRegistry.capture()
@@ -2838,6 +2905,7 @@ extension EventLog {
     // will route as soon as the current subscriber returns.
     guard !Self.isOnCommittedRouteWorker, !routingDeferred else { return false }
     await drainRouteWorker()
+    guard failedCommittedRoutes.isEmpty else { return false }
     return await retryFailedStableRouteAcknowledgements()
   }
 
@@ -2852,10 +2920,12 @@ extension EventLog {
       if routingDeferred {
         routeContinuation.yield(.resumeAfterRecovery(recovered, generation: generation))
       } else {
+        routeContinuation.yield(.retryFailedDeliveries)
         for event in recovered { routeContinuation.yield(.undurable(event)) }
       }
       guard !Self.isOnCommittedRouteWorker else { return false }
       await drainRouteWorker()
+      guard failedCommittedRoutes.isEmpty else { return false }
       guard await retryFailedStableRouteAcknowledgements() else {
         return false
       }

@@ -102,7 +102,8 @@ final class NuxieCore: @unchecked Sendable {
     let eventLog = overrides.eventLog ?? EventLog(
       identity: identity,
       dateProvider: dateProvider,
-      apiClient: api
+      apiClient: api,
+      conversionCaptureScope: ProfileStorageScope(apiKey: configuration.apiKey, environment: configuration.environment).cacheSubdirectory
     )
     // Deferred references break the two construction cycles in the graph
     // (experiences → transactionService → observer → features → profile → experiences,

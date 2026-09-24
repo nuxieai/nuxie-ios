@@ -4,6 +4,28 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyAdmissionRecoveryTests: JourneyTestCase {
+    func testStartupMeasurementStopsAtEarliestPendingLocalRoute() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        events.track("start")
+        events.track("done")
+        let captured = events.routedEvents
+        events.firstPendingRouteEventId = captured[0].id
+        let service = makeService(identity: identity, events: events, directory: directory)
+
+        await service.initialize()
+
+        let pending = try await events.pendingConversionOccurrences(
+            distinctId: "customer", limit: 100, throughEventId: nil
+        )
+        XCTAssertEqual(pending.map(\.event.id), [captured[1].id])
+        XCTAssertEqual(events.firstPendingRouteEventId, captured[0].id)
+    }
+
     func testRenderedArmWaitsForActiveForegroundBeforeAdmission() async throws {
         let context = try await makeRenderedJourneyTestContext()
         defer { removeTemporaryDirectoryIfPresent(context.directory) }

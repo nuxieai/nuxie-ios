@@ -195,9 +195,10 @@ private actor ForegroundPresentationAdmissionProbe {
     func handleEvent(
         _ event: NuxieEvent,
         admittedProfileGeneration: UInt64?
-    ) async {
+    ) async -> Bool {
         _ = event
         _ = admittedProfileGeneration
+        return true
     }
     nonisolated func eventAdmissionGeneration() -> UInt64 { 0 }
     func onAppDidEnterBackground() async {}

@@ -66,7 +66,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let descriptorBytes = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))
         try JourneyReleaseSchemaValidator.validate(try XCTUnwrap(JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any]))
         let profile: [String: Any] = [
-            "schemaVersion": "nuxie.journey-plane-profile.v1", "status": "ok",
+            "schemaVersion": "nuxie.journey-plane-profile.v2", "status": "ok",
             "delivery": ["renderBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/",
                          "assetBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/"],
             "features": [], "facts": ["properties": [:], "memberships": [:], "assignments": [:]],

@@ -3,6 +3,12 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 final class JourneyPlaneProfileTests: XCTestCase {
+    func testRejectsRetiredProfileWireVersion() throws {
+        var root = try fixture()
+        root["schemaVersion"] = "nuxie.journey-plane-profile.v1"
+        XCTAssertThrowsError(try JourneyPlaneProfile.decode(JSONSerialization.data(withJSONObject: root)))
+    }
+
     func testSharedConversionDeliveryVectors() throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -161,7 +167,7 @@ final class JourneyPlaneProfileTests: XCTestCase {
         let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
         let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
         return [
-            "schemaVersion": "nuxie.journey-plane-profile.v1", "status": "ok",
+            "schemaVersion": "nuxie.journey-plane-profile.v2", "status": "ok",
             "delivery": ["renderBaseUrl": "https://renders.example.com", "assetBaseUrl": "https://assets.example.com"],
             "features": [], "facts": ["properties": ["missing": ["present": false], "null": ["present": true, "value": NSNull()]],
                 "memberships": ["opaque": false], "assignments": ["unfetched": NSNull()]],

@@ -9,7 +9,7 @@ enum TestJourneyProfile {
         assignments: ExactJSONObject<JourneyFactTable.Assignment?> = [:]
     ) -> ProfileResponse {
         ProfileResponse(planeProfile: JourneyPlaneProfile(
-            schemaVersion: "nuxie.journey-plane-profile.v1",
+            schemaVersion: "nuxie.journey-plane-profile.v2",
             status: "ok",
             delivery: JourneyReleaseDelivery(
                 renderBaseUrl: "https://renders.example.com/",

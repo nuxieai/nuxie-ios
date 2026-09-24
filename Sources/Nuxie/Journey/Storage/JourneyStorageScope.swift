@@ -8,6 +8,7 @@ struct JourneyStorageScope: Equatable, Hashable, Sendable {
     private static let domain = "nuxie.journey-storage.v1\u{0}"
 
     private let namespaceHash: String
+    var conversionNamespace: String { "authority-" + namespaceHash }
 
     init(authority: ProfileDeliveryAuthority) {
         namespaceHash = Self.digest(

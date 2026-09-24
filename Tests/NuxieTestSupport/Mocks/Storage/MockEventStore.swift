@@ -20,6 +20,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
 
     // Storage (lock-guarded)
     private var _storedEvents: [StoredEvent] = []
+    private var _conversionInbox: [PendingConversionOccurrence] = []
     private var _originsByEventId: [String: StoredEventOrigin] = [:]
     private var _pendingIds: Set<String> = []
     private var _deliveredIds: [String] = []
@@ -270,6 +271,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             let suspended = Array(_suspendedInsertContinuations.values)
                 + Array(_suspendedStableCaptureAfterCommitContinuations.values)
             _storedEvents.removeAll()
+            _conversionInbox.removeAll()
             _originsByEventId.removeAll()
             _pendingIds.removeAll()
             _stableDroppedAt.removeAll()
@@ -295,7 +297,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         _ event: StoredEvent,
         deliveryState: EventDeliveryState,
         origin: StoredEventOrigin,
-        assigningCommitSequence: Bool
+        assigningCommitSequence: Bool,
+        acceptedAt: Date = Date()
     ) async throws -> EventStoreInsertCommit {
         let delayNanoseconds = try lock.withLock {
             _storeEventCallCount += 1
@@ -321,6 +324,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 )
             }
             _storedEvents.append(event)
+            _conversionInbox.append(.init(event: event, acceptedAt: acceptedAt))
             _originsByEventId[event.id] = origin
             if deliveryState == .pending {
                 _pendingIds.insert(event.id)
@@ -329,6 +333,43 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 newlyDurable: true,
                 commitSequence: takeCommitSequence(if: assigningCommitSequence)
             )
+        }
+    }
+
+    public func pruneConversionOccurrences(at now: Date) async throws -> Int {
+        try lock.withLock {
+            if _shouldFailStore { throw mockError(2, "Mock store error") }
+            let before = _conversionInbox.count
+            let floor = now.addingTimeInterval(-Double(PendingConversionOccurrence.retentionMillis) / 1000)
+            _conversionInbox.removeAll { $0.acceptedAt < floor }
+            return before - _conversionInbox.count
+        }
+    }
+
+    private var boundConversionScope: JourneyStorageScope?
+    public func bindConversionAuthority(_ scope: JourneyStorageScope) async throws {
+        try lock.withLock {
+            guard boundConversionScope == nil || boundConversionScope == scope else { throw EventStorageError.invalidProperties }
+            boundConversionScope = scope
+        }
+    }
+
+    public func pendingConversionOccurrences(distinctId: String, limit: Int, throughEventId: String?) async throws -> [PendingConversionOccurrence] {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            let end: Int
+            if let throughEventId {
+                guard let index = _conversionInbox.firstIndex(where: { $0.event.id == throughEventId && $0.event.distinctId == distinctId }) else { return [] }
+                end = index + 1
+            } else { end = _conversionInbox.count }
+            return Array(_conversionInbox.prefix(end).filter { $0.event.distinctId == distinctId }.prefix(max(1, min(limit, 1000))))
+        }
+    }
+
+    public func acknowledgeConversionOccurrence(eventId: String, distinctId: String) async throws {
+        try lock.withLock {
+            if _shouldFailStore { throw mockError(2, "Mock store error") }
+            _conversionInbox.removeAll { $0.event.id == eventId && $0.event.distinctId == distinctId }
         }
     }
 
@@ -436,6 +477,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 )
             }
             _storedEvents.append(event)
+            _conversionInbox.append(.init(event: event, acceptedAt: recordedAt))
             _originsByEventId[eventId] = .device
             _pendingIds.insert(eventId)
             return stagingRouteIfNeeded(StableEventCaptureCommit(
@@ -584,6 +626,11 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
 
                 _stableCaptureCommitCallCount += records.count
                 _storeEventCallCount += records.count
+                for (record, commit) in zip(records, commits) {
+                    if case .captured(let event, isNew: true) = commit.outcome {
+                        _conversionInbox.append(.init(event: event, acceptedAt: record.recordedAt))
+                    }
+                }
                 _storedEvents = storedEvents
                 _originsByEventId = originsByEventId
                 _pendingIds = pendingIds
@@ -913,6 +960,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             let suspended = Array(_suspendedInsertContinuations.values)
                 + Array(_suspendedStableCaptureAfterCommitContinuations.values)
             _storedEvents.removeAll()
+            _conversionInbox.removeAll()
             _originsByEventId.removeAll()
             _pendingIds.removeAll()
             _deliveredIds.removeAll()

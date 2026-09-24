@@ -7,6 +7,14 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testRejectsRetiredReleaseWireVersion() throws {
+        let fixture = try golden()
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        root["schemaVersion"] = "nuxie.journey-release.v1"
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
+    }
+
     func testSharedNuxOnlySceneAdmission() throws {
         let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/scene-admission.json")

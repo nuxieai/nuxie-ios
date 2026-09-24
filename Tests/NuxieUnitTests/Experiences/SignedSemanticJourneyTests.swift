@@ -62,7 +62,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
             ed25519PublicKeyBytes: try XCTUnwrap(Data(base64Encoded: XCTUnwrap(provenance["publicKeyBase64"] as? String)))
         )]
         let profile = try JourneyPlaneProfile.decode(JSONSerialization.data(withJSONObject: [
-            "schemaVersion": "nuxie.journey-plane-profile.v1", "status": "ok",
+            "schemaVersion": "nuxie.journey-plane-profile.v2", "status": "ok",
             "delivery": ["renderBaseUrl": "https://semantic.sdk-fixtures.nuxie.test/", "assetBaseUrl": "https://semantic.sdk-fixtures.nuxie.test/"],
             "features": [], "facts": ["properties": [:], "memberships": [:], "assignments": [:]],
             "releases": [entry],

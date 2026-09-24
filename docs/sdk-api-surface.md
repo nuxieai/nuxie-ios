@@ -15,7 +15,8 @@ signed Journey releases, fact tables, execution plans, journals, render models,
 network DTOs, and persistence stores are internal implementation details.
 Applications do not construct Journey objects or select release versions.
 
-`make check-public-api` builds the macOS and iOS modules, compares the exact
+`make check-public-api` uses the Xcode `build-macos` and `build-ios-device`
+targets to build the macOS and iOS frameworks, compares the exact
 declaration inventories, and runs Swift API Digester against the checked-in
 customer baselines. Intentional API changes update those baselines with
 `scripts/check-public-api.sh --update` after review.
@@ -64,7 +65,7 @@ only inside the durable coverage horizon. See
 ## Journeys
 
 A Journey is the sole client-side experience program and runtime. The server
-delivers one exact `nuxie.journey-plane-profile.v1` document containing:
+delivers one exact `nuxie.journey-plane-profile.v2` document containing:
 
 - the complete fact table required by the delivered programs;
 - enrollment arms and exact continuation bindings;

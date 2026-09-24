@@ -153,6 +153,8 @@ struct JourneyRunJournal {
         var runs: [String: JourneyRun] = [:]
         var checklist: [String: JourneyCheckmark] = [:]
         var stateArmReceipts: Set<JourneyStateArmReceipt> = []
+        var conversionWatches: [String: JourneyConversionWatch] = [:]
+        var conversionReceipts: [String: Int] = [:]
     }
 
     let distinctId: String
@@ -203,6 +205,7 @@ struct JourneyRunJournal {
         artifactSource: JourneyReleaseArtifactSource? = nil,
         executionSnapshot: JourneyRun.ExecutionSnapshot,
         reentry: Journey.Frequency,
+        policy: Journey.Policy? = nil,
         entryStepId: String,
         at: Date,
         profileFence: JourneyProfileFence? = nil,
@@ -277,6 +280,10 @@ struct JourneyRunJournal {
             let runId = "\(journeyId):\(generation)"
             guard state.runs[runId] == nil else { return nil }
             guard state.runs.count < 1024 else { throw JourneyJournalError.storageLimit }
+            Self.pruneConversionWatches(&state, at: at)
+            if policy?.goal != nil && state.conversionWatches[journeyId] == nil && state.conversionWatches.count >= 4096 {
+                throw JourneyJournalError.storageLimit
+            }
             let inheritedArtifactSHA256s = state.runs.values.first(where: {
                 $0.reference.descriptorSha256
                     == arm.reference.descriptorSha256
@@ -309,6 +316,20 @@ struct JourneyRunJournal {
                 }
             }
             do {
+                if let policy, policy.goal != nil {
+                    let candidate = try JourneyConversionWatch(run: run, policy: policy, delivery: arm.conversion)
+                    if var existing = state.conversionWatches[journeyId] {
+                        guard existing.policyHash == candidate.policyHash,
+                              existing.experienceId == candidate.experienceId,
+                              existing.versionId == candidate.versionId,
+                              existing.startedAt == candidate.startedAt else { throw JourneyJournalError.invalidState }
+                        if let delivery = arm.conversion { try existing.reconcile(delivery) }
+                        existing.legCompletedAt = nil
+                        state.conversionWatches[journeyId] = existing
+                    } else {
+                        state.conversionWatches[journeyId] = candidate
+                    }
+                }
                 if let profileFence, let profileFenceToken {
                     guard try profileFence.performIfCurrent(
                         profileFenceToken,
@@ -331,6 +352,38 @@ struct JourneyRunJournal {
                 preparedPins.rollback()
                 throw error
             }
+        }
+    }
+
+    func conversionWatches() async throws -> [String: JourneyConversionWatch] {
+        try await read { $0.conversionWatches }
+    }
+
+    /// Measurement commits share the execution/identity fence and atomic journal.
+    /// They do not acquire pins or move a presentation cursor.
+    @discardableResult
+    func recordConversionOccurrence(
+        _ event: NuxieEvent, acceptedAt: Date, matching: Set<String>,
+        admission: JourneyCommitAdmission, processingAt: Date? = nil
+    ) async throws -> Bool {
+        guard event.distinctId == distinctId else { throw JourneyJournalError.invalidState }
+        let now = processingAt ?? acceptedAt
+        return try await updateIfCurrent(admission) { state in
+            let floor = JourneyConversionWatch.millis(now) - PendingConversionOccurrence.retentionMillis
+            state.conversionReceipts = state.conversionReceipts.filter { $0.value >= floor }
+            Self.pruneConversionWatches(&state, at: now)
+            guard state.conversionReceipts[event.id] == nil else { return }
+            JourneyConversionWatch.apply(event: event, acceptedAt: acceptedAt,
+                matching: matching, watches: &state.conversionWatches)
+            state.conversionReceipts[event.id] = JourneyConversionWatch.millis(acceptedAt)
+        } != nil
+    }
+
+    private static func pruneConversionWatches(_ state: inout Snapshot, at: Date) {
+        let executing = Set(state.runs.values.map(\.journeyId))
+        let now = JourneyConversionWatch.millis(at)
+        state.conversionWatches = state.conversionWatches.filter {
+            $0.value.shouldRetain(at: now, executing: executing.contains($0.key))
         }
     }
 
@@ -924,6 +977,10 @@ struct JourneyRunJournal {
                                                  reentry: newer?.reentry ?? current.reentry,
                                                  lastSeenLiveAt: newer?.lastSeenLiveAt ?? completion.at)
             state.runs.removeValue(forKey: current.id)
+            if var watch = state.conversionWatches[current.journeyId] {
+                watch.legCompletedAt = JourneyConversionWatch.millis(completion.at)
+                state.conversionWatches[current.journeyId] = watch
+            }
         }
     }
 

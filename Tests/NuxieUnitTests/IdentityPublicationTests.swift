@@ -18,7 +18,7 @@ private actor IdentityChangeJourneyRecorder: JourneyServiceProtocol {
     func handleEvent(
         _ event: NuxieEvent,
         admittedProfileGeneration: UInt64?
-    ) async {}
+    ) async -> Bool { true }
     nonisolated func eventAdmissionGeneration() -> UInt64 { 0 }
     func initialize() async {}
     func onAppWillEnterForeground() async {}

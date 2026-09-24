@@ -596,7 +596,8 @@ final class ExperiencePresentationService {
                 placementId: placementId,
                 outcomeCorrelation: CommerceOutcomeCorrelation(
                     eventId: effectId,
-                    distinctId: owner.distinctId
+                    distinctId: owner.distinctId,
+                    journeyId: owner.journeyId
                 )
             )
             result = .awaitingOutcome

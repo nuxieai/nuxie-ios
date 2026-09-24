@@ -37,7 +37,7 @@ const privateKey = createPrivateKey({
   format: "der",
   type: "pkcs8",
 });
-const signatureDomain = Buffer.from("nuxie.journey-release.v1\0", "utf8");
+const signatureDomain = Buffer.from("nuxie.journey-release.v2\0", "utf8");
 
 const canonicalJson = (value) => {
   if (value === null || typeof value !== "object") {
@@ -58,7 +58,7 @@ for (const relativePath of [...profilePaths, ...entryPaths]) {
   const path = resolve(relativePath);
   const profile = JSON.parse(await readFile(path, "utf8"));
   const isProfile = profilePaths.includes(relativePath);
-  if (isProfile && profile.schemaVersion !== "nuxie.journey-plane-profile.v1") {
+  if (isProfile && profile.schemaVersion !== "nuxie.journey-plane-profile.v2") {
     throw new Error(`${relativePath}: expected a canonical Journey profile`);
   }
 
@@ -68,7 +68,7 @@ for (const relativePath of [...profilePaths, ...entryPaths]) {
     const descriptor = JSON.parse(
       Buffer.from(release.envelope.descriptorBytesBase64, "base64").toString("utf8"),
     );
-    if (descriptor.schemaVersion !== "nuxie.journey-release.v1") {
+    if (descriptor.schemaVersion !== "nuxie.journey-release.v2") {
       throw new Error(`${relativePath}: expected a canonical Journey release`);
     }
     // These retained host fixtures predate explicit font source declarations.
