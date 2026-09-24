@@ -68,6 +68,15 @@ struct StableEventCaptureRecord: Sendable {
   let eventId: String
   let event: StoredEvent?
   let recordedAt: Date
+  let routeAdmission: CommittedRouteAdmission?
+
+  init(eventId: String, event: StoredEvent?, recordedAt: Date,
+       routeAdmission: CommittedRouteAdmission? = nil) {
+    self.eventId = eventId
+    self.event = event
+    self.recordedAt = recordedAt
+    self.routeAdmission = routeAdmission
+  }
 }
 
 enum StableEventCaptureCommitAdmissionError: Error {
@@ -147,7 +156,8 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
     event: StoredEvent?,
     recordedAt: Date,
     assigningCommitSequence: Bool,
-    admission: (any StableEventCaptureCommitAdmission)?
+    admission: (any StableEventCaptureCommitAdmission)?,
+    routeAdmission: CommittedRouteAdmission?
   ) async throws -> StableEventCaptureCommit
   func commitStableCaptureBatchAndStageRoutes(
     _ records: [StableEventCaptureRecord],
@@ -206,6 +216,15 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
 }
 
 extension EventStoreProtocol {
+  func commitStableCaptureAndStageRoute(
+    eventId: String, event: StoredEvent?, recordedAt: Date,
+    assigningCommitSequence: Bool, admission: (any StableEventCaptureCommitAdmission)?
+  ) async throws -> StableEventCaptureCommit {
+    try await commitStableCaptureAndStageRoute(eventId: eventId, event: event,
+      recordedAt: recordedAt, assigningCommitSequence: assigningCommitSequence,
+      admission: admission, routeAdmission: nil)
+  }
+
   func insert(_ event: StoredEvent, deliveryState: EventDeliveryState,
               origin: StoredEventOrigin, assigningCommitSequence: Bool,
               acceptedAt: Date) async throws -> EventStoreInsertCommit {
@@ -1454,14 +1473,16 @@ actor SQLiteEventStore: EventStoreProtocol {
     event: StoredEvent?,
     recordedAt: Date,
     assigningCommitSequence: Bool,
-    admission: (any StableEventCaptureCommitAdmission)?
+    admission: (any StableEventCaptureCommitAdmission)?,
+    routeAdmission: CommittedRouteAdmission? = nil
   ) throws -> StableEventCaptureCommit {
     let operation = {
       try self.commitStableCaptureAndStageRouteUnfenced(
         eventId: eventId,
         event: event,
         recordedAt: recordedAt,
-        assigningCommitSequence: assigningCommitSequence
+        assigningCommitSequence: assigningCommitSequence,
+        routeAdmission: routeAdmission
       )
     }
     if let admission {
@@ -1477,7 +1498,8 @@ actor SQLiteEventStore: EventStoreProtocol {
     eventId: String,
     event: StoredEvent?,
     recordedAt: Date,
-    assigningCommitSequence: Bool
+    assigningCommitSequence: Bool,
+    routeAdmission: CommittedRouteAdmission?
   ) throws -> StableEventCaptureCommit {
     guard let db else { throw EventStorageError.databaseNotInitialized }
     let sequenceBeforeTransaction = nextCommitSequence
@@ -1504,6 +1526,7 @@ actor SQLiteEventStore: EventStoreProtocol {
           outcome: commit.outcome
         )
       )
+      try stageCommittedStableRoute(result, eventId: eventId, admission: routeAdmission)
       guard sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK else {
         throw EventStorageError.insertFailed(NSError(
           domain: "Nuxie.EventStore",
@@ -1595,7 +1618,7 @@ actor SQLiteEventStore: EventStoreProtocol {
           assigningCommitSequence: assigningCommitSequence
         )
         guard stageRoutes else { return commit }
-        return StableEventCaptureCommit(
+        let result = StableEventCaptureCommit(
           outcome: commit.outcome,
           commitSequence: commit.commitSequence,
           localRoutePending: try stageStableRoute(
@@ -1603,6 +1626,9 @@ actor SQLiteEventStore: EventStoreProtocol {
             outcome: commit.outcome
           )
         )
+        try stageCommittedStableRoute(result, eventId: record.eventId,
+          admission: record.routeAdmission)
+        return result
       }
       guard sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK else {
         throw EventStorageError.insertFailed(NSError(
@@ -1691,6 +1717,17 @@ actor SQLiteEventStore: EventStoreProtocol {
       outcome: .dropped,
       commitSequence: takeCommitSequence(if: assigningCommitSequence)
     )
+  }
+
+  private func stageCommittedStableRoute(
+    _ commit: StableEventCaptureCommit, eventId: String,
+    admission: CommittedRouteAdmission?
+  ) throws {
+    guard commit.localRoutePending, let admission else { return }
+    guard let sequence = commit.commitSequence else {
+      throw EventStorageError.invalidProperties
+    }
+    try stageCommittedRoute(eventId: eventId, sequence: sequence, admission: admission)
   }
 
   private func stageStableRoute(

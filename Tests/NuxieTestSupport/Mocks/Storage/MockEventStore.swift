@@ -446,7 +446,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         recordedAt: Date,
         assigningCommitSequence: Bool,
         admission: (any StableEventCaptureCommitAdmission)?,
-        stageRoute: Bool
+        stageRoute: Bool,
+        routeAdmission: CommittedRouteAdmission? = nil
     ) async throws -> StableEventCaptureCommit {
         let delayNanoseconds = lock.withLock {
             _stableCaptureCommitCallCount += 1
@@ -476,15 +477,25 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
         let operation = { [self] () throws -> StableEventCaptureCommit in
             try lock.withLock { () -> StableEventCaptureCommit in
+                let willCapture = _storedEvents.contains { $0.id == eventId }
+                    || (_stableDroppedAt[eventId] == nil && event != nil)
+                if stageRoute, willCapture, routeAdmission != nil, !assigningCommitSequence {
+                    throw mockError(9, "Routing requires a commit sequence")
+                }
                 func stagingRouteIfNeeded(
                     _ commit: StableEventCaptureCommit
                 ) -> StableEventCaptureCommit {
-                    guard stageRoute, case .captured = commit.outcome else {
+                    guard stageRoute, case .captured(let canonicalEvent, _) = commit.outcome else {
                         return commit
                     }
                     if !_deliveredStableRouteIds.contains(eventId),
                        !_pendingStableRouteIds.contains(eventId) {
                         _pendingStableRouteIds.append(eventId)
+                    }
+                    if _pendingStableRouteIds.contains(eventId), let routeAdmission,
+                       !_committedRoutes.contains(where: { $0.event.id == eventId }) {
+                        _committedRoutes.append(.init(event: canonicalEvent,
+                            admission: routeAdmission, nextSubscriber: 0))
                     }
                     return StableEventCaptureCommit(
                         outcome: commit.outcome,
@@ -557,7 +568,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         event: StoredEvent?,
         recordedAt: Date,
         assigningCommitSequence: Bool,
-        admission: (any StableEventCaptureCommitAdmission)?
+        admission: (any StableEventCaptureCommitAdmission)?,
+        routeAdmission: CommittedRouteAdmission? = nil
     ) async throws -> StableEventCaptureCommit {
         try await commitStableCapture(
             eventId: eventId,
@@ -565,7 +577,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             recordedAt: recordedAt,
             assigningCommitSequence: assigningCommitSequence,
             admission: admission,
-            stageRoute: true
+            stageRoute: true,
+            routeAdmission: routeAdmission
         )
     }
 
@@ -595,6 +608,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 var originsByEventId = _originsByEventId
                 var pendingIds = _pendingIds
                 var stableDroppedAt = _stableDroppedAt
+                var committedRoutes = _committedRoutes
                 var pendingStableRouteIds = _pendingStableRouteIds
                 var nextCommitSequence = _nextCommitSequence
                 var commits: [StableEventCaptureCommit] = []
@@ -644,13 +658,22 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 }
 
                 if stageRoutes {
-                    commits = zip(records, commits).map { record, commit in
-                        guard case .captured = commit.outcome else {
+                    commits = try zip(records, commits).map { record, commit in
+                        guard case .captured(let canonicalEvent, _) = commit.outcome else {
                             return commit
                         }
                         if !_deliveredStableRouteIds.contains(record.eventId),
                            !pendingStableRouteIds.contains(record.eventId) {
                             pendingStableRouteIds.append(record.eventId)
+                        }
+                        if pendingStableRouteIds.contains(record.eventId), let routeAdmission = record.routeAdmission {
+                            guard commit.commitSequence != nil else {
+                                throw mockError(9, "Routing requires a commit sequence")
+                            }
+                            if !committedRoutes.contains(where: { $0.event.id == record.eventId }) {
+                                committedRoutes.append(.init(event: canonicalEvent,
+                                    admission: routeAdmission, nextSubscriber: 0))
+                            }
                         }
                         return StableEventCaptureCommit(
                             outcome: commit.outcome,
@@ -673,6 +696,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 _originsByEventId = originsByEventId
                 _pendingIds = pendingIds
                 _stableDroppedAt = stableDroppedAt
+                _committedRoutes = committedRoutes
                 _pendingStableRouteIds = pendingStableRouteIds
                 _nextCommitSequence = nextCommitSequence
                 return commits
