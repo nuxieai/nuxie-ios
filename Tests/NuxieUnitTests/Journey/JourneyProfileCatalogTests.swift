@@ -2,8 +2,9 @@ import CryptoKit
 import Foundation
 import XCTest
 @_spi(Testing) @testable import Nuxie
+@testable import NuxieTestSupport
 
-final class JourneyProfileCatalogTests: XCTestCase {
+final class JourneyProfileCatalogTests: JourneyTestCase {
     func testSharedPublicationAdmissionVectors() async throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -207,6 +208,71 @@ final class JourneyProfileCatalogTests: XCTestCase {
         XCTAssertEqual(snapshot?.profile.armedLegs.first?.binding.type, .continuation)
         let retainedMark = await store.highWater(for: key)
         XCTAssertEqual(retainedMark, newerMark)
+    }
+
+    func testSignedRepublishPreservesEarlierGoalAndWindowThroughNativeAdmission() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        func goal(_ event: String, minutes: Int) -> [String: Any] {
+            ["criterion": ["type": "event", "eventName": event],
+             "attribution": ["basis": "entry", "window": ["amount": minutes, "unit": "minute"]]]
+        }
+        let earlier = try updatedRelease(fixture: fixture, reentry: ["type": "every_match"],
+            goal: goal("earlier_done", minutes: 1), versionSuffix: "earlier", sequenceOffset: 1)
+        let newer = try updatedRelease(fixture: fixture, reentry: ["type": "every_match"],
+            goal: goal("newer_done", minutes: 60), sequenceOffset: 2)
+        let catalog = try makeCatalog(fixture, store: InMemoryJourneyReleaseHighWaterStore())
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1_000))
+        let service = makeService(identity: identity, events: events, directory: directory, dateProvider: clock)
+        await service.initialize()
+        for publication in [earlier, newer] {
+            let originalArm = try XCTUnwrap(fixture.profile.armedLegs.first)
+            let profile = JourneyPlaneProfile(schemaVersion: fixture.profile.schemaVersion,
+                status: fixture.profile.status, delivery: fixture.profile.delivery,
+                features: fixture.profile.features, facts: fixture.profile.facts,
+                armedLegs: [.init(reference: publication.reference,
+                    binding: .init(type: .new, journeyId: nil, generation: nil),
+                    entryCondition: originalArm.entryCondition, context: originalArm.context)],
+                releases: [publication.entry])
+            let prepared = try await catalog.prepare(profile, authority: fixture.deliveryAuthority)
+            _ = try await catalog.commit(prepared, distinctId: "customer")
+            let current = await catalog.snapshot(distinctId: "customer")
+            await service.profileDidCommit(try XCTUnwrap(current), distinctId: "customer")
+            clock.advance(by: 100)
+        }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let watches = try await journal.conversionWatches()
+        let oldWatch = try XCTUnwrap(watches.values.first { $0.versionId == "version_earlier" })
+        let newWatch = try XCTUnwrap(watches.values.first { $0.versionId == "version_current" })
+        XCTAssertEqual(watches.count, 2)
+        XCTAssertEqual(oldWatch.goal.windowMillis, 60_000)
+        XCTAssertEqual(newWatch.goal.windowMillis, 3_600_000)
+        let token = try XCTUnwrap(identity.performWithCurrentIdentityFence("customer", { _ in () }))
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission(identity: identity, identityFenceToken: token.token,
+            executionFence: fence, executionFenceToken: fence.token())
+        func deliver(_ name: String, id: String, at seconds: Double) async throws {
+            _ = await events.captureAndRouteSystemEvent(.init(name: name, properties: nil,
+                eventId: id, distinctId: "customer"), occurredAt: Date(timeIntervalSince1970: seconds), admission: admission)
+            let event = try XCTUnwrap(events.routedEvents.first { $0.id == id })
+            await service.handleEvent(event)
+        }
+        try await deliver("earlier_done", id: "outside-earlier-window", at: 1_120)
+        try await deliver("newer_done", id: "newer-outcome", at: 1_120)
+        let afterNew = try await journal.conversionWatches()
+        XCTAssertNil(afterNew[oldWatch.journeyId]?.conversion)
+        XCTAssertEqual(afterNew[newWatch.journeyId]?.conversion?.eventId, "newer-outcome")
+        try await deliver("earlier_done", id: "delayed-earlier-outcome", at: 1_010)
+        try await deliver("earlier_done", id: "delayed-earlier-outcome", at: 1_010)
+        let retained = try await JourneyRunJournal(directory: directory, distinctId: "customer").conversionWatches()
+        XCTAssertEqual(retained[oldWatch.journeyId]?.conversion?.eventId, "delayed-earlier-outcome")
+        XCTAssertEqual(retained[newWatch.journeyId]?.conversion?.eventId, "newer-outcome")
+        await service.shutdown()
     }
 
     func testCurrentEnrollmentReentryPolicyWinsOverPinnedContinuation() async throws {
@@ -726,7 +792,10 @@ final class JourneyProfileCatalogTests: XCTestCase {
         fixture: JourneyPlaneProfileTestFixture,
         reentry: [String: Any],
         factReferences: [String: Any]? = nil,
-        entryCondition: [String: Any]? = nil
+        entryCondition: [String: Any]? = nil,
+        goal: [String: Any]? = nil,
+        versionSuffix: String = "current",
+        sequenceOffset: Int = 1
     ) throws -> (
         entry: JourneyReleaseProfileEntry,
         reference: ArmedJourney.Reference
@@ -742,17 +811,18 @@ final class JourneyProfileCatalogTests: XCTestCase {
         var identity = try XCTUnwrap(
             descriptor["identity"] as? [String: Any]
         )
-        identity["experienceVersionId"] = "version_current"
-        identity["versionNumber"] = original.locator.versionNumber + 1
-        identity["buildId"] = "build_current"
+        identity["experienceVersionId"] = "version_\(versionSuffix)"
+        identity["versionNumber"] = original.locator.versionNumber + sequenceOffset
+        identity["buildId"] = "build_\(versionSuffix)"
         identity["publishedAt"] = "2026-08-30T12:00:00.000Z"
-        identity["publishedAtSeq"] = original.locator.publishedAtSeq + 1
+        identity["publishedAtSeq"] = original.locator.publishedAtSeq + sequenceOffset
         descriptor["identity"] = identity
         var leg = try XCTUnwrap(descriptor["leg"] as? [String: Any])
         var policy = try XCTUnwrap(leg["policy"] as? [String: Any])
         var entryPolicy = try XCTUnwrap(policy["entry"] as? [String: Any])
         entryPolicy["frequency"] = reentry
         policy["entry"] = entryPolicy
+        if let goal { policy["goal"] = goal }
         leg["policy"] = policy
         if let factReferences {
             leg["facts"] = factReferences
@@ -774,11 +844,11 @@ final class JourneyProfileCatalogTests: XCTestCase {
                 appId: original.locator.appId,
                 environment: original.locator.environment,
                 experienceId: original.locator.experienceId,
-                experienceVersionId: "version_current",
-                versionNumber: original.locator.versionNumber + 1,
-                buildId: "build_current",
+                experienceVersionId: "version_\(versionSuffix)",
+                versionNumber: original.locator.versionNumber + sequenceOffset,
+                buildId: "build_\(versionSuffix)",
                 publishedAt: "2026-08-30T12:00:00.000Z",
-                publishedAtSeq: original.locator.publishedAtSeq + 1,
+                publishedAtSeq: original.locator.publishedAtSeq + sequenceOffset,
                 legId: original.locator.legId
             ),
             envelope: .init(

@@ -54,6 +54,61 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         XCTAssertEqual(foregroundRequest?.screenId, "screen_welcome")
     }
 
+    func testLapsedAccessReentryUsesCurrentEligibilityAndFrequencyAfterConversion() async throws {
+        for frequency in ["every_match", "one_time"] {
+            let directory = temporaryDirectory()
+            defer { removeTemporaryDirectoryIfPresent(directory) }
+            let fixture = try JourneyPlaneProfileTestFixture.load()
+            let policy = try ExactJSONCodec.decode(Journey.Policy.self, from: Data(
+                #"{"entry":{"trigger":{"type":"event","eventName":"$app_opened"},"frequency":{"type":"\#(frequency)"}},"goal":{"criterion":{"type":"event","eventName":"acquired"},"attribution":{"basis":"entry","window":{"amount":1,"unit":"day"}}},"exitWhenAny":[]}"#.utf8))
+            let snapshot = replacing(try await authenticatedSnapshot(fixture),
+                entry: .init(type: .appForegrounded, eventName: nil, segmentId: nil, member: nil,
+                    condition: .init(ir_version: 1, engine_min: nil, compiled_at: nil,
+                                     expr: .not(.feature(op: "has", id: "premium", value: nil)))),
+                policy: policy)
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer")
+            let events = MockEventLog()
+            events.identity = identity
+            let access = ReentryFeatureAccess()
+            let clock = MockDateProvider(initialDate: Date())
+            let service = makeService(identity: identity, events: events, directory: directory,
+                dateProvider: clock, featureAccess: { _ in await access.current() })
+            await service.initialize()
+            await service.profileDidCommit(snapshot, distinctId: "customer")
+            let first = try XCTUnwrap(events.routedEvents.first { $0.name == JourneyEvents.journeyStarted })
+            let firstJourneyId = try XCTUnwrap(first.properties["journey_id"] as? String)
+            clock.advance(by: 1)
+            _ = await events.captureAndRouteSystemEvent(.init(name: "acquired", properties: nil,
+                eventId: "first-acquisition", distinctId: "customer"))
+            let outcome = try XCTUnwrap(events.routedEvents.first { $0.id == "first-acquisition" })
+            await service.handleEvent(outcome)
+            let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            let converted = try await journal.conversionWatches()
+            XCTAssertEqual(converted[firstJourneyId]?.conversion?.eventId, outcome.id)
+
+            await access.setOwned(true)
+            await service.onAppDidEnterBackground()
+            await service.onAppWillEnterForeground()
+            await service.onAppBecameActive()
+            XCTAssertEqual(events.routedEvents.filter { $0.name == JourneyEvents.journeyStarted }.count, 1,
+                           "Owned access must fail acquisition entry eligibility")
+
+            await access.setOwned(false)
+            clock.advance(by: 1)
+            await service.onAppDidEnterBackground()
+            await service.onAppWillEnterForeground()
+            await service.onAppBecameActive()
+            let starts = events.routedEvents.filter { $0.name == JourneyEvents.journeyStarted }
+            XCTAssertEqual(starts.count, frequency == "every_match" ? 2 : 1, frequency)
+            let retained = try await journal.conversionWatches()
+            XCTAssertEqual(retained[firstJourneyId]?.conversion?.eventId, outcome.id)
+            XCTAssertEqual(retained.values.filter { $0.conversion != nil }.count, 1,
+                           "A new entry must not inherit a previous Journey's conversion")
+            await service.shutdown()
+        }
+    }
+
     func testEveryTimeForegroundArmReopensOnEachForegroundAndLaunch() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1396,5 +1451,15 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         )
         let responses = try XCTUnwrap(outputs["responses"] as? [String: Any])
         XCTAssertEqual(responses["answer"] as? String, "retained")
+    }
+}
+
+private actor ReentryFeatureAccess {
+    private var owned = false
+
+    func setOwned(_ value: Bool) { owned = value }
+
+    func current() -> FeatureAccess {
+        FeatureAccess(allowed: owned, unlimited: true, balance: nil, type: .boolean)
     }
 }
