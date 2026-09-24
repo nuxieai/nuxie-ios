@@ -45,7 +45,7 @@ final class EventStoreSchemaTests: XCTestCase {
     func testOriginSurvivesDatabaseReopenAndDeliveryRecovery() async throws {
         let origin = JourneyEventOrigin(
             journeyId: "journey", experienceId: "experience", versionId: "version",
-            legId: "leg", generation: 0, source: .deviceAction, stepId: "step", occurrenceId: "event"
+            legId: "leg", generation: 0, stepId: "step", occurrenceId: "event"
         )
         let first = SQLiteEventStore()
         try await first.initialize(path: temporaryRoot)

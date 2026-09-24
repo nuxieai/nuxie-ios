@@ -1089,6 +1089,81 @@
       },
       "acceptedAt": 2000,
       "expectedConversions": {}
+    },
+    {
+      "name": "internal renderer origin selects older after analytics redaction",
+      "watches": {
+        "old": {
+          "journeyId": "old",
+          "experienceId": "experience-old",
+          "versionId": "version-old",
+          "policyHash": "pinned-policy",
+          "goal": {
+            "criterion": {
+              "type": "event",
+              "eventName": "outcome"
+            },
+            "attribution": {
+              "basis": "first_shown",
+              "window": {
+                "amount": 1,
+                "unit": "minute"
+              }
+            }
+          },
+          "startedAt": 0,
+          "basis": {
+            "eventId": "basis-old",
+            "occurredAt": 100
+          }
+        },
+        "new": {
+          "journeyId": "new",
+          "experienceId": "experience-new",
+          "versionId": "version-new",
+          "policyHash": "pinned-policy",
+          "goal": {
+            "criterion": {
+              "type": "event",
+              "eventName": "outcome"
+            },
+            "attribution": {
+              "basis": "first_shown",
+              "window": {
+                "amount": 1,
+                "unit": "minute"
+              }
+            }
+          },
+          "startedAt": 0,
+          "basis": {
+            "eventId": "basis-new",
+            "occurredAt": 1000
+          }
+        }
+      },
+      "event": {
+        "id": "outcome",
+        "name": "outcome",
+        "occurredAt": 2000,
+        "properties": {},
+        "journeyOrigin": {
+          "journeyId": "old",
+          "experienceId": "experience-old",
+          "versionId": "version-old",
+          "legId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generation": 0,
+          "source": "screen_control",
+          "occurrenceId": "outcome",
+          "screenId": "screen",
+          "actionId": "continue",
+          "invocationId": "invocation-1"
+        }
+      },
+      "acceptedAt": 2000,
+      "expectedConversions": {
+        "old": "outcome"
+      }
     }
   ]
 }

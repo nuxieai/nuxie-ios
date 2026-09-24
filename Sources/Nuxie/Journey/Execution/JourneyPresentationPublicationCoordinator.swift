@@ -190,7 +190,8 @@ actor JourneyPresentationPublicationCoordinator {
         guard let publication = run.pendingPresentationPublication,
               let ordinaryItems = JourneyPresentationEventProjector
                 .routedItems(
-                    publication.items,
+                    publication,
+                    run: run,
                     distinctId: journal.distinctId
                 ) else { return false }
         guard !ordinaryItems.isEmpty else { return true }
@@ -215,7 +216,8 @@ actor JourneyPresentationPublicationCoordinator {
         var context = publication.context
         guard let ordinaryItems = JourneyPresentationEventProjector
             .routedItems(
-                publication.items,
+                publication,
+                run: run,
                 distinctId: journal.distinctId
             ) else { return .rejected }
 
@@ -630,12 +632,13 @@ enum JourneyPresentationEventProjector {
     }
 
     static func routedItems(
-        _ items: [JourneyRun.PendingPresentationPublication.Item],
+        _ publication: JourneyRun.PendingPresentationPublication,
+        run: JourneyRun,
         distinctId: String
     ) -> [RoutedStableSystemEventBatchItem]? {
         var routed: [RoutedStableSystemEventBatchItem] = []
-        routed.reserveCapacity(items.count)
-        for item in items {
+        routed.reserveCapacity(publication.items.count)
+        for item in publication.items {
             guard let properties = foundationValues(item.properties) else {
                 return nil
             }
@@ -644,7 +647,18 @@ enum JourneyPresentationEventProjector {
                     name: item.name,
                     properties: properties,
                     eventId: item.eventId,
-                    distinctId: distinctId
+                    distinctId: distinctId,
+                    journeyOrigin: item.name.hasPrefix("$") ? nil : JourneyEventOrigin(
+                        journeyId: run.journeyId,
+                        experienceId: run.reference.experienceId,
+                        versionId: run.reference.versionId,
+                        legId: run.reference.legId,
+                        generation: run.generation,
+                        screenId: publication.source.screenId,
+                        actionId: publication.source.actionId,
+                        invocationId: publication.invocationId,
+                        occurrenceId: item.eventId
+                    )
                 ),
                 occurredAt: item.occurredAt
             ))
