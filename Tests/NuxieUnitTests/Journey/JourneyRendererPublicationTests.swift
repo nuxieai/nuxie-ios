@@ -103,6 +103,14 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
             JourneyEvents.journeyCompleted,
         ])
         let emitted = try XCTUnwrap(events.routedEvents.first { $0.name == "continue" })
+        let origin = try XCTUnwrap(emitted.journeyOrigin)
+        XCTAssertEqual(origin.source, .screenControl)
+        XCTAssertEqual(origin.journeyId, request.owner.journeyId)
+        XCTAssertEqual(origin.screenId, "screen_welcome")
+        XCTAssertEqual(origin.actionId, "continue")
+        XCTAssertEqual(origin.invocationId, "continue-invocation")
+        XCTAssertEqual(origin.occurrenceId, emitted.id)
+        XCTAssertNil(origin.stepId)
         XCTAssertEqual(emitted.properties["source"] as? String, "button")
         XCTAssertEqual(emitted.properties["screen_id"] as? String, "screen_welcome")
         XCTAssertEqual(emitted.properties["journey_id"] as? String, request.owner.journeyId)
@@ -344,6 +352,12 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
             $0.name == "continue"
         }
         XCTAssertEqual(replayed.count, 1)
+        let recoveredOrigin = try XCTUnwrap(replayed.first?.journeyOrigin)
+        XCTAssertEqual(recoveredOrigin.source, .screenControl)
+        XCTAssertEqual(recoveredOrigin.screenId, "screen_welcome")
+        XCTAssertEqual(recoveredOrigin.actionId, "continue")
+        XCTAssertEqual(recoveredOrigin.invocationId, "restart-publication")
+        XCTAssertEqual(recoveredOrigin.occurrenceId, "00000000-0000-7000-8000-000000000338")
         let completion = try XCTUnwrap(recoveryEvents.routedEvents.first {
             $0.name == JourneyEvents.journeyCompleted
         })

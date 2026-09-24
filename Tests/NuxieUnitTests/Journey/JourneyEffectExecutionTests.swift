@@ -528,7 +528,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         XCTAssertEqual(origin.generation, 0)
         XCTAssertEqual(origin.source, .deviceAction)
         XCTAssertEqual(origin.occurrenceId, authored.id)
-        XCTAssertFalse(origin.stepId.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(origin.stepId).isEmpty)
 
         XCTAssertEqual(
             events.routedEvents.last?.properties["outcome"] as? String,

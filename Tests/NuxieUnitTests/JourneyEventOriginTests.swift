@@ -10,11 +10,29 @@ final class JourneyEventOriginTests: XCTestCase {
         journeyId: "019c0644-fc00-7000-8000-000000000001",
         experienceId: "experience", versionId: "version",
         legId: String(repeating: "a", count: 64), generation: 0,
-        source: .deviceAction, stepId: "finished",
+        stepId: "finished",
         occurrenceId: "019c0644-fc00-7000-8000-000000000002"
     )
 
     func testStableCaptureKeepsOriginThroughRedactionReopenAndBatchDelivery() async throws {
+        try await verifyStableCapture(origin: origin)
+    }
+
+    func testRendererOriginSurvivesRedactionReopenAndBatchDelivery() async throws {
+        let renderer = JourneyEventOrigin(
+            journeyId: origin.journeyId, experienceId: origin.experienceId, versionId: origin.versionId,
+            legId: origin.legId, generation: origin.generation, screenId: "screen", actionId: "continue",
+            invocationId: "invocation-1", occurrenceId: origin.occurrenceId
+        )
+        try await verifyStableCapture(origin: renderer)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(renderer)) as? [String: Any])
+        XCTAssertEqual(object["source"] as? String, "screen_control")
+        XCTAssertEqual(object["actionId"] as? String, "continue")
+        XCTAssertEqual(object["invocationId"] as? String, "invocation-1")
+        XCTAssertNil(object["stepId"])
+    }
+
+    private func verifyStableCapture(origin: JourneyEventOrigin) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let configuration = NuxieConfiguration(apiKey: "test-origin")

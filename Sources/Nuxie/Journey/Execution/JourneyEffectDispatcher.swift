@@ -235,7 +235,6 @@ struct JourneyEffectDispatcher {
                         versionId: request.reference.versionId,
                         legId: request.reference.legId,
                         generation: request.generation,
-                        source: .deviceAction,
                         stepId: request.stepId,
                         occurrenceId: request.effectId
                     )
