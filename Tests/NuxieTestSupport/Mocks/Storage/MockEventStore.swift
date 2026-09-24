@@ -26,6 +26,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _deliveredIds: [String] = []
     private var _stableDroppedAt: [String: Date] = [:]
     private var _pendingStableRouteIds: [String] = []
+    private var _committedRoutes: [PendingCommittedRouteDelivery] = []
     private var _deliveredStableRouteIds: Set<String> = []
     private var _historyCoverageStart: Date?
     private var _isInitialized = false
@@ -276,6 +277,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _pendingIds.removeAll()
             _stableDroppedAt.removeAll()
             _pendingStableRouteIds.removeAll()
+            _committedRoutes.removeAll()
             _deliveredStableRouteIds.removeAll()
             _historyCoverageStart = nil
             _isInitialized = false
@@ -298,10 +300,12 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         deliveryState: EventDeliveryState,
         origin: StoredEventOrigin,
         assigningCommitSequence: Bool,
-        acceptedAt: Date = Date()
+        acceptedAt: Date = Date(),
+        routeAdmission: CommittedRouteAdmission? = nil
     ) async throws -> EventStoreInsertCommit {
         let delayNanoseconds = try lock.withLock {
             _storeEventCallCount += 1
+            if routeAdmission != nil && !assigningCommitSequence { throw EventStorageError.invalidProperties }
             if _shouldFailStore {
                 throw mockError(2, "Mock store error")
             }
@@ -323,6 +327,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                     commitSequence: takeCommitSequence(if: assigningCommitSequence)
                 )
             }
+            if let routeAdmission {
+                _committedRoutes.append(.init(event: event, admission: routeAdmission, nextSubscriber: 0))
+            }
             _storedEvents.append(event)
             _conversionInbox.append(.init(event: event, acceptedAt: acceptedAt))
             _originsByEventId[event.id] = origin
@@ -333,6 +340,37 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 newlyDurable: true,
                 commitSequence: takeCommitSequence(if: assigningCommitSequence)
             )
+        }
+    }
+
+    public func firstPendingCommittedRoute(sessionId: String) async throws -> PendingCommittedRouteDelivery? {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            return _committedRoutes.first { $0.admission.sessionId == sessionId }
+        }
+    }
+
+    public func checkpointCommittedRoute(eventId: String, sessionId: String, nextSubscriber: Int) async throws {
+        try lock.withLock {
+            if _shouldFailStore { throw mockError(2, "Mock store error") }
+            guard nextSubscriber >= 0, let index = _committedRoutes.firstIndex(where: {
+                $0.event.id == eventId && $0.admission.sessionId == sessionId
+            }) else { throw EventStorageError.invalidProperties }
+            _committedRoutes[index].nextSubscriber = nextSubscriber
+        }
+    }
+
+    public func acknowledgeCommittedRoute(eventId: String, sessionId: String) async throws {
+        try lock.withLock {
+            if _shouldFailMarkDelivered { throw mockError(4, "Mock delivery error") }
+            _committedRoutes.removeAll { $0.event.id == eventId && $0.admission.sessionId == sessionId }
+        }
+    }
+
+    public func discardOtherCommittedRouteSessions(keeping sessionId: String) async throws {
+        try lock.withLock {
+            if _shouldFailStore { throw mockError(2, "Mock store error") }
+            _committedRoutes.removeAll { $0.admission.sessionId != sessionId }
         }
     }
 
@@ -791,11 +829,14 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             guard var coverage = _historyCoverageStart else {
                 throw mockError(3, "Mock coverage is not initialized")
             }
+            let locallyPending = Set(_pendingStableRouteIds)
+                .union(_committedRoutes.map { $0.event.id })
 
             let agedIds = Set(_storedEvents
                 .filter {
                     $0.timestamp < olderThan
                         && !_pendingIds.contains($0.id)
+                        && !locallyPending.contains($0.id)
                         && _originsByEventId[$0.id, default: .device] != .server
                 }
                 .map(\.id))
@@ -807,6 +848,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             let countCandidates = _storedEvents
                 .filter {
                     !_pendingIds.contains($0.id)
+                        && !locallyPending.contains($0.id)
                         && _originsByEventId[$0.id, default: .device] != .server
                 }
                 .sorted {
