@@ -72,7 +72,7 @@ private enum CaptureCommand: Sendable {
 }
 
 private enum RouteResolution: Sendable {
-  case event(RoutedCommittedEvent)
+  case committed
   case skipped
 }
 
@@ -566,6 +566,7 @@ actor EventLog: EventLogProtocol {
   private var routingDeferralGeneration: UInt64 = 0
   private var deferredRouteCommands: [RouteCommand] = []
   private var nextRouteSequenceToDeliver: UInt64 = 0
+  private var highestResolvedRouteSequence: UInt64 = 0
   private var pendingRouteResolutions: [UInt64: RouteResolution] = [:]
   /// Prevents a retry from enqueueing the same durable local-route receipt
   /// twice while its first subscriber pass is still in flight.
@@ -600,8 +601,24 @@ actor EventLog: EventLogProtocol {
     let handler: AcknowledgingCommittedEventHandler
   }
   private var subscribers: [Subscriber] = []
-  // Preserve the failed subscriber and every later route in capture order.
-  private var failedCommittedRoutes: [(event: RoutedCommittedEvent, subscriber: Int, awaitingAcknowledgement: Bool)] = []
+  private struct FailedCommittedRoute {
+    let event: RoutedCommittedEvent
+    var subscriber: Int
+    var awaitingAcknowledgement: Bool
+  }
+  // Durable followers remain in SQLite. Only the current subscriber retry and
+  // a bounded best-effort fallback for events that could not persist stay here.
+  private var failedCommittedRoute: FailedCommittedRoute?
+  private var committedRouteReadFailed = false
+  private var needsCommittedRouteDrain = false
+  private var prefetchedCommittedRoute: (sequence: UInt64, event: RoutedCommittedEvent)?
+  private var undurableCommittedRoutes: [(beforeSequence: UInt64, event: RoutedCommittedEvent)] = []
+  private var hasFailedCommittedRoutes: Bool {
+    failedCommittedRoute != nil || committedRouteReadFailed
+  }
+  var bufferedCommittedRouteCount: Int {
+    (failedCommittedRoute == nil ? 0 : 1) + (prefetchedCommittedRoute == nil ? 0 : 1) + undurableCommittedRoutes.count
+  }
   private var forwardingSubscribers: [ForwardingSubscriber] = []
 
   // MARK: - Delivery (durable queue + bounded in-memory window)
@@ -1065,8 +1082,7 @@ actor EventLog: EventLogProtocol {
     if routeToSubscribers,
        capture?.routesLocally == true,
        commit.localRoutePending,
-       let eventId = capture?.event.id,
-       activeStableRouteIds.insert(eventId).inserted {
+       capture?.event.id != nil {
       routedEvent = capture?.event
     } else {
       routedEvent = nil
@@ -1437,20 +1453,37 @@ actor EventLog: EventLogProtocol {
       return
 
     case .resolved(let sequence, let resolution):
+      highestResolvedRouteSequence = max(highestResolvedRouteSequence, sequence &+ 1)
       pendingRouteResolutions[sequence] = resolution
-      while let next = pendingRouteResolutions.removeValue(
-        forKey: nextRouteSequenceToDeliver
-      ) {
+      while let next = pendingRouteResolutions.removeValue(forKey: nextRouteSequenceToDeliver) {
+        let sequence = nextRouteSequenceToDeliver
         nextRouteSequenceToDeliver &+= 1
-        guard case .event(let routed) = next else { continue }
-        await deliverOrRetainCommittedRoute(routed)
+        if case .committed = next {
+          if !hasFailedCommittedRoutes, !needsCommittedRouteDrain,
+             undurableCommittedRoutes.isEmpty,
+             let cached = prefetchedCommittedRoute, cached.sequence == sequence {
+            prefetchedCommittedRoute = nil
+            let delivered = await deliverCommittedRoute(.init(event: cached.event,
+              subscriber: 0, awaitingAcknowledgement: false))
+            needsCommittedRouteDrain = !delivered
+          } else {
+            needsCommittedRouteDrain = true
+          }
+        }
+        await drainCommittedRouteQueue(retryFailed: false)
       }
 
     case .undurable(let routed):
-      await deliverOrRetainCommittedRoute(routed)
+      let capacity = max(1, deliveryConfig.maxQueueSize)
+      guard undurableCommittedRoutes.count < capacity else {
+        LogWarning("EventLog: best-effort local routing queue full; dropping an unpersisted event")
+        return
+      }
+      undurableCommittedRoutes.append((highestResolvedRouteSequence, routed))
+      await drainCommittedRouteQueue(retryFailed: false)
 
     case .barrier(let cont):
-      if failedCommittedRoutes.first?.awaitingAcknowledgement == true {
+      if failedCommittedRoute?.awaitingAcknowledgement == true || committedRouteReadFailed {
         await retryFailedCommittedRoutes()
       }
       cont.resume()
@@ -1496,16 +1529,75 @@ actor EventLog: EventLogProtocol {
   }
 
   private func deliverOrRetainCommittedRoute(_ routed: RoutedCommittedEvent) async {
-    guard failedCommittedRoutes.isEmpty else {
-      failedCommittedRoutes.append((routed, 0, false))
-      return
+    // Recovery visits stop at their first refusal; live durable captures use
+    // drainCommittedRouteQueue instead of retaining another event in memory.
+    guard !hasFailedCommittedRoutes else { return }
+    _ = await deliverCommittedRoute(.init(event: routed, subscriber: 0,
+      awaitingAcknowledgement: false))
+  }
+
+  private func deliverCommittedRoute(_ delivery: FailedCommittedRoute) async -> Bool {
+    failedCommittedRoute = delivery
+    if !delivery.awaitingAcknowledgement,
+       let failed = await firstFailedSubscriber(delivery.event, startingAt: delivery.subscriber) {
+      failedCommittedRoute?.subscriber = failed
+      prefetchedCommittedRoute = nil
+      await checkpointCommittedRoute(delivery.event, nextSubscriber: failed)
+      return false
     }
-    if let failed = await firstFailedSubscriber(routed, startingAt: 0) {
-      failedCommittedRoutes.append((routed, failed, false))
-      await checkpointCommittedRoute(routed, nextSubscriber: failed)
-    } else if !(await acknowledgeCommittedRoute(routed)) {
-      failedCommittedRoutes.append((routed, subscribers.count, true))
-      await checkpointCommittedRoute(routed, nextSubscriber: subscribers.count)
+    failedCommittedRoute?.subscriber = subscribers.count
+    failedCommittedRoute?.awaitingAcknowledgement = true
+    guard await acknowledgeCommittedRoute(delivery.event) else {
+      prefetchedCommittedRoute = nil
+      await checkpointCommittedRoute(delivery.event, nextSubscriber: subscribers.count)
+      return false
+    }
+    failedCommittedRoute = nil
+    if prefetchedCommittedRoute?.event.event.id == delivery.event.event.id {
+      prefetchedCommittedRoute = nil
+    }
+    return true
+  }
+
+  private func drainCommittedRouteQueue(retryFailed: Bool) async {
+    if let failed = failedCommittedRoute {
+      guard retryFailed, await deliverCommittedRoute(failed) else { return }
+    }
+    guard retryFailed || !committedRouteReadFailed else { return }
+    committedRouteReadFailed = false
+    guard !routingDeferred else { return }
+    do {
+      while true {
+        guard !routingDeferred else { return }
+        let pending = needsCommittedRouteDrain
+          ? try await store.firstPendingCommittedRoute(sessionId: committedRouteSessionId)
+          : nil
+        let eligible = pending.flatMap { $0.commitSequence < nextRouteSequenceToDeliver ? $0 : nil }
+        if eligible == nil { needsCommittedRouteDrain = false }
+        if let fallback = undurableCommittedRoutes.first,
+           fallback.beforeSequence <= nextRouteSequenceToDeliver,
+           eligible == nil || fallback.beforeSequence <= eligible!.commitSequence {
+          undurableCommittedRoutes.removeFirst()
+          guard await deliverCommittedRoute(.init(event: fallback.event, subscriber: 0,
+            awaitingAcknowledgement: false)) else { return }
+          continue
+        }
+        guard let pending = eligible else { return }
+        let stored = pending.event
+        let routed = RoutedCommittedEvent(
+          event: NuxieEvent(id: stored.id, name: stored.name, distinctId: stored.distinctId,
+            properties: stored.getPropertiesDict(), timestamp: stored.timestamp),
+          subscriberAdmissions: pending.admission.subscribers,
+          stableRouteEventId: pending.admission.stableRouteEventId,
+          hasDurableAdmission: true
+        )
+        if let eventId = routed.stableRouteEventId { activeStableRouteIds.insert(eventId) }
+        guard await deliverCommittedRoute(.init(event: routed, subscriber: pending.nextSubscriber,
+          awaitingAcknowledgement: false)) else { return }
+      }
+    } catch {
+      committedRouteReadFailed = true
+      LogWarning("EventLog: failed to read pending local subscriber delivery")
     }
   }
 
@@ -1520,21 +1612,7 @@ actor EventLog: EventLogProtocol {
   }
 
   private func retryFailedCommittedRoutes() async {
-    while let first = failedCommittedRoutes.first {
-      if !first.awaitingAcknowledgement,
-         let failed = await firstFailedSubscriber(first.event, startingAt: first.subscriber) {
-        failedCommittedRoutes[0].subscriber = failed
-        await checkpointCommittedRoute(first.event, nextSubscriber: failed)
-        return
-      }
-      failedCommittedRoutes[0].subscriber = subscribers.count
-      failedCommittedRoutes[0].awaitingAcknowledgement = true
-      guard await acknowledgeCommittedRoute(first.event) else {
-        await checkpointCommittedRoute(first.event, nextSubscriber: subscribers.count)
-        return
-      }
-      failedCommittedRoutes.removeFirst()
-    }
+    await drainCommittedRouteQueue(retryFailed: true)
   }
 
   private func acknowledgeStableRouteIfNeeded(_ eventId: String?) async {
@@ -1679,16 +1757,17 @@ actor EventLog: EventLogProtocol {
     subscriberAdmissions: [UInt64: UInt64] = [:],
     stableRouteEventId: String? = nil
   ) {
+    // One ordinary capture can route from its freshly committed record even
+    // when history queries are temporarily unavailable. Stable replays always
+    // load their original stored admissions instead of caching retry authority.
+    if let event, stableRouteEventId == nil, !hasFailedCommittedRoutes,
+       prefetchedCommittedRoute == nil || commitSequence < prefetchedCommittedRoute!.sequence {
+      prefetchedCommittedRoute = (commitSequence, RoutedCommittedEvent(event: event,
+        subscriberAdmissions: subscriberAdmissions, hasDurableAdmission: true))
+    }
     routeContinuation.yield(.resolved(
       sequence: commitSequence,
-      event.map {
-        .event(RoutedCommittedEvent(
-          event: $0,
-          subscriberAdmissions: subscriberAdmissions,
-          stableRouteEventId: stableRouteEventId,
-          hasDurableAdmission: true
-        ))
-      } ?? .skipped
+      event == nil ? .skipped : .committed
     ))
   }
 
@@ -2940,7 +3019,7 @@ extension EventLog {
     guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
     do {
       await retryFailedCommittedRoutes()
-      guard failedCommittedRoutes.isEmpty else { return false }
+      guard !hasFailedCommittedRoutes else { return false }
       let visited = try await store.visitPendingStableRoutes(distinctId: distinctId) { [weak self] stored in
         guard let self else { return false }
         return await self.deliverRecoveredStableRoute(
@@ -2952,7 +3031,7 @@ extension EventLog {
       // The serial route worker holds subsequent commands until every page
       // of the retained prefix has completed under the same admissions.
       await processRoute(.resumeAfterRecovery(generation: generation))
-      guard failedCommittedRoutes.isEmpty else { return false }
+      guard !hasFailedCommittedRoutes else { return false }
       return try await store.queryPendingStableRoutes(distinctId: distinctId, limit: 1).isEmpty
     } catch {
       LogWarning("EventLog: failed to replay pending stable local routes")
@@ -2964,6 +3043,13 @@ extension EventLog {
     _ stored: StoredEvent, generation: UInt64, admissions: [UInt64: UInt64]
   ) async -> Bool {
     guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
+    do {
+      // Captures made by this process already carry their original admissions
+      // in the delivery queue. Recovery must not substitute current authority.
+      if try await store.hasPendingCommittedRoute(eventId: stored.id, sessionId: committedRouteSessionId) {
+        return true
+      }
+    } catch { return false }
     guard activeStableRouteIds.insert(stored.id).inserted else { return true }
     await deliverOrRetainCommittedRoute(RoutedCommittedEvent(
       event: NuxieEvent(
@@ -2973,7 +3059,7 @@ extension EventLog {
       subscriberAdmissions: admissions,
       stableRouteEventId: stored.id
     ))
-    return failedCommittedRoutes.isEmpty
+    return !hasFailedCommittedRoutes
   }
 
   @discardableResult
@@ -2984,7 +3070,7 @@ extension EventLog {
     // will route as soon as the current subscriber returns.
     guard !Self.isOnCommittedRouteWorker, !routingDeferred else { return false }
     await drainRouteWorker()
-    guard failedCommittedRoutes.isEmpty else { return false }
+    guard !hasFailedCommittedRoutes else { return false }
     return await retryFailedStableRouteAcknowledgements()
   }
 

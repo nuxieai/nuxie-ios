@@ -335,8 +335,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                     commitSequence: takeCommitSequence(if: assigningCommitSequence)
                 )
             }
-            if let routeAdmission {
-                _committedRoutes.append(.init(event: event, admission: routeAdmission, nextSubscriber: 0))
+            let sequence = takeCommitSequence(if: assigningCommitSequence)
+            if let routeAdmission, let sequence {
+                _committedRoutes.append(.init(commitSequence: sequence, event: event, admission: routeAdmission, nextSubscriber: 0))
             }
             _storedEvents.append(event)
             _conversionInbox.append(.init(event: event, acceptedAt: acceptedAt))
@@ -346,7 +347,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             }
             return EventStoreInsertCommit(
                 newlyDurable: true,
-                commitSequence: takeCommitSequence(if: assigningCommitSequence)
+                commitSequence: sequence
             )
         }
     }
@@ -355,6 +356,13 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         try lock.withLock {
             if _shouldFailQuery { throw mockError(3, "Mock query error") }
             return _committedRoutes.first { $0.admission.sessionId == sessionId }
+        }
+    }
+
+    public func hasPendingCommittedRoute(eventId: String, sessionId: String) async throws -> Bool {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            return _committedRoutes.contains { $0.event.id == eventId && $0.admission.sessionId == sessionId }
         }
     }
 
@@ -500,9 +508,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                        !_pendingStableRouteIds.contains(eventId) {
                         _pendingStableRouteIds.append(eventId)
                     }
-                    if _pendingStableRouteIds.contains(eventId), let routeAdmission,
+                    if _pendingStableRouteIds.contains(eventId), let routeAdmission, let sequence = commit.commitSequence,
                        !_committedRoutes.contains(where: { $0.event.id == eventId }) {
-                        _committedRoutes.append(.init(event: canonicalEvent,
+                        _committedRoutes.append(.init(commitSequence: sequence, event: canonicalEvent,
                             admission: routeAdmission, nextSubscriber: 0))
                     }
                     return StableEventCaptureCommit(
@@ -675,11 +683,11 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                             pendingStableRouteIds.append(record.eventId)
                         }
                         if pendingStableRouteIds.contains(record.eventId), let routeAdmission = record.routeAdmission {
-                            guard commit.commitSequence != nil else {
+                            guard let sequence = commit.commitSequence else {
                                 throw mockError(9, "Routing requires a commit sequence")
                             }
                             if !committedRoutes.contains(where: { $0.event.id == record.eventId }) {
-                                committedRoutes.append(.init(event: canonicalEvent,
+                                committedRoutes.append(.init(commitSequence: sequence, event: canonicalEvent,
                                     admission: routeAdmission, nextSubscriber: 0))
                             }
                         }

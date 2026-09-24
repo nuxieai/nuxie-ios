@@ -41,6 +41,7 @@ struct CommittedRouteAdmission: Codable, Sendable, Equatable {
 }
 
 struct PendingCommittedRouteDelivery: Sendable {
+  let commitSequence: UInt64
   let event: StoredEvent
   let admission: CommittedRouteAdmission
   var nextSubscriber: Int
@@ -129,6 +130,7 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
     routeAdmission: CommittedRouteAdmission?
   ) async throws -> EventStoreInsertCommit
   func firstPendingCommittedRoute(sessionId: String) async throws -> PendingCommittedRouteDelivery?
+  func hasPendingCommittedRoute(eventId: String, sessionId: String) async throws -> Bool
   func checkpointCommittedRoute(eventId: String, sessionId: String, nextSubscriber: Int) async throws
   func acknowledgeCommittedRoute(eventId: String, sessionId: String) async throws
   func discardOtherCommittedRouteSessions(keeping sessionId: String) async throws
@@ -1144,7 +1146,7 @@ actor SQLiteEventStore: EventStoreProtocol {
   }
 
   public func firstPendingCommittedRoute(sessionId: String) throws -> PendingCommittedRouteDelivery? {
-    try withCommittedRouteStatement("SELECT event_id, admission, next_subscriber FROM committed_route_deliveries WHERE session_id = ? ORDER BY commit_sequence LIMIT 1;") { statement in
+    try withCommittedRouteStatement("SELECT event_id, admission, next_subscriber, commit_sequence FROM committed_route_deliveries WHERE session_id = ? ORDER BY commit_sequence LIMIT 1;") { statement in
       sqlite3_bind_text(statement, 1, sessionId, -1, SQLITE_TRANSIENT)
       let result = sqlite3_step(statement)
       if result == SQLITE_DONE { return nil }
@@ -1154,9 +1156,22 @@ actor SQLiteEventStore: EventStoreProtocol {
       let bytes = Data(bytes: blob, count: Int(sqlite3_column_bytes(statement, 1)))
       let admission = try JSONDecoder().decode(CommittedRouteAdmission.self, from: bytes)
       let nextSubscriber = Int(sqlite3_column_int64(statement, 2))
-      guard admission.sessionId == sessionId, nextSubscriber >= 0,
+      let sequence = sqlite3_column_int64(statement, 3)
+      guard admission.sessionId == sessionId, nextSubscriber >= 0, sequence >= 0,
             let event = try queryEvent(id: eventId) else { throw EventStorageError.invalidProperties }
-      return PendingCommittedRouteDelivery(event: event, admission: admission, nextSubscriber: nextSubscriber)
+      return PendingCommittedRouteDelivery(commitSequence: UInt64(sequence), event: event, admission: admission, nextSubscriber: nextSubscriber)
+    }
+  }
+
+  public func hasPendingCommittedRoute(eventId: String, sessionId: String) throws -> Bool {
+    try withCommittedRouteStatement("SELECT 1 FROM committed_route_deliveries WHERE event_id = ? AND session_id = ? LIMIT 1;") { statement in
+      sqlite3_bind_text(statement, 1, eventId, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_text(statement, 2, sessionId, -1, SQLITE_TRANSIENT)
+      switch sqlite3_step(statement) {
+      case SQLITE_ROW: return true
+      case SQLITE_DONE: return false
+      default: throw EventStorageError.invalidProperties
+      }
     }
   }
 
