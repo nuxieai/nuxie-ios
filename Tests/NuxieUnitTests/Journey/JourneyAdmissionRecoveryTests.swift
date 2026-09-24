@@ -543,6 +543,48 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         }
     }
 
+    func testOfferAlternativeCanDismissBeforePresentation() async throws {
+        struct Corpus: Decodable {
+            struct Case: Decodable, Sendable {
+                let name: String
+                let access: String
+                let action: [String: JourneyReleaseJSONValue]
+                let outcome: String
+            }
+            let cases: [Case]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/presentationless-dismiss.json")
+        let corpus = try ExactJSONCodec.decode(Corpus.self, from: Data(contentsOf: url))
+        for vector in corpus.cases {
+            let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+            let original = try await authenticatedRenderedSnapshot(fixture)
+            let leg = try XCTUnwrap(original.releasesByDigest.values.first).descriptor.leg
+            let snapshot = replacing(original,
+                offers: [.init(screenId: "screen_welcome", placementIds: ["golden:monthly"],
+                               alreadyEntitledStepId: "skip", unknownStepId: "skip")],
+                products: [releaseProductDocument(id: "monthly", storeProductId: "com.example.pro", featureIds: ["premium"])],
+                steps: leg.steps + [.init(kind: .action, id: "skip", action: vector.action, outlets: [:], outcome: nil)],
+                routes: leg.routes + [
+                    .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: Journey.Offer.alreadyEntitledEvent, entryStepId: "skip"),
+                    .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: Journey.Offer.accessUnknownEvent, entryStepId: "skip"),
+                ])
+            let context = try await makeRenderedJourneyTestContext(snapshot: snapshot, featureAccess: { _ in
+                vector.access == "owned" ? FeatureAccess(allowed: true, unlimited: true, balance: nil, type: .boolean) : nil
+            })
+            defer { removeTemporaryDirectoryIfPresent(context.directory) }
+            await context.service.profileDidCommit(snapshot, distinctId: "customer")
+            let request = await MainActor.run { context.presenter.request }
+            XCTAssertNil(request, vector.name)
+            let checkmark = try await context.journal.checkmark(experienceId: snapshot.profile.armedLegs[0].reference.experienceId)
+            XCTAssertEqual(checkmark?.outcome, vector.outcome, vector.name)
+            XCTAssertEqual(context.events.routedEvents.map(\.name),
+                           [JourneyEvents.journeyStarted, JourneyEvents.journeyCompleted], vector.name)
+        }
+    }
+
     func testOwnedAccessDoesNotSuppressTheEntireJourney() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
