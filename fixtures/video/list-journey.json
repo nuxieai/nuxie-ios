@@ -32,13 +32,6 @@
       "responseCaptures": []
     }
   ],
-  "reentry": {
-    "type": "every_time"
-  },
-  "entitlementGate": {
-    "enabled": true,
-    "products": []
-  },
   "facts": {
     "propertyKeys": [],
     "segmentIds": [],
@@ -49,5 +42,17 @@
     "responseFields": []
   },
   "outputs": [],
-  "completionOutputs": {}
+  "completionOutputs": {},
+  "policy": {
+    "entry": {
+      "trigger": {
+        "type": "api"
+      },
+      "frequency": {
+        "type": "every_match"
+      }
+    },
+    "exitWhenAny": []
+  },
+  "offers": []
 }
