@@ -308,6 +308,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
             journeys: journeys,
             eventLog: eventLog,
             profile: profile,
+            experiences: experiences,
             experiencePresentation: presenter,
             journeyPresentation: presenter,
             features: features

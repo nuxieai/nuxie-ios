@@ -30,6 +30,10 @@ struct NuxieCoreOverrides {
   var journeyPresentation: (any JourneyPresenting)?
   /// Explicit test-host control for presentation diagnostics.
   var presentationDiagnosticsEnabled: Bool?
+  /// Suspends background Experience preparation for deterministic tests and
+  /// qualification trials. Show-time triggers still join, jump, or fill the
+  /// prepared-release store.
+  var experiencePreparationSuspended: Bool?
   /// Qualification-only correlation installed before lifecycle restoration.
   /// The ordinary event and Journey lanes remain the execution authority.
   var qualificationPresentationAttempt: ExperiencePresentationAttempt?
@@ -184,6 +188,8 @@ final class NuxieCore: @unchecked Sendable {
           || (overrides.presentationDiagnosticsEnabled
             ?? (overrides.presentationTrace != nil)),
       testStoreEnabled: configuration.testStoreEnabled,
+      automaticPreparation: ExperienceService.defaultAutomaticPreparation
+        && overrides.experiencePreparationSuspended != true,
       videoDecoderPoolProvider: { ExperienceVideoDecoderPool.shared }
     )
     let defaultExperiencePresentation = ExperiencePresentationService(

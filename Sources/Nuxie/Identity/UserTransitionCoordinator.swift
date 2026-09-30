@@ -97,6 +97,18 @@ final class UserTransitionCoordinator: @unchecked Sendable {
             from: transition.from,
             to: transition.to
         )
+        // The departing presentation is already shut down. Drop everything
+        // prepared for the departing user before the next profile admits.
+        if PreparedReleaseUserSwitchPolicy.discardsPreparedReleases(on: transition) {
+            await experienceService.discardPreparedReleases(
+                departingDistinctId: transition.from
+            )
+        } else {
+            await experienceService.transferPreparedReleases(
+                from: transition.from,
+                to: transition.to
+            )
+        }
         if transition.kind == .reset {
             await profileService.clearCache(distinctId: transition.from)
         }
@@ -115,5 +127,24 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         // A valid offline profile can still restore readiness. FeatureService
         // requires an admitted profile and fences publication to its identity.
         await featureService.syncFeatureInfo()
+    }
+}
+
+/// Which user transitions throw away every prepared Experience release.
+///
+/// PENDING DECISION (Levi): does a first sign-in, anonymous to identified,
+/// count as switching users? `firstSignInSwitchesUsers = true` is the current
+/// default: every identify and reset discards everything prepared, matching
+/// Journeys, which drop the anonymous run, at the cost of re-preparing right
+/// at sign-up. Set it to `false` to keep prepared releases through a first
+/// sign-in and drop them only on log out or a switch between two known users.
+enum PreparedReleaseUserSwitchPolicy {
+    static let firstSignInSwitchesUsers = true
+
+    static func discardsPreparedReleases(
+        on transition: UserTransitionCoordinator.Transition
+    ) -> Bool {
+        let isFirstSignIn = transition.kind == .identify && transition.migrateEvents
+        return !isFirstSignIn || firstSignInSwitchesUsers
     }
 }

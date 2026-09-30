@@ -83,11 +83,16 @@ actor JourneyPreparedReleaseStore {
 
     /// The profile was withdrawn without a replacement (locale change,
     /// per-user cache clear). Nothing stays armed; reserved releases stay
-    /// for the shows that hold them.
+    /// for the shows that hold them. A withdrawal for someone other than the
+    /// stored owner holds nothing of theirs and changes nothing.
     func withdrawProfile(
         ownerDistinctId: String?,
         generation: UInt64
     ) async {
+        if let ownerDistinctId, let currentOwner = self.ownerDistinctId,
+           ownerDistinctId != currentOwner {
+            return
+        }
         await install(
             snapshot: nil,
             runtimeSeeds: [:],

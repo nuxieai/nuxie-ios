@@ -464,6 +464,7 @@ internal actor ProfileService: ProfileServiceProtocol {
 
         guard await experiences.commitJourneyProfile(
             preparedArtifacts,
+            ownerDistinctId: item.distinctId,
             generation: admission.generation,
             admission: sideEffectAdmission(for: admission)
         ), isCurrent(admission) else { return false }
@@ -508,6 +509,7 @@ internal actor ProfileService: ProfileServiceProtocol {
               isCurrent(admission) else { return }
         _ = await experiences.commitJourneyProfile(
             prepared,
+            ownerDistinctId: admission.distinctId,
             generation: admission.generation,
             admission: sideEffectAdmission(for: admission)
         )
@@ -524,6 +526,10 @@ internal actor ProfileService: ProfileServiceProtocol {
             admissionGeneration: generation,
             distinctId: distinctId
         )
+        await experiences.withdrawPreparedReleases(
+            ownerDistinctId: distinctId,
+            generation: generation
+        )
     }
 
     func clearCache(distinctId: String) async {
@@ -536,6 +542,10 @@ internal actor ProfileService: ProfileServiceProtocol {
             admissionGeneration: generation,
             distinctId: distinctId
         )
+        await experiences.withdrawPreparedReleases(
+            ownerDistinctId: distinctId,
+            generation: generation
+        )
         await diskCache.remove(forKey: distinctId)
     }
 
@@ -545,6 +555,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         cachedProfile = nil
         await journeyProfiles.clearAll()
         await journeys?.profileDidClearAll(admissionGeneration: generation)
+        await experiences.discardPreparedReleases(departingDistinctId: nil)
         await diskCache.clearAll()
     }
 

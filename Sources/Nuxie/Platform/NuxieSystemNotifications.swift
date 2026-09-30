@@ -27,6 +27,16 @@ enum NuxieSystemNotifications {
         #endif
     }
 
+    /// The system memory warning, where the platform delivers one. AppKit
+    /// has no equivalent, so macOS returns nil and registers nothing.
+    static var appDidReceiveMemoryWarning: Notification.Name? {
+        #if canImport(UIKit)
+        return UIApplication.didReceiveMemoryWarningNotification
+        #else
+        return nil
+        #endif
+    }
+
     static var appDidBecomeActive: Notification.Name {
         #if canImport(UIKit)
         return UIApplication.didBecomeActiveNotification

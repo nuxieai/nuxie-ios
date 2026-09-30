@@ -137,6 +137,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         journeys: core.journeys,
         eventLog: core.eventLog,
         profile: core.profile,
+        experiences: core.experiences,
         experiencePresentation: core.experiencePresentation,
         journeyPresentation: core.journeyPresentation,
         features: core.features
@@ -301,6 +302,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       await core.featureUseCommands.close()
       await run.featureCommandRecoveryTask?.value
       await core.journeys?.shutdown()
+      await core.experiences.shutdownPreparation()
       await core.eventLog.close()
       await core.profile.cleanupExpired()
 

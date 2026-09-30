@@ -138,7 +138,8 @@ final class SignedSemanticJourneyTests: XCTestCase {
             pendingPurchaseStore: PendingPurchaseStore(customStoragePath: directory), dateProvider: SystemDateProvider(),
             settings: NuxieRuntimeSettings(configuration: configuration), eventSink: DiscardingSystemEventSink())
         let experiences = ExperienceService(productService: products, eventLog: events,
-            transactionServiceProvider: { transactions }, systemEventSink: DiscardingSystemEventSink(), releaseStore: acquisition)
+            transactionServiceProvider: { transactions }, systemEventSink: DiscardingSystemEventSink(), releaseStore: acquisition,
+            automaticPreparation: false)
         let presentations = ExperiencePresentationService(experiences: experiences, eventLog: events)
         let storageScope = JourneyStorageScope(authority: authority)
         let journal = try JourneyRunJournal(directory: directory, distinctId: owner, storageScope: storageScope)
