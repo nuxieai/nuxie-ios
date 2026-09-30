@@ -225,9 +225,9 @@ final class ExperiencePresentationService {
             throw ExperiencePresentationError.noActiveScene
         }
         
-        // 4. Set up a presentation-scoped dismissal handler. Cached view
-        // controllers can be reused, so an old callback must never tear down a
-        // newer presentation of the same controller.
+        // 4. Set up a presentation-scoped dismissal handler. Every show builds
+        // a new controller; the presentation id still fences a late callback
+        // so it can never tear down a newer presentation.
         let presentationID = UUID()
         experienceViewController.onClose = { [weak self] reason in
             Task { @MainActor in
@@ -270,8 +270,8 @@ final class ExperiencePresentationService {
             warmReservation: nil
         )
 
-        // Every presentation owns freshly opened interactive screens, even
-        // when ExperienceService returns a cached view controller.
+        // Every presentation builds a new controller and owns freshly opened
+        // interactive screens.
         await experienceViewController.prepareForPresentation(
             traceToken: currentRuntimeDelegateTraceToken,
             initialScreenID: initialScreenID
