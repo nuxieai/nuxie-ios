@@ -44,7 +44,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
 
         await store.replaceProfile(
             prepared(keys),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -72,7 +72,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
 
         await store.replaceProfile(
             prepared(keys),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -91,7 +91,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let store = makeStore(gate)
         await store.replaceProfile(
             prepared(["A", "B", "C"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -114,7 +114,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let store = makeStore(gate)
         await store.replaceProfile(
             prepared(["A"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -140,7 +140,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let store = makeStore(gate)
         await store.replaceProfile(
             prepared(["A", "B"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -149,7 +149,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
 
         await store.replaceProfile(
             prepared(["B", "C"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 2,
             admission: nil
         )
@@ -170,7 +170,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let store = makeStore(gate)
         await store.replaceProfile(
             prepared(["A"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -178,7 +178,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
 
         await store.replaceProfile(
             prepared(["A"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 2,
             admission: nil
         )
@@ -198,7 +198,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let store = makeStore(gate)
         await store.replaceProfile(
             prepared(["A"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -208,7 +208,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         XCTAssertEqual(readiness, .prepared)
         await store.replaceProfile(
             prepared(["B"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 2,
             admission: nil
         )
@@ -226,7 +226,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let store = makeStore(ConcurrencyProbeGate(), automaticPreparation: false)
         await store.replaceProfile(
             prepared(["A", "B"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 2,
             admission: nil
         )
@@ -236,7 +236,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
 
         await store.replaceProfile(
             prepared(["C"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -245,7 +245,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
 
         await store.replaceProfile(
             prepared(["D"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 3,
             admission: ProfileSideEffectAdmission { false }
         )
@@ -255,7 +255,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let (reservation, _) = await store.reserve(descriptorSHA256: sha("A"))
         await store.replaceProfile(
             PreparedJourneyProfileArtifacts(snapshot: nil),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 4,
             admission: nil
         )
@@ -274,7 +274,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let store = makeStore(ConcurrencyProbeGate(), acquirer: acquirer)
         await store.replaceProfile(
             prepared(["A", "B"], seeded: []),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -298,7 +298,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let arriving = makeStore(ConcurrencyProbeGate())
         await arriving.replaceProfile(
             prepared(["A"]),
-            ownerDistinctId: "u2",
+            owner: PreparedReleaseOwner(distinctId: "u2"),
             generation: 1,
             admission: nil
         )
@@ -312,6 +312,159 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         XCTAssertEqual(kept, .prepared)
     }
 
+    /// Decision 16: a first sign-in keeps everything prepared, whether the
+    /// queued user transition or the signed-in user's profile reaches the
+    /// store first. That profile still drops what it no longer arms.
+    func testFirstSignInKeepsPreparedReleasesInEitherOrder() async throws {
+        for transitionFirst in [true, false] {
+            let order = transitionFirst ? "transition first" : "profile first"
+            let gate = ConcurrencyProbeGate()
+            let acquirer = makeAcquirer()
+            let store = makeStore(gate, acquirer: acquirer)
+            await store.replaceProfile(
+                prepared(["A", "B"]),
+                owner: PreparedReleaseOwner(distinctId: "anon"),
+                generation: 1,
+                admission: nil
+            )
+            await store.waitForIdle()
+            let anonymousPreparation = try await cachedPreparation("A", in: store)
+
+            let signedIn = PreparedReleaseOwner(
+                distinctId: "u1",
+                signedInFromAnonymousId: "anon"
+            )
+            if transitionFirst {
+                await store.transferOwner(from: "anon", to: "u1")
+            }
+            await store.replaceProfile(
+                prepared(["A", "C"]),
+                owner: signedIn,
+                generation: 2,
+                admission: nil
+            )
+            if !transitionFirst {
+                await store.transferOwner(from: "anon", to: "u1")
+            }
+            await store.waitForIdle()
+
+            let kept = try await cachedPreparation("A", in: store)
+            XCTAssertTrue(kept === anonymousPreparation, order)
+            let startLog = await gate.startLog
+            XCTAssertEqual(startLog, ["A", "B", "C"], "\(order): nothing prepared twice")
+            let acquisitions = await acquirer.starts
+            XCTAssertEqual(acquisitions, [], order)
+            let unarmed = await store.cache.status(for: sha("B"))
+            XCTAssertEqual(unarmed, .miss, order)
+            let queued = await store.cache.status(for: sha("C"))
+            XCTAssertEqual(queued, .prepared, order)
+            let owner = await store.inspection().ownerDistinctId
+            XCTAssertEqual(owner, "u1", order)
+        }
+    }
+
+    /// A switch between identified users and a reset both discard, whether
+    /// the transition's discard or the arriving user's profile reaches the
+    /// store first. A discard that arrives after the arriving user's commit
+    /// leaves that user's releases alone.
+    func testIdentifiedSwitchAndResetDiscardInEitherOrder() async throws {
+        for transitionFirst in [true, false] {
+            let order = transitionFirst ? "transition first" : "profile first"
+            let gate = ConcurrencyProbeGate()
+            let store = makeStore(gate)
+            await store.replaceProfile(
+                prepared(["A"]),
+                owner: PreparedReleaseOwner(distinctId: "u1", signedInFromAnonymousId: "anon"),
+                generation: 1,
+                admission: nil
+            )
+            await store.waitForIdle()
+            let firstUserPreparation = try await cachedPreparation("A", in: store)
+
+            // An identified user keeps the device's anonymous id, so the
+            // arriving user reports the same sign-in origin as the departing one.
+            let arrivals: [(departing: String, arriving: PreparedReleaseOwner)] = [
+                ("u1", PreparedReleaseOwner(distinctId: "u2", signedInFromAnonymousId: "anon")),
+                ("u2", PreparedReleaseOwner(distinctId: "anon-2")),
+            ]
+            var previous = firstUserPreparation
+            for (index, arrival) in arrivals.enumerated() {
+                let step = "\(order), \(arrival.departing) -> \(arrival.arriving.distinctId)"
+                if transitionFirst {
+                    await store.discard(departingDistinctId: arrival.departing)
+                }
+                await store.replaceProfile(
+                    prepared(["A"]),
+                    owner: arrival.arriving,
+                    generation: UInt64(index + 2),
+                    admission: nil
+                )
+                if !transitionFirst {
+                    await store.discard(departingDistinctId: arrival.departing)
+                }
+                await store.waitForIdle()
+
+                let current = try await cachedPreparation("A", in: store)
+                XCTAssertFalse(current === previous, step)
+                let starts = await gate.startCount(of: "A")
+                XCTAssertEqual(starts, index + 2, step)
+                let owner = await store.inspection().ownerDistinctId
+                XCTAssertEqual(owner, arrival.arriving.distinctId, step)
+                previous = current
+            }
+        }
+    }
+
+    /// The anonymous user signed in as u1 and then switched to u2 before
+    /// either transition ran. u2's profile looks like a first sign-in and
+    /// keeps everything, until the first transition reports that the
+    /// anonymous user signed in as u1: u2 is a switch, so everything goes.
+    func testSignInClaimedByLaterUserDiscardsWhenTransitionArrives() async throws {
+        let gate = ConcurrencyProbeGate()
+        let store = makeStore(gate)
+        await store.replaceProfile(
+            prepared(["A"]),
+            owner: PreparedReleaseOwner(distinctId: "anon"),
+            generation: 1,
+            admission: nil
+        )
+        await store.waitForIdle()
+        let anonymousPreparation = try await cachedPreparation("A", in: store)
+
+        await store.replaceProfile(
+            prepared(["A"]),
+            owner: PreparedReleaseOwner(distinctId: "u2", signedInFromAnonymousId: "anon"),
+            generation: 2,
+            admission: nil
+        )
+        await store.waitForIdle()
+        let provisionallyKept = try await cachedPreparation("A", in: store)
+        XCTAssertTrue(provisionallyKept === anonymousPreparation)
+
+        await store.transferOwner(from: "anon", to: "u1")
+        await store.discard(departingDistinctId: "u1")
+
+        let dropped = await store.cache.status(for: sha("A"))
+        XCTAssertEqual(dropped, .miss)
+        let discarded = await store.inspection()
+        XCTAssertNil(discarded.ownerDistinctId)
+        XCTAssertEqual(discarded.entries, [])
+        XCTAssertEqual(discarded.armed, [])
+
+        // The transition then admits u2's profile again.
+        await store.replaceProfile(
+            prepared(["A"]),
+            owner: PreparedReleaseOwner(distinctId: "u2", signedInFromAnonymousId: "anon"),
+            generation: 3,
+            admission: nil
+        )
+        await store.waitForIdle()
+        let rebuilt = try await cachedPreparation("A", in: store)
+        XCTAssertFalse(rebuilt === anonymousPreparation)
+        let starts = await gate.startCount(of: "A")
+        XCTAssertEqual(starts, 2)
+    }
+
     // MARK: - App lifecycle
 
     func testBackgroundStartsNothingAndActiveResumes() async throws {
@@ -319,7 +472,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let store = makeStore(gate)
         await store.replaceProfile(
             prepared(["A", "B"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -363,7 +516,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         stores.append(service.preparedReleaseStore)
         await service.preparedReleaseStore.replaceProfile(
             prepared(["A"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -391,7 +544,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let store = makeStore(gate)
         await store.replaceProfile(
             prepared(["A", "B"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 1,
             admission: nil
         )
@@ -407,7 +560,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         }
         await store.replaceProfile(
             prepared(["C"]),
-            ownerDistinctId: "u1",
+            owner: PreparedReleaseOwner(distinctId: "u1"),
             generation: 2,
             admission: nil
         )
@@ -441,7 +594,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
             let store = makeStore(gate, automaticPreparation: false)
             await store.replaceProfile(
                 prepared(["A"], seeded: vectorCase.verifiedRelease ? ["A"] : []),
-                ownerDistinctId: "u1",
+                owner: PreparedReleaseOwner(distinctId: "u1"),
                 generation: 1,
                 admission: nil
             )

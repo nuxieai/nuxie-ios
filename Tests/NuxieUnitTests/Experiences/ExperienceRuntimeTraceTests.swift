@@ -169,7 +169,7 @@ final class ExperienceRuntimeTraceTests: AsyncSpec {
         let preparedProfile = try await experiences.prepareJourneyProfile(snapshot)
         let committed = await experiences.commitJourneyProfile(
             preparedProfile,
-            ownerDistinctId: "customer",
+            owner: PreparedReleaseOwner(distinctId: "customer"),
             generation: 1,
             admission: nil
         )

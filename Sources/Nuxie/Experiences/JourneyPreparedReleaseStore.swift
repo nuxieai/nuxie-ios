@@ -11,8 +11,9 @@ import Foundation
 ///
 /// Profile commits are bookkeeping only and never wait for lane work. A new
 /// profile keeps what is still armed or reserved by a live show, drops the
-/// rest, and queues anything new. Switching users drops everything,
-/// including queued and in-flight work.
+/// rest, and queues anything new. Resetting or switching between identified
+/// users drops everything, including queued and in-flight work; a first
+/// sign-in keeps it (`PreparedReleaseUserSwitchPolicy`).
 actor JourneyPreparedReleaseStore {
     struct Entry: Sendable {
         let release: AuthenticatedJourneyRelease
@@ -28,6 +29,9 @@ actor JourneyPreparedReleaseStore {
     private let automaticPreparation: Bool
 
     private var ownerDistinctId: String?
+    /// The anonymous owner whose releases the current owner kept when its
+    /// profile committed before the user transition reported that sign-in.
+    private var unconfirmedSignInFrom: String?
     private var latestGeneration: UInt64 = 0
     /// Fences work started for an earlier user or a discarded state.
     private var epoch: UInt64 = 0
@@ -66,16 +70,19 @@ actor JourneyPreparedReleaseStore {
 
     /// Installs the armed releases of a committed profile. Bookkeeping only:
     /// it never awaits lane work, so it cannot delay profile admission.
+    /// A profile for a different owner first drops everything prepared for
+    /// the current one, unless the new owner signed in from it. A nil owner
+    /// never changes the owner.
     func replaceProfile(
         _ prepared: PreparedJourneyProfileArtifacts,
-        ownerDistinctId: String?,
+        owner: PreparedReleaseOwner?,
         generation: UInt64,
         admission: ProfileSideEffectAdmission?
     ) async {
         await install(
             snapshot: prepared.snapshot,
             runtimeSeeds: prepared.runtimeReleasesByDescriptorSHA256,
-            ownerDistinctId: ownerDistinctId,
+            owner: owner,
             generation: generation,
             admission: admission
         )
@@ -96,7 +103,7 @@ actor JourneyPreparedReleaseStore {
         await install(
             snapshot: nil,
             runtimeSeeds: [:],
-            ownerDistinctId: ownerDistinctId,
+            owner: ownerDistinctId.map { PreparedReleaseOwner(distinctId: $0) },
             generation: generation,
             admission: nil
         )
@@ -105,7 +112,7 @@ actor JourneyPreparedReleaseStore {
     private func install(
         snapshot: JourneyProfileCatalog.Snapshot?,
         runtimeSeeds: [String: PreparedRuntimeRelease],
-        ownerDistinctId newOwner: String?,
+        owner newOwner: PreparedReleaseOwner?,
         generation: UInt64,
         admission: ProfileSideEffectAdmission?
     ) async {
@@ -115,15 +122,22 @@ actor JourneyPreparedReleaseStore {
             return
         }
         latestGeneration = generation
-        let ownerChanged: Bool
+        var ownerChanged = false
         if let newOwner, let currentOwner = ownerDistinctId,
-           newOwner != currentOwner {
-            resetState()
-            ownerChanged = true
-        } else {
-            ownerChanged = false
+           newOwner.distinctId != currentOwner {
+            if PreparedReleaseUserSwitchPolicy.keepsPreparedReleases(
+                ownedBy: currentOwner,
+                for: newOwner
+            ) {
+                // A first sign-in whose profile arrived before its user
+                // transition. Keep everything; the transition confirms it.
+                unconfirmedSignInFrom = currentOwner
+            } else {
+                resetState()
+                ownerChanged = true
+            }
         }
-        if let newOwner { ownerDistinctId = newOwner }
+        if let newOwner { ownerDistinctId = newOwner.distinctId }
         revision &+= 1
         let installRevision = revision
 
@@ -202,14 +216,25 @@ actor JourneyPreparedReleaseStore {
         resumeIdleWaitersIfIdle()
     }
 
-    /// Re-tags the stored owner without dropping anything. Used only when a
-    /// user transition keeps prepared releases (see
-    /// `PreparedReleaseUserSwitchPolicy`).
-    func transferOwner(from departingDistinctId: String, to arrivingDistinctId: String) {
-        guard ownerDistinctId == nil || ownerDistinctId == departingDistinctId else {
-            return
+    /// Hands everything prepared to the user an anonymous user signed in as
+    /// (see `PreparedReleaseUserSwitchPolicy`), without dropping anything.
+    /// If the arriving user's profile committed first, it already kept them
+    /// and this confirms it. If a later user's commit kept them instead, the
+    /// anonymous user signed in as someone else before that user arrived, so
+    /// the later user is a switch between identified users and everything
+    /// is dropped. Their profile admits again later in the same transition.
+    func transferOwner(
+        from departingDistinctId: String,
+        to arrivingDistinctId: String
+    ) async {
+        if ownerDistinctId == nil || ownerDistinctId == departingDistinctId {
+            ownerDistinctId = arrivingDistinctId
+            unconfirmedSignInFrom = nil
+        } else if ownerDistinctId == arrivingDistinctId {
+            unconfirmedSignInFrom = nil
+        } else if unconfirmedSignInFrom == departingDistinctId {
+            await discard(departingDistinctId: nil)
         }
-        ownerDistinctId = arrivingDistinctId
     }
 
     // MARK: - Shows
@@ -354,6 +379,7 @@ actor JourneyPreparedReleaseStore {
 
     private func resetState() {
         epoch &+= 1
+        unconfirmedSignInFrom = nil
         laneTask?.cancel()
         laneTask = nil
         laneItem = nil
