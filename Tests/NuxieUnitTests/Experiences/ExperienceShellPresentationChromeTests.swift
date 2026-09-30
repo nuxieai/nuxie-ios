@@ -960,7 +960,154 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         XCTAssertNil(controller.transitioningDelegate)
     }
 
+    // MARK: - Presentation readiness
+
+    /// Cross-SDK contract: the shimmer shows only when a show is cold.
+    @MainActor
+    func testPresentationReadinessVectorDrivesTheShimmer() throws {
+        struct Vector: Decodable {
+            struct Case: Decodable {
+                let name: String
+                let readiness: String
+                let shimmer: Bool
+            }
+            let cases: [Case]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/presentation-readiness.json")
+        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: url))
+        XCTAssertFalse(vector.cases.isEmpty)
+        for vectorCase in vector.cases {
+            let readiness = try XCTUnwrap(
+                ExperiencePresentationReadiness(rawValue: vectorCase.readiness),
+                vectorCase.name
+            )
+            let controller = MockExperienceViewController(
+                mockExperienceVersionId: "version-readiness-\(vectorCase.readiness)",
+                recoveryAffordanceDelay: 5
+            )
+            controller.configurePresentationShell(Self.shell(), readiness: readiness)
+            _ = controller.view
+
+            XCTAssertEqual(try Self.presentationState(of: controller), .loading, vectorCase.name)
+            XCTAssertEqual(controller.presentationReadiness, readiness, vectorCase.name)
+            XCTAssertEqual(
+                controller.suppressesLoadingTreatmentForPresentation,
+                !vectorCase.shimmer,
+                vectorCase.name
+            )
+            XCTAssertEqual(controller.loadingView.isHidden, !vectorCase.shimmer, vectorCase.name)
+        }
+    }
+
+    /// The reservation lasts the whole show, so later screens hit the same
+    /// prepared release; reveal and timeout must not release it.
+    @MainActor
+    func testPreparedReservationHeldUntilShutdownNotReveal() async throws {
+        let released = ReservationReleaseFlag()
+        let reservation = ExperiencePresentationWarmReservation {
+            released.set()
+        }
+        let controller = Self.presentationController(loadingTimeoutSeconds: 0.05)
+        controller.configurePresentationShell(
+            Self.shell(),
+            readiness: .prepared,
+            warmReservation: reservation
+        )
+        _ = controller.view
+        XCTAssertTrue(controller.loadingView.isHidden)
+
+        let deadline = Date().addingTimeInterval(2)
+        while try Self.presentationState(of: controller) != .timedOut, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(try Self.presentationState(of: controller), .timedOut)
+        XCTAssertFalse(released.value, "a timeout must not release the show's reservation")
+
+        try Self.viewModel(of: controller).handleLoadingFinished()
+        XCTAssertEqual(try Self.presentationState(of: controller), .loaded)
+        XCTAssertFalse(released.value, "reveal must not release the show's reservation")
+
+        await controller.shutdownRuntime()
+        XCTAssertTrue(released.value)
+    }
+
     // MARK: - Helpers
+
+    /// A real controller, so `shutdownRuntime()` runs its own teardown.
+    @MainActor
+    private static func presentationController(
+        loadingTimeoutSeconds: TimeInterval
+    ) -> ExperienceViewController {
+        let screenId = "screen-1"
+        let experience = Experience(
+            id: "test-experience",
+            versionId: "version-prepared-reservation",
+            buildId: "test-build",
+            artifactContentHash: nil,
+            authenticatedReleaseID: nil,
+            behaviorPresentation: .fullScreenDefault,
+            behaviorPresentationScreens: [screenId: .init(width: 390, height: 844)],
+            assetBaseURL: URL(string: "https://assets.example.com/")!,
+            journey: JourneyDocument(
+                screens: [JourneyScreen(
+                    id: screenId,
+                    defaultViewModelName: nil,
+                    defaultInstanceId: nil
+                )],
+                viewModelValues: nil
+            ),
+            definition: nil
+        )
+        let products = MockProductService()
+        let sink = DiscardingSystemEventSink()
+        let transactions = TransactionService(
+            productService: products,
+            transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: MockDateProvider(),
+            settings: NuxieRuntimeSettings(
+                configuration: NuxieConfiguration(apiKey: "test-api-key")
+            ),
+            eventSink: sink
+        )
+        return ExperienceViewController(
+            experience: experience,
+            artifactLoader: { _, _, _ in throw CancellationError() },
+            eventLog: MockEventLog(),
+            loadingTimeoutSeconds: loadingTimeoutSeconds,
+            recoveryAffordanceDelay: 5,
+            transactionService: transactions,
+            productService: products,
+            systemEventSink: sink
+        )
+    }
+
+    /// The controller's private view model, reached through reflection so
+    /// the presentation states can be driven without a native mount.
+    @MainActor
+    private static func viewModel(
+        of controller: ExperienceViewController
+    ) throws -> ExperienceViewModel {
+        var mirror: Mirror? = Mirror(reflecting: controller)
+        while let current = mirror {
+            if let viewModel = current.children.first(where: { $0.label == "viewModel" })?
+                .value as? ExperienceViewModel {
+                return viewModel
+            }
+            mirror = current.superclassMirror
+        }
+        throw XCTSkip("ExperienceViewController no longer stores its view model")
+    }
+
+    @MainActor
+    private static func presentationState(
+        of controller: ExperienceViewController
+    ) throws -> ExperienceViewModel.State {
+        try viewModel(of: controller).currentState
+    }
 
     private static func shell(
         background: String = "#0B1220FF"
@@ -976,5 +1123,13 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
             screen: .init(width: 390, height: 844)
         )
     }
+}
+
+private final class ReservationReleaseFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var released = false
+
+    func set() { lock.withLock { released = true } }
+    var value: Bool { lock.withLock { released } }
 }
 #endif

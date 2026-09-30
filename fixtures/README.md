@@ -17,6 +17,7 @@ These JSON vectors define the contracts shared by SDK implementations.
 - `journeys/planes/run-recovery.json`: park-point recovery, abandonment, pending report retry, and delivered generation handling.
 - `journeys/planes/reports.json`: stable start/completion reports, declared outputs, privacy drops, retries, and forwarding names.
 - `journeys/planes/values.json`: exact JSON value resolution and three-valued conditions.
+- `journeys/planes/presentation-readiness.json`: show readiness (cold, prepared, built) from the reserved release's verified bytes and native preparation, shimmer only when cold, and a reservation held until the show ends. iOS consumes it in `ExperienceShellPresentationChromeTests` and `JourneyPreparedReleaseStoreTests`.
 
 The signed release fixture is the only release wire shape. Tests consume it directly and never rebuild a retired runtime model.
 
