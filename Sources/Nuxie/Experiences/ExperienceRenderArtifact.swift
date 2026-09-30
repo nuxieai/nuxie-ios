@@ -53,6 +53,20 @@ enum ExperienceArtifactSource: String, Sendable {
     case unknown
 }
 
+/// How the prepared-release store answered one show's artifact request.
+/// Recorded on the presentation trace only; it is not customer telemetry.
+enum JourneyPreparedReleaseOutcome: String, Sendable {
+    /// The release was already prepared in memory.
+    case hit
+    /// Preparation was already running, and the show waited for it.
+    case joined
+    /// The release was waiting in the background lane, and the show started
+    /// it now instead.
+    case jumped
+    /// Nothing was prepared; the show read and verified the release itself.
+    case cold
+}
+
 enum JourneyReleaseResourceMetricOwner: Equatable, Sendable {
     case presentation
     case preload
@@ -164,6 +178,9 @@ struct AcquiredExperienceArtifact: Sendable {
     let products: [StoreProduct]
     let productsResolvedForScreenID: String?
     let resourceMetrics: JourneyReleaseResourceMetrics
+    /// How the shared prepared-release store answered this show, or nil when
+    /// the artifact did not come through the store.
+    let preparedReleaseOutcome: JourneyPreparedReleaseOutcome?
     let productResolver: (@Sendable (String) async throws -> [StoreProduct])?
 
     init(
@@ -177,6 +194,7 @@ struct AcquiredExperienceArtifact: Sendable {
         products: [StoreProduct],
         productsResolvedForScreenID: String? = nil,
         resourceMetrics: JourneyReleaseResourceMetrics,
+        preparedReleaseOutcome: JourneyPreparedReleaseOutcome? = nil,
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil
     ) {
         self.identity = identity
@@ -189,6 +207,7 @@ struct AcquiredExperienceArtifact: Sendable {
         self.products = products
         self.productsResolvedForScreenID = productsResolvedForScreenID
         self.resourceMetrics = resourceMetrics
+        self.preparedReleaseOutcome = preparedReleaseOutcome
         self.productResolver = productResolver
     }
 
@@ -234,6 +253,7 @@ struct LoadedExperienceArtifact: Sendable {
             products: products,
             productsResolvedForScreenID: screenID,
             resourceMetrics: acquired.resourceMetrics,
+            preparedReleaseOutcome: acquired.preparedReleaseOutcome,
             productResolver: productResolver
         ))
     }

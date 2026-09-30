@@ -2,7 +2,39 @@ import Foundation
 @testable import Nuxie
 
 final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
+    /// One call into the prepared-release surface, in call order.
+    enum PreparationCall: Equatable, Sendable {
+        case commit(ownerDistinctId: String?, generation: UInt64)
+        case reserve(descriptorSHA256: String?)
+        case enterBackground
+        case memoryWarning
+        case becameActive
+        case withdraw(ownerDistinctId: String?, generation: UInt64)
+        case discard(departingDistinctId: String?)
+        case transfer(from: String, to: String)
+        case shutdown
+        case waitForIdle
+    }
+
     private let lock = NSRecursiveLock()
+    private var recordedPreparationCalls: [PreparationCall] = []
+    private var recordedReservationReleases: [String] = []
+    /// Readiness returned for a reserved descriptor SHA-256. A descriptor
+    /// without an entry reserves nothing and reports `.cold`.
+    var readinessByDescriptorSHA256: [String: ExperiencePresentationReadiness] = [:]
+    /// Observes every recorded preparation call, synchronously, so a test can
+    /// merge it into one ordered log with other collaborators.
+    var preparationCallObserver: (@Sendable (PreparationCall) -> Void)?
+    /// Observes a reservation's release closure.
+    var reservationReleaseObserver: (@Sendable (String) -> Void)?
+
+    var preparationCalls: [PreparationCall] {
+        withLock { recordedPreparationCalls }
+    }
+
+    var reservationReleases: [String] {
+        withLock { recordedReservationReleases }
+    }
     private var latestProfileGeneration: UInt64 = 0
     private var productAuthorityResolution:
         ActiveProductEvidenceAuthorityResolution = .unavailable
@@ -45,10 +77,11 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     @discardableResult
     func commitJourneyProfile(
         _ prepared: PreparedJourneyProfileArtifacts,
+        ownerDistinctId: String?,
         generation: UInt64,
         admission: ProfileSideEffectAdmission?
     ) async -> Bool {
-        withLock {
+        let committed = withLock { () -> Bool in
             guard generation >= latestProfileGeneration,
                   admission?() != false else { return false }
             latestProfileGeneration = generation
@@ -57,6 +90,82 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             )
             return true
         }
+        if committed {
+            record(.commit(ownerDistinctId: ownerDistinctId, generation: generation))
+        }
+        return committed
+    }
+
+    func reservePreparedRelease(
+        for experience: Experience
+    ) async -> ExperiencePreparedReleaseReservation {
+        let descriptorSHA256 = experience.authenticatedReleaseID?.descriptorSHA256
+        record(.reserve(descriptorSHA256: descriptorSHA256))
+        guard let descriptorSHA256,
+              let readiness = withLock({ readinessByDescriptorSHA256[descriptorSHA256] }) else {
+            return ExperiencePreparedReleaseReservation(
+                reservation: nil,
+                readiness: .cold
+            )
+        }
+        let reservation = ExperiencePresentationWarmReservation { [weak self] in
+            guard let self else { return }
+            let observer = self.withLock { () -> (@Sendable (String) -> Void)? in
+                self.recordedReservationReleases.append(descriptorSHA256)
+                return self.reservationReleaseObserver
+            }
+            observer?(descriptorSHA256)
+        }
+        return ExperiencePreparedReleaseReservation(
+            reservation: reservation,
+            readiness: readiness
+        )
+    }
+
+    func onAppDidEnterBackground() {
+        record(.enterBackground)
+    }
+
+    func didReceiveMemoryWarning() {
+        record(.memoryWarning)
+    }
+
+    func onAppBecameActive() async {
+        record(.becameActive)
+    }
+
+    func withdrawPreparedReleases(
+        ownerDistinctId: String?,
+        generation: UInt64
+    ) async {
+        record(.withdraw(ownerDistinctId: ownerDistinctId, generation: generation))
+    }
+
+    func discardPreparedReleases(departingDistinctId: String?) async {
+        record(.discard(departingDistinctId: departingDistinctId))
+    }
+
+    func transferPreparedReleases(
+        from departingDistinctId: String,
+        to arrivingDistinctId: String
+    ) async {
+        record(.transfer(from: departingDistinctId, to: arrivingDistinctId))
+    }
+
+    func shutdownPreparation() async {
+        record(.shutdown)
+    }
+
+    func waitForPreparationIdle() async {
+        record(.waitForIdle)
+    }
+
+    private func record(_ call: PreparationCall) {
+        let observer = withLock { () -> (@Sendable (PreparationCall) -> Void)? in
+            recordedPreparationCalls.append(call)
+            return preparationCallObserver
+        }
+        observer?(call)
     }
 
     @MainActor
@@ -160,6 +269,11 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             mockViewControllers = [:]
             defaultMockViewController = nil
             viewControllerHandler = nil
+            recordedPreparationCalls = []
+            recordedReservationReleases = []
+            readinessByDescriptorSHA256 = [:]
+            preparationCallObserver = nil
+            reservationReleaseObserver = nil
         }
     }
 

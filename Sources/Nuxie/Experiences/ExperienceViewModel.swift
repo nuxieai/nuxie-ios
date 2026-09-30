@@ -154,6 +154,9 @@ class ExperienceViewModel {
                         if artifact.resourceMetrics.duplicateReadBytes > 0 {
                             attributes["cache_outcome"] = "recovered"
                         }
+                        if let outcome = artifact.preparedReleaseOutcome {
+                            attributes["prepared_release"] = outcome.rawValue
+                        }
                         presentationTraceContext?.complete(
                             span,
                             attributes: attributes

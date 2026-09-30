@@ -44,24 +44,32 @@ func activeProductEvidenceAuthority(
 struct PreparedJourneyProfileArtifacts: Sendable {
     let snapshot: JourneyProfileCatalog.Snapshot?
     let artifacts: PreparedJourneyArtifacts?
+    /// Every rendered release admission read and verified, keyed by signed
+    /// descriptor SHA-256. Empty for a nil snapshot.
+    let runtimeReleasesByDescriptorSHA256: [String: PreparedRuntimeRelease]
     fileprivate let productReleases: [JourneyProductCatalogRelease]
 
     init(
         snapshot: JourneyProfileCatalog.Snapshot?,
-        artifacts: PreparedJourneyArtifacts? = nil
+        artifacts: PreparedJourneyArtifacts? = nil,
+        runtimeReleasesByDescriptorSHA256: [String: PreparedRuntimeRelease] = [:]
     ) {
         self.snapshot = snapshot
         self.artifacts = artifacts
+        self.runtimeReleasesByDescriptorSHA256 =
+            snapshot == nil ? [:] : runtimeReleasesByDescriptorSHA256
         productReleases = []
     }
 
     fileprivate init(
         snapshot: JourneyProfileCatalog.Snapshot?,
         artifacts: PreparedJourneyArtifacts?,
+        runtimeReleasesByDescriptorSHA256: [String: PreparedRuntimeRelease],
         productReleases: [JourneyProductCatalogRelease]
     ) {
         self.snapshot = snapshot
         self.artifacts = artifacts
+        self.runtimeReleasesByDescriptorSHA256 = runtimeReleasesByDescriptorSHA256
         self.productReleases = productReleases
     }
 }
@@ -148,12 +156,14 @@ actor JourneyReleaseCatalog {
             return PreparedJourneyProfileArtifacts(
                 snapshot: nil,
                 artifacts: nil,
+                runtimeReleasesByDescriptorSHA256: [:],
                 productReleases: []
             )
         }
-        let artifacts = try await releaseStore.prepareJourneyArtifacts(
+        let preparation = try await releaseStore.prepareJourneyArtifacts(
             for: snapshot
         )
+        let artifacts = preparation.artifacts
         guard artifacts.releaseDescriptorSHA256s
                 == Set(snapshot.releasesByDigest.keys) else {
             throw JourneyReleaseAcquisitionError.invalidProfileEntry
@@ -161,6 +171,8 @@ actor JourneyReleaseCatalog {
         return PreparedJourneyProfileArtifacts(
             snapshot: snapshot,
             artifacts: artifacts,
+            runtimeReleasesByDescriptorSHA256:
+                preparation.runtimeReleasesByDescriptorSHA256,
             productReleases: try Self.productCatalogReleases(snapshot)
         )
     }

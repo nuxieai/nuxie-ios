@@ -1,16 +1,64 @@
 import Foundation
 
+/// One show's hold on its prepared release, and how ready that release was.
+struct ExperiencePreparedReleaseReservation: Sendable {
+    /// Keeps the release prepared until the show ends. Nil when the
+    /// Experience has no authenticated release to reserve.
+    let reservation: ExperiencePresentationWarmReservation?
+    let readiness: ExperiencePresentationReadiness
+}
+
 protocol ExperienceServiceProtocol: AnyObject, Sendable {
     func prepareJourneyProfile(
         _ snapshot: JourneyProfileCatalog.Snapshot?
     ) async throws -> PreparedJourneyProfileArtifacts
 
+    /// Commits a prepared profile. When the catalog accepts it, the armed
+    /// releases are handed to the prepared-release store, which prepares
+    /// them in the background. The hand-off is bookkeeping only and never
+    /// waits for preparation.
     @discardableResult
     func commitJourneyProfile(
         _ prepared: PreparedJourneyProfileArtifacts,
+        ownerDistinctId: String?,
         generation: UInt64,
         admission: ProfileSideEffectAdmission?
     ) async -> Bool
+
+    /// Reserves the Experience's prepared release for one show.
+    func reservePreparedRelease(
+        for experience: Experience
+    ) async -> ExperiencePreparedReleaseReservation
+
+    /// Pauses background preparation. Synchronous so a main-queue lifecycle
+    /// observer can call it without waiting behind other lifecycle work.
+    func onAppDidEnterBackground()
+
+    /// Notes a system memory warning. Prepared releases are kept.
+    func didReceiveMemoryWarning()
+
+    /// Resumes background preparation once profile authority is current.
+    func onAppBecameActive() async
+
+    /// The profile was withdrawn without a replacement; nothing stays armed.
+    func withdrawPreparedReleases(
+        ownerDistinctId: String?,
+        generation: UInt64
+    ) async
+
+    /// Drops everything prepared, queued, and in flight for the departing
+    /// user. A nil id drops unconditionally.
+    func discardPreparedReleases(departingDistinctId: String?) async
+
+    /// Keeps prepared releases across a user transition by re-tagging their
+    /// owner. See `PreparedReleaseUserSwitchPolicy`.
+    func transferPreparedReleases(from departingDistinctId: String, to arrivingDistinctId: String) async
+
+    /// Stops background preparation and drops everything prepared.
+    func shutdownPreparation() async
+
+    /// Returns once background preparation is not running.
+    func waitForPreparationIdle() async
 
     @MainActor
     func viewController(
@@ -38,9 +86,36 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     )
 }
 
+extension ExperienceServiceProtocol {
+    /// Commits without an owner. A nil owner never triggers the owner-change
+    /// drop, so only tests and owner-less hosts use this form.
+    @discardableResult
+    func commitJourneyProfile(
+        _ prepared: PreparedJourneyProfileArtifacts,
+        generation: UInt64,
+        admission: ProfileSideEffectAdmission?
+    ) async -> Bool {
+        await commitJourneyProfile(
+            prepared,
+            ownerDistinctId: nil,
+            generation: generation,
+            admission: admission
+        )
+    }
+}
+
 final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
+    /// Background preparation runs by default where the SDK presents
+    /// Experiences (UIKit). Elsewhere a test must turn it on.
+    #if canImport(UIKit)
+    static let defaultAutomaticPreparation = true
+    #else
+    static let defaultAutomaticPreparation = false
+    #endif
+
     private let catalog: JourneyReleaseCatalog
     private let releaseStore: any JourneyReleaseAcquiring
+    private let preparedReleases: JourneyPreparedReleaseStore
     private let eventLog: EventCapturing
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let productService: ProductService
@@ -60,6 +135,8 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         releaseStore: any JourneyReleaseAcquiring,
         presentationDiagnosticsEnabled: Bool = false,
         testStoreEnabled: Bool = false,
+        automaticPreparation: Bool = ExperienceService.defaultAutomaticPreparation,
+        preparationCache: ExperienceInteractivePreparationCache = .init(),
         videoDecoderPoolProvider: @escaping @MainActor @Sendable () -> ExperienceVideoDecoderPool? = { nil }
     ) {
         self.eventLog = eventLog
@@ -76,7 +153,16 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
             releaseStore: releaseStore,
             testStoreEnabled: testStoreEnabled
         )
+        preparedReleases = JourneyPreparedReleaseStore(
+            acquirer: releaseStore,
+            cache: preparationCache,
+            gate: ExperiencePreparationGate(),
+            automaticPreparation: automaticPreparation
+        )
     }
+
+    /// The shared prepared-release store. Internal for tests.
+    var preparedReleaseStore: JourneyPreparedReleaseStore { preparedReleases }
 
     func prepareJourneyProfile(
         _ snapshot: JourneyProfileCatalog.Snapshot?
@@ -87,14 +173,85 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     @discardableResult
     func commitJourneyProfile(
         _ prepared: PreparedJourneyProfileArtifacts,
+        ownerDistinctId: String?,
         generation: UInt64,
         admission: ProfileSideEffectAdmission?
     ) async -> Bool {
-        await catalog.commitJourneyProfile(
+        guard await catalog.commitJourneyProfile(
             prepared,
             generation: generation,
             admission: admission
+        ) else { return false }
+        await preparedReleases.replaceProfile(
+            prepared,
+            ownerDistinctId: ownerDistinctId,
+            generation: generation,
+            admission: admission
         )
+        return true
+    }
+
+    func reservePreparedRelease(
+        for experience: Experience
+    ) async -> ExperiencePreparedReleaseReservation {
+        guard let descriptorSHA256 = experience.authenticatedReleaseID?
+            .descriptorSHA256 else {
+            return ExperiencePreparedReleaseReservation(
+                reservation: nil,
+                readiness: .cold
+            )
+        }
+        let (reservation, readiness) = await preparedReleases.reserve(
+            descriptorSHA256: descriptorSHA256
+        )
+        return ExperiencePreparedReleaseReservation(
+            reservation: reservation,
+            readiness: readiness
+        )
+    }
+
+    func onAppDidEnterBackground() {
+        preparedReleases.gate.enterBackground()
+    }
+
+    func didReceiveMemoryWarning() {
+        preparedReleases.gate.noteMemoryWarning()
+    }
+
+    func onAppBecameActive() async {
+        await preparedReleases.onAppBecameActive()
+    }
+
+    func withdrawPreparedReleases(
+        ownerDistinctId: String?,
+        generation: UInt64
+    ) async {
+        await preparedReleases.withdrawProfile(
+            ownerDistinctId: ownerDistinctId,
+            generation: generation
+        )
+    }
+
+    func discardPreparedReleases(departingDistinctId: String?) async {
+        await preparedReleases.discard(departingDistinctId: departingDistinctId)
+    }
+
+    func transferPreparedReleases(
+        from departingDistinctId: String,
+        to arrivingDistinctId: String
+    ) async {
+        await preparedReleases.transferOwner(
+            from: departingDistinctId,
+            to: arrivingDistinctId
+        )
+    }
+
+    func shutdownPreparation() async {
+        await preparedReleases.shutdown()
+    }
+
+    func waitForPreparationIdle() async {
+        await preparedReleases.waitForIdle()
     }
 
     func purchaseEvidenceAuthority(
@@ -140,6 +297,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
             release: release,
             delivery: delivery,
             pinnedArtifacts: pinnedArtifacts,
+            preparedReleases: preparedReleases,
             productResolver: { [catalog] screenID in
                 try await catalog.productsForJourneyPresentation(
                     release: release,
