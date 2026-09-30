@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // NuxieLifecycleCoordinator.swift
 // @unchecked Sendable: all service references are immutable Sendable values;
@@ -30,12 +33,14 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private let experiencePresentationService: ExperiencePresentationServiceProtocol
   private let journeyPresentationService: any JourneyPresenting
   private let featureService: FeatureServiceProtocol
+  private let experienceService: ExperienceServiceProtocol
 
   init(
     lifecycleTracker: AppLifecycleTracker,
     journeys: (any JourneyServiceProtocol)? = nil,
     eventLog: EventQueueLifecycle,
     profile: ProfileServiceProtocol,
+    experiences: ExperienceServiceProtocol,
     experiencePresentation: ExperiencePresentationServiceProtocol,
     journeyPresentation: any JourneyPresenting,
     features: FeatureServiceProtocol
@@ -48,6 +53,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     self.experiencePresentationService = experiencePresentation
     self.journeyPresentationService = journeyPresentation
     self.featureService = features
+    self.experienceService = experiences
   }
 
   func start() {
@@ -64,6 +70,23 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       }
     }
 
+    // Background Experience preparation starts foreground, like the
+    // presentation service. A launch straight into the background pauses it
+    // before any profile commit can start the lane.
+    let experiences = experienceService
+    let pauseIfLaunchedInBackground: @MainActor @Sendable () -> Void = {
+      #if canImport(UIKit)
+      if UIApplication.shared.applicationState == .background {
+        experiences.onAppDidEnterBackground()
+      }
+      #endif
+    }
+    if Thread.isMainThread {
+      MainActor.assumeIsolated(pauseIfLaunchedInBackground)
+    } else {
+      DispatchQueue.main.async { pauseIfLaunchedInBackground() }
+    }
+
     // Observers do only the synchronous main-thread UI work; service fan-out
     // is enqueued so the worker handles transitions strictly in order.
     observers.append(
@@ -75,8 +98,23 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
         MainActor.assumeIsolated {
           self.experiencePresentationService.onAppDidEnterBackground()
         }
+        // Pause background preparation now, outside the FIFO worker, so the
+        // pause never waits behind a slow profile refetch.
+        self.experienceService.onAppDidEnterBackground()
         self.transitionContinuation.yield(.didEnterBackground)
       })
+
+    // A memory warning only marks the preparation gate. Prepared releases
+    // stay; nothing is rebuilt as a direct reaction to the warning.
+    if let memoryWarning = NuxieSystemNotifications.appDidReceiveMemoryWarning {
+      observers.append(
+        nc.addObserver(
+          forName: memoryWarning,
+          object: nil, queue: .main
+        ) { [weak self] _ in
+          self?.experienceService.didReceiveMemoryWarning()
+        })
+    }
 
     observers.append(
       nc.addObserver(
@@ -119,6 +157,8 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       // Expire or refresh resident profile authority before background
       // Experience preparation resumes from that authority.
       await profileService.onAppBecameActive()
+      // Resume the background preparation lane paused on backgrounding.
+      await experienceService.onAppBecameActive()
       // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
       await featureService.syncFeatureInfo()
       // Presentation actions resumed by either runtime may await this gate.

@@ -213,6 +213,7 @@ final class InternalServiceDependencyTests: XCTestCase {
         let observer = MockTransactionObserver()
         var overrides = NuxieCoreOverrides()
         overrides.transactionObserver = observer
+        overrides.experiencePreparationSuspended = true
         let core = NuxieCore(
             configuration: configuration,
             overrides: overrides
