@@ -310,201 +310,32 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(metrics.configuredPreparationCount, 2)
     }
 
-    func testPreparationCacheBoundsRetainedNativePreparationsByRecency() async throws {
+    func testPreparationCacheKeepsEveryPreparedProvenanceWithoutCap() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
-        let cache = ExperienceInteractivePreparationCache(
-            maximumRetainedPreparations: 2
-        )
+        let cache = ExperienceInteractivePreparationCache()
+        let provenances = ["a", "b", "c", "d", "e", "f"].map { "release-\($0)" }
 
-        let first = try await cache.preparation(
-            provenance: "release-a",
-            payload: payload
-        )
-        _ = try await cache.preparation(
-            provenance: "release-b",
-            payload: payload
-        )
-        _ = try await cache.preparation(
-            provenance: "release-b",
-            payload: payload
-        )
-        _ = try await cache.preparation(
-            provenance: "release-c",
-            payload: payload
-        )
-
-        let firstStatus = await cache.status(for: "release-a")
-        let secondStatus = await cache.status(for: "release-b")
-        let thirdStatus = await cache.status(for: "release-c")
-        XCTAssertEqual(firstStatus, .miss)
-        XCTAssertEqual(secondStatus, .prepared)
-        XCTAssertEqual(thirdStatus, .prepared)
-
-        let retainedSession = try await first.openScreen(
-            pixelWidth: 24,
-            pixelHeight: 24
-        )
-        _ = try await retainedSession.snapshot()
-        try await retainedSession.close()
-    }
-
-    func testWarmReservationPinsPreparedReleaseUntilPresentationConsumesIt() async throws {
-        let payload = try await statePayload(defaultViewModelName: "Test")
-        let cache = ExperienceInteractivePreparationCache(
-            maximumRetainedPreparations: 1
-        )
-        _ = try await cache.preparation(
-            provenance: "selected-release",
-            payload: payload
-        )
-        let reservation = await cache.reservePrepared(
-            provenance: "selected-release"
-        )
-        XCTAssertNotNil(reservation)
-
-        _ = try await cache.preparation(
-            provenance: "competing-release",
-            payload: payload
-        )
-
-        let selectedStatus = await cache.status(for: "selected-release")
-        XCTAssertEqual(selectedStatus, .prepared)
-        reservation?.release()
-    }
-
-    func testPreparationCacheBoundsInspectedCatalogsAcrossReleaseRevisions() async throws {
-        let base = try await statePayload(defaultViewModelName: "Test")
-        let payload: @Sendable (String) -> AuthenticatedRuntimePayload = { rivDigest in
-            AuthenticatedRuntimePayload(
-                authenticatedKeyID: base.authenticatedKeyID,
-                renderPlan: NativeExperienceRenderPlan(
-                    identity: base.renderPlan.identity,
-                    scene: .init(
-                        key: base.renderPlan.scene.key,
-                        sha256: rivDigest,
-                        sizeBytes: base.renderPlan.scene.sizeBytes
-                    ),
-                    entry: base.renderPlan.entry,
-                    screens: base.renderPlan.screens,
-                    transitions: base.renderPlan.transitions,
-                    textInputs: base.renderPlan.textInputs,
-                    images: base.renderPlan.images,
-                    fonts: base.renderPlan.fonts
-                ),
-                journey: base.journey,
-                sceneBytes: base.sceneBytes,
-                assets: base.assets
+        for provenance in provenances {
+            _ = try await cache.preparation(
+                provenance: provenance,
+                payload: payload
             )
         }
-        let cache = ExperienceInteractivePreparationCache(
-            maximumRetainedPreparations: 2
-        )
-
-        _ = try await cache.preparation(
-            provenance: "release-a",
-            payload: payload(String(repeating: "a", count: 64))
-        )
-        _ = try await cache.preparation(
-            provenance: "release-b",
-            payload: payload(String(repeating: "b", count: 64))
-        )
-        _ = try await cache.preparation(
-            provenance: "release-c",
-            payload: payload(String(repeating: "c", count: 64))
-        )
-        _ = try await cache.preparation(
-            provenance: "release-a",
-            payload: payload(String(repeating: "a", count: 64))
-        )
-
-        let metrics = await cache.metrics()
-        XCTAssertEqual(metrics.inspectionCount, 4)
-        XCTAssertEqual(metrics.configuredPreparationCount, 4)
-    }
-
-    func testPreparationCacheAllowsInFlightPreparationsToOverflowTheRetentionLimit() async throws {
-        let payload = try await statePayload(defaultViewModelName: "Test")
-        let gate = InteractivePreparationGate(expectedEntries: 2)
-        let cache = ExperienceInteractivePreparationCache(
-            maximumRetainedPreparations: 1,
-            preparePayload: { payload, catalog in
-                await gate.enterAndWait()
-                try Task.checkCancellation()
-                return try await ExperienceInteractivePreparation.prepare(
-                    payload: payload,
-                    inspectedCatalog: catalog
-                )
-            }
-        )
-
-        async let first = cache.preparation(
-            provenance: "release-a",
-            payload: payload
-        )
-        async let second = cache.preparation(
-            provenance: "release-b",
-            payload: payload
-        )
-        await gate.waitUntilEntered()
-        await gate.release()
-
-        _ = try await (first, second)
-        let firstStatus = await cache.status(for: "release-a")
-        let secondStatus = await cache.status(for: "release-b")
-        let retainedStatuses = [firstStatus, secondStatus]
-        XCTAssertEqual(retainedStatuses.filter { $0 == .prepared }.count, 1)
-        XCTAssertEqual(retainedStatuses.filter { $0 == .miss }.count, 1)
-    }
-
-    func testPreparationCacheAllowsInFlightInspectionsToOverflowTheRetentionLimit() async throws {
-        let base = try await statePayload(defaultViewModelName: "Test")
-        let payload: @Sendable (String) -> AuthenticatedRuntimePayload = { rivDigest in
-            AuthenticatedRuntimePayload(
-                authenticatedKeyID: base.authenticatedKeyID,
-                renderPlan: NativeExperienceRenderPlan(
-                    identity: base.renderPlan.identity,
-                    scene: .init(
-                        key: base.renderPlan.scene.key,
-                        sha256: rivDigest,
-                        sizeBytes: base.renderPlan.scene.sizeBytes
-                    ),
-                    entry: base.renderPlan.entry,
-                    screens: base.renderPlan.screens,
-                    transitions: base.renderPlan.transitions,
-                    textInputs: base.renderPlan.textInputs,
-                    images: base.renderPlan.images,
-                    fonts: base.renderPlan.fonts
-                ),
-                journey: base.journey,
-                sceneBytes: base.sceneBytes,
-                assets: base.assets
-            )
+        for provenance in provenances {
+            let status = await cache.status(for: provenance)
+            XCTAssertEqual(status, .prepared, provenance)
         }
-        let gate = InteractivePreparationGate(expectedEntries: 2)
-        let cache = ExperienceInteractivePreparationCache(
-            maximumRetainedPreparations: 1,
-            inspectAssets: { bytes in
-                await gate.enterAndWait()
-                try Task.checkCancellation()
-                return try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
-            }
-        )
-
-        async let first = cache.preparation(
-            provenance: "release-a",
-            payload: payload(String(repeating: "a", count: 64))
-        )
-        async let second = cache.preparation(
-            provenance: "release-b",
-            payload: payload(String(repeating: "b", count: 64))
-        )
-        await gate.waitUntilEntered()
-        await gate.release()
-
-        _ = try await (first, second)
         let metrics = await cache.metrics()
-        XCTAssertEqual(metrics.inspectionCount, 2)
-        XCTAssertEqual(metrics.configuredPreparationCount, 2)
+        XCTAssertEqual(metrics.inspectionCount, 1)
+        XCTAssertEqual(metrics.configuredPreparationCount, provenances.count)
+
+        await cache.retainPreparations(for: ["release-a"])
+        let retainedStatus = await cache.status(for: "release-a")
+        XCTAssertEqual(retainedStatus, .prepared)
+        for provenance in provenances.dropFirst() {
+            let status = await cache.status(for: provenance)
+            XCTAssertEqual(status, .miss, provenance)
+        }
     }
 
     func testPreparationCacheReportsBothNativeRIVParsePassesAndTheDuplicate() async throws {
