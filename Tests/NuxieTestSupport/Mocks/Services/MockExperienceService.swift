@@ -136,7 +136,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
         record(.memoryWarning)
     }
 
-    func onAppBecameActive() async {
+    func onAppBecameActive() {
         record(.becameActive)
     }
 

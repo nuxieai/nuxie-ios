@@ -72,7 +72,10 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
 
     // Background Experience preparation starts foreground, like the
     // presentation service. A launch straight into the background pauses it
-    // before any profile commit can start the lane.
+    // before any profile commit can start the lane. The first activation
+    // resumes it on the main queue (below), so a launch that only reads as
+    // background because no scene has connected yet stays paused until that
+    // activation, not until the profile refetch after it.
     let experiences = experienceService
     let pauseIfLaunchedInBackground: @MainActor @Sendable () -> Void = {
       #if canImport(UIKit)
@@ -98,8 +101,10 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
         MainActor.assumeIsolated {
           self.experiencePresentationService.onAppDidEnterBackground()
         }
-        // Pause background preparation now, outside the FIFO worker, so the
-        // pause never waits behind a slow profile refetch.
+        // Pause background preparation now, outside the FIFO worker. The
+        // pause and the resume both happen on the main queue in notification
+        // order, so neither can wait behind a slow profile refetch or land
+        // after a later transition.
         self.experienceService.onAppDidEnterBackground()
         self.transitionContinuation.yield(.didEnterBackground)
       })
@@ -133,6 +138,10 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
         MainActor.assumeIsolated {
           self.experiencePresentationService.onAppBecameActive()
         }
+        // Resume background preparation here, not in the worker: a resume
+        // queued behind the profile refetch could run after the app had
+        // backgrounded again and undo that pause.
+        self.experienceService.onAppBecameActive()
         self.transitionContinuation.yield(.didBecomeActive)
       })
   }
@@ -154,11 +163,9 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
 
     case .didBecomeActive:
       await eventLog.onAppBecameActive()
-      // Expire or refresh resident profile authority before background
-      // Experience preparation resumes from that authority.
+      // Expire or refresh resident profile authority. A changed profile
+      // re-queues background Experience preparation through its commit.
       await profileService.onAppBecameActive()
-      // Resume the background preparation lane paused on backgrounding.
-      await experienceService.onAppBecameActive()
       // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
       await featureService.syncFeatureInfo()
       // Presentation actions resumed by either runtime may await this gate.

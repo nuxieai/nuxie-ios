@@ -494,15 +494,25 @@ actor RecordingJourneyReleaseAcquirer: JourneyReleaseAcquiring {
     struct Unsupported: Error {}
 
     private let runtimes: [String: PreparedRuntimeRelease]
+    private let runtimesByStart: [String: [PreparedRuntimeRelease]]
+    private let ignoresCancellation: Bool
     let gate: ConcurrencyProbeGate
     private(set) var starts: [String] = []
     private(set) var intents: [JourneyReleasePreparationIntent] = []
 
+    /// `runtimesByStart` answers a descriptor's nth start with its nth
+    /// entry (the last one after that), ahead of `runtimes`. With
+    /// `ignoresCancellation`, a held start finishes once released even when
+    /// its caller was cancelled, like a read that is already under way.
     init(
         runtimes: [String: PreparedRuntimeRelease],
+        runtimesByStart: [String: [PreparedRuntimeRelease]] = [:],
+        ignoresCancellation: Bool = false,
         gate: ConcurrencyProbeGate = ConcurrencyProbeGate()
     ) {
         self.runtimes = runtimes
+        self.runtimesByStart = runtimesByStart
+        self.ignoresCancellation = ignoresCancellation
         self.gate = gate
     }
 
@@ -524,8 +534,17 @@ actor RecordingJourneyReleaseAcquirer: JourneyReleaseAcquiring {
         let descriptorSHA256 = release.descriptorSHA256
         starts.append(descriptorSHA256)
         intents.append(intent)
-        try await gate.enter(descriptorSHA256)
+        let start = startCount(of: descriptorSHA256) - 1
+        if ignoresCancellation {
+            let gate = gate
+            try await Task { try await gate.enter(descriptorSHA256) }.value
+        } else {
+            try await gate.enter(descriptorSHA256)
+        }
         await gate.exit(descriptorSHA256)
+        if let byStart = runtimesByStart[descriptorSHA256], let last = byStart.last {
+            return start < byStart.count ? byStart[start] : last
+        }
         return runtimes[descriptorSHA256]
     }
 

@@ -133,6 +133,72 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         XCTAssertEqual(starts, 1)
     }
 
+    /// A profile change drops B while the lane is still preparing it. The
+    /// finished preparation owns a pinned native thread that its deinit
+    /// joins, so its last reference must drop on the disposal queue, never
+    /// on the cache actor that completes it.
+    func testPreparationDroppedInFlightIsReleasedOnTheDisposalQueue() async throws {
+        let gate = ConcurrencyProbeGate(holding: .keys(["B"]))
+        let dropped = WeakPreparationProbe()
+        let cache = ExperienceInteractivePreparationCache(preparePayload: { payload, catalog in
+            let key = payload.renderPlan.identity.experienceId
+            let preparation = try await ExperienceInteractivePreparation.prepare(
+                payload: payload,
+                inspectedCatalog: catalog
+            )
+            if key == "B" { dropped.preparation = preparation }
+            // Native preparation cannot be interrupted, so the hold outlives
+            // the eviction's cancellation.
+            try await Task { try await gate.enter(key) }.value
+            await gate.exit(key)
+            return preparation
+        })
+        let store = JourneyPreparedReleaseStore(
+            acquirer: makeAcquirer(),
+            cache: cache,
+            gate: ExperiencePreparationGate(),
+            automaticPreparation: true
+        )
+        stores.append(store)
+        await store.replaceProfile(
+            prepared(["B"]),
+            owner: PreparedReleaseOwner(distinctId: "u1"),
+            generation: 1,
+            admission: nil
+        )
+        await gate.waitForStarts(1)
+        await store.replaceProfile(
+            prepared(["C"]),
+            owner: PreparedReleaseOwner(distinctId: "u1"),
+            generation: 2,
+            admission: nil
+        )
+
+        // The eviction's own hand-off has run; hold the queue so any later
+        // hand-off keeps its values alive until the test lets it run.
+        NativePreparationDisposer.queue.sync {}
+        NativePreparationDisposer.queue.suspend()
+        var disposalSuspended = true
+        defer { if disposalSuspended { NativePreparationDisposer.queue.resume() } }
+        await gate.release("B")
+        await store.waitForIdle()
+
+        XCTAssertNotNil(
+            dropped.preparation,
+            "the cache actor dropped the evicted preparation's last reference"
+        )
+        let droppedStatus = await store.cache.status(for: sha("B"))
+        XCTAssertEqual(droppedStatus, .miss)
+        let queuedStatus = await store.cache.status(for: sha("C"))
+        XCTAssertEqual(queuedStatus, .prepared)
+
+        NativePreparationDisposer.queue.resume()
+        disposalSuspended = false
+        NativePreparationDisposer.queue.sync {}
+        let released = await eventually { dropped.preparation == nil }
+        XCTAssertTrue(released, "the disposal queue must release the evicted preparation")
+    }
+
     // MARK: - Profiles
 
     func testProfileChangeRetainsArmedDropsRestQueuesNew() async throws {
@@ -266,12 +332,98 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         reservation.release()
     }
 
+    // MARK: - Shows
+
+    /// A show of a release nothing prepared reads it in the store's own
+    /// task, so a show cancelled mid-read still fills the store for the
+    /// next one. Only the show that read reports the read.
+    func testColdShowFillsTheStoreEvenWhenCancelledAndOnlyItReportsTheRead() async throws {
+        let read = JourneyReleaseResourceMetrics(
+            readBytes: 4_096,
+            hashedBytes: 4_096,
+            parsedBytes: 0,
+            duplicateReadBytes: 0,
+            duplicateHashBytes: 0,
+            duplicateParseBytes: 0,
+            preloadBytes: 0,
+            unusedPreloadBytes: 0
+        )
+        let acquisitionGate = ConcurrencyProbeGate(holding: .keys([sha("D")]))
+        let acquirer = makeAcquirer(
+            gate: acquisitionGate,
+            runtimes: [
+                sha("D"): runtime("D", source: .download, resourceMetrics: read),
+                sha("E"): runtime("E", source: .download, resourceMetrics: read),
+            ]
+        )
+        let store = makeStore(
+            ConcurrencyProbeGate(),
+            acquirer: acquirer,
+            automaticPreparation: false
+        )
+        // Neither release is armed; each show reserves its own.
+        let (reservationD, _) = await store.reserve(descriptorSHA256: sha("D"))
+        let (reservationE, _) = await store.reserve(descriptorSHA256: sha("E"))
+
+        let releaseD = release("D")
+        let delivery = base.profile.delivery
+        let screenID = basePayload.renderPlan.entry.screenId
+        let cancelledShow = Task {
+            try await store.presentationArtifact(
+                release: releaseD,
+                delivery: delivery,
+                pinnedArtifacts: nil,
+                screenID: screenID,
+                identity: .init(experienceId: "D", buildId: "build"),
+                productResolver: { _ in [] }
+            )
+        }
+        await acquisitionGate.waitForStarts(1)
+        cancelledShow.cancel()
+        await acquisitionGate.release(sha("D"))
+        _ = try? await cancelledShow.value
+
+        let intents = await acquirer.intents
+        XCTAssertEqual(intents, [.presentation])
+        let filled = await store.inspection()
+        XCTAssertTrue(filled.entries.contains(sha("D")), "a cancelled show must still fill the store")
+
+        let nextShow = try await presentationArtifact("D", from: store)
+        XCTAssertEqual(nextShow.preparedReleaseOutcome, .hit)
+        XCTAssertEqual(nextShow.source, .cache)
+        XCTAssertEqual(nextShow.resourceMetrics, .zero)
+        let reads = await acquirer.startCount(of: sha("D"))
+        XCTAssertEqual(reads, 1)
+
+        let coldShow = try await presentationArtifact("E", from: store)
+        XCTAssertEqual(coldShow.preparedReleaseOutcome, .cold)
+        XCTAssertEqual(coldShow.source, .download)
+        XCTAssertEqual(coldShow.resourceMetrics, read)
+
+        reservationD.release()
+        reservationE.release()
+    }
+
     // MARK: - Users
 
+    /// A user switch drops everything, including queued and in-flight work.
+    /// The departing lane's read of A returns only after the arriving user
+    /// armed A: the epoch fence keeps that result out of the arriving user's
+    /// entry, so the arriving user reads and prepares A for themselves.
     func testUserSwitchDiscardsQueuedInFlightAndPreparedButNotNewOwner() async throws {
+        let departingSceneURL = sceneURL.appendingPathExtension("departing")
+        let arrivingSceneURL = sceneURL.appendingPathExtension("arriving")
         let acquisitionGate = ConcurrencyProbeGate(holding: .keys([sha("A")]))
-        let acquirer = makeAcquirer(gate: acquisitionGate)
-        let store = makeStore(ConcurrencyProbeGate(), acquirer: acquirer)
+        let acquirer = makeAcquirer(
+            gate: acquisitionGate,
+            runtimesByStart: [sha("A"): [
+                runtime("A", sceneURL: departingSceneURL),
+                runtime("A", sceneURL: arrivingSceneURL),
+            ]],
+            ignoresCancellation: true
+        )
+        let preparationGate = ConcurrencyProbeGate()
+        let store = makeStore(preparationGate, acquirer: acquirer)
         await store.replaceProfile(
             prepared(["A", "B"], seeded: []),
             owner: PreparedReleaseOwner(distinctId: "u1"),
@@ -281,19 +433,39 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         await acquisitionGate.waitForStarts(1)
 
         await store.discard(departingDistinctId: "u1")
-        await acquisitionGate.open()
+        // The arriving user arms A while the departing read is still out.
+        // Their lane waits in the background, so that read returns first.
+        store.gate.enterBackground()
+        await store.replaceProfile(
+            prepared(["A"], seeded: []),
+            owner: PreparedReleaseOwner(distinctId: "u2"),
+            generation: 2,
+            admission: nil
+        )
+        await acquisitionGate.release(sha("A"))
         await store.waitForIdle()
-        try await Task.sleep(nanoseconds: 100_000_000)
 
+        let afterDeparture = await store.inspection()
+        XCTAssertEqual(afterDeparture.ownerDistinctId, "u2")
+        XCTAssertEqual(afterDeparture.pending, [sha("A")])
+        let queuedAcquisitions = await acquirer.startCount(of: sha("B"))
+        XCTAssertEqual(queuedAcquisitions, 0, "A discarded queue must never start")
+        let departingPreparations = await preparationGate.startLog
+        XCTAssertEqual(departingPreparations, [], "the departing lane must prepare nothing")
         for key in ["A", "B"] {
             let status = await store.cache.status(for: sha(key))
             XCTAssertEqual(status, .miss, key)
         }
-        let queuedAcquisitions = await acquirer.startCount(of: sha("B"))
-        XCTAssertEqual(queuedAcquisitions, 0, "A discarded queue must never start")
-        let discarded = await store.inspection()
-        XCTAssertNil(discarded.ownerDistinctId)
-        XCTAssertEqual(discarded.entries, [])
+
+        await store.appDidBecomeActive().value
+        await store.waitForIdle()
+
+        let reads = await acquirer.startCount(of: sha("A"))
+        XCTAssertEqual(reads, 2, "the arriving user must read A for themselves")
+        let shown = try await presentationArtifact("A", from: store)
+        XCTAssertEqual(shown.sceneURL, arrivingSceneURL)
+        let arrivedStatus = await store.cache.status(for: sha("A"))
+        XCTAssertEqual(arrivedStatus, .prepared)
 
         let arriving = makeStore(ConcurrencyProbeGate())
         await arriving.replaceProfile(
@@ -488,7 +660,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         let paused = await store.cache.status(for: sha("B"))
         XCTAssertEqual(paused, .miss)
 
-        await store.onAppBecameActive()
+        await store.appDidBecomeActive().value
         await store.waitForIdle()
 
         let resumedLog = await gate.startLog
@@ -564,7 +736,7 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
             generation: 2,
             admission: nil
         )
-        await store.onAppBecameActive()
+        await store.appDidBecomeActive().value
         await store.waitForIdle()
         try await Task.sleep(nanoseconds: 50_000_000)
         let startLog = await gate.startLog
@@ -649,7 +821,12 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
     }
 
     /// A verified runtime release whose native preparation is keyed by `key`.
-    private func runtime(_ key: String) -> PreparedRuntimeRelease {
+    private func runtime(
+        _ key: String,
+        sceneURL: URL? = nil,
+        source: ExperienceArtifactSource = .cache,
+        resourceMetrics: JourneyReleaseResourceMetrics = .zero
+    ) -> PreparedRuntimeRelease {
         let plan = basePayload.renderPlan
         let payload = AuthenticatedRuntimePayload(
             authenticatedKeyID: basePayload.authenticatedKeyID,
@@ -674,9 +851,9 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         )
         return PreparedRuntimeRelease(
             payloadsByScreenID: [plan.entry.screenId: payload],
-            objectURLsByKey: [plan.scene.key: sceneURL],
-            source: .cache,
-            resourceMetrics: .zero
+            objectURLsByKey: [plan.scene.key: sceneURL ?? self.sceneURL],
+            source: source,
+            resourceMetrics: resourceMetrics
         )
     }
 
@@ -730,12 +907,17 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
     }
 
     private func makeAcquirer(
-        gate: ConcurrencyProbeGate = ConcurrencyProbeGate()
+        gate: ConcurrencyProbeGate = ConcurrencyProbeGate(),
+        runtimes overrides: [String: PreparedRuntimeRelease] = [:],
+        runtimesByStart: [String: [PreparedRuntimeRelease]] = [:],
+        ignoresCancellation: Bool = false
     ) -> RecordingJourneyReleaseAcquirer {
         RecordingJourneyReleaseAcquirer(
             runtimes: Dictionary(uniqueKeysWithValues: ["A", "B", "C", "D", "E"].map {
                 (sha($0), runtime($0))
-            }),
+            }).merging(overrides) { _, override in override },
+            runtimesByStart: runtimesByStart,
+            ignoresCancellation: ignoresCancellation,
             gate: gate
         )
     }
@@ -792,6 +974,17 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
         return await condition()
+    }
+}
+
+/// Watches one native preparation without keeping it alive.
+private final class WeakPreparationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var watched: ExperienceInteractivePreparation?
+
+    var preparation: ExperienceInteractivePreparation? {
+        get { lock.withLock { watched } }
+        set { lock.withLock { watched = newValue } }
     }
 }
 #endif

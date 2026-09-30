@@ -38,8 +38,10 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     /// Notes a system memory warning. Prepared releases are kept.
     func didReceiveMemoryWarning()
 
-    /// Resumes background preparation once profile authority is current.
-    func onAppBecameActive() async
+    /// Resumes background preparation. Synchronous so the main-queue
+    /// lifecycle observer keeps it in notification order with the pause: a
+    /// resume can never land after a later backgrounding.
+    func onAppBecameActive()
 
     /// The profile was withdrawn without a replacement; nothing stays armed.
     func withdrawPreparedReleases(
@@ -219,8 +221,8 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         preparedReleases.gate.noteMemoryWarning()
     }
 
-    func onAppBecameActive() async {
-        await preparedReleases.onAppBecameActive()
+    func onAppBecameActive() {
+        preparedReleases.appDidBecomeActive()
     }
 
     func withdrawPreparedReleases(

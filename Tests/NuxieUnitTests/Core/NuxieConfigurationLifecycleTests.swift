@@ -268,6 +268,36 @@ private actor ForegroundPresentationAdmissionProbe {
 
 extension ForegroundPresentationAdmissionProbe: JourneyServiceProtocol {}
 
+/// Background preparation in the lifecycle tests never reaches a release.
+private struct UnusedJourneyReleaseAcquirer: JourneyReleaseAcquiring {
+    struct Unused: Error {}
+
+    func prepareJourneyArtifacts(
+        for snapshot: JourneyProfileCatalog.Snapshot
+    ) async throws -> JourneyProfileArtifactPreparation {
+        throw Unused()
+    }
+
+    func prepareRuntimeRelease(
+        release: AuthenticatedJourneyRelease,
+        delivery: JourneyReleaseDelivery,
+        intent: JourneyReleasePreparationIntent,
+        pinnedArtifacts: JourneyPinnedReleaseArtifacts?
+    ) async throws -> PreparedRuntimeRelease? {
+        throw Unused()
+    }
+
+    func preparePresentation(
+        release: AuthenticatedJourneyRelease,
+        delivery: JourneyReleaseDelivery,
+        pinnedArtifacts: JourneyPinnedReleaseArtifacts?,
+        preparedReleases: JourneyPreparedReleaseStore?,
+        productResolver: @escaping @Sendable (String) async throws -> [StoreProduct]
+    ) async throws -> PreparedJourneyPresentation {
+        throw Unused()
+    }
+}
+
 private final class LifecycleOrderLog: @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [String] = []
@@ -339,9 +369,9 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         )
     }
 
-    /// Backgrounding and memory warnings reach background preparation
-    /// synchronously, outside the FIFO worker; becoming active resumes it
-    /// only after profile authority is current.
+    /// Backgrounding, memory warnings, and becoming active all reach
+    /// background preparation synchronously on the main queue, outside the
+    /// FIFO worker, so none of them waits behind a slow profile refetch.
     func testLifecycleFansOutPreparationPauseResumeAndMemoryWarning() async {
         await NuxieSDK.shared.shutdown()
 
@@ -349,7 +379,6 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         let identity = MockIdentityService()
         identity.setDistinctId("lifecycle-customer")
         let profile = MockProfileService()
-        profile.setOnAppBecameActive { log.append("profile.onAppBecameActive") }
         let experiences = MockExperienceService()
         experiences.preparationCallObserver = { call in
             switch call {
@@ -418,27 +447,114 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         XCTAssertNil(NuxieSystemNotifications.appDidReceiveMemoryWarning)
         #endif
 
-        await MainActor.run {
+        let resumedSynchronously = await MainActor.run { () -> Bool in
             NotificationCenter.default.post(
                 name: NuxieSystemNotifications.appDidBecomeActive,
                 object: nil
             )
+            return log.entries.contains("experiences.onAppBecameActive")
         }
-        let deadline = Date().addingTimeInterval(2)
-        while !log.entries.contains("experiences.onAppBecameActive"), Date() < deadline {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        XCTAssertTrue(resumedSynchronously, "the resume must not wait for the lifecycle worker")
 
         await lifecycle.stop()
         userDefaults.removePersistentDomain(forName: suiteName)
-        let entries = log.entries
-        let profileIndex = entries.firstIndex(of: "profile.onAppBecameActive")
-        let resumeIndex = entries.firstIndex(of: "experiences.onAppBecameActive")
-        XCTAssertNotNil(profileIndex)
-        XCTAssertNotNil(resumeIndex)
-        if let profileIndex, let resumeIndex {
-            XCTAssertLessThan(profileIndex, resumeIndex, "\(entries)")
+    }
+
+    /// A resume can never undo a later pause. Backgrounding while an
+    /// activation's profile refetch is still running leaves preparation
+    /// paused once that refetch returns. A pause from before the activation,
+    /// such as a launch that read as background, lifts at the activation
+    /// itself rather than after the refetch.
+    func testActivationResumeCannotUndoALaterPause() async {
+        await NuxieSDK.shared.shutdown()
+
+        let refetch = LifecycleTransitionGate()
+        let identity = MockIdentityService()
+        identity.setDistinctId("lifecycle-customer")
+        let profile = MockProfileService()
+        profile.setOnAppBecameActive { await refetch.suspendUntilReleased() }
+        let experiences = ExperienceService(
+            productService: ProductService(),
+            eventLog: MockEventLog(),
+            transactionServiceProvider: {
+                fatalError("the lifecycle needs no transaction service")
+            },
+            systemEventSink: DiscardingSystemEventSink(),
+            releaseStore: UnusedJourneyReleaseAcquirer(),
+            automaticPreparation: true
+        )
+        let preparation = experiences.preparedReleaseStore.gate
+        let eventLog = MockEventLog()
+        eventLog.identity = identity
+        let presenter = await MainActor.run {
+            ExperiencePresentationService(
+                windowProvider: MockWindowProvider(),
+                experiences: MockExperienceService(),
+                eventLog: eventLog
+            )
         }
+        let journeys = ForegroundPresentationAdmissionProbe(presenter: presenter)
+        let features = FeatureService(
+            api: MockNuxieApi(),
+            identity: identity,
+            profile: profile,
+            dateProvider: MockDateProvider(),
+            featureInfo: FeatureInfo(),
+            cacheTTL: 60
+        )
+        let suiteName = "com.nuxie.test.lifecycle-resume-order.\(UUID().uuidString)"
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        let lifecycle = NuxieLifecycleCoordinator(
+            lifecycleTracker: AppLifecycleTracker(
+                userDefaults: userDefaults,
+                eventSink: DiscardingSystemEventSink()
+            ),
+            journeys: journeys,
+            eventLog: eventLog,
+            profile: profile,
+            experiences: experiences,
+            experiencePresentation: presenter,
+            journeyPresentation: presenter,
+            features: features
+        )
+        lifecycle.start()
+        await MainActor.run {}
+
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: NuxieSystemNotifications.appDidEnterBackground,
+                object: nil
+            )
+        }
+        XCTAssertTrue(preparation.snapshot().isBackgrounded)
+
+        let resumedAtActivation = await MainActor.run { () -> Bool in
+            NotificationCenter.default.post(
+                name: NuxieSystemNotifications.appDidBecomeActive,
+                object: nil
+            )
+            return !preparation.snapshot().isBackgrounded
+        }
+        XCTAssertTrue(resumedAtActivation, "an activation must lift the pause without the profile refetch")
+        await refetch.waitUntilStarted()
+
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: NuxieSystemNotifications.appDidEnterBackground,
+                object: nil
+            )
+        }
+        await refetch.release()
+        // The worker finishes that activation with the Journey runtime.
+        _ = await journeys.waitForObservation()
+        await lifecycle.stop()
+        userDefaults.removePersistentDomain(forName: suiteName)
+        await experiences.shutdownPreparation()
+
+        XCTAssertTrue(
+            preparation.snapshot().isBackgrounded,
+            "the activation's late resume undid the pause that followed it"
+        )
     }
 
     func testSetupRejectsInvalidDeliveryCounts() async {

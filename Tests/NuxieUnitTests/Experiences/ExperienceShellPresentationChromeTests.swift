@@ -1003,18 +1003,19 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
     }
 
     /// The reservation lasts the whole show, so later screens hit the same
-    /// prepared release; reveal and timeout must not release it.
+    /// prepared release; a timeout, an error, and the reveal must not
+    /// release it. The controller holds the only reference, so dropping it
+    /// early releases it too.
     @MainActor
     func testPreparedReservationHeldUntilShutdownNotReveal() async throws {
         let released = ReservationReleaseFlag()
-        let reservation = ExperiencePresentationWarmReservation {
-            released.set()
-        }
         let controller = Self.presentationController(loadingTimeoutSeconds: 0.05)
         controller.configurePresentationShell(
             Self.shell(),
             readiness: .prepared,
-            warmReservation: reservation
+            warmReservation: ExperiencePresentationWarmReservation {
+                released.set()
+            }
         )
         _ = controller.view
         XCTAssertTrue(controller.loadingView.isHidden)
@@ -1025,6 +1026,12 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         }
         XCTAssertEqual(try Self.presentationState(of: controller), .timedOut)
         XCTAssertFalse(released.value, "a timeout must not release the show's reservation")
+
+        try Self.viewModel(of: controller).handleLoadingFailed(
+            URLError(.networkConnectionLost)
+        )
+        XCTAssertEqual(try Self.presentationState(of: controller), .error)
+        XCTAssertFalse(released.value, "an error must not release the show's reservation")
 
         try Self.viewModel(of: controller).handleLoadingFinished()
         XCTAssertEqual(try Self.presentationState(of: controller), .loaded)

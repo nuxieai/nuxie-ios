@@ -2,9 +2,11 @@ import Foundation
 
 /// Tiny synchronous flags that pace background Experience preparation.
 ///
-/// Main-queue lifecycle observers write these flags without awaiting, so a
-/// pause never waits behind a slow profile refetch. The prepared-release
-/// store reads them before it starts each item.
+/// Main-queue lifecycle observers write these flags without awaiting, in
+/// notification order: the background observer pauses and the activation
+/// observer resumes. Neither waits behind a slow profile refetch, and a
+/// resume can never land after a later pause. The prepared-release store
+/// reads them before it starts the lane and before each item.
 // @unchecked Sendable: every access to `state` holds `lock`.
 final class ExperiencePreparationGate: @unchecked Sendable {
     struct State: Equatable, Sendable {

@@ -44,6 +44,9 @@ actor JourneyPreparedReleaseStore {
     private var pending: [String] = []
     private var laneTask: Task<Void, Never>?
     private var laneID: UInt64 = 0
+    /// Lane bodies still running, including one a discard cancelled while
+    /// it finishes its current item.
+    private var runningLanes = 0
     private var laneItem: String?
     private var acquisitions: [String: Acquisition] = [:]
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
@@ -290,15 +293,22 @@ actor JourneyPreparedReleaseStore {
 
         var outcome: JourneyPreparedReleaseOutcome
         let resolved: PreparedRuntimeRelease?
+        // Only a show that starts the read reports what the read cost and
+        // where it came from; anything the store already held, or another
+        // caller was reading, is a cache hit that read nothing.
+        let startedAcquisition: Bool
         if let runtime = entries[descriptorSHA256]?.runtime {
             let status = await cache.status(for: descriptorSHA256)
             outcome = status == .preparing ? .joined : .hit
+            startedAcquisition = false
             resolved = runtime
         } else if let inFlight = acquisitions[descriptorSHA256] {
             outcome = .joined
+            startedAcquisition = false
             resolved = try await inFlight.task.value
         } else {
             outcome = .cold
+            startedAcquisition = true
             resolved = try await acquisition(
                 release: release,
                 delivery: delivery,
@@ -324,7 +334,8 @@ actor JourneyPreparedReleaseStore {
                 provenance: descriptorSHA256,
                 payload: payload
             ),
-            resourceMetrics: outcome == .cold ? runtime.resourceMetrics : .zero,
+            source: startedAcquisition ? runtime.source : .cache,
+            resourceMetrics: startedAcquisition ? runtime.resourceMetrics : .zero,
             preparedReleaseOutcome: outcome,
             productResolver: productResolver
         )
@@ -332,9 +343,14 @@ actor JourneyPreparedReleaseStore {
 
     // MARK: - Lifecycle
 
-    func onAppBecameActive() {
+    /// The app became active. The gate opens now, on the caller's thread,
+    /// so it stays in notification order with the pause. The lane then
+    /// starts on the store, unless the app backgrounded again first. The
+    /// returned task is that start; only tests await it.
+    @discardableResult
+    nonisolated func appDidBecomeActive() -> Task<Void, Never> {
         gate.becomeActive()
-        kickLane()
+        return Task(priority: .utility) { await self.kickLane() }
     }
 
     /// Stops the lane and drops everything. Nothing starts afterwards.
@@ -343,11 +359,12 @@ actor JourneyPreparedReleaseStore {
         await discard(departingDistinctId: nil)
     }
 
-    /// Returns once the background lane is not running: every queued release
-    /// is prepared, or the lane is paused in the background or disabled.
+    /// Returns once no lane is running: every queued release is prepared, or
+    /// the lane is paused in the background or disabled. A lane that a
+    /// discard cancelled counts until it finishes its current item.
     /// For tests and the parent qualification host.
     func waitForIdle() async {
-        while laneTask != nil {
+        while laneTask != nil || runningLanes > 0 {
             await withCheckedContinuation { idleWaiters.append($0) }
         }
     }
@@ -402,6 +419,7 @@ actor JourneyPreparedReleaseStore {
         }
         laneID &+= 1
         let id = laneID
+        runningLanes += 1
         laneTask = Task(priority: .utility) {
             await self.runLane(id: id)
         }
@@ -411,6 +429,10 @@ actor JourneyPreparedReleaseStore {
     /// never cancelled by backgrounding: native jobs cannot be interrupted,
     /// so the current item finishes and nothing new starts until active.
     private func runLane(id: UInt64) async {
+        defer {
+            runningLanes -= 1
+            resumeIdleWaitersIfIdle()
+        }
         while laneID == id,
               !Task.isCancelled,
               !isShutDown,
@@ -429,7 +451,6 @@ actor JourneyPreparedReleaseStore {
         }
         guard laneID == id else { return }
         laneTask = nil
-        resumeIdleWaitersIfIdle()
     }
 
     private func prepare(_ entry: Entry, descriptorSHA256: String) async {
@@ -461,6 +482,13 @@ actor JourneyPreparedReleaseStore {
                 provenance: descriptorSHA256,
                 payload: payload
             ).preparation(resourceMetricOwner: .preload)
+            // The request leaves this actor before it reaches the cache, so
+            // a discard or a profile change can drop the release and reach
+            // the cache first; the request then prepares a release nothing
+            // keeps. Re-apply the current set so it does not stay prepared.
+            if epoch != startEpoch || !retainedDescriptors.contains(descriptorSHA256) {
+                await cache.retainPreparations(for: retainedDescriptors)
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -543,7 +571,7 @@ actor JourneyPreparedReleaseStore {
     }
 
     private func resumeIdleWaitersIfIdle() {
-        guard laneTask == nil else { return }
+        guard laneTask == nil, runningLanes == 0 else { return }
         let waiters = idleWaiters
         idleWaiters.removeAll()
         waiters.forEach { $0.resume() }
