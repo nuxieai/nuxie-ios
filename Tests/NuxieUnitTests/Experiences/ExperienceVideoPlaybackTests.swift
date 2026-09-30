@@ -723,7 +723,6 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 "aggregateDeliveredFps": Double(host.deliveredFrames - framesAtStart) / elapsed,
                 "firstFrameFromPreparationMs": ((firstDelivered ?? CACurrentMediaTime()) - preparationStarted) * 1000,
                 "tickP95Ms": ordered.isEmpty ? 0 : ordered[min(ordered.count - 1, Int(Double(ordered.count) * 0.95))],
-                "deliveredRGBABytes": host.deliveredRGBABytes,
                 "metalAllocatedBytes": device.currentAllocatedSize,
                 "activeDecoders": host.activeDecoderCount,
                 "includesForcedMetalReadback": true, "targetTickPeriodMs": 1000.0 / 60.0,
