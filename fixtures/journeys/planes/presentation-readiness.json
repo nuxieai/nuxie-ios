@@ -1,0 +1,37 @@
+{
+  "contract": "Every Experience show records how ready it was when it reserved its release: cold, prepared, or built. Prepared means the verified runtime release (bytes read and SHA-256 checked, renderer payloads built) and the release's native preparation both exist when the show reserves it; anything less is cold. Built means one of the show's first screens was also built ahead of time; SDKs that do not build screens ahead never report it. The loading shimmer shows only when the show is cold; a prepared or built show shows the authored presentation background until reveal. The reservation lasts until the show ends, not until reveal, so every screen of the show hits the same prepared release, and a release dropped from the profile while reserved is released only when the show ends.",
+  "cases": [
+    {
+      "name": "nothing prepared",
+      "verifiedRelease": false,
+      "nativePreparation": "miss",
+      "readiness": "cold",
+      "shimmer": true
+    },
+    {
+      "name": "verified release without native preparation",
+      "verifiedRelease": true,
+      "nativePreparation": "miss",
+      "readiness": "cold",
+      "shimmer": true
+    },
+    {
+      "name": "native preparation still running",
+      "verifiedRelease": true,
+      "nativePreparation": "preparing",
+      "readiness": "cold",
+      "shimmer": true
+    },
+    {
+      "name": "verified release and native preparation",
+      "verifiedRelease": true,
+      "nativePreparation": "prepared",
+      "readiness": "prepared",
+      "shimmer": false
+    }
+  ],
+  "reservation": {
+    "heldThrough": ["loading", "reveal", "timeout", "error"],
+    "releasedAt": "show_end"
+  }
+}

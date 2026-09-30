@@ -27,6 +27,9 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     var preparationCallObserver: (@Sendable (PreparationCall) -> Void)?
     /// Observes a reservation's release closure.
     var reservationReleaseObserver: (@Sendable (String) -> Void)?
+    /// Runs inside `reservePreparedRelease` before it answers, so a test can
+    /// hold the show at that suspension point.
+    var reservePreparedReleaseHandler: (@Sendable () async -> Void)?
 
     var preparationCalls: [PreparationCall] {
         withLock { recordedPreparationCalls }
@@ -101,6 +104,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     ) async -> ExperiencePreparedReleaseReservation {
         let descriptorSHA256 = experience.authenticatedReleaseID?.descriptorSHA256
         record(.reserve(descriptorSHA256: descriptorSHA256))
+        await withLock({ reservePreparedReleaseHandler })?()
         guard let descriptorSHA256,
               let readiness = withLock({ readinessByDescriptorSHA256[descriptorSHA256] }) else {
             return ExperiencePreparedReleaseReservation(
@@ -274,6 +278,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             readinessByDescriptorSHA256 = [:]
             preparationCallObserver = nil
             reservationReleaseObserver = nil
+            reservePreparedReleaseHandler = nil
         }
     }
 

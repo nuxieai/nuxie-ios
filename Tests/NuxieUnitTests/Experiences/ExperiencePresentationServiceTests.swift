@@ -321,6 +321,36 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             )
         }
 
+        func releasedExperience(
+            _ release: AuthenticatedJourneyRelease,
+            screenId: String
+        ) -> Experience {
+            Experience(
+                id: release.descriptor.identity.experienceId,
+                versionId: release.descriptor.identity.experienceVersionId,
+                buildId: release.descriptor.identity.buildId,
+                artifactContentHash: nil,
+                authenticatedReleaseID: .init(
+                    identity: release.descriptor.identity,
+                    descriptorSHA256: release.descriptorSHA256
+                ),
+                behaviorPresentation: .fullScreenDefault,
+                behaviorPresentationScreens: [
+                    screenId: .init(width: 390, height: 844)
+                ],
+                assetBaseURL: URL(string: "https://assets.example.com/")!,
+                journey: JourneyDocument(
+                    screens: [JourneyScreen(
+                        id: screenId,
+                        defaultViewModelName: nil,
+                        defaultInstanceId: nil
+                    )],
+                    viewModelValues: nil
+                ),
+                definition: nil
+            )
+        }
+
         func journeyDelivery() -> JourneyReleaseDelivery {
             JourneyReleaseDelivery(
                 renderBaseUrl: "https://assets.nuxie.test/render/",
@@ -1057,6 +1087,134 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(nextReservation).toNot(beNil())
                     nextReservation?.release()
                     expect(availability.availabilitySignals).to(equal(1))
+                }
+
+                it("skips the shimmer, holds the reservation, and records readiness for a prepared release") { @MainActor in
+                    for readiness in [ExperiencePresentationReadiness.prepared, .cold] {
+                        let versionID = "Journey-readiness-\(readiness.rawValue)"
+                        let screenID = "screen-selected"
+                        let release = makeJourneyRelease(
+                            versionId: versionID,
+                            screenId: screenID
+                        )
+                        let controller = MockExperienceViewController(
+                            mockExperienceVersionId: versionID,
+                            mockScreenId: screenID,
+                            mockExperience: releasedExperience(
+                                release,
+                                screenId: screenID
+                            )
+                        )
+                        mockExperienceService.mockViewControllers[versionID] = controller
+                        if readiness == .prepared {
+                            mockExperienceService.readinessByDescriptorSHA256[
+                                release.descriptorSHA256
+                            ] = .prepared
+                        }
+                        let recorder = InMemoryExperiencePresentationTrace()
+                        let request = JourneyPresentationRequest(
+                            release: release,
+                            delivery: journeyDelivery(),
+                            screenId: screenID,
+                            owner: .init(
+                                journeyId: "journey-owner",
+                                distinctId: "user-1"
+                            ),
+                            reservation: service.reserveJourneyPresentation(
+                                ownerDistinctId: "user-1"
+                            ),
+                            presentationTraceContext: .init(
+                                attempt: ExperiencePresentationAttempt(
+                                    id: "readiness-\(readiness.rawValue)",
+                                    triggerEvent: "readiness_probe",
+                                    startedAt: Date(),
+                                    startedAtMonotonicTime: 0
+                                ),
+                                recorder: recorder
+                            ),
+                            onEmissionBatch: { _ in true },
+                            onOutcome: { _, _ in true }
+                        )
+
+                        let result = await service.presentJourney(request)
+                        expect(result).to(equal(.shown))
+                        expect(controller.suppressesLoadingTreatmentForPresentation)
+                            .to(equal(readiness == .prepared))
+                        let shellStart = recorder.events().compactMap {
+                            event -> [String: String]? in
+                            guard case .workStarted(_, .displayPresentation, let attributes) =
+                                    event.stage,
+                                  attributes["phase"] == "shell" else { return nil }
+                            return attributes
+                        }.first
+                        expect(shellStart?["readiness"]).to(equal(readiness.rawValue))
+                        expect(mockExperienceService.preparationCalls).to(contain(
+                            .reserve(descriptorSHA256: release.descriptorSHA256)
+                        ))
+                        expect(mockExperienceService.reservationReleases).to(beEmpty())
+                        await service.dismissCurrentExperienceFromHost()
+                    }
+                }
+
+                it("releases a prepared reservation once when the show loses ownership before its shell") { @MainActor in
+                    let versionID = "Journey-readiness-ownership"
+                    let screenID = "screen-selected"
+                    let release = makeJourneyRelease(
+                        versionId: versionID,
+                        screenId: screenID
+                    )
+                    let controller = MockExperienceViewController(
+                        mockExperienceVersionId: versionID,
+                        mockScreenId: screenID,
+                        mockExperience: releasedExperience(
+                            release,
+                            screenId: screenID
+                        )
+                    )
+                    mockExperienceService.mockViewControllers[versionID] = controller
+                    mockExperienceService.readinessByDescriptorSHA256[
+                        release.descriptorSHA256
+                    ] = .prepared
+                    let gate = ExperiencePresentationAcquisitionGate()
+                    mockExperienceService.reservePreparedReleaseHandler = {
+                        await gate.suspend()
+                    }
+                    let request = JourneyPresentationRequest(
+                        release: release,
+                        delivery: journeyDelivery(),
+                        screenId: screenID,
+                        owner: .init(
+                            journeyId: "journey-owner",
+                            distinctId: "user-1"
+                        ),
+                        reservation: service.reserveJourneyPresentation(
+                            ownerDistinctId: "user-1"
+                        ),
+                        onEmissionBatch: { _ in true },
+                        onOutcome: { _, _ in true }
+                    )
+                    let presentation = Task { @MainActor in
+                        await service.presentJourney(request)
+                    }
+                    await gate.waitUntilEntered()
+                    let shutdown = Task { @MainActor in
+                        await service.shutdownJourneyPresentation(
+                            ownerDistinctId: "user-1"
+                        )
+                    }
+                    await Task.yield()
+                    await gate.release()
+                    await shutdown.value
+
+                    let result = await presentation.value
+                    expect(result).to(equal(.failed))
+                    await polling(expect(mockExperienceService.reservationReleases)).value
+                        .toEventually(
+                            equal([release.descriptorSHA256]),
+                            timeout: .seconds(1)
+                        )
+                    expect(controller.suppressesLoadingTreatmentForPresentation)
+                        .to(beFalse())
                 }
 
                 it("fences a Journey presentation acquiring during profile teardown") { @MainActor in
