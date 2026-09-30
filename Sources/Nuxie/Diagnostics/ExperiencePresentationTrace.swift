@@ -113,6 +113,18 @@ enum ExperiencePresentationWork: String, Equatable, Sendable {
     case displayPresentation = "display_presentation"
 }
 
+/// How ready an Experience was when its show reserved it. Recorded on the
+/// presentation trace as `readiness`; the cross-SDK contract is
+/// fixtures/journeys/planes/presentation-readiness.json.
+enum ExperiencePresentationReadiness: String, Equatable, Sendable {
+    /// Nothing usable was prepared: the show reads, verifies, and prepares
+    /// the release itself behind the loading shimmer.
+    case cold
+    /// The verified release and its native preparation both existed when the
+    /// show reserved it, so the show skips the loading shimmer.
+    case prepared
+}
+
 enum ExperiencePresentationFailureCategory: String, Equatable, Sendable {
     case descriptor
     case network

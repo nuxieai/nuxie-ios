@@ -93,7 +93,7 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
                 for: preparedProfile.snapshot
             )
             XCTAssertEqual(
-                preparedArtifacts.releaseDescriptorSHA256s,
+                preparedArtifacts.artifacts.releaseDescriptorSHA256s,
                 Set(preparedProfile.snapshot.releasesByDigest.keys),
                 fixture.id
             )

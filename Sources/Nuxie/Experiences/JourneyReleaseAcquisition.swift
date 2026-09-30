@@ -32,11 +32,34 @@ enum JourneyReleaseAcquisitionError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? { contractCode }
 }
 
-private struct PreparedRuntimeRelease: Sendable {
+/// One authenticated release whose objects were read, verified, and turned
+/// into renderer payloads for every screen. It holds verified bytes in memory
+/// and is shared read-only by every show of that release.
+struct PreparedRuntimeRelease: Sendable {
     let payloadsByScreenID: [String: AuthenticatedRuntimePayload]
     let objectURLsByKey: [String: URL]
     let source: ExperienceArtifactSource
     let resourceMetrics: JourneyReleaseResourceMetrics
+
+    init(
+        payloadsByScreenID: [String: AuthenticatedRuntimePayload],
+        objectURLsByKey: [String: URL],
+        source: ExperienceArtifactSource,
+        resourceMetrics: JourneyReleaseResourceMetrics
+    ) {
+        self.payloadsByScreenID = payloadsByScreenID
+        self.objectURLsByKey = objectURLsByKey
+        self.source = source
+        self.resourceMetrics = resourceMetrics
+    }
+
+    /// The payload used to prepare the release natively. Native preparation
+    /// is per release, not per screen, and every mount opens an explicit
+    /// screen id, so any screen's payload serves. The first id in sorted
+    /// order keeps the choice deterministic.
+    var preparationPayload: AuthenticatedRuntimePayload? {
+        payloadsByScreenID.keys.min().flatMap { payloadsByScreenID[$0] }
+    }
 
     func presentationArtifact(
         identity: AcquiredExperienceArtifact.Identity,
@@ -46,6 +69,7 @@ private struct PreparedRuntimeRelease: Sendable {
         products: [StoreProduct] = [],
         productsResolvedForScreenID: String? = nil,
         resourceMetrics suppliedResourceMetrics: JourneyReleaseResourceMetrics? = nil,
+        preparedReleaseOutcome: JourneyPreparedReleaseOutcome? = nil,
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil
     ) throws -> AcquiredExperienceArtifact {
         guard let payload = payloadsByScreenID[initialScreenID] else {
@@ -80,9 +104,19 @@ private struct PreparedRuntimeRelease: Sendable {
             products: products,
             productsResolvedForScreenID: productsResolvedForScreenID,
             resourceMetrics: suppliedResourceMetrics ?? resourceMetrics,
+            preparedReleaseOutcome: preparedReleaseOutcome,
             productResolver: productResolver
         )
     }
+}
+
+/// The admission result for one profile: the pinned cache objects, plus every
+/// rendered release that admission already read and verified. The catalog
+/// hands the runtime releases to the prepared-release store, which keeps them
+/// in memory; `artifacts` stays free of bytes because Journeys retain it.
+struct JourneyProfileArtifactPreparation: Sendable {
+    let artifacts: PreparedJourneyArtifacts
+    let runtimeReleasesByDescriptorSHA256: [String: PreparedRuntimeRelease]
 }
 
 struct PreparedJourneyPresentation: Sendable {
@@ -518,15 +552,31 @@ private struct JourneyReleasePresentationDocument: Decodable {
 
 protocol JourneyReleaseAcquiring: Sendable {
     /// Acquires and pins every required render object before a canonical
-    /// profile can publish any of its Journey arms.
+    /// profile can publish any of its Journey arms. Every rendered release
+    /// read on the way is returned so it can stay prepared in memory.
     func prepareJourneyArtifacts(
         for snapshot: JourneyProfileCatalog.Snapshot
-    ) async throws -> PreparedJourneyArtifacts
+    ) async throws -> JourneyProfileArtifactPreparation
 
+    /// Reads and verifies one release's objects and builds its renderer
+    /// payloads. Returns nil for a headless release, which has nothing to
+    /// render.
+    func prepareRuntimeRelease(
+        release: AuthenticatedJourneyRelease,
+        delivery: JourneyReleaseDelivery,
+        intent: JourneyReleasePreparationIntent,
+        pinnedArtifacts: JourneyPinnedReleaseArtifacts?
+    ) async throws -> PreparedRuntimeRelease?
+
+    /// Builds the Experience for one show and its artifact loader. With
+    /// `preparedReleases`, the loader answers from the shared prepared store
+    /// (a lookup when the release is prepared); without it, every load reads
+    /// and prepares the release afresh.
     func preparePresentation(
         release: AuthenticatedJourneyRelease,
         delivery: JourneyReleaseDelivery,
         pinnedArtifacts: JourneyPinnedReleaseArtifacts?,
+        preparedReleases: JourneyPreparedReleaseStore?,
         productResolver:
             @escaping @Sendable (String) async throws -> [StoreProduct]
     ) async throws -> PreparedJourneyPresentation
@@ -535,6 +585,9 @@ protocol JourneyReleaseAcquiring: Sendable {
 enum JourneyReleasePreparationIntent: Equatable, Sendable {
     case profileAdmission
     case presentation
+    /// Background preparation of an armed release before any trigger. It
+    /// reads the same objects profile admission already downloaded.
+    case preload
 
     var allowsConstrainedNetworkAccess: Bool {
         true
@@ -739,7 +792,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
 
     func prepareJourneyArtifacts(
         for snapshot: JourneyProfileCatalog.Snapshot
-    ) async throws -> PreparedJourneyArtifacts {
+    ) async throws -> JourneyProfileArtifactPreparation {
         let releaseDescriptorSHA256s = Set(snapshot.releasesByDigest.keys)
         var authorities: [RuntimeReleaseAuthority] = []
         var objectsByReleaseDescriptorSHA256: [
@@ -779,15 +832,37 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             protectedObjectSHA256s: protectedObjectSHA256s,
             cacheRoot: cacheDirectory
         )
+        var runtimeReleases: [String: PreparedRuntimeRelease] = [:]
         for authority in authorities {
             try Task.checkCancellation()
-            _ = try await prepareRuntimeRelease(
-                authority,
-                delivery: snapshot.profile.delivery,
-                intent: .profileAdmission
-            )
+            runtimeReleases[authority.descriptorSHA256] =
+                try await prepareRuntimeRelease(
+                    authority,
+                    delivery: snapshot.profile.delivery,
+                    intent: .profileAdmission
+                )
         }
-        return prepared
+        return JourneyProfileArtifactPreparation(
+            artifacts: prepared,
+            runtimeReleasesByDescriptorSHA256: runtimeReleases
+        )
+    }
+
+    func prepareRuntimeRelease(
+        release: AuthenticatedJourneyRelease,
+        delivery: JourneyReleaseDelivery,
+        intent: JourneyReleasePreparationIntent,
+        pinnedArtifacts: JourneyPinnedReleaseArtifacts?
+    ) async throws -> PreparedRuntimeRelease? {
+        guard let authority = try Self.journeyRuntimeAuthority(release) else {
+            return nil
+        }
+        return try await prepareRuntimeRelease(
+            authority,
+            delivery: delivery,
+            intent: intent,
+            pinnedArtifacts: pinnedArtifacts
+        )
     }
 
     private nonisolated static func journeyRuntimeAuthority(
@@ -1032,6 +1107,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         release: AuthenticatedJourneyRelease,
         delivery: JourneyReleaseDelivery,
         pinnedArtifacts: JourneyPinnedReleaseArtifacts? = nil,
+        preparedReleases: JourneyPreparedReleaseStore? = nil,
         productResolver:
             @escaping @Sendable (String) async throws -> [StoreProduct]
     ) async throws -> PreparedJourneyPresentation {
@@ -1067,6 +1143,16 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     renderScreenIDs: renderScreenIDs,
                     journeyScreenIDs: journeyScreenIDs
                 )
+                if let preparedReleases {
+                    return try await preparedReleases.presentationArtifact(
+                        release: release,
+                        delivery: delivery,
+                        pinnedArtifacts: pinnedArtifacts,
+                        screenID: screenID,
+                        identity: identity,
+                        productResolver: productResolver
+                    )
+                }
                 // Keep cold network/cache acquisition in the ordinary artifact
                 // loader. The presentation shell is installed before this
                 // closure runs, so slow and failed acquisition retain the
