@@ -134,7 +134,7 @@ link_capi_c_smoke() {
         -target "${target}" -I"${headers}" \
         "${repo_root}/Tests/RuntimeContract/capi_header_smoke.c" "${library}" \
         -framework Foundation -framework QuartzCore -framework Metal \
-        -framework CoreGraphics -framework ImageIO -framework Security \
+        -framework CoreGraphics -framework ImageIO -framework CoreVideo -framework Security \
         -o "${output}"
     [[ "$(lipo -archs "${output}")" == "${target%%-*}" ]]
 }
@@ -153,7 +153,7 @@ link_capi_swift_smoke() {
         -sdk "${sdk_path}" -target "${target}" \
         -I "${headers}" "${library}" \
         -framework Foundation -framework QuartzCore -framework Metal \
-        -framework CoreGraphics -framework ImageIO -framework Security \
+        -framework CoreGraphics -framework ImageIO -framework CoreVideo -framework Security \
         "${repo_root}/Tests/RuntimeContract/capi_swift_import_smoke.swift" \
         -o "${output}"
     [[ "$(lipo -archs "${output}")" == "${target%%-*}" ]]
